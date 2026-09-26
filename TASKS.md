@@ -45,15 +45,15 @@ Legend: `[x]` done · `[ ]` open · **P0** do first · **P1** next · **P2** lat
 
 ## Phase 2 — agent loop (P1)
 
-- [ ] **4. Command-aware approvals.** Parse commands into argv (handle
+- [x] **4. Command-aware approvals.** Parse commands into argv (handle
   `sh -c`, pipes, `&&`), keep a built-in safe list (`ls`, `cat`, `rg`,
   `git status|diff|log`), persistent allow/forbid prefix rules, and forbid
   interpreter one-liners and `sudo` by default (compare Codex `execpolicy`).
-- [ ] **5. Auto-compaction and token-based truncation.** `CompactThread` is
+- [x] **5. Auto-compaction and token-based truncation.** `CompactThread` is
   manual, history is capped at 60 messages and tool output is clipped by
   characters. Compact at a token threshold, keep recent turns verbatim, and
   truncate tool output head+tail by tokens.
-- [ ] **6. Long-running / interactive commands.** `shell.run` is one-shot
+- [x] **6. Long-running / interactive commands.** `shell.run` is one-shot
   (600 s cap, no stdin, no persistent cwd/env). Add exec sessions:
   `exec.start`, `exec.write_stdin`, `exec.poll` with yielded output and PTY.
 - [ ] **7. Parallel read-only tool calls.** Run `file.read`, `file.list`,
@@ -110,3 +110,4 @@ Reviewed only the Go manager and tool wrappers, not the macOS helper.
 ## Done log
 
 - Phase 1 implemented on branch `feat/agent-core-sandbox-edit-search`: `go vet`, `gofmt` and `go test -race ./...` pass on Linux with bubblewrap installed; darwin build and `go vet` pass. Not yet exercised on macOS or in the desktop app.
+- Items 4 to 6 implemented on branch `feat/approvals-compaction-exec`: command-aware approvals (`internal/tools/shellpolicy.go`, `policy.shell_forbid_commands`), head+tail output truncation with old tool-result trimming and automatic compaction at turn start (`internal/engine/context.go`), and `exec.start`/`exec.write`/`exec.stop` sessions (`internal/tools/execsession.go`). `gofmt`, `go vet` and `go test -race` pass on Linux; darwin `go vet` passes. Follow-ups: exec sessions use pipes, not a PTY; they are host-only (not available with the microVM); compaction thresholds are fixed fractions of the model's context window.

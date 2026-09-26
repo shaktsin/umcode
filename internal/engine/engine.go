@@ -55,6 +55,7 @@ type Engine struct {
 	Previews    *preview.Manager
 	VisualQA    *visualqa.Manager
 	ComputerUse *computeruse.Manager
+	Exec        *tools.ExecManager
 	Bus         *Bus
 	Log         *slog.Logger
 
@@ -123,10 +124,11 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	})
 	visuals := visualqa.NewManager(base)
 	computers := computeruse.NewManager(base)
+	execs := tools.NewExecManager()
 	ws := tools.NewWorkspaces(o.Config)
 	reg := tools.NewRegistry()
 	sk := skills.NewRegistry(o.Config)
-	tools.RegisterBuiltins(reg, o.Config, ws, sk.EnvFor, tools.BuiltinServices{Previews: previews, VisualQA: visuals, ComputerUse: computers})
+	tools.RegisterBuiltins(reg, o.Config, ws, sk.EnvFor, tools.BuiltinServices{Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs})
 	sk.Register(reg)
 
 	mcpm := mcp.NewManager(o.Config.MCPServers, o.Logger)
@@ -136,7 +138,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		Cfg: o.Config, Store: o.Store, LLMs: o.LLMs, Catalog: cat,
 		Creds: credentials.New(o.Store, o.Secrets, o.LLMs), Tools: reg, Skills: sk, MCP: mcpm,
 		Projects:  projects.New(o.Store, o.Config),
-		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers,
+		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs,
 		Bus: bus, Log: o.Logger,
 		gate: policy.New(o.Config.Policy), started: time.Now(), baseCtx: base, cancelAll: cancel,
 		activeTurns: map[string]*activeTurn{}, threadTurns: map[string]string{},
@@ -189,6 +191,7 @@ func (e *Engine) Shutdown(ctx context.Context) {
 	e.Previews.Close()
 	e.VisualQA.Close()
 	e.ComputerUse.Close()
+	e.Exec.Close()
 	e.cancelAll()
 	done := make(chan struct{})
 	go func() {

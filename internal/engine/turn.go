@@ -989,7 +989,7 @@ func toolAllowed(name string, proj *protocol.Project) bool {
 	if proj == nil {
 		return true
 	}
-	if strings.HasPrefix(name, "shell.") && !boolOr(proj.Tools.Shell, true) {
+	if (strings.HasPrefix(name, "shell.") || strings.HasPrefix(name, "exec.")) && !boolOr(proj.Tools.Shell, true) {
 		return false
 	}
 	if strings.HasPrefix(name, "visual.") && !boolOr(proj.Tools.VisualQA, false) {

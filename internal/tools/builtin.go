@@ -35,6 +35,7 @@ type BuiltinServices struct {
 	Previews    *preview.Manager
 	VisualQA    *visualqa.Manager
 	ComputerUse *computeruse.Manager
+	Exec        *ExecManager
 }
 
 func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv SkillEnvFunc, services ...BuiltinServices) {
@@ -51,6 +52,11 @@ func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv 
 			shell.sandbox = sandbox.Detect()
 		}
 		r.Add(shell)
+		if len(services) > 0 && services[0].Exec != nil {
+			r.Add(&execStart{shell: shell, manager: services[0].Exec})
+			r.Add(&execWrite{manager: services[0].Exec})
+			r.Add(&execStop{manager: services[0].Exec})
+		}
 		r.Add(&verificationPlan{})
 		r.Add(&verificationRun{shell: shell})
 		r.Add(&browserVerify{shell: shell})
