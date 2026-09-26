@@ -4,7 +4,6 @@ A local-first AI workbench for project-scoped chats and software work.
 
 Choose a project folder and UMCode keeps its chats and project instructions together. Start a clean chat or a contextual side chat, choose configured provider/model IDs, or combine models into an ordered pool. When a provider reports a quota or rate limit, the engine can continue with the next configured model. Tool actions stay visible, with approvals for sensitive operations.
 
-![Demo](media/umcode-demo.gif)
 ![UMCode desktop app](media/umcode-screenshot.png)
 
 ---
