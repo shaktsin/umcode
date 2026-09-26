@@ -160,35 +160,29 @@
   }
 </script>
 
-<div class="flex items-start gap-4 mb-4">
+<div class="flex items-start gap-4 mb-3">
   <div>
-    <h2 class="text-sm font-semibold text-ink">Subscription accounts</h2>
-    <p class="text-xs text-muted mt-1 max-w-2xl">Use the official console sign-in from ChatGPT or Claude. UMCode checks the session but never reads, copies, or stores its OAuth token.</p>
+    <h2 class="text-sm font-semibold text-ink">Sign in with a subscription</h2>
+    <p class="text-xs text-muted mt-1 max-w-2xl">Uses the official Codex (ChatGPT) or Claude Code console sign-in. UMCode only checks that a session exists and never reads, copies, or stores its token. Chat does not use these sign-ins yet, so add an API key above to start chatting.</p>
   </div>
   <button class="btn-ghost btn-sm ml-auto" disabled={refreshing} onclick={refresh}><RefreshCw class="w-3.5 h-3.5 {refreshing ? 'animate-spin' : ''}" />Refresh</button>
 </div>
 
-<div class="grid gap-3 md:grid-cols-2">
+<div class="space-y-2">
   {#each app.identities as identity (identity.id)}
-    <section class="card p-4 flex flex-col min-h-40">
-      <div class="flex items-start gap-3">
-        <div class="w-9 h-9 rounded-lg bg-raised border border-line flex items-center justify-center text-muted"><Terminal class="w-4 h-4" /></div>
-        <div class="min-w-0">
-          <h3 class="text-sm font-semibold text-ink">{identity.displayName}</h3>
-          <p class="text-xs text-muted">via {identity.runtimeName}</p>
-        </div>
-        <span class="ml-auto inline-flex items-center gap-1.5 text-xs {identity.signedIn ? 'text-sage' : 'text-muted'}">
-          {#if identity.signedIn}<Check class="w-3.5 h-3.5" />{:else}<TriangleAlert class="w-3.5 h-3.5" />{/if}
-          {identity.signedIn ? 'Connected' : identity.installed ? 'Not connected' : 'Not installed'}
-        </span>
+    <section class="card px-3 py-2.5 flex items-center gap-3">
+      <div class="w-8 h-8 shrink-0 rounded-lg bg-raised border border-line flex items-center justify-center text-muted"><Terminal class="w-4 h-4" /></div>
+      <div class="min-w-0 flex-1">
+        <h3 class="text-sm font-medium text-ink">{identity.displayName} <span class="text-xs font-normal text-muted">via {identity.runtimeName}</span></h3>
+        <p class="text-[11px] text-muted truncate">{identity.accountType || identity.status}</p>
       </div>
-      <p class="text-xs text-ink-soft mt-4">{identity.status}</p>
-      {#if identity.accountType}<p class="text-[11px] text-muted mt-1">{identity.accountType}</p>{/if}
-      <div class="mt-auto pt-4 flex gap-2">
-        <button class="btn-outline btn-sm" onclick={() => openTerminal(identity.id, !identity.signedIn)} disabled={!identity.installed || terminalOpening || !!terminalSession}>
-          {#if identity.signedIn}<LogOut class="w-3.5 h-3.5" />Sign out{:else}<LogIn class="w-3.5 h-3.5" />Sign in{/if}
-        </button>
-      </div>
+      <span class="inline-flex items-center gap-1.5 text-xs {identity.signedIn ? 'text-sage' : 'text-muted'}">
+        {#if identity.signedIn}<Check class="w-3.5 h-3.5" />{:else}<TriangleAlert class="w-3.5 h-3.5" />{/if}
+        {identity.signedIn ? 'Signed in' : identity.installed ? 'Not signed in' : `${identity.runtimeName} not installed`}
+      </span>
+      <button class="btn-outline btn-sm" onclick={() => openTerminal(identity.id, !identity.signedIn)} disabled={!identity.installed || terminalOpening || !!terminalSession}>
+        {#if identity.signedIn}<LogOut class="w-3.5 h-3.5" />Sign out{:else}<LogIn class="w-3.5 h-3.5" />Sign in{/if}
+      </button>
     </section>
   {/each}
 </div>
@@ -207,11 +201,6 @@
     </div>
     {#if terminalError}<div class="px-3 py-2 text-xs text-rust">{terminalError}</div>{/if}
   </section>
-{:else}
-  <div class="card p-4 mt-5">
-    <h2 class="text-sm font-semibold text-ink">How these accounts will be used</h2>
-    <p class="text-xs text-muted mt-1 max-w-3xl">Subscription accounts are separate from metered API keys. Once a managed runtime is enabled for routing, it can be placed in the same model pool and selected when another route reaches a provider or organization quota.</p>
-  </div>
 {/if}
 
 <style>

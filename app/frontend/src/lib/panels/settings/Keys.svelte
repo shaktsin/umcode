@@ -95,8 +95,11 @@
   }
 </script>
 
-<div class="flex items-center mb-3">
-  <p class="text-sm text-muted">Keys are stored in the macOS Keychain; the engine never sends them to the app.</p>
+<div class="flex items-start gap-4 mb-3">
+  <div>
+    <h2 class="text-sm font-semibold text-ink">API keys</h2>
+    <p class="text-xs text-muted mt-1 max-w-2xl">Keys for Claude, OpenAI, Gemini or a local model server power chat. They are stored in the macOS Keychain and never sent to the app.</p>
+  </div>
   <button class="btn-primary ml-auto" onclick={() => (adding = !adding)}><Plus class="w-4 h-4" />Add key</button>
 </div>
 
