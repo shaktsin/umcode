@@ -88,8 +88,12 @@ type WorkspaceConfig struct {
 }
 
 type ToolsConfig struct {
-	ShellEnabled bool              `yaml:"shell_enabled"`
-	Workspaces   []WorkspaceConfig `yaml:"workspaces"`
+	ShellEnabled bool `yaml:"shell_enabled"`
+	// HostSandbox confines host shell commands (Seatbelt on macOS,
+	// bubblewrap on Linux): "auto" (default) uses it when available, "off"
+	// runs commands unconfined.
+	HostSandbox string            `yaml:"host_sandbox"`
+	Workspaces  []WorkspaceConfig `yaml:"workspaces"`
 }
 
 type PolicyConfig struct {

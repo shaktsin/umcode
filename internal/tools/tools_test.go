@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/shaktsin/umcode/internal/compute"
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
+	"github.com/shaktsin/umcode/internal/sandbox"
 )
 
 func TestWorkspaceACLAndSymlinks(t *testing.T) {
@@ -300,6 +302,7 @@ func TestProjectScope(t *testing.T) {
 	ctx := WithScope(context.Background(), scope)
 	cfg := config.Default(t.TempDir())
 	cfg.Tools.ShellEnabled = true
+	cfg.Tools.HostSandbox = "off" // exercise the guard used when no sandbox is available
 	r := NewRegistry()
 	RegisterBuiltins(r, cfg, NewWorkspaces(cfg), nil)
 
@@ -363,5 +366,59 @@ func TestComputerToolsAreOptInAndActionsRequireApproval(t *testing.T) {
 	ctx := WithScope(context.Background(), &Scope{ThreadID: "thread-1", Root: t.TempDir()})
 	if _, err := requireComputerScope(ctx); err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("disabled Computer Use was allowed: %v", err)
+	}
+}
+
+// wrapSandbox is a stand-in Sandbox that marks the command as sandboxed.
+type wrapSandbox struct{ policies []sandboxPolicy }
+
+type sandboxPolicy struct {
+	root    string
+	network bool
+}
+
+func (w *wrapSandbox) Name() string { return "fake" }
+func (w *wrapSandbox) Wrap(cmd *exec.Cmd, p sandbox.Policy) error {
+	w.policies = append(w.policies, sandboxPolicy{p.Root, p.Network})
+	inner := append([]string{cmd.Path}, cmd.Args[1:]...)
+	cmd.Path = "/usr/bin/env"
+	cmd.Args = append([]string{"/usr/bin/env", "SANDBOXED=yes"}, inner...)
+	return nil
+}
+
+func TestHostShellRunsInSandboxWhenNetworkIsOff(t *testing.T) {
+	project := t.TempDir()
+	sb := &wrapSandbox{}
+	sh := &shellRun{sandbox: sb}
+	ctx := WithScope(context.Background(), &Scope{ProjectID: "p", ProjectName: "demo", Root: project, AllowShell: true, AllowNet: false})
+	args, _ := json.Marshal(map[string]string{"command": "echo $SANDBOXED"})
+	out, err := sh.Call(ctx, args)
+	if err != nil {
+		t.Fatalf("sandboxed shell with network off was refused: %v", err)
+	}
+	if !strings.Contains(out, "yes") {
+		t.Errorf("command did not run under the sandbox:\n%s", out)
+	}
+	if len(sb.policies) != 1 || sb.policies[0].network || filepath.Base(sb.policies[0].root) != filepath.Base(project) {
+		t.Errorf("policy = %+v", sb.policies)
+	}
+	// Commands that reach for the network are not pre-empted: the sandbox decides.
+	if _, err := sh.Call(ctx, json.RawMessage(`{"command":"echo curl"}`)); err != nil {
+		t.Errorf("sandboxed command refused by the heuristic: %v", err)
+	}
+}
+
+func TestSandboxHint(t *testing.T) {
+	if h := sandboxHint("touch: /etc/x: Operation not permitted", false); !strings.Contains(h, "sandbox") {
+		t.Errorf("write hint = %q", h)
+	}
+	if h := sandboxHint("curl: (6) Could not resolve host: example.com", false); !strings.Contains(h, "network access is off") {
+		t.Errorf("network hint = %q", h)
+	}
+	if h := sandboxHint("curl: (6) Could not resolve host: example.com", true); h != "" {
+		t.Errorf("network hint with network on = %q", h)
+	}
+	if h := sandboxHint("all good", false); h != "" {
+		t.Errorf("unexpected hint %q", h)
 	}
 }

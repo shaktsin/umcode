@@ -41,6 +41,9 @@ models:
 # ---------------------------------------------------------------------------
 tools:
   shell_enabled: true        # allow shell.run tool (RISK_RED — requires approval)
+  host_sandbox: auto         # auto | off — confine host shell commands (Seatbelt on macOS, bubblewrap on Linux):
+                             # writes only inside the project and temp/cache folders, no credential folders,
+                             # no network unless the project allows it
 
   # Named sandboxed directories agents can operate in.
   # Each workspace has an independent ACL. Relative file paths are resolved
