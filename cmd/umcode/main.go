@@ -206,11 +206,15 @@ func runEngine(args []string) error {
 		return err
 	}
 	srv := server.New(eng, log)
-	if err := srv.ListenUnix(cfg.Runtime.SocketPath); err != nil {
-		return err
-	}
+	// Bind the TCP port first: ListenUnix replaces a stale socket file, and a
+	// second engine that then fails on the port must not leave the running
+	// engine's socket deleted.
 	if err := srv.ListenWebSocket(cfg.Runtime.WSHost, cfg.Runtime.EngineWSPort, filepath.Join(filepath.Dir(cfg.Runtime.SocketPath), "token")); err != nil {
-		return fmt.Errorf("websocket: %w", err)
+		return fmt.Errorf("websocket: %w (another UMCode engine may still be running; find it with `lsof -nP -iTCP:%d -sTCP:LISTEN`)", err, cfg.Runtime.EngineWSPort)
+	}
+	if err := srv.ListenUnix(cfg.Runtime.SocketPath); err != nil {
+		srv.Close()
+		return err
 	}
 	log.Info("engine started", "version", version.Version, "config", cfg.Path, "db", cfg.Storage.DBPath, "secrets", sec.Backend())
 	<-ctx.Done()
