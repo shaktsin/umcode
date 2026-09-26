@@ -101,7 +101,10 @@ type PolicyConfig struct {
 	ApprovalMode             string   `yaml:"approval_mode"`           // normal | auto_approve_workspace
 	AutoApproveTools         []string `yaml:"auto_approve_tools"`
 	AutoApproveShellCommands []string `yaml:"auto_approve_shell_commands"`
-	ApprovalTimeoutMinutes   int      `yaml:"approval_timeout_minutes"`
+	// ShellForbidCommands are command prefixes (word by word, per pipeline
+	// segment, e.g. "git push") that are refused without asking.
+	ShellForbidCommands    []string `yaml:"shell_forbid_commands"`
+	ApprovalTimeoutMinutes int      `yaml:"approval_timeout_minutes"`
 }
 
 type StorageConfig struct {

@@ -760,6 +760,14 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	it.Tool.Risk = string(risk)
 	_ = e.saveAndPublish(sctx, it, protocol.NotifyItemStarted)
 
+	if g, ok := tool.(tools.Guard); ok {
+		if why, forbidden := g.Forbidden(call.Args); forbidden {
+			it.Status, it.Tool.Error = protocol.ItemDenied, "Blocked: "+why+". Choose a safer approach; do not retry this command."
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return it.Tool.Error, true
+		}
+	}
+
 	decision, reason := e.gate.Check(name, risk, th.Channel == "listener")
 	if decision == policy.Ask {
 		approved, err := e.requestApproval(ctx, sctx, turn, it, name, call.Args, risk, reason, summary)

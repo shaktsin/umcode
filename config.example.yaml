@@ -162,7 +162,12 @@ policy:
   approval_mode: normal
   auto_approve_workspaces: []       # workspace names, e.g. ["websites", "projects"]
   auto_approve_tools: []            # tool names/globs, e.g. ["file.*", "shell.run"]
-  auto_approve_shell_commands: []   # safe command prefixes, e.g. ["npm run", "pytest", "git status"]
+  auto_approve_shell_commands: []
+  # Command prefixes (word by word, per pipeline segment) refused without asking,
+  # e.g. ["git push", "npm publish"]. Destructive commands (sudo, rm -rf /, curl | sh)
+  # are always refused. Read-only commands (ls, cat, rg, git status/diff/log, ...) run
+  # without asking when their arguments stay inside the project.
+  shell_forbid_commands: []
 
 # ---------------------------------------------------------------------------
 # Storage

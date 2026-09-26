@@ -46,7 +46,7 @@ func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv 
 	r.Add(newWebSearch())
 	r.Add(newWebFetch())
 	if cfg.Tools.ShellEnabled {
-		shell := &shellRun{ws: ws, autoApprove: cfg.Policy.AutoApproveShellCommands, skillEnv: skillEnv, compute: compute.NewBundledRunner()}
+		shell := &shellRun{ws: ws, autoApprove: cfg.Policy.AutoApproveShellCommands, forbid: cfg.Policy.ShellForbidCommands, skillEnv: skillEnv, compute: compute.NewBundledRunner()}
 		if !strings.EqualFold(cfg.Tools.HostSandbox, "off") {
 			shell.sandbox = sandbox.Detect()
 		}
@@ -453,6 +453,7 @@ func (t *fileWrite) Call(ctx context.Context, args json.RawMessage) (string, err
 type shellRun struct {
 	ws          *Workspaces
 	autoApprove []string
+	forbid      []string
 	skillEnv    SkillEnvFunc
 	compute     compute.Runner
 	// sandbox confines host commands; nil means they run unconfined.
@@ -512,12 +513,25 @@ func (*shellRun) Schema() json.RawMessage {
 func (t *shellRun) Assess(args json.RawMessage) (Risk, string) {
 	a, _ := decode[struct{ Command string }](args)
 	cmd := strings.TrimSpace(a.Command)
-	for _, prefix := range t.autoApprove {
-		if prefix != "" && (cmd == prefix || strings.HasPrefix(cmd, prefix+" ")) && !strings.ContainsAny(cmd, ";&|`$><") {
-			return RiskYellow, "Run: " + cmd
-		}
+	class, reason := ClassifyShell(cmd, t.forbid)
+	switch {
+	case class == ClassForbidden:
+		return RiskRed, "Blocked (" + reason + "): " + cmd
+	case AllSegmentsMatch(cmd, t.autoApprove):
+		return RiskYellow, "Run: " + cmd
+	case class == ClassSafe:
+		return RiskGreen, "Run (read-only): " + cmd
 	}
 	return RiskRed, "Run: " + cmd
+}
+
+// Forbidden refuses destructive commands before an approval is requested.
+func (t *shellRun) Forbidden(args json.RawMessage) (string, bool) {
+	a, _ := decode[struct{ Command string }](args)
+	if class, reason := ClassifyShell(strings.TrimSpace(a.Command), t.forbid); class == ClassForbidden {
+		return reason, true
+	}
+	return "", false
 }
 
 // safeEnv is the environment passed to shell commands: no API keys or tokens.
