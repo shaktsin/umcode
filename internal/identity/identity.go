@@ -1,6 +1,6 @@
 // Package identity detects sign-in state owned by supported model runtimes.
 // It deliberately reads status only: OAuth credentials remain in the official
-// Codex and Claude Code stores and are never copied into ufoundry.
+// Codex and Claude Code stores and are never copied into umcode.
 package identity
 
 import (

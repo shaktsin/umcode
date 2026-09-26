@@ -12,7 +12,7 @@ package main
 #import <ServiceManagement/ServiceManagement.h>
 
 // The engine's LaunchAgent plist lives in UMCode.app/Contents/Library/LaunchAgents.
-static NSString *const kPlist = @"com.ufoundry.engine.plist";
+static NSString *const kPlist = @"com.umcode.engine.plist";
 
 // 0 unsupported (not in a bundle / pre-13), 1 not registered, 2 enabled, 3 requires approval, 4 not found
 static int ufServiceStatus(void) {

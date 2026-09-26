@@ -255,34 +255,12 @@ func (s *Service) Budget(ctx context.Context, c protocol.Credential) (BudgetStat
 	return st, nil
 }
 
-// LegacyLookup returns a secret stored by the Python app under an env-style
-// name such as UFOUNDRY_LLM_OPENAI_API_KEY ("" if absent).
-type LegacyLookup func(name string) string
-
-// legacyNames lists the names the Python app used for a provider's key, newest first.
-func legacyNames(provider string, isMain bool) []string {
-	up := strings.ToUpper(provider)
-	var names []string
-	for _, prefix := range []string{"UFOUNDRY_", "UMABOT_"} {
-		names = append(names, prefix+"LLM_"+up+"_API_KEY")
-		if up == "CLAUDE" {
-			names = append(names, prefix+"LLM_ANTHROPIC_API_KEY")
-		}
-		if isMain {
-			names = append(names, prefix+"LLM_API_KEY")
-		}
-	}
-	return names
-}
-
-// ImportConfigKeys moves API keys the Python app knew about into secure
-// storage, once per provider, when that provider has no key yet. Sources:
-// api_key values in config.yaml or the environment, then legacy lookups
-// (the Python app's Keychain entries and ~/.ufoundry/.env).
-func (s *Service) ImportConfigKeys(ctx context.Context, cfg *config.Config, legacy LegacyLookup) ([]protocol.Credential, error) {
+// ImportConfigKeys moves API keys found in config.yaml (or the UMCODE_
+// environment) into secure storage, once per provider, when that provider
+// has no key yet.
+func (s *Service) ImportConfigKeys(ctx context.Context, cfg *config.Config) ([]protocol.Credential, error) {
 	type pending struct{ key, baseURL string }
 	found := map[string]pending{}
-	providers := []string{"claude", "openai", "gemini"}
 	if cfg.LLM.APIKey != "" && cfg.LLM.Provider != "" {
 		found[cfg.LLM.Provider] = pending{key: cfg.LLM.APIKey}
 	}
@@ -292,19 +270,6 @@ func (s *Service) ImportConfigKeys(ctx context.Context, cfg *config.Config, lega
 		}
 		if p.APIKey != "" || (name == "openai_compatible" && p.BaseURL != "") {
 			found[name] = pending{p.APIKey, p.BaseURL}
-		}
-	}
-	if legacy != nil {
-		for _, prov := range providers {
-			if _, ok := found[prov]; ok {
-				continue
-			}
-			for _, n := range legacyNames(prov, prov == cfg.LLM.Provider) {
-				if v := legacy(n); v != "" {
-					found[prov] = pending{key: v}
-					break
-				}
-			}
 		}
 	}
 	var added []protocol.Credential

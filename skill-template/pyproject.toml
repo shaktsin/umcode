@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ufoundry-skill-example"
+name = "umcode-skill-example"
 version = "1.0.0"
 description = "Example skill for UMCode"
 readme = "README.md"

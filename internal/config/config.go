@@ -1,11 +1,10 @@
-// Package config loads ~/.ufoundry/config.yaml. It reads the same keys as the
+// Package config loads ~/.umcode/config.yaml. It reads the same keys as the
 // Python app; unknown keys are ignored so existing files keep working.
 package config
 
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -204,41 +203,17 @@ type MCPServerConfig struct {
 // IsEnabled defaults to true when unset.
 func (m MCPServerConfig) IsEnabled() bool { return m.Enabled == nil || *m.Enabled }
 
-// HomeDir returns the UMCode home: $UFOUNDRY_HOME, else ~/.ufoundry.
-// If only the pre-rename ~/.umabot exists it is moved to ~/.ufoundry.
+// HomeDir returns the UMCode home: $UMCODE_HOME, else ~/.umcode.
 func HomeDir() (string, error) {
-	if h := os.Getenv("UFOUNDRY_HOME"); h != "" {
+	if h := os.Getenv("UMCODE_HOME"); h != "" {
 		return expand(h), nil
 	}
 	userHome, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	home := filepath.Join(userHome, ".ufoundry")
-	legacy := filepath.Join(userHome, ".umabot")
-	if _, err := os.Stat(home); errors.Is(err, os.ErrNotExist) {
-		if st, err := os.Stat(legacy); err == nil && st.IsDir() {
-			if err := os.Rename(legacy, home); err == nil {
-				// Leave a symlink so explicit ~/.umabot paths in config keep working.
-				_ = os.Symlink(home, legacy)
-				slog.Info("migrated legacy home", "from", legacy, "to", home)
-				migrateLegacyDB(home)
-			}
-		}
-	}
+	home := filepath.Join(userHome, ".umcode")
 	return home, nil
-}
-
-func migrateLegacyDB(home string) {
-	oldDB := filepath.Join(home, "umabot.db")
-	newDB := filepath.Join(home, "ufoundry.db")
-	if _, err := os.Stat(newDB); errors.Is(err, os.ErrNotExist) {
-		if _, err := os.Stat(oldDB); err == nil {
-			if os.Rename(oldDB, newDB) == nil {
-				_ = os.Symlink(newDB, oldDB)
-			}
-		}
-	}
 }
 
 // Load reads config from path, or from the default locations when path is "".
@@ -289,7 +264,7 @@ func Default(home string) *Config {
 		Home:    home,
 		LLM:     LLMConfig{Provider: "claude"},
 		Storage: StorageConfig{
-			DBPath:   filepath.Join(home, "ufoundry.db"),
+			DBPath:   filepath.Join(home, "umcode.db"),
 			VaultDir: filepath.Join(home, "vault"),
 		},
 		Runtime: RuntimeConfig{
@@ -458,19 +433,8 @@ func NormalizeProvider(p string) string {
 	return strings.ToLower(strings.TrimSpace(p))
 }
 
-// envPrefixes are checked in order; UMABOT_ is a deprecated fallback.
-var envPrefixes = []string{"UFOUNDRY_", "UMABOT_"}
-
 func getenv(name string) (string, bool) {
-	for _, p := range envPrefixes {
-		if v, ok := os.LookupEnv(p + name); ok {
-			if p == "UMABOT_" {
-				slog.Warn("deprecated environment variable, rename to UFOUNDRY_"+name, "var", p+name)
-			}
-			return v, true
-		}
-	}
-	return "", false
+	return os.LookupEnv("UMCODE_" + name)
 }
 
 func applyEnv(c *Config) {
@@ -515,26 +479,4 @@ func expand(p string) string {
 		}
 	}
 	return os.ExpandEnv(p)
-}
-
-// ReadDotenv parses KEY=VALUE lines from ~/.ufoundry/.env (the Python app's
-// secret fallback). Missing files return an empty map.
-func ReadDotenv(path string) map[string]string {
-	out := map[string]string{}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return out
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		out[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
-	}
-	return out
 }

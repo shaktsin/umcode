@@ -58,7 +58,7 @@ func (s *Service) InstructionsFor(ctx context.Context, p protocol.Project, hint 
 			src.Error = fmt.Sprintf("truncated to %d KB", maxInstructionBytes>>10)
 		}
 		title := map[string]string{
-			"global": "# Your standing instructions (~/.ufoundry/AGENT.md)",
+			"global": "# Your standing instructions (~/.umcode/AGENT.md)",
 			"project": fmt.Sprintf("# Project instructions (%s)",
 				filepath.Base(f.path)),
 			"nested": fmt.Sprintf("# Instructions for %s", filepath.Dir(f.path)),

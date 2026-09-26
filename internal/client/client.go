@@ -42,7 +42,7 @@ func Dial(ctx context.Context, socketPath, name string, admin bool) (*Client, er
 	var d net.Dialer
 	nc, err := d.DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("engine not reachable at %s (is `ufoundry engine` running?): %w", socketPath, err)
+		return nil, fmt.Errorf("engine not reachable at %s (is `umcode engine` running?): %w", socketPath, err)
 	}
 	c := &Client{nc: nc, pending: map[int64]chan *protocol.Message{}, notes: make(chan Notification, 4096), done: make(chan struct{})}
 	go c.read()

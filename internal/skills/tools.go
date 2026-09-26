@@ -149,7 +149,7 @@ func (r *Registry) Install(ctx context.Context, source, name string) (*Skill, er
 	if source == "" {
 		return nil, fmt.Errorf("source is empty")
 	}
-	tmp, err := os.MkdirTemp("", "ufoundry-skill-")
+	tmp, err := os.MkdirTemp("", "umcode-skill-")
 	if err != nil {
 		return nil, err
 	}

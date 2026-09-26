@@ -69,13 +69,10 @@ This is an example skill template for UMCode. It demonstrates:
 
 ```bash
 # Install from local path
-ufoundry skills install /path/to/this/skill
+umcode skill install /path/to/this/skill
 
 # Or from GitHub
-ufoundry skills install https://github.com/yourusername/umcode-skill-example.git
-
-# Or publish to PyPI and install
-ufoundry skills install ufoundry-skill-example
+umcode skill install https://github.com/yourusername/umcode-skill-example.git
 ```
 
 ## Scripts
@@ -88,9 +85,3 @@ Bash script that greets the user by name.
 
 ### fetch_data
 Python script that fetches data from a URL using requests library.
-
-## Publishing to PyPI
-
-1. Update `pyproject.toml` with your package name
-2. Build: `python -m build`
-3. Upload: `twine upload dist/*`

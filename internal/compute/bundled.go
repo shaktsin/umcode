@@ -307,11 +307,11 @@ func (b *BundledRunner) bridgePath() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		// macOS: Contents/Resources/ufoundry -> Contents/Resources/compute.
+		// macOS: Contents/Resources/umcode -> Contents/Resources/compute.
 		// Linux: the private bridge sits beside the packaged engine directory.
 		dir = filepath.Join(filepath.Dir(exe), "compute")
 	}
-	name := "ufoundry-compute"
+	name := "umcode-compute"
 	path := filepath.Join(dir, name)
 	info, err := os.Stat(path)
 	if err != nil {

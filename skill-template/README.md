@@ -22,21 +22,11 @@ cd my-skill
 
 ```bash
 # Install in development mode
-ufoundry skills install .
+umcode skill install .
 
-# Test your skill
-ufoundry reload
-# Then chat with your bot and trigger the skill
-```
-
-### 4. Publish to PyPI (optional)
-
-```bash
-# Build the package
-python -m build
-
-# Upload to PyPI
-python -m twine upload dist/*
+# Confirm it is loaded
+umcode skill list
+# Then start a chat and trigger the skill
 ```
 
 ## Skill Structure
@@ -46,7 +36,7 @@ my-skill/
 ├── SKILL.md              # Skill manifest (required)
 ├── README.md            # Documentation
 ├── requirements.txt     # Python dependencies
-├── pyproject.toml       # Package metadata for PyPI
+├── pyproject.toml       # Optional package metadata
 └── scripts/            # Executable scripts
     ├── hello.py        # Python script example
     ├── hello.sh        # Bash script example
@@ -202,12 +192,12 @@ Access these in your scripts:
 
 ## Publishing Checklist
 
-- [ ] Unique skill name (check PyPI)
+- [ ] Unique skill name
 - [ ] All scripts are executable (`chmod +x scripts/*.sh`)
 - [ ] requirements.txt includes all dependencies
 - [ ] pyproject.toml has correct metadata
 - [ ] README.md is complete
-- [ ] Tested locally with `ufoundry skills install .`
+- [ ] Tested locally with `umcode skill install .`
 - [ ] Version follows semver
 - [ ] License specified (MIT, Apache, etc.)
 

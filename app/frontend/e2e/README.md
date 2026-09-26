@@ -6,12 +6,12 @@ per step and exits non-zero if any step failed, and each takes screenshots so a
 failure can be looked at.
 
 ```sh
-export UFOUNDRY_HOME=/tmp/uf-e2e/home        # a throwaway engine home
+export UMCODE_HOME=/tmp/uf-e2e/home        # a throwaway engine home
 python3 fake-provider.py 18997 &             # a fake OpenAI-compatible server
-ufoundry engine &                            # against that home
+umcode engine &                            # against that home
 #   add two openai_compatible keys pointing at http://127.0.0.1:18997/v1,
 #   label them "primary" and "backup", and add a project
-UFOUNDRY_ENGINE_WS_PORT=<port> npm run dev & # the UI, pointed at that engine
+UMCODE_ENGINE_WS_PORT=<port> npm run dev & # the UI, pointed at that engine
 
 node e2e/chat.mjs        # project edits, diffs, side chats, approvals, undo
 node e2e/routing.mjs     # the route chip, failover across keys and models

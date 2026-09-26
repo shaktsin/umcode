@@ -26,8 +26,8 @@
       text = text ? `${text}\n\n${detail}` : detail;
       input?.focus();
     };
-    window.addEventListener('ufoundry:compose', onCompose);
-    return () => window.removeEventListener('ufoundry:compose', onCompose);
+    window.addEventListener('umcode:compose', onCompose);
+    return () => window.removeEventListener('umcode:compose', onCompose);
   });
 
   function submit() {

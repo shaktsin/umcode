@@ -155,7 +155,7 @@ func (m *Manager) connect(s *server) error {
 	res, err := t.Call(ctx, "initialize", map[string]any{
 		"protocolVersion": ProtocolVersion,
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "ufoundry", "version": version.Version},
+		"clientInfo":      map[string]any{"name": "umcode", "version": version.Version},
 	})
 	if err != nil {
 		if st, ok := t.(*stdioTransport); ok {

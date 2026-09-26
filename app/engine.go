@@ -21,15 +21,15 @@ import (
 
 // Engine run modes, as shown in Settings → Engine & app.
 const (
-	ModeService  = "service"  // LaunchAgent registered with SMAppService (or `ufoundry service install`)
+	ModeService  = "service"  // LaunchAgent registered with SMAppService (or `umcode service install`)
 	ModeChild    = "child"    // started by this app; stops when the app quits
 	ModeExternal = "external" // already running when the app started (terminal, old LaunchAgent…)
 	ModeStopped  = "stopped"
 )
 
 // ServiceLabel is the launchd label of the engine agent. It must match the
-// plist in Contents/Library/LaunchAgents and `ufoundry service install`.
-const ServiceLabel = "com.ufoundry.engine"
+// plist in Contents/Library/LaunchAgents and `umcode service install`.
+const ServiceLabel = "com.umcode.engine"
 
 // EngineManager finds, starts and supervises the engine process.
 type EngineManager struct {
@@ -106,14 +106,14 @@ func (m *EngineManager) setMode(mode, detail string) {
 	m.mu.Unlock()
 }
 
-// EngineBinary finds the `ufoundry` executable: inside the app bundle first,
+// EngineBinary finds the `umcode` executable: inside the app bundle first,
 // then next to this executable, then on PATH.
 //
 // In the bundle it lives in Contents/Resources, not beside the app binary:
-// the Mac's file system ignores case, so Contents/MacOS/ufoundry would be the
+// the Mac's file system ignores case, so Contents/MacOS/umcode would be the
 // same file as Contents/MacOS/UMCode.
 func EngineBinary() (string, error) {
-	if p := os.Getenv("UFOUNDRY_ENGINE_BIN"); p != "" {
+	if p := os.Getenv("UMCODE_ENGINE_BIN"); p != "" {
 		return p, nil
 	}
 	if exe, err := os.Executable(); err == nil {
@@ -122,8 +122,8 @@ func EngineBinary() (string, error) {
 		}
 		dir := filepath.Dir(exe)
 		for _, cand := range []string{
-			filepath.Join(dir, "..", "Resources", "ufoundry"), // inside the app bundle
-			filepath.Join(dir, "ufoundry"),                    // a plain build next to it
+			filepath.Join(dir, "..", "Resources", "umcode"), // inside the app bundle
+			filepath.Join(dir, "umcode"),                    // a plain build next to it
 		} {
 			cand = filepath.Clean(cand)
 			if st, err := os.Stat(cand); err == nil && !st.IsDir() && !sameFile(cand, exe) {
@@ -131,10 +131,10 @@ func EngineBinary() (string, error) {
 			}
 		}
 	}
-	if p, err := exec.LookPath("ufoundry"); err == nil {
+	if p, err := exec.LookPath("umcode"); err == nil {
 		return p, nil
 	}
-	return "", errors.New("the ufoundry engine binary was not found in the app bundle or on PATH")
+	return "", errors.New("the umcode engine binary was not found in the app bundle or on PATH")
 }
 
 // sameFile guards against a case-insensitive file system handing us the app
@@ -176,7 +176,7 @@ func (m *EngineManager) Ensure(ctx context.Context) error {
 		}
 		return nil
 	}
-	if os.Getenv("UFOUNDRY_NO_SERVICE") != "1" {
+	if os.Getenv("UMCODE_NO_SERVICE") != "1" {
 		switch serviceStatus() {
 		case serviceEnabled:
 			// launchd should start it; give it a moment (it may be restarting).
@@ -210,7 +210,7 @@ func (m *EngineManager) engineStatus(ctx context.Context) (protocol.EngineStatus
 	}
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	c, err := client.Dial(cctx, ep.Socket, "ufoundry-app", false)
+	c, err := client.Dial(cctx, ep.Socket, "umcode-app", false)
 	if err != nil {
 		return protocol.EngineStatus{}, err
 	}
@@ -393,7 +393,7 @@ func (m *EngineManager) InstallService(ctx context.Context) error {
 			}
 			out, cerr := exec.CommandContext(ctx, bin, "service", "install").CombinedOutput()
 			if cerr != nil {
-				return fmt.Errorf("ufoundry service install: %v: %s", cerr, strings.TrimSpace(string(out)))
+				return fmt.Errorf("umcode service install: %v: %s", cerr, strings.TrimSpace(string(out)))
 			}
 		} else {
 			_ = m.startChild(ctx)
@@ -402,7 +402,7 @@ func (m *EngineManager) InstallService(ctx context.Context) error {
 	}
 	if serviceStatus() == serviceRequiresApproval {
 		_ = m.startChild(ctx)
-		return errors.New("allow ufoundry in System Settings → General → Login Items, then try again")
+		return errors.New("allow umcode in System Settings → General → Login Items, then try again")
 	}
 	if !m.waitReachable(ctx, 15*time.Second) {
 		_ = m.startChild(ctx)

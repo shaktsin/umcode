@@ -235,7 +235,7 @@ func newRepo(t *testing.T) string {
 	root := t.TempDir()
 	git(t, root, "init")
 	git(t, root, "config", "user.name", "UMCode Test")
-	git(t, root, "config", "user.email", "test@ufoundry.invalid")
+	git(t, root, "config", "user.email", "test@umcode.invalid")
 	return root
 }
 

@@ -42,7 +42,7 @@ func boolOr(p *bool, def bool) bool {
 }
 
 // NewWorkspaces builds workspaces from config. With none configured it uses
-// ~/.ufoundry/workspace (created on demand) with deletes disabled.
+// ~/.umcode/workspace (created on demand) with deletes disabled.
 func NewWorkspaces(cfg *config.Config) *Workspaces {
 	w := &Workspaces{}
 	for _, c := range cfg.Tools.Workspaces {

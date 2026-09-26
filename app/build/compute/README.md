@@ -1,6 +1,6 @@
 # Bundled microVM runtime staging
 
-UMCode's desktop app talks to a private `ufoundry-compute` bridge. It is an
+UMCode's desktop app talks to a private `umcode-compute` bridge. It is an
 implementation detail of the app bundle, not a supported user command. The
 bridge receives one versioned JSON request on stdin (`version`, `rootfs`,
 `root`, `dir`, `command`, `network`, `timeoutSeconds`, and an optional single
@@ -11,13 +11,13 @@ stdout/stderr.
 coding image with Git, ripgrep, Node/npm, Go, Python/pip, compilers, and CA
 certificates. It uses Docker only while assembling the release artifact; the
 installed UMCode app does not require Docker. Chromium is included by default
-for headless browser checks. Set `UF_GUEST_BROWSER=0` only for a reduced image
+for headless browser checks. Set `UMCODE_GUEST_BROWSER=0` only for a reduced image
 that intentionally does not support browser verification.
 
-The macOS app builder accepts `UF_LIBKRUN_BUNDLE=/path/to/stage` and copies that
+The macOS app builder accepts `UMCODE_LIBKRUN_BUNDLE=/path/to/stage` and copies that
 directory to `UMCode.app/Contents/Resources/compute`. The Linux app-folder
 builder accepts the same variable and copies it to `compute/` beside the app
-and engine executables. Both runtime bundles contain `ufoundry-compute`, the
+and engine executables. Both runtime bundles contain `umcode-compute`, the
 matching libkrun/libkrunfw libraries, and the pinned guest root filesystem.
 
 Linux desktop packaging is provided by `app/build/linux/bundle.sh`. It creates

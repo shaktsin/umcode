@@ -34,7 +34,7 @@ var Version = "0.4.0-dev"
 // BuildID is shared with the bundled engine to detect stale background services.
 var BuildID = ""
 
-const bundleID = "com.ufoundry.app"
+const bundleID = "com.umcode.app"
 
 func main() {
 	logger := newLogger()
@@ -143,7 +143,7 @@ func startHidden() bool {
 			return true
 		}
 	}
-	return os.Getenv("UFOUNDRY_START_HIDDEN") == "1"
+	return os.Getenv("UMCODE_START_HIDDEN") == "1"
 }
 
 func newLogger() *slog.Logger {

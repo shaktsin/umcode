@@ -88,8 +88,6 @@ type Options struct {
 	Secrets secrets.Store
 	LLMs    *llm.Registry // nil = built-in adapters
 	Logger  *slog.Logger
-	// Legacy finds API keys saved by the Python app (Keychain, .env); optional.
-	Legacy credentials.LegacyLookup
 	// DisableScheduler turns off scheduled task runs (tests, secondary engines).
 	DisableScheduler bool
 	// DisableMCP skips starting MCP servers.
@@ -164,7 +162,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	if err := o.Store.ExpirePendingApprovals(ctx); err != nil {
 		return nil, err
 	}
-	if added, err := e.Creds.ImportConfigKeys(ctx, o.Config, o.Legacy); err != nil {
+	if added, err := e.Creds.ImportConfigKeys(ctx, o.Config); err != nil {
 		e.Log.Warn("could not import API keys from config", "err", err)
 	} else {
 		for _, c := range added {

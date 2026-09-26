@@ -57,14 +57,3 @@ func (keychain) Delete(key string) error {
 	}
 	return err
 }
-
-// ReadLegacy reads a generic password saved by the Python app under another
-// service name (e.g. "ufoundry" or the pre-rename "umabot").
-func ReadLegacy(service, account string) (string, bool) {
-	out, err := exec.Command("/usr/bin/security", "find-generic-password", "-s", service, "-a", account, "-w").Output()
-	if err != nil {
-		return "", false
-	}
-	v := strings.TrimRight(string(out), "\n")
-	return v, v != ""
-}

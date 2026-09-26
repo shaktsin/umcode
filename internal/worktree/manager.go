@@ -190,7 +190,7 @@ func (m *Manager) Ensure(ctx context.Context, taskID, projectRoot string) (Works
 	if _, err := gitBytes(ctx, path, "add", "--all"); err != nil {
 		return cleanup(fmt.Errorf("stage task baseline: %w", err))
 	}
-	if _, err := gitBytes(ctx, path, "-c", "user.name=UMCode", "-c", "user.email=ufoundry@localhost",
+	if _, err := gitBytes(ctx, path, "-c", "user.name=UMCode", "-c", "user.email=umcode@localhost",
 		"commit", "--quiet", "--allow-empty", "-m", "UMCode task baseline"); err != nil {
 		return cleanup(fmt.Errorf("record task baseline: %w", err))
 	}
@@ -256,7 +256,7 @@ func (m *Manager) Keep(ctx context.Context, taskID, projectRoot string) (int, er
 	if _, err := gitBytes(ctx, ws.Path, "add", "--all"); err != nil {
 		return len(paths), fmt.Errorf("task changes were applied, but could not stage the new task baseline: %w", err)
 	}
-	if _, err := gitBytes(ctx, ws.Path, "-c", "user.name=UMCode", "-c", "user.email=ufoundry@localhost",
+	if _, err := gitBytes(ctx, ws.Path, "-c", "user.name=UMCode", "-c", "user.email=umcode@localhost",
 		"commit", "--quiet", "--allow-empty", "-m", "UMCode kept task baseline"); err != nil {
 		return len(paths), fmt.Errorf("task changes were applied, but could not record the new task baseline: %w", err)
 	}

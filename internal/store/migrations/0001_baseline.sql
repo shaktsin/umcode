@@ -1,4 +1,4 @@
--- Baseline: the schema created by the Python app (ufoundry/storage/db.py).
+-- Baseline: the schema created by the earlier Python app.
 -- Every statement is IF NOT EXISTS, so this is a no-op on existing databases.
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

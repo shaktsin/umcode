@@ -14,7 +14,7 @@
       return;
     }
     window.dispatchEvent(
-      new CustomEvent('ufoundry:compose', {
+      new CustomEvent('umcode:compose', {
         detail: `From the side chat “${active?.title ?? ''}”:\n\n${last.text}\n\n`,
       }),
     );

@@ -48,7 +48,7 @@ class AppState {
       },
       async (c) => {
         await c.call('initialize', {
-          clientName: this.shell === 'mac' ? 'ufoundry-mac' : 'ufoundry-web',
+          clientName: this.shell === 'mac' ? 'umcode-mac' : 'umcode-web',
           clientVersion: '0.4.0',
           protocolVersion: PROTOCOL_VERSION,
           admin: true,

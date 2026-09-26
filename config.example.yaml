@@ -1,8 +1,8 @@
 # UMCode Configuration Example
 # All fields shown with defaults and inline comments.
-# Copy to ~/.ufoundry/config.yaml and fill in your values.
-# Secrets (api_key, tokens, client_secret) are stored in macOS Keychain or
-# ~/.ufoundry/.env — they are deliberately null here.
+# Copy to ~/.umcode/config.yaml and fill in your values.
+# API keys are stored in the macOS Keychain (or ~/.umcode/secrets.json on
+# Linux) — add them with `umcode key add`; they are deliberately null here.
 
 # ---------------------------------------------------------------------------
 # AI Provider
@@ -10,7 +10,7 @@
 llm:
   provider: claude           # claude | openai | gemini
   model: claude-sonnet-4-6  # model ID for the chosen provider
-  api_key: null              # set via env UFOUNDRY_LLM_API_KEY or Keychain
+  api_key: null              # set via env UMCODE_LLM_API_KEY or Keychain
   reasoning_effort: null     # low | medium | high  (OpenAI o-series only)
 
 # Models shown in chat are configuration-led. Pools try enabled entries in
@@ -37,65 +37,6 @@ models:
       enabled: true
 
 # ---------------------------------------------------------------------------
-# Control Panel — YOUR private interface (not a user-facing connector)
-# The primary panel is the legacy single-panel field kept for backward compat.
-# Add more panels in control_panels list to run web + Telegram simultaneously.
-# ---------------------------------------------------------------------------
-control_panel:
-  enabled: true
-  ui_type: telegram          # telegram | discord | web
-  connector: control_panel_bot
-  chat_id: "123456789"       # your Telegram user/group ID
-  web_host: 127.0.0.1
-  web_port: 8080
-  observability:
-    multi_agent_topology: summary   # none | summary | full
-    multi_agent_logs: none          # none | summary | full
-
-# Additional panels — all enabled panels receive every notification at once
-control_panels:
-  - enabled: true
-    ui_type: web
-    connector: ''
-    chat_id: null
-    web_host: 127.0.0.1
-    web_port: 8080
-    observability:
-      multi_agent_topology: full
-      multi_agent_logs: full
-
-# ---------------------------------------------------------------------------
-# Message Connectors — channels the bot listens and replies on
-# ---------------------------------------------------------------------------
-connectors:
-  - name: control_panel_bot
-    type: telegram_bot       # telegram_bot | telegram_user | discord
-    token: null              # set via env UFOUNDRY_CONNECTOR_<NAME>_TOKEN
-
-  - name: public_bot
-    type: telegram_bot
-    token: null
-
-  # Telegram user account connector (reads all user chats via MTProto)
-  # - name: my_account
-  #   type: telegram_user
-  #   api_id: null
-  #   api_hash: null
-  #   session_name: my_session
-  #   phone: "+1234567890"
-  #   allow_login: false
-
-  # Gmail IMAP connector — proactive email notifications via IMAP IDLE (no GCP required).
-  # One-time setup:
-  #   1. Enable IMAP in Gmail settings → Forwarding and POP/IMAP → Enable IMAP
-  #   2. Authorise Google in UMCode (run make init → Integrations → Google Workspace)
-  # - name: gmail_imap
-  #   type: gmail_imap
-  #   mailbox: INBOX              # IMAP mailbox to watch (default: INBOX)
-  #   # Notifications auto-route to the local control panel (web-panel) or
-  #   # your configured Telegram/control channel — no reply_* fields needed.
-
-# ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 tools:
@@ -106,7 +47,7 @@ tools:
   # against the active workspace root. shell.run cwd defaults to it.
   workspaces:
     - name: builds           # referred to by name in prompts ("use my builds workspace")
-      path: ~/ufoundry-workspace
+      path: ~/umcode-workspace
       default: true          # used when user doesn't specify a workspace
       acl:
         read: true
@@ -188,7 +129,7 @@ agents:
 
   # Path to a Markdown file injected into every agent's system prompt.
   # Edit this to give the bot standing instructions, persona, or domain context.
-  context_file: ~/.ufoundry/AGENT.md
+  context_file: ~/.umcode/AGENT.md
 
   # Orchestrator uses a strong reasoning model; workers can use a cheaper one.
   # Leave provider/model blank to inherit from the top-level llm block.
@@ -208,59 +149,6 @@ agents:
   tokens_per_minute: 0            # 0 = unlimited; set to your API tier limit
 
 # ---------------------------------------------------------------------------
-# Reusable agent teams (optional, layered on top of agents.enabled)
-# ---------------------------------------------------------------------------
-agent_teams:
-  enabled: false
-  routing_mode: hybrid                 # rule | llm | hybrid
-  default_confidence_threshold: 0.62
-  fallback_to_dynamic: true
-  max_teams_considered: 20
-  fit_gate_enabled: true
-  fit_min_query_len: 60
-  install_dir: ~/.ufoundry/agent-teams  # writable team-pack install/create location
-  team_dirs:
-    - ./agent_teams                    # repo-local team packs (TEAM.md per subdir)
-
-# ---------------------------------------------------------------------------
-# Integrations — external services the bot can act on via built-in tools
-# ---------------------------------------------------------------------------
-integrations:
-  google:
-    client_id: ""            # GCP OAuth2 client ID (web application credential)
-    client_secret: null      # set via env GOOGLE_CLIENT_SECRET or Keychain
-
-# ---------------------------------------------------------------------------
-# Security
-# ---------------------------------------------------------------------------
-security:
-  enabled: true
-  ssrf_protection: true       # block requests to RFC1918 / 169.254.x.x / metadata IPs
-  mask_secrets_in_output: true # redact API keys / tokens from tool output shown to LLM
-
-  # Named role definitions — use fnmatch globs for tool patterns
-  roles:
-    admin:
-      allow: ["*"]
-      require_approval_for_red: false
-      require_approval_for_yellow: false
-    user:
-      allow: ["*"]
-      deny: []
-      require_approval_for_red: true
-      require_approval_for_yellow: false
-
-  # Map Telegram user_id → role
-  users:
-    # "123456789":
-    #   role: admin
-
-  # Per-connector default role
-  connectors:
-    # public_bot:
-    #   default_role: user
-
-# ---------------------------------------------------------------------------
 # Policy
 # ---------------------------------------------------------------------------
 policy:
@@ -272,78 +160,22 @@ policy:
   auto_approve_workspaces: []       # workspace names, e.g. ["websites", "projects"]
   auto_approve_tools: []            # tool names/globs, e.g. ["file.*", "shell.run"]
   auto_approve_shell_commands: []   # safe command prefixes, e.g. ["npm run", "pytest", "git status"]
-  # Optional external rule file (recommended for non-trivial ACL policy).
-  # Relative paths resolve from config.yaml directory.
-  rules_file: ~/.ufoundry/policies/default.yaml
-
-  # Inline rules (optional). Evaluated by ascending priority.
-  # Schema:
-  #   - id: unique-rule-id
-  #     enabled: true
-  #     priority: 100
-  #     match:
-  #       connectors: [gmail_imap, "telegram_*"]
-  #       connector_roles: [listener, admin]
-  #       channels: [gmail, telegram, web]
-  #       directions: [inbound, outbound]
-  #       kinds: [external, control, task_run]
-  #       tools: [gmail.search, "gmail.*", "shell.*"]
-  #       importance: [high, medium, low]
-  #       actions: [summarize, draft_reply, create_task, ignore]
-  #       needs_admin: true
-  #       admin_explicit: true
-  #     apply:
-  #       tool: inherit | allow | deny | require_confirmation
-  #       ingest_to_llm: true | false
-  #       set_importance: high | medium | low
-  #       set_action: summarize | draft_reply | create_task | ignore
-  #       set_needs_admin: true | false
-  #       reason: "human readable reason"
-  rules:
-    # Never allow implicit gmail.search calls.
-    - id: admin-gmail-search-explicit-only
-      priority: 20
-      match:
-        tools: ["gmail.search"]
-        admin_explicit: false
-      apply:
-        tool: deny
-        reason: "gmail.search must be explicitly requested by an admin."
-
-    # Inbound listener messages from gmail should always be sent to LLM
-    # and surfaced to admin as a summary at minimum.
-    - id: gmail-listener-always-ingest
-      priority: 30
-      match:
-        connectors: ["gmail*"]
-        connector_roles: ["listener"]
-        directions: ["inbound"]
-      apply:
-        ingest_to_llm: true
-        set_importance: medium
-        set_action: summarize
-        set_needs_admin: true
-        reason: "Do not silently drop inbound Gmail notifications."
 
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
 storage:
-  db_path: ~/.ufoundry/ufoundry.db
-  vault_dir: ~/.ufoundry/vault
+  db_path: ~/.umcode/umcode.db
+  vault_dir: ~/.umcode/vault
 
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
 runtime:
-  pid_file: ~/.ufoundry/ufoundry.pid
-  log_dir: ~/.ufoundry/logs
+  log_dir: ~/.umcode/logs
   ws_host: 127.0.0.1
   ws_port: 8765
-  ws_token: null             # auto-generated on first `make init`
+  ws_token: null             # auto-generated on first start
+  engine_ws_port: 8766       # engine protocol WebSocket (0 = off); used by the Mac app
+  socket_path: ~/.umcode/run/engine.sock
 
-# ---------------------------------------------------------------------------
-# Worker
-# ---------------------------------------------------------------------------
-worker:
-  concurrency: 1             # parallel jobs across different chat_ids
