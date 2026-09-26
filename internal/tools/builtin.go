@@ -290,11 +290,19 @@ func clipAt(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	cut := s[:limit]
-	for !utf8.ValidString(cut) && len(cut) > 0 {
-		cut = cut[:len(cut)-1]
+	// Keep the start and the end: build and test output carries its verdict
+	// (the failing test, the final error) at the tail.
+	headN := limit * 65 / 100
+	tailN := limit - headN
+	head := s[:headN]
+	for !utf8.ValidString(head) && len(head) > 0 {
+		head = head[:len(head)-1]
 	}
-	return cut + fmt.Sprintf("\n… [truncated %d bytes]", len(s)-len(cut))
+	tail := s[len(s)-tailN:]
+	for !utf8.ValidString(tail) && len(tail) > 0 {
+		tail = tail[1:]
+	}
+	return head + fmt.Sprintf("\n… [truncated %d bytes from the middle] …\n", len(s)-len(head)-len(tail)) + tail
 }
 
 // resolvePath resolves a tool's path argument. Inside a project every path is

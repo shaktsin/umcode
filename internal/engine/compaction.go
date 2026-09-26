@@ -39,13 +39,27 @@ func (e *Engine) CompactThread(ctx context.Context, threadID string) error {
 		e.mu.Unlock()
 	}()
 
+	return e.compactLocked(ctx, threadID, "")
+}
+
+// compactLocked summarizes the context of every turn except currentTurn and
+// stores the summary on the newest of those turns. The caller must hold the
+// thread's turn lock (a manual compaction takes it; a running turn already has
+// it). currentTurn is empty for a manual compaction.
+func (e *Engine) compactLocked(ctx context.Context, threadID, currentTurn string) error {
 	thread, err := e.Store.GetThread(ctx, threadID)
 	if err != nil {
 		return err
 	}
-	turns, err := e.Store.ListTurns(ctx, threadID)
+	allTurns, err := e.Store.ListTurns(ctx, threadID)
 	if err != nil {
 		return err
+	}
+	var turns []protocol.Turn
+	for _, t := range allTurns {
+		if t.ID != currentTurn {
+			turns = append(turns, t)
+		}
 	}
 	if len(turns) == 0 {
 		return protocol.Errorf(protocol.CodeInvalidRequest, "send a message before compacting this chat")
@@ -54,7 +68,7 @@ func (e *Engine) CompactThread(ctx context.Context, threadID string) error {
 	if err != nil {
 		return err
 	}
-	messages := historyMessages(items, "", 0)
+	messages := historyMessages(items, currentTurn, 0)
 	if len(messages) == 0 {
 		return protocol.Errorf(protocol.CodeInvalidRequest, "there is no conversation context to compact")
 	}

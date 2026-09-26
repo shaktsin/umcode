@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -99,5 +100,16 @@ func TestShellGuardAndAssess(t *testing.T) {
 	}
 	if r, _ := sh.Assess(args("make build")); r != RiskRed {
 		t.Errorf("make risk = %s", r)
+	}
+}
+
+func TestClipKeepsHeadAndTail(t *testing.T) {
+	s := strings.Repeat("a", 1000) + "MIDDLE" + strings.Repeat("b", 1000) + "FINAL ERROR"
+	out := clipAt(s, 400)
+	if !strings.HasPrefix(out, "aaa") || !strings.HasSuffix(out, "FINAL ERROR") || !strings.Contains(out, "truncated") || strings.Contains(out, "MIDDLE") {
+		t.Fatalf("clip = %q", out)
+	}
+	if clipAt("short", 400) != "short" {
+		t.Fatal("short input changed")
 	}
 }
