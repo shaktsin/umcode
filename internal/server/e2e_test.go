@@ -115,7 +115,7 @@ type harness struct {
 func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("UFOUNDRY_HOME", dir)
+	t.Setenv("UMCODE_HOME", dir)
 	cfg := config.Default(dir)
 	cfg.Tools.ShellEnabled = true
 	cfg.Runtime.SocketPath = filepath.Join(dir, "e.sock")
@@ -127,7 +127,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	st, err := store.Open(ctx, filepath.Join(dir, "ufoundry.db"))
+	st, err := store.Open(ctx, filepath.Join(dir, "umcode.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	}
 	for _, args := range [][]string{
 		{"init"}, {"config", "user.name", "UMCode Test"},
-		{"config", "user.email", "test@ufoundry.invalid"},
+		{"config", "user.email", "test@umcode.invalid"},
 		{"commit", "--allow-empty", "-m", "test project baseline"},
 	} {
 		cmd := exec.Command("git", append([]string{"-C", h.ws}, args...)...)
@@ -762,7 +762,7 @@ func abs(f float64) float64 {
 
 func TestWebSocketTransport(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("UFOUNDRY_HOME", dir)
+	t.Setenv("UMCODE_HOME", dir)
 	cfg := config.Default(dir)
 	ctx := context.Background()
 	st, err := store.Open(ctx, ":memory:")

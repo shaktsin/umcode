@@ -18,7 +18,7 @@ func prepareGuestRoot(base string) (string, func(), error) {
 			return "", nil, fmt.Errorf("bundled Linux guest root is missing required %s at %s", required, base)
 		}
 	}
-	temp, err := os.MkdirTemp("", "ufoundry-guest-*")
+	temp, err := os.MkdirTemp("", "umcode-guest-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("create temporary guest root: %w", err)
 	}

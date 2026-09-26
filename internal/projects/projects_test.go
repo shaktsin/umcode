@@ -17,7 +17,7 @@ import (
 func newService(t *testing.T) (*Service, *store.Store, *config.Config) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("UFOUNDRY_HOME", home)
+	t.Setenv("UMCODE_HOME", home)
 	cfg := config.Default(home)
 	st, err := store.Open(context.Background(), filepath.Join(home, "test.db"))
 	if err != nil {

@@ -20,7 +20,7 @@ import (
 
 // The test binary doubles as a fake stdio MCP server.
 func TestMain(m *testing.M) {
-	if os.Getenv("UF_FAKE_MCP") == "1" {
+	if os.Getenv("UMCODE_FAKE_MCP") == "1" {
 		fakeStdioServer()
 		os.Exit(0)
 	}
@@ -102,9 +102,9 @@ func findTool(t *testing.T, m *Manager, name string) tools.Tool {
 
 func TestStdioServer(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-must-not-leak")
-	t.Setenv("UF_FAKE_MCP", "0")
+	t.Setenv("UMCODE_FAKE_MCP", "0")
 	cfg := config.MCPServerConfig{Name: "fake", Command: os.Args[0],
-		Env: map[string]string{"UF_FAKE_MCP": "1", "FAKE_TOKEN": "t0k"}, DisabledTools: []string{"sec*"}}
+		Env: map[string]string{"UMCODE_FAKE_MCP": "1", "FAKE_TOKEN": "t0k"}, DisabledTools: []string{"sec*"}}
 	m := NewManager([]config.MCPServerConfig{cfg}, quietLog())
 	defer m.Close()
 	if err := m.Start(true); err != nil {

@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	approvalCategory = "ufoundry.approval"
+	approvalCategory = "umcode.approval"
 	actionApprove    = "approve"
 	actionDeny       = "deny"
 )
@@ -105,7 +105,7 @@ func (w *Watcher) session(ctx context.Context) error {
 		return err
 	}
 	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	c, err := client.Dial(dctx, ep.Socket, "ufoundry-mac-shell", true)
+	c, err := client.Dial(dctx, ep.Socket, "umcode-mac-shell", true)
 	cancel()
 	if err != nil {
 		return err

@@ -43,7 +43,7 @@ func TestBundledRunnerSendsStructuredRequestToPrivateBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge := filepath.Join(t.TempDir(), "ufoundry-compute")
+	bridge := filepath.Join(t.TempDir(), "umcode-compute")
 	if err := os.WriteFile(bridge, []byte("test bridge"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestDiskLimitCancelsRunningBridge(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "large.bin"), make([]byte, (1<<20)+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bridge := filepath.Join(t.TempDir(), "ufoundry-compute")
+	bridge := filepath.Join(t.TempDir(), "umcode-compute")
 	if err := os.WriteFile(bridge, []byte("test bridge"), 0o755); err != nil {
 		t.Fatal(err)
 	}

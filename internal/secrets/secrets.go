@@ -11,7 +11,7 @@ import (
 )
 
 // Service is the Keychain service name for all UMCode secrets.
-const Service = "com.ufoundry"
+const Service = "com.umcode"
 
 // ErrNotFound is returned when a secret does not exist.
 var ErrNotFound = errors.New("secret not found")

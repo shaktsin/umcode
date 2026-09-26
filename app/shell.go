@@ -61,29 +61,29 @@ func (s *Shell) ShowWindow() {
 	})
 }
 
-// runJS calls one of the window.ufoundry hooks defined in frontend/src/main.ts.
+// runJS calls one of the window.umcode hooks defined in frontend/src/main.ts.
 func (s *Shell) runJS(js string) {
 	application.InvokeAsync(func() {
-		s.Window.ExecJS("window.ufoundry && " + js)
+		s.Window.ExecJS("window.umcode && " + js)
 	})
 }
 
 func (s *Shell) ShowView(view string) {
 	s.ShowWindow()
-	s.runJS(fmt.Sprintf("window.ufoundry.show(%q)", view))
+	s.runJS(fmt.Sprintf("window.umcode.show(%q)", view))
 }
 
 func (s *Shell) OpenThread(id string) {
 	s.ShowWindow()
 	b, _ := json.Marshal(id)
-	s.runJS("window.ufoundry.openThread(" + string(b) + ")")
+	s.runJS("window.umcode.openThread(" + string(b) + ")")
 }
 
 // OpenProject switches the window to a project.
 func (s *Shell) OpenProject(id string) {
 	s.ShowWindow()
 	b, _ := json.Marshal(id)
-	s.runJS("window.ufoundry.openProject(" + string(b) + ")")
+	s.runJS("window.umcode.openProject(" + string(b) + ")")
 }
 
 // ---- menu bar ----
@@ -120,7 +120,7 @@ func (s *Shell) buildTrayMenu() {
 	m.Add("Open UMCode").OnClick(func(*application.Context) { s.ShowWindow() })
 	m.Add("New Chat").OnClick(func(*application.Context) {
 		s.ShowWindow()
-		s.runJS("window.ufoundry.newChat()")
+		s.runJS("window.umcode.newChat()")
 	})
 	if len(projects) > 0 {
 		sub := m.AddSubmenu("Projects")
@@ -148,7 +148,7 @@ func (s *Shell) buildTrayMenu() {
 			if err := s.Engine.Restart(ctx); err != nil {
 				s.SetStatus(StatusOffline, err.Error())
 			}
-			s.runJS("window.ufoundry.reconnect()")
+			s.runJS("window.umcode.reconnect()")
 		}()
 	})
 	m.AddSeparator()
@@ -238,7 +238,7 @@ func (s *Shell) setLaunchAtLogin(on bool) error {
 	return s.App.Autostart.Disable()
 }
 
-const cliLink = "/usr/local/bin/ufoundry"
+const cliLink = "/usr/local/bin/umcode"
 
 func cliInstalled() (string, bool) {
 	target, err := os.Readlink(cliLink)
@@ -246,10 +246,10 @@ func cliInstalled() (string, bool) {
 		return "", false
 	}
 	bin, err := EngineBinary()
-	return cliLink, err == nil && (target == bin || strings.HasSuffix(target, "/Contents/Resources/ufoundry"))
+	return cliLink, err == nil && (target == bin || strings.HasSuffix(target, "/Contents/Resources/umcode"))
 }
 
-// installCLI links /usr/local/bin/ufoundry to the engine binary inside the
+// installCLI links /usr/local/bin/umcode to the engine binary inside the
 // bundle, asking for an administrator password via the standard macOS prompt.
 func installCLI() error {
 	bin, err := EngineBinary()
@@ -295,17 +295,17 @@ func (s *Shell) ensureEngine() {
 
 // ---- HTTP endpoints for the UI ----
 
-// Middleware answers /__ufoundry/* inside the webview's asset server; all
+// Middleware answers /__umcode/* inside the webview's asset server; all
 // other requests go to the embedded UI.
 func (s *Shell) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == "/__ufoundry/connection":
+		case r.URL.Path == "/__umcode/connection":
 			s.handleConnection(w)
-		case r.URL.Path == "/__ufoundry/shell" && r.Method == http.MethodGet:
+		case r.URL.Path == "/__umcode/shell" && r.Method == http.MethodGet:
 			s.handleShellInfo(w)
-		case strings.HasPrefix(r.URL.Path, "/__ufoundry/shell/") && r.Method == http.MethodPost:
-			s.handleShellAction(w, r, strings.TrimPrefix(r.URL.Path, "/__ufoundry/shell/"))
+		case strings.HasPrefix(r.URL.Path, "/__umcode/shell/") && r.Method == http.MethodPost:
+			s.handleShellAction(w, r, strings.TrimPrefix(r.URL.Path, "/__umcode/shell/"))
 		default:
 			next.ServeHTTP(w, r)
 		}

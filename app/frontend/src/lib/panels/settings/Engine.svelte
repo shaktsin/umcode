@@ -19,7 +19,7 @@
   async function loadShell() {
     if (app.shell !== 'mac') return;
     try {
-      const r = await fetch('/__ufoundry/shell', { cache: 'no-store' });
+      const r = await fetch('/__umcode/shell', { cache: 'no-store' });
       if (r.ok) shell = await r.json();
     } catch {
       shell = null;
@@ -29,7 +29,7 @@
   async function action(name: string, body: Record<string, unknown> = {}) {
     busy = name;
     try {
-      const r = await fetch(`/__ufoundry/shell/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await fetch(`/__umcode/shell/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       if (j.message) app.toast('info', j.message);
@@ -97,7 +97,7 @@
       <div class="flex items-center">
         <div>
           <div>Command-line tool</div>
-          <div class="text-xs text-muted">{shell.cliInstalled ? `Installed at ${shell.cliPath}` : 'Adds `ufoundry` to /usr/local/bin (asks for your password).'}</div>
+          <div class="text-xs text-muted">{shell.cliInstalled ? `Installed at ${shell.cliPath}` : 'Adds `umcode` to /usr/local/bin (asks for your password).'}</div>
         </div>
         <button class="btn-outline btn-sm ml-auto" disabled={!!busy} onclick={() => action('installCLI')}>{shell.cliInstalled ? 'Reinstall' : 'Install'}</button>
       </div>

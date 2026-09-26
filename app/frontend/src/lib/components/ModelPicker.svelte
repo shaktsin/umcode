@@ -88,7 +88,7 @@
       app.routing = result;
       const saved = result.pools.find((item) => item.id === pool!.id)!;
       onchange({ ...value, provider: 'pool', model: saved.id, credentialId: undefined });
-      window.dispatchEvent(new CustomEvent('ufoundry:routing'));
+      window.dispatchEvent(new CustomEvent('umcode:routing'));
     } catch (error) {
       app.toast('error', error instanceof Error ? error.message : 'Could not save this model pool.');
       syncSelected();

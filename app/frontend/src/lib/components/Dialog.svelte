@@ -8,7 +8,7 @@
       return;
     }
     try {
-      const response = await fetch('/__ufoundry/shell/chooseFolder', { method: 'POST' });
+      const response = await fetch('/__umcode/shell/chooseFolder', { method: 'POST' });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
       if (dialog.current?.kind === 'project') dialog.current.path = result.path;

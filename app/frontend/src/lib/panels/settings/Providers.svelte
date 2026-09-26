@@ -142,7 +142,7 @@
     if (!anchor) return;
     event.preventDefault();
     try {
-      const response = await fetch('/__ufoundry/shell/openURL', {
+      const response = await fetch('/__umcode/shell/openURL', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: anchor.href }),
       });
       if (!response.ok) throw new Error('Could not open link in the browser');

@@ -1,6 +1,6 @@
 UMCode Linux desktop bundle
 
-Run ./ufoundry-launch to start the app. Run ./install-desktop.sh to add a
+Run ./umcode-launch to start the app. Run ./install-desktop.sh to add a
 launcher to this user's desktop application menu. No CLI or browser UI is
 installed.
 
@@ -13,4 +13,4 @@ but compute will report unavailable.
 
 Keep the folder together when moving/updating the app. Removing it removes the
 app bundle; the desktop entry can be removed from
-~/.local/share/applications/ufoundry.desktop (displayed as UMCode).
+~/.local/share/applications/umcode.desktop (displayed as UMCode).

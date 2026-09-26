@@ -1,23 +1,23 @@
 # UMCode Go engine
 
-The Go engine is the new core of UMCode: one binary (`ufoundry`) that is both the always-on engine and the CLI. The Mac app and other clients talk to it through the engine protocol described below. It runs alongside the Python app during the migration and shares its `~/.ufoundry` folder and SQLite database.
+The Go engine is the new core of UMCode: one binary (`umcode`) that is both the always-on engine and the CLI. The Mac app and other clients talk to it through the engine protocol described below. State lives in `~/.umcode` (SQLite database, config, run socket and token).
 
-Status: milestones M0–M5 of the [rewrite plan](https://claude.ai/code/artifact/259caf02-238a-46e2-ad53-ee346d97c407) (engine, agent loop, skills, MCP, scheduled tasks, projects and the sandbox), plus the Mac app (M5) and the engine side of M6 (chats, models, complexity, API keys and usage). Connectors (Telegram, Gmail, Discord), Google Workspace tools and agent teams are still served by the Python app.
+Status: milestones M0–M5 of the [rewrite plan](https://claude.ai/code/artifact/259caf02-238a-46e2-ad53-ee346d97c407) (engine, agent loop, skills, MCP, scheduled tasks, projects and the sandbox), plus the Mac app (M5) and the engine side of M6 (chats, models, complexity, API keys and usage). The former Python assistant (connectors, Google Workspace tools, agent teams, web control panel) has been removed.
 
 ## Quick start
 
 ```sh
-make go-build                       # → bin/ufoundry
-./bin/ufoundry engine               # run in the foreground (Ctrl-C to stop)
-./bin/ufoundry service install      # or: start at login (launchd / systemd --user)
+make go-build                       # → bin/umcode
+./bin/umcode engine               # run in the foreground (Ctrl-C to stop)
+./bin/umcode service install      # or: start at login (launchd / systemd --user)
 
-./bin/ufoundry key add --provider claude --label personal   # prompts for the key, then tests it
-./bin/ufoundry project add ~/code/my-app                    # the folder the agent may work in
-./bin/ufoundry chat --project prj_… "add a test for the parser"
-./bin/ufoundry chat                 # interactive, no project: read-only
+./bin/umcode key add --provider claude --label personal   # prompts for the key, then tests it
+./bin/umcode project add ~/code/my-app                    # the folder the agent may work in
+./bin/umcode chat --project prj_… "add a test for the parser"
+./bin/umcode chat                 # interactive, no project: read-only
 ```
 
-API keys go to the macOS Keychain (service `com.ufoundry`); on Linux they are kept in `~/.ufoundry/secrets.json` (mode 0600). On first start the engine imports the keys the Python app already has, for any provider with no key yet: `api_key` values in `config.yaml`, `UFOUNDRY_*`/`UMABOT_*` environment variables, `~/.ufoundry/.env`, and the Python app's Keychain entries (service `ufoundry`, or `umabot` from before the rename). You can then remove keys from `config.yaml`.
+API keys go to the macOS Keychain (service `com.umcode`); on Linux they are kept in `~/.umcode/secrets.json` (mode 0600). On first start the engine imports `api_key` values from `config.yaml` (or the `UMCODE_LLM_*` environment variables) for any provider with no key yet; you can then remove them from `config.yaml`.
 
 ## The Mac app
 
@@ -38,7 +38,7 @@ The window is a rail plus up to three columns:
 | 2 · Side chat | “Ask about this” on any message, file or diff opens a child chat in the same project; several stack as tabs, and *Promote* hands its answer back to the main composer |
 | 3 · Inspector | A file, a diff or a long tool result, read-only, with *Undo* for a change and *Ask about this* to spin off a side chat |
 
-The shell itself does the native parts: a menu-bar item with the engine's state, the pending-approval count and the project list; approval notifications with Approve and Deny buttons; starting the engine (as a `SMAppService` login item when the app is installed, otherwise as a child process); *Open at Login*; and installing the `ufoundry` command-line tool. The UI reaches the engine through `/__ufoundry/connection`, which the shell answers with the WebSocket URL and the token from `~/.ufoundry/run/token`; `make app-dev` answers the same path from the Vite dev server, which is why the UI runs unchanged in a browser.
+The shell itself does the native parts: a menu-bar item with the engine's state, the pending-approval count and the project list; approval notifications with Approve and Deny buttons; starting the engine (as a `SMAppService` login item when the app is installed, otherwise as a child process); *Open at Login*; and installing the `umcode` command-line tool. The UI reaches the engine through `/__umcode/connection`, which the shell answers with the WebSocket URL and the token from `~/.umcode/run/token`; `make app-dev` answers the same path from the Vite dev server, which is why the UI runs unchanged in a browser.
 
 The theme is warm rather than cold — paper and ink with one clay accent, and sage/rust diffs — and follows the system's light or dark setting.
 
@@ -48,17 +48,17 @@ A **project** is a folder the agent may work in, and it is the sandbox: `file.re
 
 Each project carries its own defaults (provider, model, complexity, key), its tool switches (`shell`, `network`) and, optionally, the MCP servers it may use. Shell commands run with the project root as the working directory and an environment with no API keys in it; with `network` off, commands that obviously reach out (`curl`, `git push`, `npm install`, …) are refused with a message rather than failing halfway.
 
-**`AGENT.md` is the project's system prompt.** Every turn composes `~/.ufoundry/AGENT.md` (your standing instructions) → the project's `AGENT.md` → the nearest `AGENT.md` in the subtree being worked on. `AGENTS.md` (Codex) and `CLAUDE.md` (Claude Code) are read as fallbacks, so a repo set up for either works unchanged. Files are re-read when they change on disk and capped at 32 KB each; `ufoundry project instructions ID --composed` prints exactly what the agent receives.
+**`AGENT.md` is the project's system prompt.** Every turn composes `~/.umcode/AGENT.md` (your standing instructions) → the project's `AGENT.md` → the nearest `AGENT.md` in the subtree being worked on. `AGENTS.md` (Codex) and `CLAUDE.md` (Claude Code) are read as fallbacks, so a repo set up for either works unchanged. Files are re-read when they change on disk and capped at 32 KB each; `umcode project instructions ID --composed` prints exactly what the agent receives.
 
-Every file the agent creates, changes or deletes becomes a **`fileChange` item** in the chat with a unified diff, and is recorded with the previous content (up to 1 MB), so `ufoundry project diff` shows what a turn did and `ufoundry project revert TURN_ID` puts it back. Answering an approval with `remember: true` stores that decision for the project, so "always allow `npm test` here" stops asking.
+Every file the agent creates, changes or deletes becomes a **`fileChange` item** in the chat with a unified diff, and is recorded with the previous content (up to 1 MB), so `umcode project diff` shows what a turn did and `umcode project revert TURN_ID` puts it back. Answering an approval with `remember: true` stores that decision for the project, so "always allow `npm test` here" stops asking.
 
 ```sh
-ufoundry project add ~/code/my-app --name my-app        # register a folder
-ufoundry project show prj_…                             # folder, git branch, defaults, AGENT.md
-ufoundry project instructions prj_… -f AGENT.md         # write the project's instructions
-ufoundry project diff prj_…                             # what the agent changed
-ufoundry project revert trn_…                           # undo one turn's edits
-ufoundry project set prj_… --network on -m claude-opus-5
+umcode project add ~/code/my-app --name my-app        # register a folder
+umcode project show prj_…                             # folder, git branch, defaults, AGENT.md
+umcode project instructions prj_… -f AGENT.md         # write the project's instructions
+umcode project diff prj_…                             # what the agent changed
+umcode project revert trn_…                           # undo one turn's edits
+umcode project set prj_… --network on -m claude-opus-5
 ```
 
 ## CLI
@@ -75,7 +75,7 @@ ufoundry project set prj_… --network on -m claude-opus-5
 | `usage [--by credential\|model\|thread\|role\|day] [--days N] [--key ID]` | Tokens and cost. |
 | `approvals / approve ID / deny ID` | Answer approvals from another terminal. |
 | `task list [--all] / add / cancel ID / run ID / runs ID` | Scheduled tasks. `add` takes `--at 2026-09-20T09:00`, `--daily 09:00`, `--weekly mon@09:00`, `--hourly 15` or `--cron "0 9 * * mon-fri"`, plus `--tz`, `-p/-m/-c`. |
-| `skill list / show NAME / install PATH_OR_GIT_URL / remove NAME` | Skills in `./skills`, `~/.ufoundry/skills` and `skill_dirs`. |
+| `skill list / show NAME / install PATH_OR_GIT_URL / remove NAME` | Skills in `./skills`, `~/.umcode/skills` and `skill_dirs`. |
 | `mcp [list] / mcp restart NAME` | MCP servers from `mcp_servers` and their status. |
 | `tools` | Every tool the agent can call, with its source. |
 | `status`, `service install\|uninstall\|status`, `version` | Engine management. |
@@ -101,22 +101,22 @@ Reasoning maps to Claude adaptive thinking + `output_config.effort` (or a thinki
 
 ## Skills, MCP and scheduled tasks
 
-**Skills** use the same `SKILL.md` format as the Python app and are found in `./skills`, `~/.ufoundry/skills` and any `skill_dirs`. The system prompt lists each skill's name and description; the agent reads full instructions with `skill.get_instructions` and runs declared scripts with `skill.run_script`, or passes `skill: <name>` to `shell.run` to use the skill's environment. Scripts get `{"input": <args>, "config": <skills.<name>.config>}` on stdin (the `skill-template` contract), run in the skill folder with its `.venv` (created with `uv` when available, reusing venvs the Python app made), `extra_path`, `env` and `SKILL_DIR`, and never inherit the engine's own API keys. `risk_level` in `SKILL.md` (default yellow) decides approvals.
+**Skills** use the `SKILL.md` format and are found in `./skills`, `~/.umcode/skills` and any `skill_dirs`. The system prompt lists each skill's name and description; the agent reads full instructions with `skill.get_instructions` and runs declared scripts with `skill.run_script`, or passes `skill: <name>` to `shell.run` to use the skill's environment. Scripts get `{"input": <args>, "config": <skills.<name>.config>}` on stdin (the `skill-template` contract), run in the skill folder with its `.venv` (created with `uv` when available), `extra_path`, `env` and `SKILL_DIR`, and never inherit the engine's own API keys. `risk_level` in `SKILL.md` (default yellow) decides approvals.
 
-**MCP servers** from `mcp_servers` (stdio or Streamable HTTP, same keys as the Python app) start in the background; their tools appear as `mcp_<server>_<tool>`. Risk comes from the server's `risk_level` if set, otherwise from the tool's annotations: read-only is green, destructive is red, anything else yellow. A server that exits is restarted on the next call.
+**MCP servers** from `mcp_servers` (stdio or Streamable HTTP) start in the background; their tools appear as `mcp_<server>_<tool>`. Risk comes from the server's `risk_level` if set, otherwise from the tool's annotations: read-only is green, destructive is red, anything else yellow. A server that exits is restarted on the next call.
 
-**Scheduled tasks** share the `tasks` table with the Python app. Each run becomes a turn in the task's own thread (so you can read its history and cost), with the task's provider/model/complexity. Approvals work as in chat. The agent can create, list and cancel tasks itself (`task.create`, `task.list`, `task.cancel`). Differences from the Python app: cron schedules are new (the Python app ignores them), and a failed one-time task is not retried in a loop. Both schedulers lease tasks before running them, so running both apps never runs a task twice.
+**Scheduled tasks** are stored in the `tasks` table. Each run becomes a turn in the task's own thread (so you can read its history and cost), with the task's provider/model/complexity. Approvals work as in chat. The agent can create, list and cancel tasks itself (`task.create`, `task.list`, `task.cancel`). A failed one-time task is not retried in a loop. Tasks are leased before running, so a task never runs twice.
 
 ## Usage and cost
 
-Every model request writes one row to `llm_usage`: key, provider, model, thread, turn, role (`chat`, `title`), input / cached / output / reasoning tokens, cost, latency and status. Cost uses the bundled price table (`internal/models/catalog.json`, list prices checked 2026-09-18) or your override (`ufoundry model price`). Models without a known price cost $0 and show `?`. When a provider reports no usage, tokens are estimated and flagged.
+Every model request writes one row to `llm_usage`: key, provider, model, thread, turn, role (`chat`, `title`), input / cached / output / reasoning tokens, cost, latency and status. Cost uses the bundled price table (`internal/models/catalog.json`, list prices checked 2026-09-18) or your override (`umcode model price`). Models without a known price cost $0 and show `?`. When a provider reports no usage, tokens are estimated and flagged.
 
 ## New config keys
 
 ```yaml
 runtime:
-  engine_ws_port: 8766          # protocol WebSocket (0 = off); separate from the Python gateway's ws_port
-  socket_path: ~/.ufoundry/run/engine.sock
+  engine_ws_port: 8766          # protocol WebSocket (0 = off); separate from ws_port
+  socket_path: ~/.umcode/run/engine.sock
 policy:
   approval_timeout_minutes: 30  # unanswered approvals count as denied
 models:
@@ -141,7 +141,7 @@ mcp_servers:
 
 ## Protocol
 
-JSON-RPC 2.0, one message per line on the Unix socket `~/.ufoundry/run/engine.sock` (0600), or one per text frame on `ws://127.0.0.1:8766/ws` with `Authorization: Bearer <~/.ufoundry/run/token>` (or `?token=`). The token is regenerated at each engine start. Browser clients may connect from the Mac app's webview (`wails://…`) or a local dev server; other origins are refused. Clients must call `initialize` first (`protocolVersion` major must match; `admin: true` to receive and answer approvals).
+JSON-RPC 2.0, one message per line on the Unix socket `~/.umcode/run/engine.sock` (0600), or one per text frame on `ws://127.0.0.1:8766/ws` with `Authorization: Bearer <~/.umcode/run/token>` (or `?token=`). The token is regenerated at each engine start. Browser clients may connect from the Mac app's webview (`wails://…`) or a local dev server; other origins are refused. Clients must call `initialize` first (`protocolVersion` major must match; `admin: true` to receive and answer approvals).
 
 Types are in `internal/protocol`. Methods:
 
@@ -169,7 +169,7 @@ Approvals are a notification plus `approval/respond` rather than a server-to-cli
 ## Layout
 
 ```
-cmd/ufoundry/        CLI + engine entry point
+cmd/umcode/        CLI + engine entry point
 internal/protocol/   protocol types and method names
 internal/server/     Unix socket + WebSocket transports (e2e tests live here)
 internal/client/     Go protocol client (used by the CLI)
@@ -186,7 +186,7 @@ internal/tasks/      schedules (incl. cron), scheduler loop, task tools
 internal/procutil/   subprocess cleanup (process groups, timeouts)
 internal/policy/     approval policy
 internal/store/      SQLite (pure Go, WASM build of SQLite) + migrations
-internal/config/     config.yaml loader (reads the Python app's keys)
+internal/config/     config.yaml loader
 internal/secrets/    Keychain (macOS) / file store
 ```
 
@@ -195,12 +195,12 @@ internal/secrets/    Keychain (macOS) / file store
 ```
 app/                 Wails v3 shell (its own Go module; needs Go 1.25)
   main.go            window, menu bar, engine lifecycle
-  shell.go           /__ufoundry/* endpoints, tray menu, login item, CLI install
+  shell.go           /__umcode/* endpoints, tray menu, login item, CLI install
   watcher.go         admin connection: approval notifications, counts, projects
   engine.go          finds and supervises the engine (SMAppService or child process)
   build/macos/       Info.plist, the engine LaunchAgent, bundle.sh
                      (the engine sits in Contents/Resources: macOS ignores
-                     case, so Contents/MacOS/ufoundry would be the app itself)
+                     case, so Contents/MacOS/umcode would be the app itself)
   frontend/          Svelte 5 + Vite UI (svelte-check, vitest)
 ```
 

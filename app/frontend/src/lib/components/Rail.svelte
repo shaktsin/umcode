@@ -13,7 +13,7 @@
   import { chat } from '$lib/stores/chat.svelte';
   import ThreadList from './ThreadList.svelte';
 
-  const KEY = 'ufoundry.railCollapsed';
+  const KEY = 'umcode.railCollapsed';
   let collapsed = $state(false);
   try { collapsed = localStorage.getItem(KEY) === '1'; } catch { /* use default */ }
 

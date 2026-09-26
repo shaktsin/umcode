@@ -209,7 +209,7 @@ class ChatState {
     });
     app.onConnected(() => this.reload());
     // The approved models changed under us: re-ask what each chat would use.
-    window.addEventListener('ufoundry:routing', () => this.each((v) => void v.loadRoute()));
+    window.addEventListener('umcode:routing', () => this.each((v) => void v.loadRoute()));
   }
 
   private each(fn: (v: ThreadView) => void) {

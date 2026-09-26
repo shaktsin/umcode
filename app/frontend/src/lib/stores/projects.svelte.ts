@@ -2,7 +2,7 @@ import { app } from './app.svelte';
 import { errMsg } from '$lib/format';
 import type { FileEntry, Project, ProjectFilesResult, ProjectTools } from '$lib/types';
 
-const LAST_PROJECT = 'ufoundry.lastProject';
+const LAST_PROJECT = 'umcode.lastProject';
 
 function remember(id: string | null) {
   try {

@@ -4,16 +4,16 @@
 # architecture from macOS or Linux; the shipped app does not require Docker.
 set -euo pipefail
 
-ARCHIVE="${UF_GUEST_ROOTFS_ARCHIVE:-}"
-OUT="${UF_GUEST_ROOTFS_OUT:-}"
-ARCH="${UF_GUEST_ARCH:-$(uname -m)}"
+ARCHIVE="${UMCODE_GUEST_ROOTFS_ARCHIVE:-}"
+OUT="${UMCODE_GUEST_ROOTFS_OUT:-}"
+ARCH="${UMCODE_GUEST_ARCH:-$(uname -m)}"
 
 if [[ -z "$ARCHIVE" || ! -f "$ARCHIVE" ]]; then
-    echo "Set UF_GUEST_ROOTFS_ARCHIVE to the pinned Alpine minirootfs archive." >&2
+    echo "Set UMCODE_GUEST_ROOTFS_ARCHIVE to the pinned Alpine minirootfs archive." >&2
     exit 2
 fi
 if [[ -z "$OUT" || "$OUT" != /* ]]; then
-    echo "Set UF_GUEST_ROOTFS_OUT to a new absolute output directory." >&2
+    echo "Set UMCODE_GUEST_ROOTFS_OUT to a new absolute output directory." >&2
     exit 2
 fi
 if [[ -e "$OUT" ]]; then
@@ -51,7 +51,7 @@ packages=(
     bash build-base ca-certificates coreutils curl findutils git go
     nodejs npm openssh-client python3 py3-pip ripgrep
 )
-if [[ "${UF_GUEST_BROWSER:-1}" == 1 ]]; then
+if [[ "${UMCODE_GUEST_BROWSER:-1}" == 1 ]]; then
     packages+=(chromium)
 fi
 

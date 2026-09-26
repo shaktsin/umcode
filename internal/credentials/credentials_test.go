@@ -10,7 +10,7 @@ import (
 	"github.com/shaktsin/umcode/internal/store"
 )
 
-func TestImportLegacyKeys(t *testing.T) {
+func TestImportConfigKeys(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -21,16 +21,13 @@ func TestImportLegacyKeys(t *testing.T) {
 	s := New(st, sec, llm.NewRegistry())
 	cfg := config.Default(t.TempDir())
 	cfg.LLM.Provider = "openai"
-	legacy := map[string]string{
-		"UMABOT_LLM_API_KEY":           "sk-main-openai", // pre-rename main key → openai
-		"UFOUNDRY_LLM_GEMINI_API_KEY":  "gm-key-1111",    // provider-specific key
-		"UMABOT_LLM_ANTHROPIC_API_KEY": "sk-ant-2222",    // alias
-	}
-	added, err := s.ImportConfigKeys(ctx, cfg, func(n string) string { return legacy[n] })
-	if err != nil || len(added) != 3 {
+	cfg.LLM.APIKey = "sk-main-openai"
+	cfg.LLM.Providers = map[string]config.LLMProviderConfig{"gemini": {APIKey: "gm-key-1111"}}
+	added, err := s.ImportConfigKeys(ctx, cfg)
+	if err != nil || len(added) != 2 {
 		t.Fatalf("added=%+v err=%v", added, err)
 	}
-	for _, prov := range []string{"openai", "gemini", "claude"} {
+	for _, prov := range []string{"openai", "gemini"} {
 		r, err := s.Resolve(ctx, prov, "")
 		if err != nil {
 			t.Fatalf("%s: %v", prov, err)
@@ -40,7 +37,7 @@ func TestImportLegacyKeys(t *testing.T) {
 		}
 	}
 	// Second run imports nothing.
-	added, _ = s.ImportConfigKeys(ctx, cfg, func(n string) string { return legacy[n] })
+	added, _ = s.ImportConfigKeys(ctx, cfg)
 	if len(added) != 0 {
 		t.Fatalf("re-imported: %+v", added)
 	}

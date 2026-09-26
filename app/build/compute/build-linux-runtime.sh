@@ -8,9 +8,9 @@ REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/sources.lock"
 
-OUT="${UF_LIBKRUN_BUNDLE_OUT:-}"
+OUT="${UMCODE_LIBKRUN_BUNDLE_OUT:-}"
 if [[ -z "$OUT" ]]; then
-    echo "Set UF_LIBKRUN_BUNDLE_OUT to a new runtime staging directory." >&2
+    echo "Set UMCODE_LIBKRUN_BUNDLE_OUT to a new runtime staging directory." >&2
     exit 2
 fi
 if [[ "$OUT" != /* ]]; then
@@ -55,8 +55,8 @@ if ! python3 -c 'import elftools' >/dev/null 2>&1; then
     exit 2
 fi
 
-jobs="${UF_LIBKRUN_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/ufoundry-runtime-build.XXXXXX")"
+jobs="${UMCODE_LIBKRUN_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/umcode-runtime-build.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
 prefix="$work_dir/prefix/usr/local"
 
@@ -75,17 +75,17 @@ if [[ "$actual_commit" != "$libkrunfw_commit" ]]; then
     echo "Unexpected libkrunfw commit: $actual_commit" >&2
     exit 2
 fi
-if [[ -n "${UF_LIBKRUNFW_KERNEL_C:-}" ]]; then
+if [[ -n "${UMCODE_LIBKRUNFW_KERNEL_C:-}" ]]; then
     if [[ "$guest_arch" != aarch64 ]]; then
-        echo "The pinned prebuilt kernel bundle is ARM64-only; omit UF_LIBKRUNFW_KERNEL_C on x86_64." >&2
+        echo "The pinned prebuilt kernel bundle is ARM64-only; omit UMCODE_LIBKRUNFW_KERNEL_C on x86_64." >&2
         exit 2
     fi
-    actual_sha="$(sha256sum "$UF_LIBKRUNFW_KERNEL_C" | awk '{print $1}')"
+    actual_sha="$(sha256sum "$UMCODE_LIBKRUNFW_KERNEL_C" | awk '{print $1}')"
     if [[ "$actual_sha" != "$guest_kernel_c_bundle_aarch64_sha256" ]]; then
         echo "Unexpected ARM64 kernel bundle checksum: $actual_sha" >&2
         exit 2
     fi
-    cp "$UF_LIBKRUNFW_KERNEL_C" "$work_dir/libkrunfw/kernel.c"
+    cp "$UMCODE_LIBKRUNFW_KERNEL_C" "$work_dir/libkrunfw/kernel.c"
 fi
 # libkrunfw passes MAKEFLAGS as positional arguments into its kernel sub-make.
 # Avoid `make -C` here: GNU make adds a bare `w` (print-directory) flag for -C,
@@ -101,10 +101,10 @@ printf '%s  %s\n' "$guest_sha" "$rootfs_archive" | sha256sum --check --status ||
     exit 2
 }
 guest_rootfs="$work_dir/guest-rootfs"
-UF_GUEST_ROOTFS_ARCHIVE="$rootfs_archive" UF_GUEST_ROOTFS_OUT="$guest_rootfs" UF_GUEST_ARCH="$guest_arch" \
+UMCODE_GUEST_ROOTFS_ARCHIVE="$rootfs_archive" UMCODE_GUEST_ROOTFS_OUT="$guest_rootfs" UMCODE_GUEST_ARCH="$guest_arch" \
     "$SCRIPT_DIR/prepare-guest-rootfs.sh"
 
-CGO_ENABLED=1 UF_LIBKRUN_PREFIX="$prefix" UF_GUEST_ROOTFS="$guest_rootfs" \
-    UF_LIBKRUN_BUNDLE_OUT="$OUT" "$SCRIPT_DIR/build-bridge.sh"
+CGO_ENABLED=1 UMCODE_LIBKRUN_PREFIX="$prefix" UMCODE_GUEST_ROOTFS="$guest_rootfs" \
+    UMCODE_LIBKRUN_BUNDLE_OUT="$OUT" "$SCRIPT_DIR/build-bridge.sh"
 
 echo "Linux runtime staged at: $OUT"

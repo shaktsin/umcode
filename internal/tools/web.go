@@ -167,7 +167,7 @@ func (t *webFetch) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; UMCode/1.0; +https://ufoundry.dev)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; UMCode/1.0)")
 	req.Header.Set("Accept", "text/html, text/plain, application/xhtml+xml;q=0.9, */*;q=0.1")
 	resp, err := t.client.Do(req)
 	if err != nil {

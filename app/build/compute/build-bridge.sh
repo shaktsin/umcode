@@ -4,20 +4,20 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
-PREFIX="${UF_LIBKRUN_PREFIX:-}"
-GUEST_ROOTFS="${UF_GUEST_ROOTFS:-}"
-OUT="${UF_LIBKRUN_BUNDLE_OUT:-}"
+PREFIX="${UMCODE_LIBKRUN_PREFIX:-}"
+GUEST_ROOTFS="${UMCODE_GUEST_ROOTFS:-}"
+OUT="${UMCODE_LIBKRUN_BUNDLE_OUT:-}"
 
 if [[ -z "$PREFIX" || ! -f "$PREFIX/include/libkrun.h" ]]; then
-    echo "Set UF_LIBKRUN_PREFIX to a staged libkrun/libkrunfw install prefix." >&2
+    echo "Set UMCODE_LIBKRUN_PREFIX to a staged libkrun/libkrunfw install prefix." >&2
     exit 2
 fi
 if [[ -z "$GUEST_ROOTFS" || ! -d "$GUEST_ROOTFS" || ( ! -e "$GUEST_ROOTFS/bin/sh" && ! -L "$GUEST_ROOTFS/bin/sh" ) || ( ! -e "$GUEST_ROOTFS/bin/mount" && ! -L "$GUEST_ROOTFS/bin/mount" ) ]]; then
-    echo "Set UF_GUEST_ROOTFS to a Linux rootfs containing /bin/sh and /bin/mount." >&2
+    echo "Set UMCODE_GUEST_ROOTFS to a Linux rootfs containing /bin/sh and /bin/mount." >&2
     exit 2
 fi
 if [[ -z "$OUT" ]]; then
-    echo "Set UF_LIBKRUN_BUNDLE_OUT to an empty staging directory." >&2
+    echo "Set UMCODE_LIBKRUN_BUNDLE_OUT to an empty staging directory." >&2
     exit 2
 fi
 if [[ -e "$OUT" ]]; then
@@ -70,6 +70,6 @@ fi
 export CGO_ENABLED=1
 
 echo "==> Building private libkrun bridge for $(uname -s)/$(uname -m)"
-(cd "$REPO" && go build -trimpath -tags=libkrun -o "$OUT/ufoundry-compute" ./cmd/ufoundry-compute)
-chmod 755 "$OUT/ufoundry-compute"
+(cd "$REPO" && go build -trimpath -tags=libkrun -o "$OUT/umcode-compute" ./cmd/umcode-compute)
+chmod 755 "$OUT/umcode-compute"
 echo "==> Staged private runtime: $OUT"

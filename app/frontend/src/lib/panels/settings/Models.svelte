@@ -35,7 +35,7 @@
     });
     if (r) health = r.rows ?? [];
     // Waking a key changes what a chat would run on.
-    if (clear) window.dispatchEvent(new CustomEvent('ufoundry:routing'));
+    if (clear) window.dispatchEvent(new CustomEvent('umcode:routing'));
   }
 
   const cooling = $derived(health.filter((h) => h.cooldownEnd));
@@ -165,7 +165,7 @@
       draft = structuredClone(result);
       dirty = false;
       // Open chats are showing what they would run on; that just changed.
-      window.dispatchEvent(new CustomEvent('ufoundry:routing'));
+      window.dispatchEvent(new CustomEvent('umcode:routing'));
       app.toast('info', 'Models and pools saved.');
     } catch (e) {
       app.toast('error', errMsg(e));

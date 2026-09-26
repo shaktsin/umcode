@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../../.."   # repo root
 REPO="$PWD"
 APP_DIR="$REPO/app"
-OUT="${UMCODE_APP_OUT:-${UFOUNDRY_APP_OUT:-$REPO/bin/UMCode.app}}"
+OUT="${UMCODE_APP_OUT:-$REPO/bin/UMCode.app}"
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUILD_ID="$(uuidgen | tr -d '-')"
@@ -38,7 +38,7 @@ ENGINE_LDFLAGS="-s -w -X github.com/shaktsin/umcode/internal/version.Version=$VE
 APP_LDFLAGS="-s -w -X main.Version=$VERSION -X main.BuildID=$BUILD_ID"
 
 build_engine() { # $1=arch $2=out
-    GOOS=darwin GOARCH="$1" CGO_ENABLED=1 go build -trimpath -ldflags "$ENGINE_LDFLAGS" -o "$2" ./cmd/ufoundry
+    GOOS=darwin GOARCH="$1" CGO_ENABLED=1 go build -trimpath -ldflags "$ENGINE_LDFLAGS" -o "$2" ./cmd/umcode
 }
 build_app() { # $1=arch $2=out
     (cd "$APP_DIR" && GOOS=darwin GOARCH="$1" CGO_ENABLED=1 go build -trimpath -tags production \
@@ -80,9 +80,9 @@ rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources" "$OUT/Contents/Library/LaunchAgents"
 cp "$TMP/app-bin" "$OUT/Contents/MacOS/UMCode"
 # The engine goes in Resources, not next to the app binary: the Mac's file
-# system ignores case, so Contents/MacOS/UMCode and .../ufoundry remain distinct.
-# same file and the engine would overwrite the app.
-cp "$TMP/engine-bin" "$OUT/Contents/Resources/ufoundry"
+# system ignores case, so Contents/MacOS/UMCode and Contents/MacOS/umcode would
+# be the same file and the engine would overwrite the app.
+cp "$TMP/engine-bin" "$OUT/Contents/Resources/umcode"
 # Computer Use is a separate helper bundle so macOS grants Screen Recording
 # and Accessibility access to the smallest component that needs it.
 COMPUTER_APP="$OUT/Contents/Resources/computer/UMCode Computer Use.app"
@@ -92,13 +92,13 @@ sed "s/__VERSION__/${VERSION#v}/g" "$APP_DIR/build/macos/computer-use/Info.plist
 printf 'APPL????' > "$COMPUTER_APP/Contents/PkgInfo"
 # Release builds may stage UMCode's private libkrun bridge and its runtime
 # assets here. This is an app-internal executable, not a user-facing CLI.
-if [[ -n "${UF_LIBKRUN_BUNDLE:-}" ]]; then
-    if [[ ! -x "$UF_LIBKRUN_BUNDLE/ufoundry-compute" ]]; then
-        echo "UF_LIBKRUN_BUNDLE must contain an executable ufoundry-compute bridge." >&2
+if [[ -n "${UMCODE_LIBKRUN_BUNDLE:-}" ]]; then
+    if [[ ! -x "$UMCODE_LIBKRUN_BUNDLE/umcode-compute" ]]; then
+        echo "UMCODE_LIBKRUN_BUNDLE must contain an executable umcode-compute bridge." >&2
         exit 1
     fi
     mkdir -p "$OUT/Contents/Resources/compute"
-    cp -Rp "$UF_LIBKRUN_BUNDLE/." "$OUT/Contents/Resources/compute/"
+    cp -Rp "$UMCODE_LIBKRUN_BUNDLE/." "$OUT/Contents/Resources/compute/"
 else
     echo "NOTICE: no libkrun runtime staged; isolated compute will be unavailable in this app build."
 fi
@@ -117,7 +117,7 @@ else
     echo "NOTICE: no Chromium runtime staged; the opt-in Visual QA plugin will report not run."
 fi
 sed "s/__VERSION__/${VERSION#v}/g" "$APP_DIR/build/macos/Info.plist" > "$OUT/Contents/Info.plist"
-cp "$APP_DIR/build/macos/com.ufoundry.engine.plist" "$OUT/Contents/Library/LaunchAgents/"
+cp "$APP_DIR/build/macos/com.umcode.engine.plist" "$OUT/Contents/Library/LaunchAgents/"
 printf 'APPL????' > "$OUT/Contents/PkgInfo"
 
 # sips can write a valid .icns directly. This is also more portable across
@@ -131,28 +131,28 @@ if ! cmp -s "$TMP/app-bin" "$OUT/Contents/MacOS/UMCode"; then
     echo "The app binary in the bundle is not the app; check where the engine was copied." >&2
     exit 1
 fi
-if cmp -s "$OUT/Contents/MacOS/UMCode" "$OUT/Contents/Resources/ufoundry"; then
+if cmp -s "$OUT/Contents/MacOS/UMCode" "$OUT/Contents/Resources/umcode"; then
     echo "The app and engine binaries are identical; the bundle is invalid." >&2
     exit 1
 fi
-if ! "$OUT/Contents/Resources/ufoundry" version | grep -q '^ufoundry '; then
-    echo "The bundled engine does not identify itself as the ufoundry CLI." >&2
+if ! "$OUT/Contents/Resources/umcode" version | grep -q '^umcode '; then
+    echo "The bundled engine does not identify itself as the umcode CLI." >&2
     exit 1
 fi
 
 echo "==> Signing"
 if [[ -n "$SIGN_ID" ]]; then
-    if [[ -x "$OUT/Contents/Resources/compute/ufoundry-compute" ]]; then
+    if [[ -x "$OUT/Contents/Resources/compute/umcode-compute" ]]; then
         # The private bridge is the process that creates the VM and therefore
         # must carry Apple's hypervisor entitlement in signed distribution builds.
         while IFS= read -r -d '' library; do
             codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$library"
         done < <(find "$OUT/Contents/Resources/compute" \( -type f -o -type d \) \( -name '*.dylib' -o -name '*.framework' \) -print0)
         codesign --force --options runtime --timestamp --entitlements "$APP_DIR/build/macos/hypervisor.entitlements" \
-            --sign "$SIGN_ID" "$OUT/Contents/Resources/compute/ufoundry-compute"
+            --sign "$SIGN_ID" "$OUT/Contents/Resources/compute/umcode-compute"
     fi
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$COMPUTER_APP"
-    codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$OUT/Contents/Resources/ufoundry"
+    codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$OUT/Contents/Resources/umcode"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$OUT"
     echo "Signed with: $SIGN_ID"
     echo "Notarize with: xcrun notarytool submit --keychain-profile <profile> --wait <zip> && xcrun stapler staple '$OUT'"
@@ -162,7 +162,7 @@ else
     echo "Ad-hoc signed. SMAppService login items need a Developer ID signature to register."
 fi
 
-if [[ -x "$OUT/Contents/Resources/compute/ufoundry-compute" ]]; then
+if [[ -x "$OUT/Contents/Resources/compute/umcode-compute" ]]; then
     # Re-apply the VM entitlement after outer-bundle signing. `--deep` in the
     # ad-hoc path above otherwise re-signs nested code without this entitlement.
     if [[ -n "$SIGN_ID" ]]; then
@@ -170,14 +170,14 @@ if [[ -x "$OUT/Contents/Resources/compute/ufoundry-compute" ]]; then
             codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$library"
         done < <(find "$OUT/Contents/Resources/compute" -type f -name '*.dylib' -print0)
         codesign --force --options runtime --timestamp --entitlements "$APP_DIR/build/macos/hypervisor.entitlements" \
-            --sign "$SIGN_ID" "$OUT/Contents/Resources/compute/ufoundry-compute"
+            --sign "$SIGN_ID" "$OUT/Contents/Resources/compute/umcode-compute"
         codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$OUT"
     else
         while IFS= read -r -d '' library; do
             codesign --force --sign - "$library"
         done < <(find "$OUT/Contents/Resources/compute" -type f -name '*.dylib' -print0)
         codesign --force --entitlements "$APP_DIR/build/macos/hypervisor.entitlements" --sign - \
-            "$OUT/Contents/Resources/compute/ufoundry-compute"
+            "$OUT/Contents/Resources/compute/umcode-compute"
         codesign --force --sign - "$OUT"
     fi
 fi

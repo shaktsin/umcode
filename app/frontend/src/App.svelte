@@ -18,7 +18,7 @@
 
   // Column widths are per project, and only a convenience, so a browser that
   // refuses storage simply gets the defaults.
-  const KEY = 'ufoundry.columns';
+  const KEY = 'umcode.columns';
   let sideWidth = $state(380);
   let inspectorWidth = $state(460);
   let narrow = $state(false);

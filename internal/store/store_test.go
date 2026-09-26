@@ -12,7 +12,7 @@ import (
 
 func TestLegacyBackfill(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "ufoundry.db")
+	path := filepath.Join(t.TempDir(), "umcode.db")
 	// Simulate a database created by the Python app.
 	raw, err := sql.Open("sqlite3", "file:"+path)
 	if err != nil {

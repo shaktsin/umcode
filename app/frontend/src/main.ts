@@ -9,7 +9,7 @@ import { inspector } from '$lib/stores/inspector.svelte';
 // Hooks the Go shell calls (window.ExecJS) from the menu bar and notifications.
 declare global {
   interface Window {
-    ufoundry: {
+    umcode: {
       newChat: () => void;
       show: (view: string) => void;
       openThread: (id: string) => void;
@@ -19,7 +19,7 @@ declare global {
     };
   }
 }
-window.ufoundry = {
+window.umcode = {
   newChat: () => chat.newChat(),
   show: (view) => (app.view = view as typeof app.view),
   openThread: (id) => void chat.open(id),

@@ -13,10 +13,10 @@ case "$ARCH" in
     *) echo "Unsupported Linux architecture: $ARCH" >&2; exit 2 ;;
 esac
 
-OUT="${UMCODE_APP_OUT:-${UFOUNDRY_APP_OUT:-$REPO/dist/UMCode-linux-$GOARCH}}"
-RUNTIME="${UF_LIBKRUN_BUNDLE:-}"
-if [[ -z "$RUNTIME" || ! -x "$RUNTIME/ufoundry-compute" || ! -d "$RUNTIME/rootfs" ]]; then
-    echo "Set UF_LIBKRUN_BUNDLE to a staged Linux private runtime bundle." >&2
+OUT="${UMCODE_APP_OUT:-${UMCODE_APP_OUT:-$REPO/dist/UMCode-linux-$GOARCH}}"
+RUNTIME="${UMCODE_LIBKRUN_BUNDLE:-}"
+if [[ -z "$RUNTIME" || ! -x "$RUNTIME/umcode-compute" || ! -d "$RUNTIME/rootfs" ]]; then
+    echo "Set UMCODE_LIBKRUN_BUNDLE to a staged Linux private runtime bundle." >&2
     exit 2
 fi
 if [[ -e "$OUT" ]]; then
@@ -49,25 +49,25 @@ echo "==> Frontend"
 (cd "$APP_DIR/frontend" && npm install --silent && npm run build --silent)
 echo "==> Linux app and engine ($GOARCH)"
 (cd "$REPO" && CGO_ENABLED=1 GOOS=linux GOARCH="$GOARCH" go build -trimpath \
-    -ldflags "$ENGINE_LDFLAGS" -o "$TMP/ufoundry-engine" ./cmd/ufoundry)
+    -ldflags "$ENGINE_LDFLAGS" -o "$TMP/umcode-engine" ./cmd/umcode)
 (cd "$APP_DIR" && CGO_ENABLED=1 GOOS=linux GOARCH="$GOARCH" go build -trimpath \
     -tags production -ldflags "$APP_LDFLAGS" -o "$TMP/UMCode" .)
 
 mkdir -p "$OUT/compute"
 install -m 755 "$TMP/UMCode" "$OUT/UMCode"
-install -m 755 "$TMP/ufoundry-engine" "$OUT/ufoundry"
+install -m 755 "$TMP/umcode-engine" "$OUT/umcode"
 cp -R "$RUNTIME/." "$OUT/compute/"
-install -m 755 "$SCRIPT_DIR/ufoundry-launch" "$OUT/ufoundry-launch"
+install -m 755 "$SCRIPT_DIR/umcode-launch" "$OUT/umcode-launch"
 install -m 755 "$SCRIPT_DIR/install-desktop.sh" "$OUT/install-desktop.sh"
-install -m 644 "$APP_DIR/icons/appicon.png" "$OUT/ufoundry.png"
-install -m 644 "$SCRIPT_DIR/ufoundry.desktop" "$OUT/ufoundry.desktop"
+install -m 644 "$APP_DIR/icons/appicon.png" "$OUT/umcode.png"
+install -m 644 "$SCRIPT_DIR/umcode.desktop" "$OUT/umcode.desktop"
 install -m 644 "$SCRIPT_DIR/README.txt" "$OUT/README.txt"
 
-"$OUT/ufoundry" version | grep -q '^ufoundry ' || {
+"$OUT/umcode" version | grep -q '^umcode ' || {
     echo "Bundled engine smoke check failed." >&2
     exit 1
 }
-test -x "$OUT/compute/ufoundry-compute"
+test -x "$OUT/compute/umcode-compute"
 test -s "$OUT/compute/lib/libkrun.so.1"
 test -s "$OUT/compute/lib/libkrunfw.so.5"
 echo "==> Portable app folder ready: $OUT"

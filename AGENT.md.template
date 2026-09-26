@@ -1,19 +1,18 @@
 # Agent Context
 
-This file is loaded automatically by ufoundry every time it starts.
+This file is loaded automatically by UMCode at the start of every turn.
 Edit it to give the assistant a persona, standing instructions, personal facts,
 or any domain knowledge it should always have.
 
-The content here is injected into every agent's system prompt — it applies to
-all requests, all connectors, and all spawned sub-agents.
+The content here is injected into the system prompt of every chat.
 
 ---
 
 ## About me
 
-<!-- Tell the bot who you are so it can tailor responses.
+<!-- Tell the assistant who you are so it can tailor responses.
      Examples:
-       - My name is Alex, I'm a backend engineer working primarily in Go and Python.
+       - My name is Alex, I'm a backend engineer working primarily in Go and TypeScript.
        - I'm based in New York (EST, UTC-5).
        - I prefer concise answers and code over long explanations.
 -->

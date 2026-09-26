@@ -216,7 +216,7 @@ wa_session/
 config.example.yaml.bak
 .DS_Store
 .codemem/
-ufoundry-*.bundle
+umcode-*.bundle
 /skills/
 /agent_teams/
 
