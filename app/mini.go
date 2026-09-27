@@ -68,7 +68,7 @@ func (s *Shell) HideMini() {
 	if win == nil {
 		return
 	}
-	application.InvokeAsync(win.Hide)
+	application.InvokeAsync(func() { win.Hide() })
 }
 
 // ToggleMini flips the overlay's visibility; used by the tray menu item.
