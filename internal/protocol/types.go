@@ -172,9 +172,11 @@ type Approval struct {
 
 // Credential is an API key record. The secret itself is never sent to clients.
 type Credential struct {
-	ID               string       `json:"id"`
-	Provider         string       `json:"provider"`
-	Label            string       `json:"label"`
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	// Kind is "api_key" or "chatgpt" (signed in with a ChatGPT account).
+	Kind             string       `json:"kind"`
 	BaseURL          string       `json:"baseUrl,omitempty"`
 	Last4            string       `json:"last4"`
 	Enabled          bool         `json:"enabled"`

@@ -269,6 +269,8 @@ export interface Credential {
   id: string;
   provider: string;
   label: string;
+  /** 'api_key', or 'chatgpt' for an OpenAI credential signed in with a ChatGPT account. */
+  kind: 'api_key' | 'chatgpt';
   baseUrl?: string;
   last4: string;
   enabled: boolean;
@@ -397,6 +399,20 @@ export interface UsageRow {
 export interface UsageSummary {
   rows: UsageRow[];
   total: UsageTotals;
+}
+
+export interface ChatGPTSignInStart {
+  sessionId: string;
+  verificationUrl: string;
+  userCode: string;
+  expiresInSec: number;
+}
+
+export interface ChatGPTSignInResult {
+  sessionId: string;
+  ok: boolean;
+  error?: string;
+  credential?: Credential;
 }
 
 export interface CredentialTestResult {

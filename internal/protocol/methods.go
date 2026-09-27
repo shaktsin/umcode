@@ -44,6 +44,10 @@ const (
 	MethodCredentialRotate = "credential/rotate"
 	MethodCredentialDelete = "credential/delete"
 
+	// Sign in with a ChatGPT account (OpenAI only) instead of adding an API key.
+	MethodChatGPTSignInStart  = "chatgpt/signin/start"
+	MethodChatGPTSignInCancel = "chatgpt/signin/cancel"
+
 	MethodUsageSummary   = "usage/summary"
 	MethodUsageSetBudget = "usage/setBudget"
 
@@ -53,6 +57,7 @@ const (
 
 // Notification names (engine → client).
 const (
+	NotifyChatGPTSignIn    = "chatgpt/signin/completed"
 	NotifyThreadUpdated    = "thread/updated"
 	NotifyTurnStarted      = "turn/started"
 	NotifyTurnCompleted    = "turn/completed"
@@ -365,4 +370,25 @@ type ThreadEvent struct {
 // ApprovalEvent wraps an approval.
 type ApprovalEvent struct {
 	Approval Approval `json:"approval"`
+}
+
+// ChatGPTSignInStart is returned when a ChatGPT sign-in begins: the user opens
+// VerificationURL in a browser and enters UserCode.
+type ChatGPTSignInStart struct {
+	SessionID       string `json:"sessionId"`
+	VerificationURL string `json:"verificationUrl"`
+	UserCode        string `json:"userCode"`
+	ExpiresInSec    int    `json:"expiresInSec"`
+}
+
+type ChatGPTSignInCancelParams struct {
+	SessionID string `json:"sessionId"`
+}
+
+// ChatGPTSignInResult is the notification sent when a sign-in ends.
+type ChatGPTSignInResult struct {
+	SessionID  string      `json:"sessionId"`
+	OK         bool        `json:"ok"`
+	Error      string      `json:"error,omitempty"`
+	Credential *Credential `json:"credential,omitempty"`
 }

@@ -265,6 +265,17 @@ func (s *Server) routes() map[string]handler {
 			}
 			return cred, nil
 		}),
+		protocol.MethodChatGPTSignInStart: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
+			res, err := e.Creds.StartChatGPTSignIn(ctx)
+			if err != nil {
+				return nil, protocol.Errorf(protocol.CodeInternal, "%v", err)
+			}
+			return res, nil
+		}),
+		protocol.MethodChatGPTSignInCancel: bind(func(ctx context.Context, c *conn, p protocol.ChatGPTSignInCancelParams) (any, error) {
+			e.Creds.CancelChatGPTSignIn(p.SessionID)
+			return okResult{true}, nil
+		}),
 		protocol.MethodCredentialTest: bind(func(ctx context.Context, c *conn, p protocol.CredentialIDParams) (any, error) {
 			return e.Creds.Test(ctx, p.CredentialID)
 		}),

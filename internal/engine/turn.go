@@ -636,7 +636,8 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 			}
 		}
 		totals.CostUSD = models.Cost(res.meta, llm.Usage{InputTokens: totals.InputTokens,
-			CachedInputTokens: totals.CachedInputTokens, OutputTokens: totals.OutputTokens})
+			CachedInputTokens: totals.CachedInputTokens, OutputTokens: totals.OutputTokens,
+			Subscription: cred.Material.Kind == llm.KindChatGPT})
 		budget.addUsage(totals)
 		if err := e.Store.InsertUsage(sctx, store.UsageRecord{CredentialID: cred.Record.ID, Provider: res.sel.Provider,
 			Model: res.sel.Model, ThreadID: turn.ThreadID, TurnID: turn.ID, Role: role, Usage: totals,

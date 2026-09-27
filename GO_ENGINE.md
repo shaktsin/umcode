@@ -164,6 +164,7 @@ Types are in `internal/protocol`. Methods:
 | Approvals | `approval/list`, `approval/respond` |
 | Providers, models | `provider/list`, `model/list`, `model/setHidden`, `model/setPrice`, `model/refresh` |
 | API keys | `credential/list`, `credential/add`, `credential/test`, `credential/update`, `credential/rotate`, `credential/delete` |
+| ChatGPT sign-in (OpenAI) | `chatgpt/signin/start`, `chatgpt/signin/cancel`; notification `chatgpt/signin/completed`. A credential has `kind`: `api_key` or `chatgpt` |
 | Usage | `usage/summary`, `usage/setBudget` |
 | Complexity | `complexity/getDefaults`, `complexity/setDefaults` |
 | Tasks | `task/list`, `task/create`, `task/cancel`, `task/runNow`, `task/runs` |

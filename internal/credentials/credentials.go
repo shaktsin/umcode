@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/chatgpt"
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -28,11 +30,20 @@ type Service struct {
 	secrets secrets.Store
 	llms    *llm.Registry
 	now     func() time.Time
+
+	// ChatGPT is the auth client for "Sign in with ChatGPT" (tests replace it).
+	ChatGPT *chatgpt.Client
+	// OnSignIn is called when a ChatGPT sign-in finishes.
+	OnSignIn func(protocol.ChatGPTSignInResult)
+
+	refreshMu sync.Mutex
+	signMu    sync.Mutex
+	signins   map[string]context.CancelFunc
 }
 
 // New returns a Service.
 func New(st *store.Store, sec secrets.Store, llms *llm.Registry) *Service {
-	return &Service{st: st, secrets: sec, llms: llms, now: time.Now}
+	return &Service{st: st, secrets: sec, llms: llms, now: time.Now, ChatGPT: &chatgpt.Client{}, signins: map[string]context.CancelFunc{}}
 }
 
 func secretKey(id string) string { return "credential/" + id }
@@ -107,6 +118,9 @@ func (s *Service) Rotate(ctx context.Context, id, secret string) (protocol.Crede
 	if _, err := s.st.GetCredential(ctx, id); err != nil {
 		return protocol.Credential{}, err
 	}
+	if c, _ := s.st.GetCredential(ctx, id); c.Kind == llm.KindChatGPT {
+		return protocol.Credential{}, errors.New("a ChatGPT sign-in has no key to replace; sign in again instead")
+	}
 	secret = strings.TrimSpace(secret)
 	if secret == "" {
 		return protocol.Credential{}, errors.New("API key is empty")
@@ -170,6 +184,9 @@ func (s *Service) Test(ctx context.Context, id string) (protocol.CredentialTestR
 }
 
 func (s *Service) material(c protocol.Credential) (llm.Credential, error) {
+	if c.Kind == llm.KindChatGPT {
+		return s.chatGPTMaterial(c)
+	}
 	secret, err := s.secrets.Get(secretKey(c.ID))
 	if err != nil && !(errors.Is(err, secrets.ErrNotFound) && c.Provider == "openai_compatible") {
 		return llm.Credential{}, fmt.Errorf("read secret for %s: %w", c.Label, err)

@@ -162,6 +162,9 @@ func (o *OpenAI) buildRequest(req Request) map[string]any {
 }
 
 func (o *OpenAI) Stream(ctx context.Context, cred Credential, req Request) (<-chan Event, error) {
+	if cred.Kind == KindChatGPT {
+		return o.streamChatGPT(ctx, cred, req)
+	}
 	body, err := json.Marshal(o.buildRequest(req))
 	if err != nil {
 		return nil, err
@@ -306,6 +309,9 @@ func (o *OpenAI) Stream(ctx context.Context, cred Credential, req Request) (<-ch
 }
 
 func (o *OpenAI) ListModels(ctx context.Context, cred Credential) ([]string, error) {
+	if cred.Kind == KindChatGPT {
+		return o.listChatGPTModels(ctx, cred)
+	}
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, o.base(cred)+"/models", nil)
 	if err != nil {
 		return nil, err
