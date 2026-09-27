@@ -2,9 +2,11 @@ package credentials
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,8 +18,69 @@ import (
 
 const signInWindow = 15 * time.Minute
 
+// Secret stores (the macOS Keychain in particular) reject quotes and limit
+// line length, so sign-in tokens are saved as base64 text in short chunks.
+const chunkSize = 1200
+
+const chunkMarker = "umcode-chunks:"
+
+func (s *Service) setLargeSecret(key, value string) error {
+	enc := base64.RawURLEncoding.EncodeToString([]byte(value))
+	var parts []string
+	for len(enc) > 0 {
+		n := min(chunkSize, len(enc))
+		parts = append(parts, enc[:n])
+		enc = enc[n:]
+	}
+	for i, p := range parts {
+		if err := s.secrets.Set(fmt.Sprintf("%s#%d", key, i), p); err != nil {
+			return err
+		}
+	}
+	// The index is written last, so a half-written set is never read.
+	return s.secrets.Set(key, chunkMarker+strconv.Itoa(len(parts)))
+}
+
+func (s *Service) getLargeSecret(key string) (string, error) {
+	head, err := s.secrets.Get(key)
+	if err != nil {
+		return "", err
+	}
+	rest, ok := strings.CutPrefix(head, chunkMarker)
+	if !ok {
+		return head, nil
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil || n <= 0 || n > 64 {
+		return "", errors.New("stored sign-in is unreadable")
+	}
+	var enc strings.Builder
+	for i := 0; i < n; i++ {
+		p, err := s.secrets.Get(fmt.Sprintf("%s#%d", key, i))
+		if err != nil {
+			return "", err
+		}
+		enc.WriteString(p)
+	}
+	b, err := base64.RawURLEncoding.DecodeString(enc.String())
+	return string(b), err
+}
+
+// deleteSecret removes a secret and any chunks that belong to it.
+func (s *Service) deleteSecret(key string) {
+	if head, err := s.secrets.Get(key); err == nil {
+		if rest, ok := strings.CutPrefix(head, chunkMarker); ok {
+			n, _ := strconv.Atoi(rest)
+			for i := 0; i < n && i < 64; i++ {
+				_ = s.secrets.Delete(fmt.Sprintf("%s#%d", key, i))
+			}
+		}
+	}
+	_ = s.secrets.Delete(key)
+}
+
 func (s *Service) loadTokens(id string) (chatgpt.Tokens, error) {
-	raw, err := s.secrets.Get(secretKey(id))
+	raw, err := s.getLargeSecret(secretKey(id))
 	if err != nil {
 		return chatgpt.Tokens{}, err
 	}
@@ -29,11 +92,12 @@ func (s *Service) loadTokens(id string) (chatgpt.Tokens, error) {
 }
 
 func (s *Service) saveTokens(id string, t chatgpt.Tokens) error {
+	t.IDToken = "" // only used to read the account details, which are kept separately
 	b, err := json.Marshal(t)
 	if err != nil {
 		return err
 	}
-	return s.secrets.Set(secretKey(id), string(b))
+	return s.setLargeSecret(secretKey(id), string(b))
 }
 
 // chatGPTMaterial returns a usable access token, refreshing it when it is
@@ -144,7 +208,7 @@ func (s *Service) saveChatGPT(ctx context.Context, t chatgpt.Tokens) (protocol.C
 	}
 	c, err = s.st.CreateCredential(ctx, c)
 	if err != nil {
-		_ = s.secrets.Delete(secretKey(c.ID))
+		s.deleteSecret(secretKey(c.ID))
 		return c, err
 	}
 	_ = s.st.Audit(ctx, "credential.signin", map[string]any{"id": c.ID, "provider": "openai", "kind": "chatgpt"})

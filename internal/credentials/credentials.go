@@ -140,7 +140,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if err := s.st.DeleteCredential(ctx, id); err != nil {
 		return err
 	}
-	_ = s.secrets.Delete(secretKey(id))
+	s.deleteSecret(secretKey(id))
 	_ = s.st.Audit(ctx, "credential.delete", map[string]any{"id": id})
 	return nil
 }

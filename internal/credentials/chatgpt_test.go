@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +18,17 @@ import (
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/store"
 )
+
+// keychainLike mimics the macOS Keychain store's limits: no quotes or
+// backslashes, and short values.
+type keychainLike struct{ secrets.Store }
+
+func (k keychainLike) Set(key, value string) error {
+	if strings.ContainsAny(value, "\"\\\n\r") || len(value) > 2000 {
+		return errors.New("keychain: secret contains unsupported characters or is too long")
+	}
+	return k.Store.Set(key, value)
+}
 
 func jwt(claims map[string]any) string {
 	b, _ := json.Marshal(claims)
@@ -57,7 +70,7 @@ func TestChatGPTSignInStoresCredentialAndRefreshes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	s := New(st, secrets.NewMemoryStore(), llm.NewRegistry())
+	s := New(st, keychainLike{secrets.NewMemoryStore()}, llm.NewRegistry())
 	s.ChatGPT = &chatgpt.Client{Issuer: auth.URL, PollWait: 5 * time.Millisecond}
 	results := make(chan protocol.ChatGPTSignInResult, 2)
 	s.OnSignIn = func(r protocol.ChatGPTSignInResult) { results <- r }
