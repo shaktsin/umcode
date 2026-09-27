@@ -29,17 +29,13 @@ const (
 	MethodApprovalList    = "approval/list"
 	MethodApprovalRespond = "approval/respond"
 
-	MethodProviderList         = "provider/list"
-	MethodIdentityList         = "identity/list"
-	MethodIdentityConsoleStart = "identity/console/start"
-	MethodIdentityConsoleInput = "identity/console/input"
-	MethodIdentityConsoleStop  = "identity/console/stop"
-	MethodModelList            = "model/list"
-	MethodModelSetHidden       = "model/setHidden"
-	MethodModelRefresh         = "model/refresh"
-	MethodModelSetPrice        = "model/setPrice"
-	MethodRoutingGet           = "routing/get"
-	MethodRoutingSet           = "routing/set"
+	MethodProviderList   = "provider/list"
+	MethodModelList      = "model/list"
+	MethodModelSetHidden = "model/setHidden"
+	MethodModelRefresh   = "model/refresh"
+	MethodModelSetPrice  = "model/setPrice"
+	MethodRoutingGet     = "routing/get"
+	MethodRoutingSet     = "routing/set"
 
 	MethodCredentialList   = "credential/list"
 	MethodCredentialAdd    = "credential/add"
@@ -57,20 +53,18 @@ const (
 
 // Notification names (engine → client).
 const (
-	NotifyThreadUpdated         = "thread/updated"
-	NotifyTurnStarted           = "turn/started"
-	NotifyTurnCompleted         = "turn/completed"
-	NotifyItemStarted           = "item/started"
-	NotifyItemDelta             = "item/delta"
-	NotifyItemCompleted         = "item/completed"
-	NotifyApprovalRequest       = "approval/request"
-	NotifyApprovalResolved      = "approval/resolved"
-	NotifyBudgetWarning         = "usage/budgetWarning"
-	NotifyIdentityConsoleOutput = "identity/console/output"
-	NotifyIdentityConsoleDone   = "identity/console/done"
-	NotifyPreviewStarted        = "preview/started"
-	NotifyPreviewOutput         = "preview/output"
-	NotifyPreviewStopped        = "preview/stopped"
+	NotifyThreadUpdated    = "thread/updated"
+	NotifyTurnStarted      = "turn/started"
+	NotifyTurnCompleted    = "turn/completed"
+	NotifyItemStarted      = "item/started"
+	NotifyItemDelta        = "item/delta"
+	NotifyItemCompleted    = "item/completed"
+	NotifyApprovalRequest  = "approval/request"
+	NotifyApprovalResolved = "approval/resolved"
+	NotifyBudgetWarning    = "usage/budgetWarning"
+	NotifyPreviewStarted   = "preview/started"
+	NotifyPreviewOutput    = "preview/output"
+	NotifyPreviewStopped   = "preview/stopped"
 )
 
 // InitializeParams is sent first by every client.
@@ -238,10 +232,6 @@ type ApprovalListResult struct {
 
 type ProviderListResult struct {
 	Providers []Provider `json:"providers"`
-}
-
-type IdentityListResult struct {
-	Identities []ProviderIdentity `json:"identities"`
 }
 
 type ModelListParams struct {

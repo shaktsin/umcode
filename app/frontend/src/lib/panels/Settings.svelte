@@ -1,16 +1,16 @@
 <script lang="ts">
-  import Accounts from './settings/Accounts.svelte';
+  import Keys from './settings/Keys.svelte';
   import Models from './settings/Models.svelte';
   import ComplexityTab from './settings/Complexity.svelte';
   import Engine from './settings/Engine.svelte';
 
   const tabs = [
-    { id: 'accounts', label: 'Accounts' },
+    { id: 'keys', label: 'API keys' },
     { id: 'models', label: 'Models' },
     { id: 'complexity', label: 'Complexity' },
     { id: 'engine', label: 'Engine & app' },
   ] as const;
-  let tab = $state<(typeof tabs)[number]['id']>('accounts');
+  let tab = $state<(typeof tabs)[number]['id']>('keys');
 </script>
 
 <h1 class="page-title mb-3">Settings</h1>
@@ -23,7 +23,7 @@
   {/each}
 </div>
 
-{#if tab === 'accounts'}<Accounts />
+{#if tab === 'keys'}<Keys />
 {:else if tab === 'models'}<Models />
 {:else if tab === 'complexity'}<ComplexityTab />
 {:else}<Engine />

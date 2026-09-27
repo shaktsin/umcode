@@ -2,14 +2,11 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/shaktsin/umcode/internal/identity"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/skills"
 )
@@ -211,77 +208,6 @@ func (s *Server) routes() map[string]handler {
 		protocol.MethodProviderList: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
 			ps, err := e.Providers(ctx)
 			return protocol.ProviderListResult{Providers: ps}, err
-		}),
-		protocol.MethodIdentityList: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
-			return protocol.IdentityListResult{Identities: e.ProviderIdentities(ctx)}, nil
-		}),
-		protocol.MethodIdentityConsoleStart: bind(func(ctx context.Context, c *conn, p struct {
-			Provider string `json:"provider"`
-			SignIn   bool   `json:"signIn"`
-		}) (any, error) {
-			if !c.IsAdmin() {
-				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can start provider sign-in")
-			}
-			proc, err := identity.StartConsole(p.Provider, p.SignIn)
-			if err != nil {
-				return nil, protocol.Errorf(protocol.CodeInvalidParams, "%v", err)
-			}
-			var b [16]byte
-			if _, err := rand.Read(b[:]); err != nil {
-				_ = proc.Close()
-				return nil, err
-			}
-			sessionID := hex.EncodeToString(b[:])
-			s.consoleMu.Lock()
-			s.consoles[sessionID] = ownedConsole{owner: c.ID(), process: proc}
-			s.consoleMu.Unlock()
-			go func() {
-				buf := make([]byte, 1024)
-				for {
-					n, readErr := proc.Output().Read(buf)
-					if n > 0 {
-						c.Notify(protocol.NotifyIdentityConsoleOutput, map[string]string{"sessionId": sessionID, "text": string(buf[:n])})
-					}
-					if readErr != nil {
-						break
-					}
-				}
-				waitErr := proc.Wait()
-				s.consoleMu.Lock()
-				delete(s.consoles, sessionID)
-				s.consoleMu.Unlock()
-				status := "completed"
-				if waitErr != nil {
-					status = "failed"
-				}
-				c.Notify(protocol.NotifyIdentityConsoleDone, map[string]string{"sessionId": sessionID, "status": status})
-			}()
-			return map[string]string{"sessionId": sessionID}, nil
-		}),
-		protocol.MethodIdentityConsoleInput: bind(func(ctx context.Context, c *conn, p struct {
-			SessionID string `json:"sessionId"`
-			Data      string `json:"data"`
-		}) (any, error) {
-			if len(p.Data) > 64<<10 {
-				return nil, protocol.Errorf(protocol.CodeInvalidParams, "terminal input exceeds 64 KiB")
-			}
-			proc, err := s.ownedConsole(c, p.SessionID)
-			if err != nil {
-				return nil, err
-			}
-			if err := proc.Write(p.Data); err != nil {
-				return nil, protocol.Errorf(protocol.CodeInternal, "write to provider terminal: %v", err)
-			}
-			return okResult{true}, nil
-		}),
-		protocol.MethodIdentityConsoleStop: bind(func(ctx context.Context, c *conn, p struct {
-			SessionID string `json:"sessionId"`
-		}) (any, error) {
-			proc, err := s.ownedConsole(c, p.SessionID)
-			if err != nil {
-				return nil, err
-			}
-			return okResult{true}, proc.Close()
 		}),
 		protocol.MethodModelList: bind(func(ctx context.Context, c *conn, p protocol.ModelListParams) (any, error) {
 			ms, err := e.Catalog.List(ctx, p.Provider, p.IncludeHidden)

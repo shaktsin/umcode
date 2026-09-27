@@ -19,7 +19,6 @@ import (
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/credentials"
-	"github.com/shaktsin/umcode/internal/identity"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/mcp"
 	"github.com/shaktsin/umcode/internal/models"
@@ -452,12 +451,6 @@ func (e *Engine) Providers(ctx context.Context) ([]protocol.Provider, error) {
 			DefaultModel: e.defaultModel(id), Credentials: count[id]})
 	}
 	return out, nil
-}
-
-// ProviderIdentities reports console subscription sessions without reading or
-// returning the credentials owned by Codex or Claude Code.
-func (e *Engine) ProviderIdentities(ctx context.Context) []protocol.ProviderIdentity {
-	return identity.List(ctx)
 }
 
 func (e *Engine) defaultModel(provider string) string {

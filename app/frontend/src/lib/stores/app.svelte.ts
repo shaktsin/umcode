@@ -2,7 +2,7 @@ import { RpcClient, PROTOCOL_VERSION, type ConnState } from '$lib/rpc';
 import { fetchConnection } from '$lib/connection';
 import { errMsg } from '$lib/format';
 import type {
-  Approval, BudgetWarning, ComplexityDefaults, Credential, EngineStatus, Model, Provider, ProviderIdentity, RoutingConfig,
+  Approval, BudgetWarning, ComplexityDefaults, Credential, EngineStatus, Model, Provider, RoutingConfig,
 } from '$lib/types';
 
 export type View = 'chat' | 'approvals' | 'tasks' | 'extensions' | 'usage' | 'project' | 'settings';
@@ -21,7 +21,6 @@ class AppState {
   view = $state<View>('chat');
   approvals = $state<Approval[]>([]);
   providers = $state<Provider[]>([]);
-  identities = $state<ProviderIdentity[]>([]);
   models = $state<Model[]>([]);
   credentials = $state<Credential[]>([]);
   complexity = $state<ComplexityDefaults | null>(null);
@@ -136,18 +135,14 @@ class AppState {
   }
 
   async refreshCatalog() {
-    const [p, i, m, c, x, r] = await Promise.all([
+    const [p, m, c, x, r] = await Promise.all([
       this.call<{ providers: Provider[] }>('provider/list'),
-      // Older/external engines may not expose managed identities yet. Keep the
-      // rest of the catalog usable while the app prompts for an engine update.
-      this.call<{ identities: ProviderIdentity[] }>('identity/list').catch(() => ({ identities: [] })),
       this.call<{ models: Model[] }>('model/list', {}),
       this.call<{ credentials: Credential[] }>('credential/list'),
       this.call<ComplexityDefaults>('complexity/getDefaults'),
       this.call<RoutingConfig>('routing/get'),
     ]);
     this.providers = p.providers ?? [];
-    this.identities = i.identities ?? [];
     this.models = m.models ?? [];
     this.credentials = c.credentials ?? [];
     this.complexity = x;

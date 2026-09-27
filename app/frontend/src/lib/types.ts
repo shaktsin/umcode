@@ -305,18 +305,6 @@ export interface Provider {
   credentials: number;
 }
 
-export interface ProviderIdentity {
-  id: string;
-  displayName: string;
-  runtimeName: string;
-  installed: boolean;
-  signedIn: boolean;
-  accountType?: string;
-  status: string;
-  signInCommand: string;
-  signOutCommand: string;
-}
-
 export interface ComplexityPreset {
   level: Complexity;
   reasoning: string;
