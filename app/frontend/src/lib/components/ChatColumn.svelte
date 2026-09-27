@@ -10,6 +10,7 @@
   import ItemView from './ItemView.svelte';
   import ToolCall from './ToolCall.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
+  import ComputerUseView from './ComputerUseView.svelte';
   import Composer from './Composer.svelte';
   import type { Item, Turn, TaskWorkspaceResult } from '$lib/types';
   import { createProject } from '$lib/createProject';
@@ -299,6 +300,10 @@
         </div>
       {/if}
     </header>
+  {/if}
+
+  {#if variant === 'main' && threadProject?.tools.computerUse}
+    <ComputerUseView items={view.items} projectId={threadProject?.id} threadId={view.thread?.id} />
   {/if}
 
   <div class="flex-1 min-h-0 overflow-y-auto" bind:this={scroller} onscroll={onScroll}>

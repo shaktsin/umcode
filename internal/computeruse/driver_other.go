@@ -22,3 +22,9 @@ func (unavailableDriver) Inspect(context.Context, Target, string) (State, error)
 func (unavailableDriver) Act(context.Context, Target, Action) error {
 	return errors.New("Computer Use is currently available only in the packaged macOS app")
 }
+func (unavailableDriver) Hide(context.Context, Target) error {
+	return errors.New("Computer Use is currently available only in the packaged macOS app")
+}
+func (unavailableDriver) Show(context.Context, Target) error {
+	return errors.New("Computer Use is currently available only in the packaged macOS app")
+}
