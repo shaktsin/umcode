@@ -43,7 +43,7 @@ func inspectCodex(ctx context.Context) protocol.ProviderIdentity {
 		ID: "chatgpt", DisplayName: "ChatGPT", RuntimeName: "Codex",
 		SignInCommand: "codex login --device-auth", SignOutCommand: "codex logout",
 	}
-	path := findExecutable("codex", macPath("/Applications/ChatGPT.app/Contents/Resources/codex"))
+	path := CodexPath()
 	if path == "" {
 		id.Status = "Codex is not installed"
 		return id
@@ -76,7 +76,7 @@ func inspectClaude(ctx context.Context) protocol.ProviderIdentity {
 		ID: "claude_subscription", DisplayName: "Claude", RuntimeName: "Claude Code",
 		SignInCommand: "claude auth login --claudeai", SignOutCommand: "claude auth logout",
 	}
-	path := findExecutable("claude", macPath("/opt/homebrew/bin/claude"), macPath("/usr/local/bin/claude"))
+	path := ClaudePath()
 	if path == "" {
 		id.Status = "Claude Code is not installed"
 		return id
@@ -136,4 +136,14 @@ func compactStatus(status, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+// CodexPath returns the Codex executable, or "" when it is not installed.
+func CodexPath() string {
+	return findExecutable("codex", macPath("/Applications/ChatGPT.app/Contents/Resources/codex"))
+}
+
+// ClaudePath returns the Claude Code executable, or "" when it is not installed.
+func ClaudePath() string {
+	return findExecutable("claude", macPath("/opt/homebrew/bin/claude"), macPath("/usr/local/bin/claude"))
 }

@@ -17,6 +17,7 @@
   const defaultComplexity = $derived(app.complexity?.default || 'auto');
   const providerNames: Record<string, string> = {
     claude: 'Anthropic API', openai: 'OpenAI API', gemini: 'Google Gemini', openai_compatible: 'OpenAI-compatible',
+    claude_subscription: 'Claude subscription', chatgpt: 'ChatGPT subscription',
   };
   const pools = $derived(app.routing?.pools ?? []);
   const configured = $derived(app.routing?.models ?? []);

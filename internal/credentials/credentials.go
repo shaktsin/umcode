@@ -53,7 +53,7 @@ func (s *Service) Add(ctx context.Context, p protocol.CredentialAddParams) (prot
 		return protocol.Credential{}, fmt.Errorf("unknown provider %q", p.Provider)
 	}
 	p.Secret = strings.TrimSpace(p.Secret)
-	if p.Secret == "" && p.Provider != "openai_compatible" {
+	if p.Secret == "" && p.Provider != "openai_compatible" && !llm.IsSubscription(p.Provider) {
 		return protocol.Credential{}, errors.New("API key is empty")
 	}
 	if p.Provider == "openai_compatible" && p.BaseURL == "" {
@@ -64,8 +64,10 @@ func (s *Service) Add(ctx context.Context, p protocol.CredentialAddParams) (prot
 	}
 	c := protocol.Credential{ID: store.NewID("key"), Provider: p.Provider, Label: p.Label, BaseURL: p.BaseURL,
 		Last4: last4(p.Secret), IsDefault: p.IsDefault}
-	if err := s.secrets.Set(secretKey(c.ID), p.Secret); err != nil {
-		return c, fmt.Errorf("save secret: %w", err)
+	if !llm.IsSubscription(p.Provider) {
+		if err := s.secrets.Set(secretKey(c.ID), p.Secret); err != nil {
+			return c, fmt.Errorf("save secret: %w", err)
+		}
 	}
 	c, err := s.st.CreateCredential(ctx, c)
 	if err != nil {
@@ -170,6 +172,9 @@ func (s *Service) Test(ctx context.Context, id string) (protocol.CredentialTestR
 }
 
 func (s *Service) material(c protocol.Credential) (llm.Credential, error) {
+	if llm.IsSubscription(c.Provider) {
+		return llm.Credential{}, nil // the runtime holds the sign-in
+	}
 	secret, err := s.secrets.Get(secretKey(c.ID))
 	if err != nil && !(errors.Is(err, secrets.ErrNotFound) && c.Provider == "openai_compatible") {
 		return llm.Credential{}, fmt.Errorf("read secret for %s: %w", c.Label, err)
@@ -314,4 +319,28 @@ func (s *Service) Usable(ctx context.Context, provider string) ([]Resolved, erro
 		out = append(out, Resolved{c, m})
 	}
 	return out, nil
+}
+
+// SyncSubscription keeps a secretless credential in step with a runtime's
+// sign-in: created (and enabled) while signed in, removed when signed out. It
+// lets a subscription take part in routing like any other key, without UMCode
+// ever holding a token.
+func (s *Service) SyncSubscription(ctx context.Context, provider, label string, signedIn bool) error {
+	existing, err := s.st.ListCredentials(ctx, provider)
+	if err != nil {
+		return err
+	}
+	if !signedIn {
+		for _, c := range existing {
+			if err := s.Delete(ctx, c.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(existing) > 0 {
+		return nil
+	}
+	_, err = s.Add(ctx, protocol.CredentialAddParams{Provider: provider, Label: label})
+	return err
 }

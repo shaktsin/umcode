@@ -14,6 +14,7 @@
 
   const providerNames: Record<string, string> = {
     claude: 'Claude', openai: 'OpenAI', gemini: 'Gemini', openai_compatible: 'OpenAI-compatible',
+    claude_subscription: 'Claude subscription', chatgpt: 'ChatGPT subscription',
   };
 
   $effect(() => {

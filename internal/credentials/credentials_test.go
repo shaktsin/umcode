@@ -42,3 +42,30 @@ func TestImportConfigKeys(t *testing.T) {
 		t.Fatalf("re-imported: %+v", added)
 	}
 }
+
+func TestSyncSubscriptionFollowsSignIn(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	s := New(st, secrets.NewMemoryStore(), llm.NewRegistry())
+	if err := s.SyncSubscription(ctx, llm.ProviderClaudeSubscription, "Claude subscription", true); err != nil {
+		t.Fatal(err)
+	}
+	// Idempotent while signed in.
+	if err := s.SyncSubscription(ctx, llm.ProviderClaudeSubscription, "Claude subscription", true); err != nil {
+		t.Fatal(err)
+	}
+	usable, err := s.Usable(ctx, llm.ProviderClaudeSubscription)
+	if err != nil || len(usable) != 1 || usable[0].Material.APIKey != "" {
+		t.Fatalf("usable = %+v err=%v", usable, err)
+	}
+	if err := s.SyncSubscription(ctx, llm.ProviderClaudeSubscription, "Claude subscription", false); err != nil {
+		t.Fatal(err)
+	}
+	if usable, _ = s.Usable(ctx, llm.ProviderClaudeSubscription); len(usable) != 0 {
+		t.Fatalf("still usable after sign-out: %+v", usable)
+	}
+}
