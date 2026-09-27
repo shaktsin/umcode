@@ -16,6 +16,11 @@ export interface Toast {
 class AppState {
   conn = $state<ConnState>('closed');
   connError = $state('');
+  // True once the engine has connected at least once this launch. The
+  // startup splash (see Splash.svelte) shows until this flips; a later,
+  // transient drop falls back to the small ConnectionBanner instead of
+  // hiding the whole app again.
+  booted = $state(false);
   shell = $state('browser');
   status = $state<EngineStatus | null>(null);
   view = $state<View>('chat');
@@ -58,7 +63,10 @@ class AppState {
     this.rpc.onState((s, err) => {
       this.conn = s;
       this.connError = err || '';
-      if (s === 'open') void this.onReady();
+      if (s === 'open') {
+        this.booted = true;
+        void this.onReady();
+      }
     });
     this.rpc.on('approval/request', (p: { approval: Approval }) => {
       if (!this.approvals.some((a) => a.id === p.approval.id)) this.approvals = [...this.approvals, p.approval];

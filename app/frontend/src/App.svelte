@@ -1,6 +1,7 @@
 <script lang="ts">
   import Rail from '$lib/components/Rail.svelte';
   import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
+  import Splash from '$lib/components/Splash.svelte';
   import Toasts from '$lib/components/Toasts.svelte';
   import Dialog from '$lib/components/Dialog.svelte';
   import ChatColumn from '$lib/components/ChatColumn.svelte';
@@ -91,6 +92,9 @@
 
 <svelte:window onkeydown={onKey} onresize={onResize} />
 
+{#if !app.booted}
+  <Splash />
+{:else}
 <div class="flex h-full overflow-hidden">
   <Rail />
   <div class="flex flex-col flex-1 min-w-0">
@@ -147,5 +151,6 @@
     </div>
   </div>
 </div>
+{/if}
 <Toasts />
 <Dialog />
