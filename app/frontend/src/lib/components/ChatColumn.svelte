@@ -90,13 +90,19 @@
   /**
    * When a turn moved off its first model — a rate limit, an outage — the
    * footer says so, so a slower or cheaper answer is never a mystery.
+   *
+   * A turn calls its model once per tool-calling round, so a normal,
+   * fully successful turn can easily have several trail entries that are
+   * all "used" and nothing else — that is not a switch, and must not be
+   * reported as one just because the trail has more than one entry.
    */
   function switchNote(t: Turn): string {
     const trail = t.routeTrail ?? [];
     if (trail.length < 2) return '';
+    const first = trail[0];
+    if (first.status === 'used') return ''; // the turn never actually failed over
     const names = trail.map((s) => s.displayName || s.model);
     const used = trail[trail.length - 1];
-    const first = trail[0];
     if (first.model === used.model) return `switched key after ${statusWord(first.status)}`;
     return `switched from ${names[0]} after ${statusWord(first.status)}`;
   }
