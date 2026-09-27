@@ -106,7 +106,37 @@ func (s *Service) Create(ctx context.Context, p protocol.ProjectCreateParams) (p
 	if err != nil {
 		return rec, err
 	}
+	ensureUmcodeGitignored(root)
 	return s.decorate(rec), nil
+}
+
+// ensureUmcodeGitignored keeps this app's own bookkeeping for a project
+// (Computer Use and Visual QA screenshots, under <root>/.umcode) out of the
+// person's version control, so a screenshot taken while approving an action
+// never ends up committed alongside their real files. Best-effort: a
+// project that isn't a Git repo, or whose .gitignore can't be written, is
+// left alone rather than failing the project creation over it.
+func ensureUmcodeGitignored(root string) {
+	if st, err := os.Stat(filepath.Join(root, ".git")); err != nil || !st.IsDir() {
+		return
+	}
+	path := filepath.Join(root, ".gitignore")
+	existing, _ := os.ReadFile(path)
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), "/")) == ".umcode" {
+			return
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	prefix := ""
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		prefix = "\n"
+	}
+	_, _ = f.WriteString(prefix + ".umcode/\n")
 }
 
 // Get returns one project with its live folder and git state.

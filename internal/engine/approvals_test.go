@@ -20,3 +20,16 @@ func TestApprovalSignatureTrimsCommandWhitespaceAndKeepsExactFilePath(t *testing
 		t.Fatalf("signatures = command %q, path %q", command, path)
 	}
 }
+
+func TestIsComputerUseToolNeverRemembered(t *testing.T) {
+	for _, tool := range []string{"computer.act", "computer.start", "computer.inspect", "computer.stop"} {
+		if !isComputerUseTool(tool) {
+			t.Fatalf("%s should be recognized as a Computer Use tool", tool)
+		}
+	}
+	for _, tool := range []string{"shell.run", "file.write", "computerlike.thing"} {
+		if isComputerUseTool(tool) {
+			t.Fatalf("%s should not be treated as a Computer Use tool", tool)
+		}
+	}
+}

@@ -57,14 +57,15 @@ type Artifact struct {
 }
 
 type Report struct {
-	Status     string     `json:"status"`
-	Framework  string     `json:"framework"`
-	SessionID  string     `json:"session_id,omitempty"`
-	State      *State     `json:"state,omitempty"`
-	Apps       []App      `json:"apps,omitempty"`
-	Artifacts  []Artifact `json:"artifacts"`
-	Reason     string     `json:"reason,omitempty"`
-	DurationMS int64      `json:"duration_ms,omitempty"`
+	Status      string     `json:"status"`
+	Framework   string     `json:"framework"`
+	SessionID   string     `json:"session_id,omitempty"`
+	State       *State     `json:"state,omitempty"`
+	Apps        []App      `json:"apps,omitempty"`
+	Artifacts   []Artifact `json:"artifacts"`
+	Reason      string     `json:"reason,omitempty"`
+	DurationMS  int64      `json:"duration_ms,omitempty"`
+	ActionCount int        `json:"action_count,omitempty"`
 }
 
 type Action struct {
@@ -98,6 +99,10 @@ type Session struct {
 	// screenshot taken for this session (set on every inspect/act). Approvals
 	// for computer.act attach it so the person can see what they're approving.
 	LastScreenshotRel string
+	// ActionCount is how many Act calls have run in this session. Surfaced on
+	// every report as a lightweight, always-on audit trail of how much this
+	// session has actually done, independent of the approval log.
+	ActionCount int
 }
 
 func NewManager(ctx context.Context) *Manager {
@@ -199,6 +204,7 @@ func (m *Manager) Act(ctx context.Context, threadID string, action Action) (Repo
 	if err := m.driver.Act(ctx, s.Target, action); err != nil {
 		return Report{}, err
 	}
+	s.ActionCount++
 	return m.inspect(ctx, s, fmt.Sprintf("action-%d.png", time.Now().UnixMilli()))
 }
 
@@ -223,7 +229,8 @@ func (m *Manager) inspect(ctx context.Context, s *Session, name string) (Report,
 	relSlash := filepath.ToSlash(rel)
 	s.LastScreenshotRel = relSlash
 	return Report{Status: "passed", Framework: "umcode-computer-use", SessionID: s.ID, State: &state,
-		Artifacts: []Artifact{{Path: relSlash, Kind: "screenshot", MimeType: "image/png", Bytes: st.Size()}}}, nil
+		Artifacts:   []Artifact{{Path: relSlash, Kind: "screenshot", MimeType: "image/png", Bytes: st.Size()}},
+		ActionCount: s.ActionCount}, nil
 }
 
 // LastScreenshot returns the most recent screenshot's project-relative path

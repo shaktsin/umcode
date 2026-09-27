@@ -9,7 +9,11 @@
   let showDetails = $state(false);
   let screenshotUrl = $state('');
 
-  const canRemember = $derived(Boolean(projectName));
+  // Computer Use actions can't be "remembered": every click, keystroke or
+  // scroll gets its own approval signature (see ApprovalSignature on the
+  // backend), so a remembered decision here would silently rubber-stamp
+  // every future action instead of the one specific one that was reviewed.
+  const canRemember = $derived(Boolean(projectName) && !approval.tool.startsWith('computer.'));
   const rememberLabel = $derived(projectName || 'this project');
   const rememberAction = $derived(approval.tool === 'shell.run' ? 'command' : 'action');
 

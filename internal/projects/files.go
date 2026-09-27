@@ -17,11 +17,13 @@ import (
 )
 
 // skipDirs are never walked or listed: noise that would bury the tree.
+// .umcode holds this app's own bookkeeping for the project (Computer Use and
+// Visual QA screenshots, worktrees) — not something to show as a project file.
 var skipDirs = map[string]bool{
 	".git": true, "node_modules": true, ".venv": true, "venv": true, "__pycache__": true,
 	".mypy_cache": true, ".pytest_cache": true, ".ruff_cache": true, ".next": true,
 	".gradle": true, ".idea": true, "dist": true, "build": true, "target": true,
-	".DS_Store": true, ".terraform": true, ".tox": true,
+	".DS_Store": true, ".terraform": true, ".tox": true, ".umcode": true,
 }
 
 const (

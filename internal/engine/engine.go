@@ -332,13 +332,23 @@ func (e *Engine) SetThreadSettings(ctx context.Context, p protocol.ThreadSetSett
 	})
 }
 
-// DeleteThread deletes a thread unless a turn is running in it.
+// DeleteThread deletes a thread unless a turn is running in it. Any Computer
+// Use or Visual QA session still attached to it is stopped first: those
+// sessions are keyed by thread ID and outlive a single turn, so without this
+// they would keep holding their target app (and the memory for their
+// session record) after the thread they belonged to is gone.
 func (e *Engine) DeleteThread(ctx context.Context, id string) error {
 	e.mu.Lock()
 	_, running := e.threadTurns[id]
 	e.mu.Unlock()
 	if running {
 		return protocol.Errorf(protocol.CodeConflict, "a turn is running in this thread; interrupt it first")
+	}
+	if e.ComputerUse != nil {
+		e.ComputerUse.Stop(id)
+	}
+	if e.VisualQA != nil {
+		e.VisualQA.Stop(id)
 	}
 	return e.Store.DeleteThread(ctx, id)
 }
