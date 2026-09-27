@@ -33,6 +33,7 @@ const (
 type Shell struct {
 	App     *application.App
 	Window  *application.WebviewWindow
+	Mini    *application.WebviewWindow // the small overlay window; created lazily, see mini.go
 	Tray    *application.SystemTray
 	Engine  *EngineManager
 	Watcher *Watcher
@@ -135,6 +136,8 @@ func (s *Shell) buildTrayMenu() {
 	m.Add("Usage").OnClick(func(*application.Context) { s.ShowView("usage") })
 	m.Add("Settings…").OnClick(func(*application.Context) { s.ShowView("settings") })
 	m.AddSeparator()
+	m.Add("Mini Overlay").OnClick(func(*application.Context) { s.ToggleMini() })
+	m.AddSeparator()
 	s.loginItem = m.AddCheckbox("Open at Login", s.launchAtLogin()).OnClick(func(ctx *application.Context) {
 		if err := s.setLaunchAtLogin(ctx.ClickedMenuItem().Checked()); err != nil {
 			s.Log.Warn("launch at login", "err", err)
@@ -173,10 +176,18 @@ func (s *Shell) SetCounts(pending, running int) {
 		running = s.running
 	}
 	changed := s.pending != pending || s.running != running
+	wasWaiting := s.pending > 0
 	s.pending, s.running = pending, running
 	s.mu.Unlock()
 	if changed {
 		s.refreshTray()
+	}
+	// A new approval needs the user's attention even when the main window is
+	// closed or another app is in front, so surface the overlay for it. It
+	// never steals focus (see mini.go), and it only pops up on the 0→n edge,
+	// not on every refresh while approvals are already showing.
+	if pending > 0 && !wasWaiting {
+		s.ShowMini()
 	}
 }
 
@@ -306,6 +317,8 @@ func (s *Shell) Middleware(next http.Handler) http.Handler {
 			s.handleShellInfo(w)
 		case strings.HasPrefix(r.URL.Path, "/__umcode/shell/") && r.Method == http.MethodPost:
 			s.handleShellAction(w, r, strings.TrimPrefix(r.URL.Path, "/__umcode/shell/"))
+		case strings.HasPrefix(r.URL.Path, "/__umcode/mini/") && r.Method == http.MethodPost:
+			s.handleMiniAction(w, r, strings.TrimPrefix(r.URL.Path, "/__umcode/mini/"))
 		default:
 			next.ServeHTTP(w, r)
 		}
