@@ -337,7 +337,7 @@ func (t *execStart) Call(ctx context.Context, args json.RawMessage) (string, err
 		return "", ErrNoProject
 	}
 	if !scope.AllowShell {
-		return "", fmt.Errorf("shell commands are switched off for the project %s", scope.ProjectName)
+		return "", fmt.Errorf("shell commands are switched off for the project %s; do not try to run commands through Computer Use as a workaround — tell the user that Shell needs to be turned on in this project's settings (or in the chat's approval controls) before commands can run", scope.ProjectName)
 	}
 	if scope.UseCompute {
 		return "", errors.New("exec sessions run on the host and are not available while the project uses the isolated microVM; use shell.run")

@@ -227,6 +227,19 @@
   async function openProject() {
     await createProject();
   }
+
+  const approvalLabel: Record<string, string> = {
+    '': 'Ask every time',
+    normal: 'Ask every time',
+    auto_workspace: 'Auto-approve workspace',
+    auto_all: 'Auto-approve all',
+  };
+
+  async function setApprovalMode(e: Event) {
+    if (!threadProject) return;
+    const mode = (e.currentTarget as HTMLSelectElement).value as 'normal' | 'auto_workspace' | 'auto_all';
+    await projects.update(threadProject.id, { approvalMode: mode });
+  }
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col">
@@ -243,6 +256,16 @@
             {#if threadProject.vcs?.branch}<span class="shrink-0">branch {threadProject.vcs.branch}</span>{/if}
             <span class="shrink-0">{threadProject.tools.shell === false ? 'shell off' : 'shell on'}</span>
             <span class="shrink-0">{threadProject.tools.network ? 'network on' : 'network off'}</span>
+            <select
+              class="shrink-0 bg-transparent border border-line rounded px-1 py-0.5 text-[10px] text-muted hover:text-ink-soft"
+              title="How much the agent can do here without asking first"
+              value={threadProject.approvalMode || 'normal'}
+              onchange={setApprovalMode}
+            >
+              <option value="normal">{approvalLabel.normal}</option>
+              <option value="auto_workspace">{approvalLabel.auto_workspace}</option>
+              <option value="auto_all">{approvalLabel.auto_all}</option>
+            </select>
           {:else}
             <span>No project</span><span>read-only workspace</span>
           {/if}
