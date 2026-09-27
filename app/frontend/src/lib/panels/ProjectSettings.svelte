@@ -15,6 +15,21 @@
     await projects.update(p.id, { tools: { ...p.tools, [key]: value } });
   }
 
+  // Comma-separated app names / bundle IDs Computer Use is allowed to
+  // target in this project. Empty means unrestricted (every app allowed).
+  let computerAppsDraft = $state('');
+  $effect(() => {
+    computerAppsDraft = (p?.tools.computerUseApps ?? []).join(', ');
+  });
+  async function setComputerApps() {
+    if (!p) return;
+    const list = computerAppsDraft
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    await projects.update(p.id, { tools: { ...p.tools, computerUseApps: list } });
+  }
+
   async function setComputeLimit(key: 'computeVcpus' | 'computeMemoryMiB' | 'computeDiskMiB', value: number) {
     if (!p || !Number.isFinite(value)) return;
     await projects.update(p.id, { tools: { ...p.tools, [key]: value } });
@@ -144,6 +159,14 @@
 		  <span class="block text-xs text-muted">Lets the agent open an app you select, inspect its window, and—after approval—click, type, fill forms, press keys, and scroll. macOS keeps Screen Recording and Accessibility permission on a separately signed helper.</span>
 		</span>
 	  </label>
+	  {#if p.tools.computerUse}
+		<div class="pl-7">
+		  <label class="text-xs text-muted">Allowed apps (optional)
+			<input class="input mt-1 w-full py-1" type="text" placeholder="e.g. Safari, com.apple.mail" bind:value={computerAppsDraft} onblur={setComputerApps} onkeydown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()} />
+		  </label>
+		  <span class="block text-xs text-muted mt-1">Comma-separated app names or bundle IDs. Leave blank to allow any app; the agent is refused for anything not on this list once it's set.</span>
+		</div>
+	  {/if}
       <label class="flex items-start gap-3">
         <input class="mt-1 shrink-0" type="checkbox" checked={!!p.tools.network} onchange={(e) => setTool('network', e.currentTarget.checked)} />
         <span>

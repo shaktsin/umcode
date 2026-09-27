@@ -171,10 +171,18 @@ func (m *EngineManager) Ensure(ctx context.Context) error {
 				}
 			}
 			m.setMode(ModeService, "")
-		} else {
-			m.setMode(ModeExternal, "")
+			return nil
 		}
-		return nil
+		// Not managed by launchd: an engine left by an earlier app run, a
+		// terminal, or an older build. Reuse it only if it answers and is the
+		// same build; otherwise stop it and start a fresh one below.
+		engine, err := m.engineStatus(ctx)
+		if err == nil && (BuildID == "" || engine.BuildID == BuildID) {
+			m.setMode(ModeExternal, "")
+			return nil
+		}
+		m.log.Warn("an existing engine is stale or not responding; replacing it", "err", err)
+		m.stopRunningEngines(ctx)
 	}
 	if os.Getenv("UMCODE_NO_SERVICE") != "1" {
 		switch serviceStatus() {
@@ -375,7 +383,8 @@ func (m *EngineManager) Restart(ctx context.Context) error {
 		}
 		return nil
 	case ModeExternal:
-		return errors.New("the engine was started outside the app (for example from a terminal); restart it there")
+		m.stopRunningEngines(ctx)
+		return m.Ensure(ctx)
 	default:
 		return m.Ensure(ctx)
 	}

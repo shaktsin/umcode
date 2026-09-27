@@ -25,6 +25,7 @@ export interface ProjectTools {
   compute?: boolean;
 	visualQa?: boolean;
 	computerUse?: boolean;
+	computerUseApps?: string[];
   computeVcpus?: number;
   computeMemoryMiB?: number;
   computeDiskMiB?: number;
@@ -251,6 +252,7 @@ export interface Attachment {
 export interface Approval {
   id: string;
   threadId: string;
+  projectId?: string;
   turnId: string;
   itemId: string;
   tool: string;
@@ -260,6 +262,9 @@ export interface Approval {
   actionSummary: string;
   status: 'pending' | 'approved' | 'denied' | 'expired';
   decidedBy?: string;
+  // Project-relative path to the latest Computer Use screenshot, when this
+  // approval is for a computer.* tool. Fetch with project/readArtifact.
+  screenshot?: string;
   createdAt: string;
   expiresAt: string;
   decidedAt?: string;
@@ -269,6 +274,8 @@ export interface Credential {
   id: string;
   provider: string;
   label: string;
+  /** 'api_key', or 'chatgpt' for an OpenAI credential signed in with a ChatGPT account. */
+  kind: 'api_key' | 'chatgpt';
   baseUrl?: string;
   last4: string;
   enabled: boolean;
@@ -303,18 +310,6 @@ export interface Provider {
   enabled: boolean;
   defaultModel: string;
   credentials: number;
-}
-
-export interface ProviderIdentity {
-  id: string;
-  displayName: string;
-  runtimeName: string;
-  installed: boolean;
-  signedIn: boolean;
-  accountType?: string;
-  status: string;
-  signInCommand: string;
-  signOutCommand: string;
 }
 
 export interface ComplexityPreset {
@@ -409,6 +404,20 @@ export interface UsageRow {
 export interface UsageSummary {
   rows: UsageRow[];
   total: UsageTotals;
+}
+
+export interface ChatGPTSignInStart {
+  sessionId: string;
+  verificationUrl: string;
+  userCode: string;
+  expiresInSec: number;
+}
+
+export interface ChatGPTSignInResult {
+  sessionId: string;
+  ok: boolean;
+  error?: string;
+  credential?: Credential;
 }
 
 export interface CredentialTestResult {

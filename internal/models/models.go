@@ -125,7 +125,7 @@ func infer(provider, model string) Meta {
 
 // Cost returns the USD cost of usage for a model (0 if its price is unknown).
 func Cost(m Meta, u llm.Usage) float64 {
-	if m.PriceUnknown {
+	if m.PriceUnknown || u.Subscription {
 		return 0
 	}
 	uncached := u.InputTokens - u.CachedInputTokens

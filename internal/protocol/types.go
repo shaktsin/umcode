@@ -156,6 +156,7 @@ func (u *UsageTotals) Add(o UsageTotals) {
 type Approval struct {
 	ID            string          `json:"id"`
 	ThreadID      string          `json:"threadId"`
+	ProjectID     string          `json:"projectId,omitempty"`
 	TurnID        string          `json:"turnId"`
 	ItemID        string          `json:"itemId"`
 	Tool          string          `json:"tool"`
@@ -165,16 +166,22 @@ type Approval struct {
 	ActionSummary string          `json:"actionSummary"`
 	Status        string          `json:"status"` // pending | approved | denied | expired
 	DecidedBy     string          `json:"decidedBy,omitempty"`
-	CreatedAt     time.Time       `json:"createdAt"`
-	ExpiresAt     time.Time       `json:"expiresAt"`
-	DecidedAt     *time.Time      `json:"decidedAt,omitempty"`
+	// Screenshot is a project-relative path to the most recent Computer Use
+	// screenshot for this thread, when the approval is for a computer.* tool.
+	// Fetch its bytes with project/readArtifact. Empty for every other tool.
+	Screenshot string     `json:"screenshot,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  time.Time  `json:"expiresAt"`
+	DecidedAt  *time.Time `json:"decidedAt,omitempty"`
 }
 
 // Credential is an API key record. The secret itself is never sent to clients.
 type Credential struct {
-	ID               string       `json:"id"`
-	Provider         string       `json:"provider"`
-	Label            string       `json:"label"`
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	// Kind is "api_key" or "chatgpt" (signed in with a ChatGPT account).
+	Kind             string       `json:"kind"`
 	BaseURL          string       `json:"baseUrl,omitempty"`
 	Last4            string       `json:"last4"`
 	Enabled          bool         `json:"enabled"`
@@ -211,20 +218,6 @@ type Provider struct {
 	Enabled      bool   `json:"enabled"`
 	DefaultModel string `json:"defaultModel"`
 	Credentials  int    `json:"credentials"`
-}
-
-// ProviderIdentity is a subscription sign-in owned by an official model
-// runtime. It contains status and commands only, never tokens or secrets.
-type ProviderIdentity struct {
-	ID             string `json:"id"`
-	DisplayName    string `json:"displayName"`
-	RuntimeName    string `json:"runtimeName"`
-	Installed      bool   `json:"installed"`
-	SignedIn       bool   `json:"signedIn"`
-	AccountType    string `json:"accountType,omitempty"`
-	Status         string `json:"status"`
-	SignInCommand  string `json:"signInCommand"`
-	SignOutCommand string `json:"signOutCommand"`
 }
 
 // ComplexityPreset is the engine translation of one complexity level.

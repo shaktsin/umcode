@@ -241,6 +241,9 @@ package-lock.json
 *.jpeg
 *.gif
 *.webp
+# Exception: the startup splash's logo is a real source asset, not a
+# generated screenshot or artifact.
+!app/frontend/src/lib/assets/appicon.png
 
 # Project-specific: keep out of version control
 CLAUDE.md

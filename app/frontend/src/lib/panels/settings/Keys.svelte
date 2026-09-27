@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Plus, Star, Trash2, FlaskConical, RefreshCw } from '@lucide/svelte';
+  import { Plus, Star, Trash2, FlaskConical, RefreshCw, LogIn, Copy } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
   import { errMsg, fmtUsd, relTime } from '$lib/format';
   import { dialog } from '$lib/stores/dialog.svelte';
-  import type { Credential, CredentialTestResult } from '$lib/types';
+  import type { ChatGPTSignInResult, ChatGPTSignInStart, Credential, CredentialTestResult } from '$lib/types';
 
   const providerNames: Record<string, string> = {
     claude: 'Anthropic Claude', openai: 'OpenAI', gemini: 'Google Gemini', openai_compatible: 'OpenAI-compatible (Ollama, LM Studio, vLLM…)',
@@ -17,6 +17,23 @@
   let baseUrl = $state('');
   let isDefault = $state(false);
   let busy = $state(false);
+  // OpenAI can be connected with an API key or by signing in with ChatGPT.
+  let authMode = $state<'key' | 'chatgpt'>('key');
+  let signin = $state<ChatGPTSignInStart | null>(null);
+  const viaChatGPT = $derived(provider === 'openai' && authMode === 'chatgpt');
+
+  $effect(() => app.rpc.on('chatgpt/signin/completed', async (r: ChatGPTSignInResult) => {
+    if (!signin || r.sessionId !== signin.sessionId) return;
+    signin = null;
+    if (r.ok) {
+      adding = false;
+      app.toast('info', 'Signed in with ChatGPT.');
+      await refresh();
+      if (r.credential) await test(r.credential);
+    } else if (r.error && r.error !== 'sign-in cancelled') {
+      app.toast('error', r.error);
+    }
+  }));
   let tests = $state<Record<string, CredentialTestResult | 'running'>>({});
   let budgetEdit = $state<Record<string, { amount: string; hardStop: boolean }>>({});
 
@@ -50,6 +67,32 @@
     }
   }
 
+  async function openLink(url: string) {
+    try {
+      const r = await fetch('/__umcode/shell/openURL', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+      if (r.ok) return;
+    } catch { /* not running inside the desktop app */ }
+    window.open(url, '_blank', 'noopener');
+  }
+
+  async function startSignIn() {
+    busy = true;
+    try {
+      signin = await app.call<ChatGPTSignInStart>('chatgpt/signin/start', {});
+      await openLink(signin.verificationUrl);
+    } catch (e) {
+      app.toast('error', errMsg(e));
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function cancelSignIn() {
+    const s = signin;
+    signin = null;
+    if (s) await app.try('chatgpt/signin/cancel', { sessionId: s.sessionId });
+  }
+
   async function test(c: Credential) {
     tests[c.id] = 'running';
     try {
@@ -73,8 +116,10 @@
   }
 
   async function remove(c: Credential) {
-    if (!(await dialog.confirm(`Delete the key “${c.label}”? Usage history is kept.`, { okLabel: 'Delete', danger: true }))) return;
-    await app.try('credential/delete', { credentialId: c.id }, 'Key deleted.');
+    const chatgpt = c.kind === 'chatgpt';
+    const ask = chatgpt ? `Sign out “${c.label}”? Usage history is kept.` : `Delete the key “${c.label}”? Usage history is kept.`;
+    if (!(await dialog.confirm(ask, { okLabel: chatgpt ? 'Sign out' : 'Delete', danger: true }))) return;
+    await app.try('credential/delete', { credentialId: c.id }, chatgpt ? 'Signed out.' : 'Key deleted.');
     await refresh();
   }
 
@@ -95,22 +140,48 @@
   }
 </script>
 
-<div class="flex items-center mb-3">
-  <p class="text-sm text-muted">Keys are stored in the macOS Keychain; the engine never sends them to the app.</p>
-  <button class="btn-primary ml-auto" onclick={() => (adding = !adding)}><Plus class="w-4 h-4" />Add key</button>
+<div class="flex items-start gap-4 mb-3">
+  <div>
+    <h2 class="text-sm font-semibold text-ink">Providers</h2>
+    <p class="text-xs text-muted mt-1 max-w-2xl">Connect Claude, OpenAI, Gemini or a local model server to power chat. Use an API key for any provider, or, for OpenAI, sign in with your ChatGPT account instead. Keys and sign-ins are stored in the macOS Keychain and never sent to the app.</p>
+  </div>
+  <button class="btn-primary ml-auto" onclick={() => (adding = !adding)}><Plus class="w-4 h-4" />Connect</button>
 </div>
 
 {#if adding}
-  <form class="card p-4 mb-4 space-y-3" onsubmit={(e) => { e.preventDefault(); add(); }}>
+  <form class="card p-4 mb-4 space-y-3" onsubmit={(e) => { e.preventDefault(); if (!viaChatGPT) add(); }}>
     <div class="grid grid-cols-2 gap-3">
       <div>
         <label class="label" for="k-prov">Provider</label>
-        <select id="k-prov" class="input" bind:value={provider}>
+        <select id="k-prov" class="input" bind:value={provider} onchange={() => { if (provider !== 'openai') authMode = 'key'; }}>
           {#each providerIds as id}<option value={id}>{providerNames[id] ?? id}</option>{/each}
         </select>
       </div>
-      <div><label class="label" for="k-label">Label</label><input id="k-label" class="input" bind:value={label} placeholder="Personal, Work…" /></div>
+      {#if !viaChatGPT}
+        <div><label class="label" for="k-label">Label</label><input id="k-label" class="input" bind:value={label} placeholder="Personal, Work…" /></div>
+      {/if}
     </div>
+    {#if provider === 'openai'}
+      <div class="inline-flex rounded-md border border-line p-0.5 text-sm" role="group" aria-label="How to connect OpenAI">
+        <button type="button" class="px-3 py-1 rounded {authMode === 'key' ? 'bg-clay text-white' : 'text-ink-soft'}" onclick={() => { authMode = 'key'; cancelSignIn(); }}>Add a key</button>
+        <button type="button" class="px-3 py-1 rounded {authMode === 'chatgpt' ? 'bg-clay text-white' : 'text-ink-soft'}" onclick={() => (authMode = 'chatgpt')}>Sign in with ChatGPT</button>
+      </div>
+    {/if}
+    {#if viaChatGPT}
+      {#if signin}
+        <div class="rounded-md border border-line p-3 space-y-2">
+          <p class="text-sm text-ink-soft">A browser window opened. Sign in to ChatGPT and enter this code:</p>
+          <div class="flex items-center gap-2">
+            <code class="text-lg font-mono tracking-widest text-ink selectable">{signin.userCode}</code>
+            <button type="button" class="btn-ghost btn-sm" aria-label="Copy code" onclick={() => navigator.clipboard?.writeText(signin!.userCode)}><Copy class="w-3.5 h-3.5" /></button>
+            <button type="button" class="btn-ghost btn-sm" onclick={() => openLink(signin!.verificationUrl)}>Open the page again</button>
+          </div>
+          <p class="text-xs text-muted">Waiting for approval… this closes by itself when you finish. Only continue if you started this here.</p>
+        </div>
+      {:else}
+        <p class="text-xs text-muted max-w-xl">Uses your ChatGPT plan instead of an API key, so calls count against your plan’s limits and are not billed per token. This is OpenAI’s Codex sign-in, which OpenAI has not published for third-party apps, so it may change or stop working. Anthropic accounts can’t be used this way.</p>
+      {/if}
+    {:else}
     <div>
       <label class="label" for="k-secret">API key{provider === 'openai_compatible' ? ' (optional)' : ''}</label>
       <input id="k-secret" class="input font-mono" type="password" autocomplete="off" bind:value={secret} placeholder={provider === 'claude' ? 'sk-ant-…' : provider === 'openai' ? 'sk-…' : ''} />
@@ -122,17 +193,22 @@
       </div>
     {/if}
     <label class="flex items-center gap-2 text-sm text-ink-soft"><input type="checkbox" bind:checked={isDefault} /> Use as the default key for this provider</label>
+    {/if}
     <div class="flex justify-end gap-2">
-      <button type="button" class="btn-ghost" onclick={() => (adding = false)}>Cancel</button>
+      <button type="button" class="btn-ghost" onclick={() => { cancelSignIn(); adding = false; }}>Cancel</button>
+      {#if viaChatGPT}
+        <button type="button" class="btn-primary" disabled={busy || !!signin} onclick={startSignIn}><LogIn class="w-4 h-4" />{signin ? 'Waiting…' : 'Sign in with ChatGPT'}</button>
+      {:else}
       <button type="submit" class="btn-primary" disabled={busy || (!secret.trim() && provider !== 'openai_compatible') || (provider === 'openai_compatible' && !baseUrl.trim())}>
         {busy ? 'Saving…' : 'Save and test'}
       </button>
+      {/if}
     </div>
   </form>
 {/if}
 
 {#if app.credentials.length === 0 && !adding}
-  <div class="card p-8 text-center text-sm text-muted">No API keys yet. Add one to start chatting.</div>
+  <div class="card p-8 text-center text-sm text-muted">Nothing connected yet. Add an API key (or sign in with ChatGPT for OpenAI) to start chatting.</div>
 {/if}
 
 {#each grouped as [prov, list]}
@@ -149,10 +225,12 @@
             onclick={() => !c.isDefault && update(c, { isDefault: true })}
           ><Star class="w-4 h-4 {c.isDefault ? 'fill-current' : ''}" /></button>
           <div class="flex-1 min-w-0">
-            <div class="text-sm text-ink">{c.label} <span class="font-mono text-xs text-muted">••••{c.last4 || '-'}</span></div>
+            <div class="text-sm text-ink">{c.label}
+              {#if c.kind === 'chatgpt'}<span class="ml-1 rounded bg-raised px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">ChatGPT sign-in</span>
+              {:else}<span class="font-mono text-xs text-muted">••••{c.last4 || '-'}</span>{/if}</div>
             <div class="text-[11px] text-muted">
               {#if c.baseUrl}<span class="font-mono">{c.baseUrl}</span> · {/if}
-              This month {fmtUsd(c.monthUsage?.costUsd)}{c.monthlyBudgetUsd ? ` of ${fmtUsd(c.monthlyBudgetUsd)}` : ''}
+              {#if c.kind === 'chatgpt'}Uses your ChatGPT plan{:else}This month {fmtUsd(c.monthUsage?.costUsd)}{c.monthlyBudgetUsd ? ` of ${fmtUsd(c.monthlyBudgetUsd)}` : ''}{/if}
               {#if c.lastTestedAt} · tested {relTime(c.lastTestedAt)} {c.lastTestOk ? '✓' : '✗'}{/if}
             </div>
           </div>
@@ -163,9 +241,11 @@
             <input type="checkbox" checked={c.enabled} onchange={(e) => update(c, { enabled: e.currentTarget.checked })} /> Enabled
           </label>
           <button class="btn-ghost btn-sm" onclick={() => test(c)} disabled={t === 'running'}><FlaskConical class="w-3.5 h-3.5" />{t === 'running' ? 'Testing…' : 'Test'}</button>
-          <button class="btn-ghost btn-sm" onclick={() => editBudget(c)}>Budget</button>
-          <button class="btn-ghost btn-sm" title="Replace key" aria-label="Replace key" onclick={() => rotate(c)}><RefreshCw class="w-3.5 h-3.5" /></button>
-          <button class="btn-danger btn-sm" aria-label="Delete key" onclick={() => remove(c)}><Trash2 class="w-3.5 h-3.5" /></button>
+          {#if c.kind !== 'chatgpt'}
+            <button class="btn-ghost btn-sm" onclick={() => editBudget(c)}>Budget</button>
+            <button class="btn-ghost btn-sm" title="Replace key" aria-label="Replace key" onclick={() => rotate(c)}><RefreshCw class="w-3.5 h-3.5" /></button>
+          {/if}
+          <button class="btn-danger btn-sm" aria-label={c.kind === 'chatgpt' ? 'Sign out' : 'Delete key'} title={c.kind === 'chatgpt' ? 'Sign out' : 'Delete key'} onclick={() => remove(c)}><Trash2 class="w-3.5 h-3.5" /></button>
         </div>
         {#if t && t !== 'running'}
           <div class="mt-2 text-xs {t.ok ? 'text-sage' : 'text-rust'} selectable">

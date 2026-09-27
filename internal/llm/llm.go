@@ -117,6 +117,7 @@ type Usage struct {
 	OutputTokens      int64 // all generated tokens, including reasoning
 	ReasoningTokens   int64 // subset of OutputTokens spent on reasoning
 	Reported          bool  // false if the provider returned no usage
+	Subscription      bool  // billed to a plan (ChatGPT sign-in), not per token
 }
 
 // EventType enumerates stream events.
@@ -143,9 +144,19 @@ type Event struct {
 
 // Credential carries what an adapter needs to authenticate.
 type Credential struct {
-	APIKey  string
+	APIKey  string // API key, or the access token when Kind is KindChatGPT
 	BaseURL string
+	// Kind is "" / KindAPIKey for an API key, KindChatGPT for a ChatGPT sign-in.
+	Kind string
+	// AccountID is the ChatGPT account id (KindChatGPT only).
+	AccountID string
 }
+
+// Credential kinds.
+const (
+	KindAPIKey  = "api_key"
+	KindChatGPT = "chatgpt"
+)
 
 // Provider is implemented by each adapter.
 type Provider interface {

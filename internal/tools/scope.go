@@ -23,6 +23,10 @@ type Scope struct {
 	UseCompute       bool
 	AllowVisualQA    bool
 	AllowComputerUse bool
+	// ComputerUseApps restricts Computer Use to these apps (case-insensitive
+	// match against app_name, bundle_id, or app_path's basename). Empty means
+	// unrestricted.
+	ComputerUseApps  []string
 	ComputeVCPUs     int
 	ComputeMemoryMiB int
 	ComputeDiskMiB   int

@@ -27,7 +27,6 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/shaktsin/umcode/internal/engine"
-	"github.com/shaktsin/umcode/internal/identity"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/version"
@@ -45,18 +44,11 @@ type Server struct {
 	httpSrv   *http.Server
 	conns     map[*conn]struct{}
 	token     string
-	consoleMu sync.Mutex
-	consoles  map[string]ownedConsole
-}
-
-type ownedConsole struct {
-	owner   string
-	process *identity.Console
 }
 
 // New returns a server for eng.
 func New(eng *engine.Engine, log *slog.Logger) *Server {
-	s := &Server{eng: eng, log: log, conns: map[*conn]struct{}{}, consoles: map[string]ownedConsole{}}
+	s := &Server{eng: eng, log: log, conns: map[*conn]struct{}{}}
 	s.handlers = s.routes()
 	return s
 }
@@ -229,14 +221,6 @@ func (s *Server) dropConn(c *conn) {
 	s.mu.Lock()
 	delete(s.conns, c)
 	s.mu.Unlock()
-	s.consoleMu.Lock()
-	for id, entry := range s.consoles {
-		if entry.owner == c.id {
-			_ = entry.process.Close()
-			delete(s.consoles, id)
-		}
-	}
-	s.consoleMu.Unlock()
 	c.close()
 }
 
@@ -265,7 +249,7 @@ func (s *Server) handleMessage(c *conn, data []byte) {
 	// Requests run concurrently so a slow call does not block the connection;
 	// initialize runs inline so it completes before anything that follows it.
 	run := func(f func()) { go f() }
-	if m.Method == protocol.MethodInitialize || m.Method == protocol.MethodIdentityConsoleInput {
+	if m.Method == protocol.MethodInitialize {
 		run = func(f func()) { f() }
 	}
 	run(func() {
@@ -320,16 +304,6 @@ func (c *conn) Wants(threadID string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.all || c.threads[threadID]
-}
-
-func (s *Server) ownedConsole(c *conn, id string) (*identity.Console, error) {
-	s.consoleMu.Lock()
-	defer s.consoleMu.Unlock()
-	entry, ok := s.consoles[id]
-	if !ok || entry.owner != c.ID() {
-		return nil, protocol.Errorf(protocol.CodeNotFound, "provider terminal session not found")
-	}
-	return entry.process, nil
 }
 
 func (c *conn) subscribe(p protocol.SubscribeParams) {

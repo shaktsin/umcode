@@ -22,13 +22,27 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 	args json.RawMessage, risk tools.Risk, reason, summary string) (bool, error) {
 	timeout := time.Duration(e.Cfg.Policy.ApprovalTimeoutMinutes) * time.Minute
 	now := time.Now().UTC()
+	th, _ := e.Store.GetThread(sctx, turn.ThreadID)
 	a := protocol.Approval{
-		ID: store.NewID("apr"), ThreadID: turn.ThreadID, TurnID: turn.ID, ItemID: it.ID, Tool: tool, Args: args,
+		ID: store.NewID("apr"), ThreadID: turn.ThreadID, ProjectID: th.ProjectID, TurnID: turn.ID, ItemID: it.ID, Tool: tool, Args: args,
 		Risk: string(risk), Reason: reason, ActionSummary: summary, Status: "pending",
 		CreatedAt: now, ExpiresAt: now.Add(timeout),
 	}
-	// A decision the user asked to remember for this project answers immediately.
-	if th, err := e.Store.GetThread(sctx, turn.ThreadID); err == nil && th.ProjectID != "" {
+	// A running Computer Use session's latest screenshot lets the person see
+	// exactly what they're being asked to approve, instead of judging a
+	// click or keystroke from its coordinates alone.
+	if e.ComputerUse != nil {
+		if shot, ok := e.ComputerUse.LastScreenshot(turn.ThreadID); ok {
+			a.Screenshot = shot
+		}
+	}
+	// A decision the user asked to remember for this project answers
+	// immediately. Computer Use actions are excluded: their approval
+	// signature can't distinguish one click or keystroke from another (see
+	// ApprovalSignature), so "remember" would silently rubber-stamp every
+	// future action in the project rather than the one the person actually
+	// reviewed. Each one always gets a fresh, human decision.
+	if th.ProjectID != "" && !isComputerUseTool(tool) {
 		switch e.Store.RememberedDecision(sctx, th.ProjectID, tool, ApprovalSignature(tool, args)) {
 		case "allow":
 			_ = e.Store.Audit(sctx, "approval.remembered", map[string]any{"tool": tool, "project": th.ProjectID, "decision": "allow"})
@@ -54,7 +68,7 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 	// Admin clients get the request; clients following the thread see it too.
 	ev := protocol.ApprovalEvent{Approval: a}
 	e.Bus.PublishAdmin(protocol.NotifyApprovalRequest, ev)
-	_ = e.Store.Audit(sctx, "approval.request", map[string]any{"id": a.ID, "tool": tool, "risk": risk, "summary": summary})
+	_ = e.Store.Audit(sctx, "approval.request", map[string]any{"id": a.ID, "tool": tool, "risk": risk, "summary": summary, "args": json.RawMessage(args)})
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -110,7 +124,7 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 			}
 		}
 	}
-	if remember && decided.ID != "" {
+	if remember && decided.ID != "" && !isComputerUseTool(decided.Tool) {
 		if th, err := e.Store.GetThread(ctx, decided.ThreadID); err == nil && th.ProjectID != "" {
 			decision := "deny"
 			if approve {
@@ -127,6 +141,13 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 		return decided, fmt.Errorf("approval %s not found after decision", id)
 	}
 	return decided, nil
+}
+
+// isComputerUseTool reports whether tool is one of the computer.* tools,
+// whose actions must never be covered by a remembered "always allow"
+// decision (see requestApproval and RespondApproval).
+func isComputerUseTool(tool string) bool {
+	return strings.HasPrefix(tool, "computer.")
 }
 
 // ApprovalSignature identifies the exact command or path a person approved.

@@ -29,17 +29,13 @@ const (
 	MethodApprovalList    = "approval/list"
 	MethodApprovalRespond = "approval/respond"
 
-	MethodProviderList         = "provider/list"
-	MethodIdentityList         = "identity/list"
-	MethodIdentityConsoleStart = "identity/console/start"
-	MethodIdentityConsoleInput = "identity/console/input"
-	MethodIdentityConsoleStop  = "identity/console/stop"
-	MethodModelList            = "model/list"
-	MethodModelSetHidden       = "model/setHidden"
-	MethodModelRefresh         = "model/refresh"
-	MethodModelSetPrice        = "model/setPrice"
-	MethodRoutingGet           = "routing/get"
-	MethodRoutingSet           = "routing/set"
+	MethodProviderList   = "provider/list"
+	MethodModelList      = "model/list"
+	MethodModelSetHidden = "model/setHidden"
+	MethodModelRefresh   = "model/refresh"
+	MethodModelSetPrice  = "model/setPrice"
+	MethodRoutingGet     = "routing/get"
+	MethodRoutingSet     = "routing/set"
 
 	MethodCredentialList   = "credential/list"
 	MethodCredentialAdd    = "credential/add"
@@ -47,6 +43,10 @@ const (
 	MethodCredentialUpdate = "credential/update"
 	MethodCredentialRotate = "credential/rotate"
 	MethodCredentialDelete = "credential/delete"
+
+	// Sign in with a ChatGPT account (OpenAI only) instead of adding an API key.
+	MethodChatGPTSignInStart  = "chatgpt/signin/start"
+	MethodChatGPTSignInCancel = "chatgpt/signin/cancel"
 
 	MethodUsageSummary   = "usage/summary"
 	MethodUsageSetBudget = "usage/setBudget"
@@ -57,20 +57,19 @@ const (
 
 // Notification names (engine → client).
 const (
-	NotifyThreadUpdated         = "thread/updated"
-	NotifyTurnStarted           = "turn/started"
-	NotifyTurnCompleted         = "turn/completed"
-	NotifyItemStarted           = "item/started"
-	NotifyItemDelta             = "item/delta"
-	NotifyItemCompleted         = "item/completed"
-	NotifyApprovalRequest       = "approval/request"
-	NotifyApprovalResolved      = "approval/resolved"
-	NotifyBudgetWarning         = "usage/budgetWarning"
-	NotifyIdentityConsoleOutput = "identity/console/output"
-	NotifyIdentityConsoleDone   = "identity/console/done"
-	NotifyPreviewStarted        = "preview/started"
-	NotifyPreviewOutput         = "preview/output"
-	NotifyPreviewStopped        = "preview/stopped"
+	NotifyChatGPTSignIn    = "chatgpt/signin/completed"
+	NotifyThreadUpdated    = "thread/updated"
+	NotifyTurnStarted      = "turn/started"
+	NotifyTurnCompleted    = "turn/completed"
+	NotifyItemStarted      = "item/started"
+	NotifyItemDelta        = "item/delta"
+	NotifyItemCompleted    = "item/completed"
+	NotifyApprovalRequest  = "approval/request"
+	NotifyApprovalResolved = "approval/resolved"
+	NotifyBudgetWarning    = "usage/budgetWarning"
+	NotifyPreviewStarted   = "preview/started"
+	NotifyPreviewOutput    = "preview/output"
+	NotifyPreviewStopped   = "preview/stopped"
 )
 
 // InitializeParams is sent first by every client.
@@ -240,10 +239,6 @@ type ProviderListResult struct {
 	Providers []Provider `json:"providers"`
 }
 
-type IdentityListResult struct {
-	Identities []ProviderIdentity `json:"identities"`
-}
-
 type ModelListParams struct {
 	Provider      string `json:"provider,omitempty"`
 	IncludeHidden bool   `json:"includeHidden,omitempty"`
@@ -375,4 +370,25 @@ type ThreadEvent struct {
 // ApprovalEvent wraps an approval.
 type ApprovalEvent struct {
 	Approval Approval `json:"approval"`
+}
+
+// ChatGPTSignInStart is returned when a ChatGPT sign-in begins: the user opens
+// VerificationURL in a browser and enters UserCode.
+type ChatGPTSignInStart struct {
+	SessionID       string `json:"sessionId"`
+	VerificationURL string `json:"verificationUrl"`
+	UserCode        string `json:"userCode"`
+	ExpiresInSec    int    `json:"expiresInSec"`
+}
+
+type ChatGPTSignInCancelParams struct {
+	SessionID string `json:"sessionId"`
+}
+
+// ChatGPTSignInResult is the notification sent when a sign-in ends.
+type ChatGPTSignInResult struct {
+	SessionID  string      `json:"sessionId"`
+	OK         bool        `json:"ok"`
+	Error      string      `json:"error,omitempty"`
+	Credential *Credential `json:"credential,omitempty"`
 }

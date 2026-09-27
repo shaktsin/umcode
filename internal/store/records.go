@@ -15,7 +15,7 @@ import (
 // ---- credentials ----
 
 const credCols = `id, provider, label, base_url, last4, enabled, is_default, fallback,
-	monthly_budget_usd, hard_stop, last_tested_at, last_test_ok, created_at`
+	monthly_budget_usd, hard_stop, last_tested_at, last_test_ok, created_at, kind`
 
 func scanCred(sc interface{ Scan(...any) error }) (protocol.Credential, error) {
 	var c protocol.Credential
@@ -24,7 +24,7 @@ func scanCred(sc interface{ Scan(...any) error }) (protocol.Credential, error) {
 	var ok sql.NullInt64
 	var created string
 	err := sc.Scan(&c.ID, &c.Provider, &c.Label, &c.BaseURL, &c.Last4, &enabled, &isDefault, &fallback,
-		&c.MonthlyBudgetUSD, &hardStop, &tested, &ok, &created)
+		&c.MonthlyBudgetUSD, &hardStop, &tested, &ok, &created, &c.Kind)
 	if err != nil {
 		return c, err
 	}
@@ -64,10 +64,13 @@ func (s *Store) CreateCredential(ctx context.Context, c protocol.Credential) (pr
 	now := time.Now().UTC()
 	c.CreatedAt = now
 	c.Enabled = true
+	if c.Kind == "" {
+		c.Kind = "api_key"
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO credentials (id, provider, label, base_url, last4, enabled, is_default,
-		fallback, monthly_budget_usd, hard_stop, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		fallback, monthly_budget_usd, hard_stop, created_at, updated_at, kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.ID, c.Provider, c.Label, c.BaseURL, c.Last4, 1, b2i(c.IsDefault), b2i(c.Fallback),
-		c.MonthlyBudgetUSD, b2i(c.HardStop), FormatTime(now), FormatTime(now))
+		c.MonthlyBudgetUSD, b2i(c.HardStop), FormatTime(now), FormatTime(now), c.Kind)
 	if err != nil {
 		return c, err
 	}

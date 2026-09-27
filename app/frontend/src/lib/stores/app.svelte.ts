@@ -2,7 +2,7 @@ import { RpcClient, PROTOCOL_VERSION, type ConnState } from '$lib/rpc';
 import { fetchConnection } from '$lib/connection';
 import { errMsg } from '$lib/format';
 import type {
-  Approval, BudgetWarning, ComplexityDefaults, Credential, EngineStatus, Model, Provider, ProviderIdentity, RoutingConfig,
+  Approval, BudgetWarning, ComplexityDefaults, Credential, EngineStatus, Model, Provider, RoutingConfig,
 } from '$lib/types';
 
 export type View = 'chat' | 'approvals' | 'tasks' | 'extensions' | 'usage' | 'project' | 'settings';
@@ -16,12 +16,16 @@ export interface Toast {
 class AppState {
   conn = $state<ConnState>('closed');
   connError = $state('');
+  // True once the engine has connected at least once this launch. The
+  // startup splash (see Splash.svelte) shows until this flips; a later,
+  // transient drop falls back to the small ConnectionBanner instead of
+  // hiding the whole app again.
+  booted = $state(false);
   shell = $state('browser');
   status = $state<EngineStatus | null>(null);
   view = $state<View>('chat');
   approvals = $state<Approval[]>([]);
   providers = $state<Provider[]>([]);
-  identities = $state<ProviderIdentity[]>([]);
   models = $state<Model[]>([]);
   credentials = $state<Credential[]>([]);
   complexity = $state<ComplexityDefaults | null>(null);
@@ -59,7 +63,10 @@ class AppState {
     this.rpc.onState((s, err) => {
       this.conn = s;
       this.connError = err || '';
-      if (s === 'open') void this.onReady();
+      if (s === 'open') {
+        this.booted = true;
+        void this.onReady();
+      }
     });
     this.rpc.on('approval/request', (p: { approval: Approval }) => {
       if (!this.approvals.some((a) => a.id === p.approval.id)) this.approvals = [...this.approvals, p.approval];
@@ -136,18 +143,14 @@ class AppState {
   }
 
   async refreshCatalog() {
-    const [p, i, m, c, x, r] = await Promise.all([
+    const [p, m, c, x, r] = await Promise.all([
       this.call<{ providers: Provider[] }>('provider/list'),
-      // Older/external engines may not expose managed identities yet. Keep the
-      // rest of the catalog usable while the app prompts for an engine update.
-      this.call<{ identities: ProviderIdentity[] }>('identity/list').catch(() => ({ identities: [] })),
       this.call<{ models: Model[] }>('model/list', {}),
       this.call<{ credentials: Credential[] }>('credential/list'),
       this.call<ComplexityDefaults>('complexity/getDefaults'),
       this.call<RoutingConfig>('routing/get'),
     ]);
     this.providers = p.providers ?? [];
-    this.identities = i.identities ?? [];
     this.models = m.models ?? [];
     this.credentials = c.credentials ?? [];
     this.complexity = x;
