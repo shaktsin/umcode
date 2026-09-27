@@ -162,8 +162,8 @@
 
 <div class="flex items-start gap-4 mb-3">
   <div>
-    <h2 class="text-sm font-semibold text-ink">Sign in with a subscription (no API key needed)</h2>
-    <p class="text-xs text-muted mt-1 max-w-2xl">Uses the official Codex (ChatGPT) or Claude Code console sign-in. UMCode only checks that a session exists and never reads, copies, or stores its token. Once signed in, the account's models appear in the model picker. Chats run through the Codex or Claude Code command-line tool, so they use your plan's limits rather than a metered key, and UMCode does not track their cost.</p>
+    <h2 class="text-sm font-semibold text-ink">Sign in with a subscription</h2>
+    <p class="text-xs text-muted mt-1 max-w-2xl">Uses the official Codex (ChatGPT) or Claude Code console sign-in. UMCode only checks that a session exists and never reads, copies, or stores its token. Chat does not use these sign-ins yet, so add an API key above to start chatting.</p>
   </div>
   <button class="btn-ghost btn-sm ml-auto" disabled={refreshing} onclick={refresh}><RefreshCw class="w-3.5 h-3.5 {refreshing ? 'animate-spin' : ''}" />Refresh</button>
 </div>

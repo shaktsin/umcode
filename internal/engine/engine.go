@@ -99,8 +99,7 @@ type Options struct {
 
 // New builds an engine and runs startup housekeeping.
 func New(ctx context.Context, o Options) (*Engine, error) {
-	builtinLLMs := o.LLMs == nil
-	if builtinLLMs {
+	if o.LLMs == nil {
 		o.LLMs = llm.NewRegistry()
 	}
 	if o.Logger == nil {
@@ -172,15 +171,6 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 			e.Log.Info("imported an existing API key into secure storage (you can remove any api_key from config.yaml)",
 				"provider", c.Provider, "credential", c.ID)
 		}
-	}
-	// Pick up any Codex / Claude Code sign-in already on this machine (only with
-	// the built-in adapters: tests that inject their own providers stay isolated).
-	if builtinLLMs {
-		go func() {
-			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-			defer cancel()
-			e.ProviderIdentities(sctx)
-		}()
 	}
 	if !o.DisableMCP {
 		if err := mcpm.Start(false); err != nil {
@@ -454,8 +444,7 @@ func (e *Engine) Providers(ctx context.Context) ([]protocol.Provider, error) {
 	for _, c := range creds {
 		count[c.Provider]++
 	}
-	names := map[string]string{"claude": "Anthropic Claude", "openai": "OpenAI", "gemini": "Google Gemini", "openai_compatible": "OpenAI-compatible (local)",
-		llm.ProviderClaudeSubscription: "Claude subscription (Claude Code)", llm.ProviderChatGPT: "ChatGPT subscription (Codex)"}
+	names := map[string]string{"claude": "Anthropic Claude", "openai": "OpenAI", "gemini": "Google Gemini", "openai_compatible": "OpenAI-compatible (local)"}
 	var out []protocol.Provider
 	for _, id := range e.LLMs.IDs() {
 		pc := e.Cfg.LLM.Providers[id]
@@ -468,103 +457,7 @@ func (e *Engine) Providers(ctx context.Context) ([]protocol.Provider, error) {
 // ProviderIdentities reports console subscription sessions without reading or
 // returning the credentials owned by Codex or Claude Code.
 func (e *Engine) ProviderIdentities(ctx context.Context) []protocol.ProviderIdentity {
-	ids := identity.List(ctx)
-	e.syncSubscriptions(ctx, ids)
-	return ids
-}
-
-// syncSubscriptions makes each signed-in Codex / Claude Code session available
-// as a secretless credential, so its models can be chosen and routed like any
-// other. A failure is logged and never blocks the caller.
-func (e *Engine) syncSubscriptions(ctx context.Context, ids []protocol.ProviderIdentity) {
-	for _, id := range ids {
-		provider, label := "", ""
-		switch id.ID {
-		case "chatgpt":
-			provider, label = llm.ProviderChatGPT, "ChatGPT subscription"
-		case "claude_subscription":
-			provider, label = llm.ProviderClaudeSubscription, "Claude subscription"
-		default:
-			continue
-		}
-		if err := e.Creds.SyncSubscription(ctx, provider, label, id.SignedIn); err != nil {
-			e.Log.Warn("sync subscription sign-in", "provider", provider, "err", err)
-		}
-		if err := e.syncSubscriptionModels(ctx, provider, id.SignedIn); err != nil {
-			e.Log.Warn("sync subscription models", "provider", provider, "err", err)
-		}
-	}
-}
-
-// syncSubscriptionModels adds the subscription's models to the approved model
-// list while it is signed in, and removes them (and their pool entries) when it
-// is not.
-func (e *Engine) syncSubscriptionModels(ctx context.Context, provider string, signedIn bool) error {
-	type want struct{ id, name, model string }
-	var wants []want
-	switch provider {
-	case llm.ProviderChatGPT:
-		wants = []want{{"chatgpt-default", "ChatGPT (Codex)", "default"}}
-	case llm.ProviderClaudeSubscription:
-		wants = []want{
-			{"claude-subscription-sonnet", "Claude Sonnet (subscription)", "sonnet"},
-			{"claude-subscription-opus", "Claude Opus (subscription)", "opus"},
-			{"claude-subscription-haiku", "Claude Haiku (subscription)", "haiku"},
-		}
-	default:
-		return nil
-	}
-	cfg := e.RoutingConfig()
-	changed := false
-	if signedIn {
-		have := map[string]bool{}
-		for _, m := range cfg.Models {
-			have[m.ID] = true
-		}
-		for _, w := range wants {
-			if !have[w.id] {
-				cfg.Models = append(cfg.Models, protocol.ConfiguredModel{ID: w.id, Name: w.name, Provider: provider, Model: w.model, Enabled: true})
-				changed = true
-			}
-		}
-	} else {
-		drop := map[string]bool{}
-		kept := cfg.Models[:0]
-		for _, m := range cfg.Models {
-			if m.Provider == provider {
-				drop[m.ID] = true
-				changed = true
-				continue
-			}
-			kept = append(kept, m)
-		}
-		cfg.Models = kept
-		if changed {
-			pools := cfg.Pools[:0]
-			for _, p := range cfg.Pools {
-				var ms []string
-				for _, id := range p.Models {
-					if !drop[id] {
-						ms = append(ms, id)
-					}
-				}
-				if len(ms) == 0 {
-					if cfg.DefaultPool == p.ID {
-						cfg.DefaultPool = ""
-					}
-					continue
-				}
-				p.Models = ms
-				pools = append(pools, p)
-			}
-			cfg.Pools = pools
-		}
-	}
-	if !changed {
-		return nil
-	}
-	_, err := e.SetRoutingConfig(ctx, cfg)
-	return err
+	return identity.List(ctx)
 }
 
 func (e *Engine) defaultModel(provider string) string {

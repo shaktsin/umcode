@@ -10,10 +10,6 @@
   };
   const providerIds = $derived(app.providers.length ? app.providers.map((p) => p.id) : Object.keys(providerNames));
 
-  // Sign-ins made through Codex / Claude Code appear under "Subscription sign-in", not here.
-  const subscriptionProviders = ['claude_subscription', 'chatgpt'];
-  const providerIdsForKeys = $derived(providerIds.filter((id) => !subscriptionProviders.includes(id)));
-
   let adding = $state(false);
   let provider = $state('claude');
   let label = $state('');
@@ -26,7 +22,7 @@
 
   const grouped = $derived.by(() => {
     const g: Record<string, Credential[]> = {};
-    for (const c of app.credentials) if (!subscriptionProviders.includes(c.provider)) (g[c.provider] ??= []).push(c);
+    for (const c of app.credentials) (g[c.provider] ??= []).push(c);
     return Object.entries(g);
   });
 
@@ -113,7 +109,7 @@
       <div>
         <label class="label" for="k-prov">Provider</label>
         <select id="k-prov" class="input" bind:value={provider}>
-          {#each providerIdsForKeys as id}<option value={id}>{providerNames[id] ?? id}</option>{/each}
+          {#each providerIds as id}<option value={id}>{providerNames[id] ?? id}</option>{/each}
         </select>
       </div>
       <div><label class="label" for="k-label">Label</label><input id="k-label" class="input" bind:value={label} placeholder="Personal, Work…" /></div>
@@ -138,7 +134,7 @@
   </form>
 {/if}
 
-{#if grouped.length === 0 && !adding}
+{#if app.credentials.length === 0 && !adding}
   <div class="card p-8 text-center text-sm text-muted">No API keys yet. Add one to start chatting.</div>
 {/if}
 

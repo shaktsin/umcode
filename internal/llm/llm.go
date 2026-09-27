@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/shaktsin/umcode/internal/identity"
 	"io"
 	"net/http"
 	"strconv"
@@ -212,8 +211,6 @@ func NewRegistry() *Registry {
 	r.Register(&OpenAI{id: "openai", defaultBase: "https://api.openai.com/v1"})
 	r.Register(&OpenAI{id: "openai_compatible", defaultBase: "http://localhost:11434/v1", compatible: true})
 	r.Register(&Gemini{})
-	r.Register(NewClaudeSubscription(identity.ClaudePath))
-	r.Register(NewChatGPTSubscription(identity.CodexPath))
 	return r
 }
 
@@ -228,7 +225,7 @@ func (r *Registry) Get(id string) (Provider, bool) {
 
 // IDs lists registered provider ids.
 func (r *Registry) IDs() []string {
-	return []string{"claude", "openai", "gemini", "openai_compatible", ProviderClaudeSubscription, ProviderChatGPT}
+	return []string{"claude", "openai", "gemini", "openai_compatible"}
 }
 
 // EstimateTokens is a rough fallback (≈4 characters per token).

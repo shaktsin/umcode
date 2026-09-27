@@ -286,8 +286,8 @@
           {projects.active ? `What should we do in ${projects.active.name}?` : 'What can I help with?'}
         </h2>
         {#if app.conn === 'open' && !hasKeys}
-          <p class="text-sm text-muted mt-2 max-w-sm">Sign in with your ChatGPT or Claude subscription, or add an API key for Claude, OpenAI, Gemini or a local model server.</p>
-          <button class="btn-primary mt-4" onclick={() => (app.view = 'settings')}><KeyRound class="w-4 h-4" />Set up a model</button>
+          <p class="text-sm text-muted mt-2 max-w-sm">Add an API key for Claude, OpenAI, Gemini or a local model server to get started.</p>
+          <button class="btn-primary mt-4" onclick={() => (app.view = 'settings')}><KeyRound class="w-4 h-4" />Add an API key</button>
         {:else if !projects.active}
           <p class="text-sm text-muted mt-2 max-w-sm">
             Without a project I can read and answer, but not change files. Create a project to choose a folder and let me work in it.

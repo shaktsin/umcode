@@ -136,13 +136,11 @@ class AppState {
   }
 
   async refreshCatalog() {
-    // identity/list goes first: the engine turns each signed-in Codex / Claude
-    // Code session into a credential and approved models as a side effect, and
-    // the calls below must see that. Older/external engines may not expose
-    // managed identities yet; keep the rest of the catalog usable then.
-    const i = await this.call<{ identities: ProviderIdentity[] }>('identity/list').catch(() => ({ identities: [] }));
-    const [p, m, c, x, r] = await Promise.all([
+    const [p, i, m, c, x, r] = await Promise.all([
       this.call<{ providers: Provider[] }>('provider/list'),
+      // Older/external engines may not expose managed identities yet. Keep the
+      // rest of the catalog usable while the app prompts for an engine update.
+      this.call<{ identities: ProviderIdentity[] }>('identity/list').catch(() => ({ identities: [] })),
       this.call<{ models: Model[] }>('model/list', {}),
       this.call<{ credentials: Credential[] }>('credential/list'),
       this.call<ComplexityDefaults>('complexity/getDefaults'),
