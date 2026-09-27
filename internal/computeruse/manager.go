@@ -86,11 +86,6 @@ type driver interface {
 	Open(context.Context, Target) (Target, error)
 	Inspect(context.Context, Target, string) (State, error)
 	Act(context.Context, Target, Action) error
-	// Hide and Show are best-effort: a driver that cannot support them (no
-	// permission granted, or the non-darwin stub) returns an error, which
-	// callers treat as "leave visibility as it is" rather than a failure.
-	Hide(context.Context, Target) error
-	Show(context.Context, Target) error
 }
 
 type Manager struct {
@@ -219,11 +214,10 @@ func (m *Manager) Act(ctx context.Context, threadID string, action Action) (Repo
 		action.X *= s.Last.Window.Width / float64(s.Last.Window.PixelWidth)
 		action.Y *= s.Last.Window.Height / float64(s.Last.Window.PixelHeight)
 	}
-	// The window may have been tucked away (see inspect below) since the
-	// last action; bring it back so this click lands on the right target.
-	// Best-effort: if UMCode hasn't been granted the Automation permission
-	// this needs, the app just stays visible like it always did.
-	_ = m.driver.Show(ctx, s.Target)
+	// No focus juggling here: the helper (native/computer-use-helper) posts
+	// this action straight to the target process's window via
+	// CGEventPostToPid, which does not require it to be frontmost or even
+	// on top of other windows. See that package's README for the technique.
 	if err := m.driver.Act(ctx, s.Target, action); err != nil {
 		return Report{}, err
 	}
@@ -260,10 +254,9 @@ func (m *Manager) inspect(ctx context.Context, s *Session, name string) (Report,
 	}
 	relSlash := filepath.ToSlash(rel)
 	s.LastScreenshotRel = relSlash
-	// Now that the screenshot for this step is captured, tuck the app back
-	// out of the way instead of leaving it sitting in front of whatever the
-	// person is actually working on. Best-effort, same as Show above.
-	_ = m.driver.Hide(ctx, s.Target)
+	// No hide/show step here either: the helper captures this screenshot
+	// with CGWindowListCreateImage, which works on an occluded or
+	// non-frontmost window just as well as a visible one.
 	return Report{Status: "passed", Framework: "umcode-computer-use", SessionID: s.ID, State: &state,
 		Artifacts:   []Artifact{{Path: relSlash, Kind: "screenshot", MimeType: "image/png", Bytes: st.Size()}},
 		ActionCount: s.ActionCount}, nil

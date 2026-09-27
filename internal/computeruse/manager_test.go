@@ -12,9 +12,8 @@ import (
 )
 
 type fakeDriver struct {
-	actions      []Action
-	opens        int
-	hides, shows int
+	actions []Action
+	opens   int
 }
 
 func (f *fakeDriver) List(context.Context) ([]App, error) {
@@ -36,8 +35,6 @@ func (f *fakeDriver) Act(_ context.Context, _ Target, action Action) error {
 	f.actions = append(f.actions, action)
 	return nil
 }
-func (f *fakeDriver) Hide(context.Context, Target) error { f.hides++; return nil }
-func (f *fakeDriver) Show(context.Context, Target) error { f.shows++; return nil }
 
 func TestPersistentComputerUseSession(t *testing.T) {
 	driver := &fakeDriver{}
@@ -186,10 +183,5 @@ func TestComputerUseMarksClicks(t *testing.T) {
 		if a.Kind == "screenshot_click" {
 			t.Fatal("scroll should not produce a click marker")
 		}
-	}
-	// Show/Hide were attempted around every action and screenshot: once for
-	// Start's inspect, then a Show+Act+inspect-Hide pair per Act call.
-	if driver.shows == 0 || driver.hides == 0 {
-		t.Fatalf("expected Show/Hide to be attempted, got shows=%d hides=%d", driver.shows, driver.hides)
 	}
 }
