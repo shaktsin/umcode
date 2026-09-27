@@ -88,8 +88,12 @@ type WorkspaceConfig struct {
 }
 
 type ToolsConfig struct {
-	ShellEnabled bool              `yaml:"shell_enabled"`
-	Workspaces   []WorkspaceConfig `yaml:"workspaces"`
+	ShellEnabled bool `yaml:"shell_enabled"`
+	// HostSandbox confines host shell commands (Seatbelt on macOS,
+	// bubblewrap on Linux): "auto" (default) uses it when available, "off"
+	// runs commands unconfined.
+	HostSandbox string            `yaml:"host_sandbox"`
+	Workspaces  []WorkspaceConfig `yaml:"workspaces"`
 }
 
 type PolicyConfig struct {
@@ -97,7 +101,10 @@ type PolicyConfig struct {
 	ApprovalMode             string   `yaml:"approval_mode"`           // normal | auto_approve_workspace
 	AutoApproveTools         []string `yaml:"auto_approve_tools"`
 	AutoApproveShellCommands []string `yaml:"auto_approve_shell_commands"`
-	ApprovalTimeoutMinutes   int      `yaml:"approval_timeout_minutes"`
+	// ShellForbidCommands are command prefixes (word by word, per pipeline
+	// segment, e.g. "git push") that are refused without asking.
+	ShellForbidCommands    []string `yaml:"shell_forbid_commands"`
+	ApprovalTimeoutMinutes int      `yaml:"approval_timeout_minutes"`
 }
 
 type StorageConfig struct {

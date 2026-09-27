@@ -21,6 +21,7 @@ import (
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/preview"
 	"github.com/shaktsin/umcode/internal/procutil"
+	"github.com/shaktsin/umcode/internal/sandbox"
 	"github.com/shaktsin/umcode/internal/visualqa"
 )
 
@@ -34,17 +35,28 @@ type BuiltinServices struct {
 	Previews    *preview.Manager
 	VisualQA    *visualqa.Manager
 	ComputerUse *computeruse.Manager
+	Exec        *ExecManager
 }
 
 func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv SkillEnvFunc, services ...BuiltinServices) {
 	r.Add(&fileRead{ws})
 	r.Add(&fileList{ws})
 	r.Add(&fileWrite{ws})
+	r.Add(&fileEdit{ws})
+	r.Add(&fileSearch{ws})
 	r.Add(newWebSearch())
 	r.Add(newWebFetch())
 	if cfg.Tools.ShellEnabled {
-		shell := &shellRun{ws: ws, autoApprove: cfg.Policy.AutoApproveShellCommands, skillEnv: skillEnv, compute: compute.NewBundledRunner()}
+		shell := &shellRun{ws: ws, autoApprove: cfg.Policy.AutoApproveShellCommands, forbid: cfg.Policy.ShellForbidCommands, skillEnv: skillEnv, compute: compute.NewBundledRunner()}
+		if !strings.EqualFold(cfg.Tools.HostSandbox, "off") {
+			shell.sandbox = sandbox.Detect()
+		}
 		r.Add(shell)
+		if len(services) > 0 && services[0].Exec != nil {
+			r.Add(&execStart{shell: shell, manager: services[0].Exec})
+			r.Add(&execWrite{manager: services[0].Exec})
+			r.Add(&execStop{manager: services[0].Exec})
+		}
 		r.Add(&verificationPlan{})
 		r.Add(&verificationRun{shell: shell})
 		r.Add(&browserVerify{shell: shell})
@@ -284,11 +296,19 @@ func clipAt(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	cut := s[:limit]
-	for !utf8.ValidString(cut) && len(cut) > 0 {
-		cut = cut[:len(cut)-1]
+	// Keep the start and the end: build and test output carries its verdict
+	// (the failing test, the final error) at the tail.
+	headN := limit * 65 / 100
+	tailN := limit - headN
+	head := s[:headN]
+	for !utf8.ValidString(head) && len(head) > 0 {
+		head = head[:len(head)-1]
 	}
-	return cut + fmt.Sprintf("\n… [truncated %d bytes]", len(s)-len(cut))
+	tail := s[len(s)-tailN:]
+	for !utf8.ValidString(tail) && len(tail) > 0 {
+		tail = tail[1:]
+	}
+	return head + fmt.Sprintf("\n… [truncated %d bytes from the middle] …\n", len(s)-len(head)-len(tail)) + tail
 }
 
 // resolvePath resolves a tool's path argument. Inside a project every path is
@@ -447,8 +467,11 @@ func (t *fileWrite) Call(ctx context.Context, args json.RawMessage) (string, err
 type shellRun struct {
 	ws          *Workspaces
 	autoApprove []string
+	forbid      []string
 	skillEnv    SkillEnvFunc
 	compute     compute.Runner
+	// sandbox confines host commands; nil means they run unconfined.
+	sandbox sandbox.Sandbox
 }
 
 type liveOutput struct {
@@ -495,7 +518,7 @@ func (w *liveOutput) Len() int {
 
 func (*shellRun) Name() string { return "shell.run" }
 func (*shellRun) Description() string {
-	return "Run a shell command (sh -c) in the open project. Returns exit code, stdout and stderr."
+	return "Run a shell command (sh -c) in the open project. Returns exit code, stdout and stderr. On the host the command is sandboxed when the platform supports it: it can write only inside the project (and temp/cache folders), cannot read credential folders such as ~/.ssh, and has no network unless the project allows it."
 }
 func (*shellRun) Schema() json.RawMessage {
 	return schema(`{"type":"object","properties":{"command":{"type":"string"},"workspace":{"type":"string","description":"Folder inside the project to run in; default the project root"},"timeout_seconds":{"type":"integer","description":"Default 60, max 600"},"skill":{"type":"string","description":"Run with this skill's environment (its venv, PATH and env vars; SKILL_DIR is set)"}},"required":["command"]}`)
@@ -504,12 +527,25 @@ func (*shellRun) Schema() json.RawMessage {
 func (t *shellRun) Assess(args json.RawMessage) (Risk, string) {
 	a, _ := decode[struct{ Command string }](args)
 	cmd := strings.TrimSpace(a.Command)
-	for _, prefix := range t.autoApprove {
-		if prefix != "" && (cmd == prefix || strings.HasPrefix(cmd, prefix+" ")) && !strings.ContainsAny(cmd, ";&|`$><") {
-			return RiskYellow, "Run: " + cmd
-		}
+	class, reason := ClassifyShell(cmd, t.forbid)
+	switch {
+	case class == ClassForbidden:
+		return RiskRed, "Blocked (" + reason + "): " + cmd
+	case AllSegmentsMatch(cmd, t.autoApprove):
+		return RiskYellow, "Run: " + cmd
+	case class == ClassSafe:
+		return RiskGreen, "Run (read-only): " + cmd
 	}
 	return RiskRed, "Run: " + cmd
+}
+
+// Forbidden refuses destructive commands before an approval is requested.
+func (t *shellRun) Forbidden(args json.RawMessage) (string, bool) {
+	a, _ := decode[struct{ Command string }](args)
+	if class, reason := ClassifyShell(strings.TrimSpace(a.Command), t.forbid); class == ClassForbidden {
+		return reason, true
+	}
+	return "", false
 }
 
 // safeEnv is the environment passed to shell commands: no API keys or tokens.
@@ -544,10 +580,11 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if !scope.AllowShell {
 		return "", fmt.Errorf("shell commands are switched off for the project %s", scope.ProjectName)
 	}
-	if !scope.AllowNet && !scope.UseCompute {
-		return "", errors.New("shell execution is blocked while network access is off unless the project's microVM is enabled; host shell networking cannot be safely restricted")
+	sandboxed := !scope.UseCompute && t.sandbox != nil
+	if !scope.AllowNet && !scope.UseCompute && !sandboxed {
+		return "", errors.New("shell execution is blocked while network access is off unless the project's microVM is enabled or the host sandbox is available; host shell networking cannot be safely restricted")
 	}
-	if !scope.AllowNet {
+	if !scope.AllowNet && !sandboxed {
 		if prog, yes := NeedsNetwork(a.Command); yes {
 			return "", fmt.Errorf("%s needs the network, which is off for the project %s (turn it on in the project's settings)", prog, scope.ProjectName)
 		}
@@ -608,6 +645,11 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		cmd.Env = env
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if sandboxed {
+		if err := t.sandbox.Wrap(cmd, sandbox.DefaultPolicy(scope.Root, scope.AllowNet)); err != nil {
+			return "", fmt.Errorf("could not start the command sandbox: %w", err)
+		}
+	}
 	runErr := cmd.Run()
 	code := 0
 	var ee *exec.ExitError
@@ -623,7 +665,26 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if cctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("command timed out after %s", timeout)
 	}
-	return shellOutput(code, stdout, stderr), nil
+	out := shellOutput(code, stdout, stderr)
+	if sandboxed && code != 0 {
+		out += sandboxHint(stdout.String()+stderr.String(), scope.AllowNet)
+	}
+	return out, nil
+}
+
+// sandboxHint explains a failure that looks like the sandbox's doing, so the
+// model does not retry the same thing or try to work around it.
+func sandboxHint(output string, network bool) string {
+	low := strings.ToLower(output)
+	switch {
+	case strings.Contains(low, "operation not permitted") || strings.Contains(low, "read-only file system") || strings.Contains(low, "permission denied"):
+		return "\n\n[sandbox: this command runs sandboxed. Writes are limited to the project folder and temp/cache folders, and credential folders (~/.ssh, ~/.aws, ...) are unreadable. If the failure is a blocked path, do not work around it; explain it to the user.]"
+	case !network && (strings.Contains(low, "could not resolve host") || strings.Contains(low, "network is unreachable") ||
+		strings.Contains(low, "temporary failure in name resolution") || strings.Contains(low, "getaddrinfo") ||
+		strings.Contains(low, "connection refused") || strings.Contains(low, "no route to host")):
+		return "\n\n[sandbox: network access is off for this project, so the command could not reach the network. Ask the user to enable network access in the project's settings if it is needed.]"
+	}
+	return ""
 }
 
 func shellOutput(code int, stdout, stderr interface {

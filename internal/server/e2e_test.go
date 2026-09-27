@@ -249,7 +249,7 @@ func TestChatWithApprovedShellTool(t *testing.T) {
 	if key.Last4 != "1234" || !key.IsDefault {
 		t.Fatalf("key = %+v", key)
 	}
-	h.fake.push(toolReply("shell__run", `{"command":"echo hello-from-shell"}`), textReply("The command printed hello."))
+	h.fake.push(toolReply("shell__run", `{"command":"echo hello-from-shell > /dev/stderr; echo hello-from-shell"}`), textReply("The command printed hello."))
 
 	var th protocol.Thread
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &th)

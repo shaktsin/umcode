@@ -357,6 +357,17 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			user.Parts = append(user.Parts, llm.Part{Type: "image", MimeType: a.MimeType, DataB64: a.DataB64})
 		}
 	}
+	// A long conversation is summarized before the new message so the turn
+	// starts with room to work. Failure is not fatal: the history limit and
+	// tool-result trimming still bound the request.
+	if overWindow(msgs, 0, res.meta.ContextWindow, contextCompactFraction) {
+		if err := e.compactLocked(sctx, th.ID, turn.ID); err != nil {
+			log.Warn("automatic context compaction failed", "err", err)
+		} else if h, err := e.history(sctx, th.ID, turn.ID); err == nil {
+			msgs = h
+			log.Info("conversation context compacted automatically", "window", res.meta.ContextWindow)
+		}
+	}
 	msgs = append(msgs, user)
 
 	var specs []llm.ToolSpec
@@ -390,8 +401,13 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			pause(reason)
 			break
 		}
-		req.Messages = msgs
 		req.System = e.systemPrompt(sctx, p.Text, proj, instructionHint)
+		// Old tool output is the first thing to go when the request nears the
+		// window; the newest results stay.
+		if n := trimToolResults(msgs, tokens(req.System)+toolSpecTokens(specs), int(float64(res.meta.ContextWindow)*contextTrimFraction)); n > 0 {
+			log.Info("dropped old tool results to save context", "count", n)
+		}
+		req.Messages = msgs
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
 			if reason := budget.stopReason(); reason != "" {
@@ -760,6 +776,14 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	it.Tool.Risk = string(risk)
 	_ = e.saveAndPublish(sctx, it, protocol.NotifyItemStarted)
 
+	if g, ok := tool.(tools.Guard); ok {
+		if why, forbidden := g.Forbidden(call.Args); forbidden {
+			it.Status, it.Tool.Error = protocol.ItemDenied, "Blocked: "+why+". Choose a safer approach; do not retry this command."
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return it.Tool.Error, true
+		}
+	}
+
 	decision, reason := e.gate.Check(name, risk, th.Channel == "listener")
 	if decision == policy.Ask {
 		approved, err := e.requestApproval(ctx, sctx, turn, it, name, call.Args, risk, reason, summary)
@@ -965,7 +989,7 @@ func toolAllowed(name string, proj *protocol.Project) bool {
 	if proj == nil {
 		return true
 	}
-	if strings.HasPrefix(name, "shell.") && !boolOr(proj.Tools.Shell, true) {
+	if (strings.HasPrefix(name, "shell.") || strings.HasPrefix(name, "exec.")) && !boolOr(proj.Tools.Shell, true) {
 		return false
 	}
 	if strings.HasPrefix(name, "visual.") && !boolOr(proj.Tools.VisualQA, false) {
@@ -984,4 +1008,13 @@ func toolAllowed(name string, proj *protocol.Project) bool {
 		}
 	}
 	return false
+}
+
+// toolSpecTokens estimates the request overhead of the tool definitions.
+func toolSpecTokens(specs []llm.ToolSpec) int {
+	n := 0
+	for _, s := range specs {
+		n += tokens(s.Name) + tokens(s.Description) + tokens(string(s.Schema))
+	}
+	return n
 }

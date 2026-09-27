@@ -46,6 +46,12 @@ type Tool interface {
 	Call(ctx context.Context, args json.RawMessage) (string, error)
 }
 
+// Guard is implemented by tools that can refuse a call outright, before any
+// approval is requested (for example a destructive shell command).
+type Guard interface {
+	Forbidden(args json.RawMessage) (reason string, forbidden bool)
+}
+
 // Source contributes tools that can change at runtime (skills, MCP servers).
 type Source interface {
 	Tools() []Tool
