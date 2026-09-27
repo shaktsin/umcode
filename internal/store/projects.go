@@ -12,7 +12,7 @@ import (
 )
 
 const projectCols = `id, name, root, instructions_path, provider, model, complexity, credential_id,
-	tools, archived, created_at, last_opened_at`
+	tools, archived, approval_mode, created_at, last_opened_at`
 
 func scanProject(sc interface{ Scan(...any) error }) (protocol.Project, error) {
 	var p protocol.Project
@@ -20,7 +20,7 @@ func scanProject(sc interface{ Scan(...any) error }) (protocol.Project, error) {
 	var archived int
 	err := sc.Scan(&p.ID, &p.Name, &p.Root, &p.InstructionsPath,
 		&p.Settings.Provider, &p.Settings.Model, &complexity, &p.Settings.CredentialID,
-		&toolsJSON, &archived, &created, &opened)
+		&toolsJSON, &archived, &p.ApprovalMode, &created, &opened)
 	if err != nil {
 		return p, err
 	}
@@ -44,10 +44,10 @@ func (s *Store) CreateProject(ctx context.Context, p protocol.Project) (protocol
 	if err != nil {
 		return p, err
 	}
-	_, err = s.DB.ExecContext(ctx, `INSERT INTO projects (`+projectCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO projects (`+projectCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.Root, p.InstructionsPath,
 		p.Settings.Provider, p.Settings.Model, string(p.Settings.Complexity), p.Settings.CredentialID,
-		string(tools), b2i(p.Archived), FormatTime(now), FormatTime(now))
+		string(tools), b2i(p.Archived), p.ApprovalMode, FormatTime(now), FormatTime(now))
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return p, ErrDuplicate
 	}
@@ -146,14 +146,17 @@ func (s *Store) UpdateProject(ctx context.Context, p protocol.ProjectUpdateParam
 	if p.Archived != nil {
 		cur.Archived = *p.Archived
 	}
+	if p.ApprovalMode != nil {
+		cur.ApprovalMode = *p.ApprovalMode
+	}
 	tools, err := json.Marshal(cur.Tools)
 	if err != nil {
 		return cur, err
 	}
 	_, err = s.DB.ExecContext(ctx, `UPDATE projects SET name = ?, root = ?, instructions_path = ?, provider = ?, model = ?,
-		complexity = ?, credential_id = ?, tools = ?, archived = ? WHERE id = ?`,
+		complexity = ?, credential_id = ?, tools = ?, archived = ?, approval_mode = ? WHERE id = ?`,
 		cur.Name, cur.Root, cur.InstructionsPath, cur.Settings.Provider, cur.Settings.Model,
-		string(cur.Settings.Complexity), cur.Settings.CredentialID, string(tools), b2i(cur.Archived), cur.ID)
+		string(cur.Settings.Complexity), cur.Settings.CredentialID, string(tools), b2i(cur.Archived), cur.ApprovalMode, cur.ID)
 	return cur, err
 }
 

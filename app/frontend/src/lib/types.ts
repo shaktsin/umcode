@@ -2,6 +2,13 @@
 
 export type Complexity = '' | 'auto' | 'quick' | 'standard' | 'deep';
 
+// Per-project auto-approve tier. '' behaves like 'normal': every red-risk
+// action always asks. 'auto_workspace' auto-approves red actions confined to
+// the project's sandboxed workspace (shell, file edits, exec sessions,
+// browser verification) but never Computer Use. 'auto_all' also auto-approves
+// Computer Use, which drives the real desktop outside the sandbox.
+export type ApprovalMode = '' | 'normal' | 'auto_workspace' | 'auto_all';
+
 export interface ModelSelection {
   provider?: string;
   model?: string;
@@ -49,6 +56,7 @@ export interface Project {
   settings: ModelSelection;
   tools: ProjectTools;
   archived?: boolean;
+  approvalMode?: ApprovalMode;
   missing?: boolean;
   vcs?: VCSInfo;
   threads: number;

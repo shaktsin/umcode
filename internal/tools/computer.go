@@ -143,9 +143,30 @@ func (t *computerAct) Call(ctx context.Context, args json.RawMessage) (string, e
 	if err != nil {
 		return "", err
 	}
-	var a computeruse.Action
-	if err := json.Unmarshal(args, &a); err != nil {
+	// The tool schema's parameter is "action" (see Schema above), not the
+	// "type" json tag computeruse.Action itself uses for the outbound wire
+	// format to the native helper. Decode into the schema's own shape first,
+	// then build the Action explicitly, so a schema/model call never lands
+	// on Action's zero-value Type and gets rejected as "unsupported computer
+	// action """.
+	var parsed struct {
+		Action string  `json:"action"`
+		X      float64 `json:"x"`
+		Y      float64 `json:"y"`
+		Text   string  `json:"text"`
+		Key    string  `json:"key"`
+		Delta  int     `json:"delta"`
+	}
+	if err := json.Unmarshal(args, &parsed); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	a := computeruse.Action{
+		Type:  parsed.Action,
+		X:     parsed.X,
+		Y:     parsed.Y,
+		Text:  parsed.Text,
+		Key:   parsed.Key,
+		Delta: parsed.Delta,
 	}
 	r, err := t.manager.Act(ctx, s.ThreadID, a)
 	return encodeComputerReport(r), err

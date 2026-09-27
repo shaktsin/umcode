@@ -64,6 +64,12 @@ type Project struct {
 	Settings         ModelSelection `json:"settings"`
 	Tools            ProjectTools   `json:"tools"`
 	Archived         bool           `json:"archived,omitempty"`
+	// ApprovalMode is this project's auto-approve tier: "" (or "normal"),
+	// "auto_workspace" (auto-approve red actions confined to the project
+	// workspace: shell, file edits, exec sessions, browser verification —
+	// never Computer Use), or "auto_all" (also auto-approves Computer Use,
+	// which drives the real desktop outside the sandbox).
+	ApprovalMode string `json:"approvalMode,omitempty"`
 	// Missing is true when the folder is gone from disk.
 	Missing      bool      `json:"missing,omitempty"`
 	VCS          *VCSInfo  `json:"vcs,omitempty"`
@@ -81,10 +87,11 @@ type ProjectListResult struct {
 }
 
 type ProjectCreateParams struct {
-	Root     string         `json:"root"`
-	Name     string         `json:"name,omitempty"`
-	Settings ModelSelection `json:"settings,omitempty"`
-	Tools    ProjectTools   `json:"tools,omitempty"`
+	Root         string         `json:"root"`
+	Name         string         `json:"name,omitempty"`
+	Settings     ModelSelection `json:"settings,omitempty"`
+	Tools        ProjectTools   `json:"tools,omitempty"`
+	ApprovalMode string         `json:"approvalMode,omitempty"`
 }
 
 type ProjectIDParams struct {
@@ -99,6 +106,7 @@ type ProjectUpdateParams struct {
 	Tools            *ProjectTools   `json:"tools,omitempty"`
 	InstructionsPath *string         `json:"instructionsPath,omitempty"`
 	Archived         *bool           `json:"archived,omitempty"`
+	ApprovalMode     *string         `json:"approvalMode,omitempty"`
 }
 
 // InstructionSource is one file that contributed to a project's instructions.

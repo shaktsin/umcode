@@ -8,6 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -99,6 +103,11 @@ type Session struct {
 	// screenshot taken for this session (set on every inspect/act). Approvals
 	// for computer.act attach it so the person can see what they're approving.
 	LastScreenshotRel string
+	// LastAnnotatedScreenshotRel is LastScreenshotRel with a marker drawn at
+	// the point of the most recent click/fill, for a person watching the
+	// live view to see exactly what was clicked. Empty when the last
+	// screenshot was not preceded by a point action, or annotation failed.
+	LastAnnotatedScreenshotRel string
 	// ActionCount is how many Act calls have run in this session. Surfaced on
 	// every report as a lightweight, always-on audit trail of how much this
 	// session has actually done, independent of the approval log.
@@ -196,16 +205,33 @@ func (m *Manager) Act(ctx context.Context, threadID string, action Action) (Repo
 	}
 	// Screenshots are commonly Retina pixel dimensions while CGEvent uses
 	// display points. Map model-selected screenshot coordinates back to the
-	// current window's coordinate space before sending input.
-	if (action.Type == "click" || action.Type == "double_click" || action.Type == "fill") && s.Last.Window.PixelWidth > 0 && s.Last.Window.PixelHeight > 0 {
+	// current window's coordinate space before sending input. clickX/clickY
+	// keep the original screenshot-pixel coordinates for the click marker
+	// drawn below, independent of that rescaling.
+	pointAction := action.Type == "click" || action.Type == "double_click" || action.Type == "fill"
+	clickX, clickY := action.X, action.Y
+	if pointAction && s.Last.Window.PixelWidth > 0 && s.Last.Window.PixelHeight > 0 {
 		action.X *= s.Last.Window.Width / float64(s.Last.Window.PixelWidth)
 		action.Y *= s.Last.Window.Height / float64(s.Last.Window.PixelHeight)
 	}
+	// No focus juggling here: the helper (native/computer-use-helper) posts
+	// this action straight to the target process's window via
+	// CGEventPostToPid, which does not require it to be frontmost or even
+	// on top of other windows. See that package's README for the technique.
 	if err := m.driver.Act(ctx, s.Target, action); err != nil {
 		return Report{}, err
 	}
 	s.ActionCount++
-	return m.inspect(ctx, s, fmt.Sprintf("action-%d.png", time.Now().UnixMilli()))
+	report, err := m.inspect(ctx, s, fmt.Sprintf("action-%d.png", time.Now().UnixMilli()))
+	if err != nil {
+		return Report{}, err
+	}
+	if pointAction {
+		if rel, aerr := m.markClick(s, clickX, clickY); aerr == nil {
+			report.Artifacts = append(report.Artifacts, Artifact{Path: rel, Kind: "screenshot_click", MimeType: "image/png"})
+		}
+	}
+	return report, nil
 }
 
 func (m *Manager) inspect(ctx context.Context, s *Session, name string) (Report, error) {
@@ -228,9 +254,104 @@ func (m *Manager) inspect(ctx context.Context, s *Session, name string) (Report,
 	}
 	relSlash := filepath.ToSlash(rel)
 	s.LastScreenshotRel = relSlash
+	// No hide/show step here either: the helper captures this screenshot
+	// with CGWindowListCreateImage, which works on an occluded or
+	// non-frontmost window just as well as a visible one.
 	return Report{Status: "passed", Framework: "umcode-computer-use", SessionID: s.ID, State: &state,
 		Artifacts:   []Artifact{{Path: relSlash, Kind: "screenshot", MimeType: "image/png", Bytes: st.Size()}},
 		ActionCount: s.ActionCount}, nil
+}
+
+// markClick draws a small ring-and-crosshair marker onto a copy of the
+// session's latest screenshot at (x, y) — screenshot-pixel coordinates, the
+// same space the model targets — so a person watching Computer Use live can
+// see exactly what the last click landed on. Best-effort: a screenshot that
+// isn't a decodable PNG (as in tests, or a driver hiccup) just means no
+// marker, not a failed action.
+func (m *Manager) markClick(s *Session, x, y float64) (string, error) {
+	if s.LastScreenshotRel == "" {
+		return "", errors.New("no screenshot to annotate")
+	}
+	abs := filepath.Join(s.Root, filepath.FromSlash(s.LastScreenshotRel))
+	f, err := os.Open(abs)
+	if err != nil {
+		return "", err
+	}
+	src, err := png.Decode(f)
+	f.Close()
+	if err != nil {
+		return "", err
+	}
+	img := image.NewRGBA(src.Bounds())
+	draw.Draw(img, img.Bounds(), src, src.Bounds().Min, draw.Src)
+	drawClickMarker(img, x, y)
+	outAbs := strings.TrimSuffix(abs, filepath.Ext(abs)) + "-click.png"
+	out, err := os.Create(outAbs)
+	if err != nil {
+		return "", err
+	}
+	defer out.Close()
+	if err := png.Encode(out, img); err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(s.Root, outAbs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", errors.New("annotated screenshot escaped the project workspace")
+	}
+	relSlash := filepath.ToSlash(rel)
+	s.LastAnnotatedScreenshotRel = relSlash
+	return relSlash, nil
+}
+
+// drawClickMarker paints a white-and-red ring with a crosshair centered on
+// (x, y), clipped to the image bounds.
+func drawClickMarker(img *image.RGBA, x, y float64) {
+	cx, cy := int(x), int(y)
+	b := img.Bounds()
+	red := color.RGBA{237, 63, 63, 255}
+	white := color.RGBA{255, 255, 255, 255}
+	ring := func(radius, thickness int, c color.RGBA) {
+		for dy := -radius; dy <= radius; dy++ {
+			for dx := -radius; dx <= radius; dx++ {
+				d2 := dx*dx + dy*dy
+				if d2 <= radius*radius && d2 >= (radius-thickness)*(radius-thickness) {
+					p := image.Pt(cx+dx, cy+dy)
+					if p.In(b) {
+						img.Set(p.X, p.Y, c)
+					}
+				}
+			}
+		}
+	}
+	line := func(x0, y0, x1, y1 int, c color.RGBA) {
+		dx, dy := x1-x0, y1-y0
+		steps := dx
+		if dy > steps {
+			steps = dy
+		}
+		if -dx > steps {
+			steps = -dx
+		}
+		if -dy > steps {
+			steps = -dy
+		}
+		if steps == 0 {
+			steps = 1
+		}
+		for i := 0; i <= steps; i++ {
+			p := image.Pt(x0+dx*i/steps, y0+dy*i/steps)
+			if p.In(b) {
+				img.Set(p.X, p.Y, c)
+			}
+		}
+	}
+	ring(14, 3, white)
+	ring(11, 3, red)
+	const armInner, armOuter = 4, 10
+	line(cx-armOuter, cy, cx-armInner, cy, white)
+	line(cx+armInner, cy, cx+armOuter, cy, white)
+	line(cx, cy-armOuter, cx, cy-armInner, white)
+	line(cx, cy+armInner, cx, cy+armOuter, white)
 }
 
 // LastScreenshot returns the most recent screenshot's project-relative path

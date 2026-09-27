@@ -578,7 +578,7 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		return "", ErrNoProject
 	}
 	if !scope.AllowShell {
-		return "", fmt.Errorf("shell commands are switched off for the project %s", scope.ProjectName)
+		return "", fmt.Errorf("shell commands are switched off for the project %s; do not try to run commands through Computer Use as a workaround — tell the user that Shell needs to be turned on in this project's settings (or in the chat's approval controls) before commands can run", scope.ProjectName)
 	}
 	sandboxed := !scope.UseCompute && t.sandbox != nil
 	if !scope.AllowNet && !scope.UseCompute && !sandboxed {

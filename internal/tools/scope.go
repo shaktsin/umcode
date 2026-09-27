@@ -23,6 +23,9 @@ type Scope struct {
 	UseCompute       bool
 	AllowVisualQA    bool
 	AllowComputerUse bool
+	// ApprovalMode is this project's auto-approve tier ("", "normal",
+	// "auto_workspace", or "auto_all"); see policy.Gate.Check.
+	ApprovalMode string
 	// ComputerUseApps restricts Computer Use to these apps (case-insensitive
 	// match against app_name, bundle_id, or app_path's basename). Empty means
 	// unrestricted.

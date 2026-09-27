@@ -339,6 +339,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			AllowVisualQA:    boolOr(p.Tools.VisualQA, false),
 			AllowComputerUse: boolOr(p.Tools.ComputerUse, false),
 			ComputerUseApps:  p.Tools.ComputerUseApps,
+			ApprovalMode:     approvalModeOr(p.ApprovalMode, e.Cfg.Policy.ApprovalMode),
 			ComputeVCPUs:     intOr(p.Tools.ComputeVCPUs, 0),
 			ComputeMemoryMiB: intOr(p.Tools.ComputeMemoryMiB, 0),
 			ComputeDiskMiB:   intOr(p.Tools.ComputeDiskMiB, 0),
@@ -786,7 +787,11 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		}
 	}
 
-	decision, reason := e.gate.Check(name, risk, th.Channel == "listener")
+	approvalMode := ""
+	if scope := tools.ScopeFrom(ctx); scope != nil {
+		approvalMode = scope.ApprovalMode
+	}
+	decision, reason := e.gate.Check(name, risk, th.Channel == "listener", approvalMode)
 	if decision == policy.Ask {
 		approved, err := e.requestApproval(ctx, sctx, turn, it, name, call.Args, risk, reason, summary)
 		if err != nil || !approved {
@@ -956,6 +961,27 @@ func appendText(msgs []llm.Message, role llm.Role, text string) []llm.Message {
 }
 
 // boolOr returns *p when set, else def.
+// approvalModeOr picks the project's own auto-approve tier, falling back to
+// the engine-wide policy.approval_mode default when the project has not set
+// one. It also accepts the older "auto_approve_workspace" spelling from
+// policy.approval_mode / APPROVAL_MODE for backward compatibility with
+// existing configs.
+func approvalModeOr(projectMode, globalDefault string) string {
+	if projectMode != "" {
+		return projectMode
+	}
+	switch globalDefault {
+	case "auto_approve_workspace":
+		return policy.ApprovalAutoWorkspace
+	case "auto_approve_all", "auto_all":
+		return policy.ApprovalAutoAll
+	case "normal", "":
+		return ""
+	default:
+		return globalDefault
+	}
+}
+
 func boolOr(p *bool, def bool) bool {
 	if p == nil {
 		return def

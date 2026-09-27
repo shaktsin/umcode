@@ -5,7 +5,7 @@
   import { app } from '$lib/stores/app.svelte';
   import { dialog } from '$lib/stores/dialog.svelte';
   import ModelPicker from '$lib/components/ModelPicker.svelte';
-  import type { ModelSelection } from '$lib/types';
+  import type { ApprovalMode, ModelSelection } from '$lib/types';
   import { createProject, editProject } from '$lib/createProject';
 
   const p = $derived(projects.active);
@@ -38,6 +38,11 @@
   async function setSettings(sel: ModelSelection) {
     if (!p) return;
     await projects.update(p.id, { settings: sel });
+  }
+
+  async function setApprovalMode(mode: ApprovalMode) {
+    if (!p) return;
+    await projects.update(p.id, { approvalMode: mode });
   }
 
   async function close() {
@@ -199,6 +204,34 @@
         <span class="label">Default model for chats here</span>
         <ModelPicker value={p.settings} onchange={setSettings} />
       </div>
+    </div>
+  </section>
+
+  <section class="card p-4 mb-5">
+    <h2 class="text-sm font-semibold mb-1">Approvals</h2>
+    <p class="text-xs text-muted mb-3">How much the agent can do here without stopping to ask first. This can be changed anytime, including from the chat itself.</p>
+    <div class="space-y-2 text-sm">
+      <label class="flex items-start gap-3">
+        <input class="mt-1 shrink-0" type="radio" name="approval-mode" checked={!p.approvalMode || p.approvalMode === 'normal'} onchange={() => setApprovalMode('normal')} />
+        <span>
+          Ask every time <span class="text-muted">(default)</span>
+          <span class="block text-xs text-muted">Every risky action — running commands, editing files, Computer Use — waits for your approval.</span>
+        </span>
+      </label>
+      <label class="flex items-start gap-3">
+        <input class="mt-1 shrink-0" type="radio" name="approval-mode" checked={p.approvalMode === 'auto_workspace'} onchange={() => setApprovalMode('auto_workspace')} />
+        <span>
+          Auto-approve in this workspace
+          <span class="block text-xs text-muted">Shell commands, file edits, and browser checks run without asking, as long as they stay inside this project's folder. Computer Use — anything that drives your real desktop — still always asks.</span>
+        </span>
+      </label>
+      <label class="flex items-start gap-3">
+        <input class="mt-1 shrink-0" type="radio" name="approval-mode" checked={p.approvalMode === 'auto_all'} onchange={() => setApprovalMode('auto_all')} />
+        <span>
+          Auto-approve everything, including Computer Use
+          <span class="block text-xs text-muted">Highest trust. Also auto-approves Computer Use, so the agent can click, type, and submit forms in your real apps with no confirmation. Only use this for a project you fully trust.</span>
+        </span>
+      </label>
     </div>
   </section>
 
