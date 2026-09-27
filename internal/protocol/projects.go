@@ -26,15 +26,19 @@ const (
 // ProjectTools says which tool groups are available inside a project.
 // A nil field means "use the engine default".
 type ProjectTools struct {
-	Shell            *bool `json:"shell,omitempty"`
-	Network          *bool `json:"network,omitempty"`     // network access from shell commands
-	Compute          *bool `json:"compute,omitempty"`     // run shell commands in an app-bundled microVM
-	VisualQA         *bool `json:"visualQa,omitempty"`    // let the agent control the isolated preview browser
-	ComputerUse      *bool `json:"computerUse,omitempty"` // let the agent control explicitly selected desktop apps
-	ComputeVCPUs     *int  `json:"computeVcpus,omitempty"`
-	ComputeMemoryMiB *int  `json:"computeMemoryMiB,omitempty"`
-	ComputeDiskMiB   *int  `json:"computeDiskMiB,omitempty"`
-	Git              *bool `json:"git,omitempty"`
+	Shell       *bool `json:"shell,omitempty"`
+	Network     *bool `json:"network,omitempty"`     // network access from shell commands
+	Compute     *bool `json:"compute,omitempty"`     // run shell commands in an app-bundled microVM
+	VisualQA    *bool `json:"visualQa,omitempty"`    // let the agent control the isolated preview browser
+	ComputerUse *bool `json:"computerUse,omitempty"` // let the agent control explicitly selected desktop apps
+	// ComputerUseApps restricts Computer Use to these apps: matched
+	// case-insensitively against app_name, bundle_id, or app_path (basename).
+	// Empty or nil means no restriction (every app is allowed).
+	ComputerUseApps  []string `json:"computerUseApps,omitempty"`
+	ComputeVCPUs     *int     `json:"computeVcpus,omitempty"`
+	ComputeMemoryMiB *int     `json:"computeMemoryMiB,omitempty"`
+	ComputeDiskMiB   *int     `json:"computeDiskMiB,omitempty"`
+	Git              *bool    `json:"git,omitempty"`
 	// MCPServers, when set, limits which configured MCP servers this project
 	// may use. An empty slice means none; nil means all of them.
 	MCPServers []string `json:"mcpServers,omitempty"`

@@ -338,6 +338,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			UseCompute:       boolOr(p.Tools.Compute, false),
 			AllowVisualQA:    boolOr(p.Tools.VisualQA, false),
 			AllowComputerUse: boolOr(p.Tools.ComputerUse, false),
+			ComputerUseApps:  p.Tools.ComputerUseApps,
 			ComputeVCPUs:     intOr(p.Tools.ComputeVCPUs, 0),
 			ComputeMemoryMiB: intOr(p.Tools.ComputeMemoryMiB, 0),
 			ComputeDiskMiB:   intOr(p.Tools.ComputeDiskMiB, 0),

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/shaktsin/umcode/internal/computeruse"
@@ -32,7 +33,7 @@ type computerStart struct{ manager *computeruse.Manager }
 
 func (*computerStart) Name() string { return "computer.start" }
 func (*computerStart) Description() string {
-	return "Open or select a macOS application for this task, optionally open a URL in that application, and return a full-resolution screenshot. The session persists across later computer.inspect and computer.act calls."
+	return "Open or select a macOS application for this task, optionally open a URL in that application, and return a full-resolution screenshot. The session persists across later computer.inspect and computer.act calls. The project may restrict this to an allowed-apps list; an unlisted app is refused."
 }
 func (*computerStart) Schema() json.RawMessage {
 	return schema(`{"type":"object","properties":{"app_name":{"type":"string"},"bundle_id":{"type":"string"},"app_path":{"type":"string"},"url":{"type":"string"}},"additionalProperties":false}`)
@@ -62,8 +63,36 @@ func (t *computerStart) Call(ctx context.Context, args json.RawMessage) (string,
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
+	if !computerUseAppAllowed(s, a.AppName, a.BundleID, a.AppPath) {
+		return "", fmt.Errorf("%q is not on this project's Computer Use allowed-apps list; add it in project settings", firstNonBlank(a.AppName, a.BundleID, a.AppPath))
+	}
 	r, err := t.manager.Start(ctx, s.ThreadID, s.Root, computeruse.Target{Name: a.AppName, BundleID: a.BundleID, Path: a.AppPath, URL: a.URL})
 	return encodeComputerReport(r), err
+}
+
+// computerUseAppAllowed checks a requested target against the project's
+// Computer Use allowlist. An empty list means every app is allowed, matching
+// the behavior before this list existed.
+func computerUseAppAllowed(s *Scope, appName, bundleID, appPath string) bool {
+	if len(s.ComputerUseApps) == 0 {
+		return true
+	}
+	candidates := []string{appName, bundleID, appPath}
+	if appPath != "" {
+		candidates = append(candidates, filepath.Base(appPath))
+	}
+	for _, allowed := range s.ComputerUseApps {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "" {
+			continue
+		}
+		for _, c := range candidates {
+			if c != "" && strings.EqualFold(strings.TrimSpace(c), allowed) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type computerInspect struct{ manager *computeruse.Manager }

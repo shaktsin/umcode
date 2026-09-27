@@ -369,6 +369,35 @@ func TestComputerToolsAreOptInAndActionsRequireApproval(t *testing.T) {
 	}
 }
 
+// A project's Computer Use allowlist, when set, refuses any app not on it;
+// an empty list keeps today's unrestricted behavior.
+func TestComputerUseAppAllowlist(t *testing.T) {
+	open := &Scope{AllowComputerUse: true}
+	if !computerUseAppAllowed(open, "Safari", "", "") {
+		t.Fatal("an empty allowlist must allow every app")
+	}
+	restricted := &Scope{AllowComputerUse: true, ComputerUseApps: []string{"Safari", "com.apple.mail"}}
+	if !computerUseAppAllowed(restricted, "safari", "", "") {
+		t.Fatal("allowlist match must be case-insensitive")
+	}
+	if !computerUseAppAllowed(restricted, "", "com.apple.mail", "") {
+		t.Fatal("allowlist must match by bundle id")
+	}
+	if computerUseAppAllowed(restricted, "Chrome", "com.google.chrome", "") {
+		t.Fatal("an app not on the allowlist must be refused")
+	}
+}
+
+func TestComputerStartRefusesAppNotOnAllowlist(t *testing.T) {
+	manager := computeruse.NewManager(context.Background())
+	tool := &computerStart{manager: manager}
+	scope := &Scope{ThreadID: "thread-1", Root: t.TempDir(), AllowComputerUse: true, ComputerUseApps: []string{"Safari"}}
+	ctx := WithScope(context.Background(), scope)
+	if _, err := tool.Call(ctx, json.RawMessage(`{"app_name":"Chrome"}`)); err == nil || !strings.Contains(err.Error(), "allowed-apps") {
+		t.Fatalf("expected an allowlist refusal, got %v", err)
+	}
+}
+
 // wrapSandbox is a stand-in Sandbox that marks the command as sandboxed.
 type wrapSandbox struct{ policies []sandboxPolicy }
 

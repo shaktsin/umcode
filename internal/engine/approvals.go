@@ -22,13 +22,22 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 	args json.RawMessage, risk tools.Risk, reason, summary string) (bool, error) {
 	timeout := time.Duration(e.Cfg.Policy.ApprovalTimeoutMinutes) * time.Minute
 	now := time.Now().UTC()
+	th, _ := e.Store.GetThread(sctx, turn.ThreadID)
 	a := protocol.Approval{
-		ID: store.NewID("apr"), ThreadID: turn.ThreadID, TurnID: turn.ID, ItemID: it.ID, Tool: tool, Args: args,
+		ID: store.NewID("apr"), ThreadID: turn.ThreadID, ProjectID: th.ProjectID, TurnID: turn.ID, ItemID: it.ID, Tool: tool, Args: args,
 		Risk: string(risk), Reason: reason, ActionSummary: summary, Status: "pending",
 		CreatedAt: now, ExpiresAt: now.Add(timeout),
 	}
+	// A running Computer Use session's latest screenshot lets the person see
+	// exactly what they're being asked to approve, instead of judging a
+	// click or keystroke from its coordinates alone.
+	if e.ComputerUse != nil {
+		if shot, ok := e.ComputerUse.LastScreenshot(turn.ThreadID); ok {
+			a.Screenshot = shot
+		}
+	}
 	// A decision the user asked to remember for this project answers immediately.
-	if th, err := e.Store.GetThread(sctx, turn.ThreadID); err == nil && th.ProjectID != "" {
+	if th.ProjectID != "" {
 		switch e.Store.RememberedDecision(sctx, th.ProjectID, tool, ApprovalSignature(tool, args)) {
 		case "allow":
 			_ = e.Store.Audit(sctx, "approval.remembered", map[string]any{"tool": tool, "project": th.ProjectID, "decision": "allow"})

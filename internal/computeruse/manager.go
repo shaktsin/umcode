@@ -94,6 +94,10 @@ type Session struct {
 	ID, ThreadID, Root, ArtifactDir string
 	Target                          Target
 	Last                            State
+	// LastScreenshotRel is the project-relative path of the most recent
+	// screenshot taken for this session (set on every inspect/act). Approvals
+	// for computer.act attach it so the person can see what they're approving.
+	LastScreenshotRel string
 }
 
 func NewManager(ctx context.Context) *Manager {
@@ -116,6 +120,18 @@ func (m *Manager) Start(ctx context.Context, threadID, root string, target Targe
 	started := time.Now()
 	if threadID == "" || root == "" {
 		return Report{}, errors.New("computer use requires a project task")
+	}
+	// If this task already has a session and the caller asked for the same
+	// app again (e.g. a retry, or the model re-selecting it in a later
+	// turn), reuse it instead of relaunching: relaunching re-activates the
+	// app and steals focus from whatever the person switched to since.
+	if existing := m.ForThread(threadID); existing != nil && target.URL == "" && sameApp(existing.Target, target) {
+		report, err := m.inspect(ctx, existing, fmt.Sprintf("start-%d.png", time.Now().UnixMilli()))
+		if err != nil {
+			return Report{}, err
+		}
+		report.DurationMS = time.Since(started).Milliseconds()
+		return report, nil
 	}
 	opened, err := m.driver.Open(ctx, target)
 	if err != nil {
@@ -204,8 +220,39 @@ func (m *Manager) inspect(ctx context.Context, s *Session, name string) (Report,
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return Report{}, errors.New("computer use artifact escaped the project workspace")
 	}
+	relSlash := filepath.ToSlash(rel)
+	s.LastScreenshotRel = relSlash
 	return Report{Status: "passed", Framework: "umcode-computer-use", SessionID: s.ID, State: &state,
-		Artifacts: []Artifact{{Path: filepath.ToSlash(rel), Kind: "screenshot", MimeType: "image/png", Bytes: st.Size()}}}, nil
+		Artifacts: []Artifact{{Path: relSlash, Kind: "screenshot", MimeType: "image/png", Bytes: st.Size()}}}, nil
+}
+
+// LastScreenshot returns the most recent screenshot's project-relative path
+// for this task's Computer Use session, if one is running and has taken at
+// least one screenshot.
+func (m *Manager) LastScreenshot(threadID string) (string, bool) {
+	s := m.ForThread(threadID)
+	if s == nil || s.LastScreenshotRel == "" {
+		return "", false
+	}
+	return s.LastScreenshotRel, true
+}
+
+// sameApp reports whether two targets identify the same running app, so a
+// repeat computer.start can reuse the existing session instead of
+// relaunching (and re-activating, stealing focus) it.
+func sameApp(a, b Target) bool {
+	switch {
+	case a.BundleID != "" && b.BundleID != "":
+		return strings.EqualFold(a.BundleID, b.BundleID)
+	case a.PID != 0 && b.PID != 0 && a.Name != "" && b.Name != "":
+		return a.PID == b.PID
+	case a.Path != "" && b.Path != "":
+		return strings.EqualFold(a.Path, b.Path)
+	case a.Name != "" && b.Name != "":
+		return strings.EqualFold(a.Name, b.Name)
+	default:
+		return false
+	}
 }
 
 func (m *Manager) ForThread(threadID string) *Session {

@@ -156,6 +156,7 @@ func (u *UsageTotals) Add(o UsageTotals) {
 type Approval struct {
 	ID            string          `json:"id"`
 	ThreadID      string          `json:"threadId"`
+	ProjectID     string          `json:"projectId,omitempty"`
 	TurnID        string          `json:"turnId"`
 	ItemID        string          `json:"itemId"`
 	Tool          string          `json:"tool"`
@@ -165,9 +166,13 @@ type Approval struct {
 	ActionSummary string          `json:"actionSummary"`
 	Status        string          `json:"status"` // pending | approved | denied | expired
 	DecidedBy     string          `json:"decidedBy,omitempty"`
-	CreatedAt     time.Time       `json:"createdAt"`
-	ExpiresAt     time.Time       `json:"expiresAt"`
-	DecidedAt     *time.Time      `json:"decidedAt,omitempty"`
+	// Screenshot is a project-relative path to the most recent Computer Use
+	// screenshot for this thread, when the approval is for a computer.* tool.
+	// Fetch its bytes with project/readArtifact. Empty for every other tool.
+	Screenshot string     `json:"screenshot,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  time.Time  `json:"expiresAt"`
+	DecidedAt  *time.Time `json:"decidedAt,omitempty"`
 }
 
 // Credential is an API key record. The secret itself is never sent to clients.

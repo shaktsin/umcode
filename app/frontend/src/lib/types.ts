@@ -25,6 +25,7 @@ export interface ProjectTools {
   compute?: boolean;
 	visualQa?: boolean;
 	computerUse?: boolean;
+	computerUseApps?: string[];
   computeVcpus?: number;
   computeMemoryMiB?: number;
   computeDiskMiB?: number;
@@ -251,6 +252,7 @@ export interface Attachment {
 export interface Approval {
   id: string;
   threadId: string;
+  projectId?: string;
   turnId: string;
   itemId: string;
   tool: string;
@@ -260,6 +262,9 @@ export interface Approval {
   actionSummary: string;
   status: 'pending' | 'approved' | 'denied' | 'expired';
   decidedBy?: string;
+  // Project-relative path to the latest Computer Use screenshot, when this
+  // approval is for a computer.* tool. Fetch with project/readArtifact.
+  screenshot?: string;
   createdAt: string;
   expiresAt: string;
   decidedAt?: string;
