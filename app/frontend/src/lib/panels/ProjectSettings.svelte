@@ -5,29 +5,24 @@
   import { app } from '$lib/stores/app.svelte';
   import { dialog } from '$lib/stores/dialog.svelte';
   import ModelPicker from '$lib/components/ModelPicker.svelte';
-  import type { ApprovalMode, ModelSelection } from '$lib/types';
+  import type { ModelSelection } from '$lib/types';
   import { createProject, editProject } from '$lib/createProject';
 
   const p = $derived(projects.active);
+  let computerUseDefault = $state(true);
 
-  async function setTool(key: 'shell' | 'network' | 'compute' | 'visualQa' | 'computerUse', value: boolean) {
+  $effect(() => {
+    void app.conn;
+    if (app.conn === 'open') {
+      void app.try<{ enabled: boolean }>('settings/computerUse/getDefault', {}).then((r) => {
+        if (r) computerUseDefault = r.enabled;
+      });
+    }
+  });
+
+  async function setTool(key: 'network' | 'compute', value: boolean) {
     if (!p) return;
     await projects.update(p.id, { tools: { ...p.tools, [key]: value } });
-  }
-
-  // Comma-separated app names / bundle IDs Computer Use is allowed to
-  // target in this project. Empty means unrestricted (every app allowed).
-  let computerAppsDraft = $state('');
-  $effect(() => {
-    computerAppsDraft = (p?.tools.computerUseApps ?? []).join(', ');
-  });
-  async function setComputerApps() {
-    if (!p) return;
-    const list = computerAppsDraft
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    await projects.update(p.id, { tools: { ...p.tools, computerUseApps: list } });
   }
 
   async function setComputeLimit(key: 'computeVcpus' | 'computeMemoryMiB' | 'computeDiskMiB', value: number) {
@@ -35,14 +30,17 @@
     await projects.update(p.id, { tools: { ...p.tools, [key]: value } });
   }
 
+  async function setComputerUse(value: string) {
+    if (!p) return;
+    const tools = { ...p.tools };
+    if (value === 'default') delete tools.computerUse;
+    else tools.computerUse = value === 'enabled';
+    await projects.update(p.id, { tools });
+  }
+
   async function setSettings(sel: ModelSelection) {
     if (!p) return;
     await projects.update(p.id, { settings: sel });
-  }
-
-  async function setApprovalMode(mode: ApprovalMode) {
-    if (!p) return;
-    await projects.update(p.id, { approvalMode: mode });
   }
 
   async function close() {
@@ -141,52 +139,24 @@
   </div>
 
   <section class="card p-4 mb-5">
-    <h2 class="text-sm font-semibold mb-3">What the agent may do here</h2>
+    <h2 class="text-sm font-semibold mb-3">Compute</h2>
+    <p class="text-xs text-muted mb-3">First-party tools are available in chats. Risky actions ask for approval or follow the autonomy choice in that chat.</p>
     <div class="space-y-3 text-sm">
-      <label class="flex items-start gap-3">
-        <input class="mt-1 shrink-0" type="checkbox" checked={p.tools.shell !== false} onchange={(e) => setTool('shell', e.currentTarget.checked)} />
-        <span>
-          Run shell commands
-          <span class="block text-xs text-muted">They run in this folder, with no API keys in their environment.</span>
-        </span>
-      </label>
-	  <label class="flex items-start gap-3">
-		<input class="mt-1 shrink-0" type="checkbox" checked={!!p.tools.visualQa} onchange={(e) => setTool('visualQa', e.currentTarget.checked)} />
-		<span>
-		  Enable autonomous Visual QA
-		  <span class="block text-xs text-muted">Lets the agent open this project's scoped preview in UMCode's isolated Chromium, interact with it, and capture screenshots, console errors, and failed requests. External sites and your normal browser profile are not exposed.</span>
-		</span>
-	  </label>
-	  <label class="flex items-start gap-3">
-		<input class="mt-1 shrink-0" type="checkbox" checked={!!p.tools.computerUse} onchange={(e) => setTool('computerUse', e.currentTarget.checked)} />
-		<span>
-		  Enable Computer Use
-		  <span class="block text-xs text-muted">Lets the agent open an app you select, inspect its window, and—after approval—click, type, fill forms, press keys, and scroll. macOS keeps Screen Recording and Accessibility permission on a separately signed helper.</span>
-		</span>
-	  </label>
-	  {#if p.tools.computerUse}
-		<div class="pl-7">
-		  <label class="text-xs text-muted">Allowed apps (optional)
-			<input class="input mt-1 w-full py-1" type="text" placeholder="e.g. Safari, com.apple.mail" bind:value={computerAppsDraft} onblur={setComputerApps} onkeydown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()} />
-		  </label>
-		  <span class="block text-xs text-muted mt-1">Comma-separated app names or bundle IDs. Leave blank to allow any app; the agent is refused for anything not on this list once it's set.</span>
-		</div>
-	  {/if}
-      <label class="flex items-start gap-3">
-        <input class="mt-1 shrink-0" type="checkbox" checked={!!p.tools.network} onchange={(e) => setTool('network', e.currentTarget.checked)} />
-        <span>
-          Allow shell commands to use the network
-          <span class="block text-xs text-muted">For a hard network-off boundary, enable the microVM below; host-shell commands are blocked while network is off.</span>
-        </span>
-      </label>
       <label class="flex items-start gap-3">
         <input class="mt-1 shrink-0" type="checkbox" checked={!!p.tools.compute} onchange={(e) => setTool('compute', e.currentTarget.checked)} />
         <span>
-          Run shell in a microVM
-          <span class="block text-xs text-muted">Commands run in UMCode's bundled microVM. Only this chat's project folder or isolated worktree is mounted; the guest receives no provider credentials or host environment. Network stays off unless enabled above.</span>
+          Run commands in the isolated microVM
+          <span class="block text-xs text-muted">Only this chat's project folder or isolated worktree is mounted; the guest receives no provider credentials or host environment.</span>
         </span>
       </label>
       {#if p.tools.compute}
+        <label class="flex items-start gap-3 pl-7">
+          <input class="mt-1 shrink-0" type="checkbox" checked={!!p.tools.network} onchange={(e) => setTool('network', e.currentTarget.checked)} />
+          <span>
+            Allow this microVM to use the network
+            <span class="block text-xs text-muted">Network access is off unless enabled here.</span>
+          </span>
+        </label>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-7">
           <label class="min-w-0 text-xs text-muted">vCPU (1–8)
             <input class="input mt-1 w-full py-1" type="number" min="1" max="8" step="1" value={p.tools.computeVcpus ?? 4} onchange={(e) => setComputeLimit('computeVcpus', Number(e.currentTarget.value))} />
@@ -208,30 +178,15 @@
   </section>
 
   <section class="card p-4 mb-5">
-    <h2 class="text-sm font-semibold mb-1">Approvals</h2>
-    <p class="text-xs text-muted mb-3">How much the agent can do here without stopping to ask first. This can be changed anytime, including from the chat itself.</p>
-    <div class="space-y-2 text-sm">
-      <label class="flex items-start gap-3">
-        <input class="mt-1 shrink-0" type="radio" name="approval-mode" checked={!p.approvalMode || p.approvalMode === 'normal'} onchange={() => setApprovalMode('normal')} />
-        <span>
-          Ask every time <span class="text-muted">(default)</span>
-          <span class="block text-xs text-muted">Every risky action — running commands, editing files, Computer Use — waits for your approval.</span>
-        </span>
-      </label>
-      <label class="flex items-start gap-3">
-        <input class="mt-1 shrink-0" type="radio" name="approval-mode" checked={p.approvalMode === 'auto_workspace'} onchange={() => setApprovalMode('auto_workspace')} />
-        <span>
-          Auto-approve in this workspace
-          <span class="block text-xs text-muted">Shell commands, file edits, and browser checks run without asking, as long as they stay inside this project's folder. Computer Use — anything that drives your real desktop — still always asks.</span>
-        </span>
-      </label>
-      <label class="flex items-start gap-3">
-        <input class="mt-1 shrink-0" type="radio" name="approval-mode" checked={p.approvalMode === 'auto_all'} onchange={() => setApprovalMode('auto_all')} />
-        <span>
-          Auto-approve everything, including Computer Use
-          <span class="block text-xs text-muted">Highest trust. Also auto-approves Computer Use, so the agent can click, type, and submit forms in your real apps with no confirmation. Only use this for a project you fully trust.</span>
-        </span>
-      </label>
+    <h2 class="text-sm font-semibold mb-2">Computer Use</h2>
+    <p class="text-xs text-muted mb-3">Interact with a selected desktop app. Agent actions follow this chat’s approval choice; your direct clicks in the live view are explicit user actions.</p>
+    <div class="flex flex-wrap items-center gap-3">
+      <label class="text-xs text-muted" for="computer-use-project">Availability in this project</label>
+      <select id="computer-use-project" class="input py-1 w-auto" value={p.tools.computerUse === undefined ? 'default' : p.tools.computerUse ? 'enabled' : 'disabled'} onchange={(e) => setComputerUse(e.currentTarget.value)}>
+        <option value="default">Use global default ({computerUseDefault ? 'enabled' : 'disabled'})</option>
+        <option value="enabled">Enabled for this project</option>
+        <option value="disabled">Disabled for this project</option>
+      </select>
     </div>
   </section>
 

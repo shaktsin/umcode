@@ -30,7 +30,9 @@ const maxOutput = 64 << 10
 // SkillEnvFunc returns the environment for running commands as part of a skill.
 type SkillEnvFunc func(ctx context.Context, skill string) ([]string, error)
 
-// RegisterBuiltins adds the built-in tools allowed by config. skillEnv may be nil.
+// RegisterBuiltins adds available first-party tools. Risk and approval are
+// evaluated per chat; project settings only choose the compute environment.
+// skillEnv may be nil.
 type BuiltinServices struct {
 	Previews    *preview.Manager
 	VisualQA    *visualqa.Manager
@@ -46,30 +48,30 @@ func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv 
 	r.Add(&fileSearch{ws})
 	r.Add(newWebSearch())
 	r.Add(newWebFetch())
-	if cfg.Tools.ShellEnabled {
-		shell := &shellRun{ws: ws, autoApprove: cfg.Policy.AutoApproveShellCommands, forbid: cfg.Policy.ShellForbidCommands, skillEnv: skillEnv, compute: compute.NewBundledRunner()}
-		if !strings.EqualFold(cfg.Tools.HostSandbox, "off") {
-			shell.sandbox = sandbox.Detect()
-		}
-		r.Add(shell)
-		if len(services) > 0 && services[0].Exec != nil {
-			r.Add(&execStart{shell: shell, manager: services[0].Exec})
-			r.Add(&execWrite{manager: services[0].Exec})
-			r.Add(&execStop{manager: services[0].Exec})
-		}
-		r.Add(&verificationPlan{})
-		r.Add(&verificationRun{shell: shell})
-		r.Add(&browserVerify{shell: shell})
-		if len(services) > 0 && services[0].Previews != nil {
-			r.Add(&previewStart{manager: services[0].Previews, shell: shell})
-			r.Add(&previewStop{manager: services[0].Previews})
-		}
-		if len(services) > 0 && services[0].Previews != nil && services[0].VisualQA != nil {
-			r.Add(&visualStart{previews: services[0].Previews, manager: services[0].VisualQA})
-			r.Add(&visualInspect{manager: services[0].VisualQA})
-			r.Add(&visualAct{manager: services[0].VisualQA})
-			r.Add(&visualStop{manager: services[0].VisualQA})
-		}
+	// First-party tools are always available. Their assessed risk is handled by
+	// the chat's approval mode before any action runs.
+	shell := &shellRun{ws: ws, forbid: cfg.Policy.ShellForbidCommands, skillEnv: skillEnv, compute: compute.NewBundledRunner()}
+	if !strings.EqualFold(cfg.Tools.HostSandbox, "off") {
+		shell.sandbox = sandbox.Detect()
+	}
+	r.Add(shell)
+	if len(services) > 0 && services[0].Exec != nil {
+		r.Add(&execStart{shell: shell, manager: services[0].Exec})
+		r.Add(&execWrite{manager: services[0].Exec})
+		r.Add(&execStop{manager: services[0].Exec})
+	}
+	r.Add(&verificationPlan{})
+	r.Add(&verificationRun{shell: shell})
+	r.Add(&browserVerify{shell: shell})
+	if len(services) > 0 && services[0].Previews != nil {
+		r.Add(&previewStart{manager: services[0].Previews, shell: shell})
+		r.Add(&previewStop{manager: services[0].Previews})
+	}
+	if len(services) > 0 && services[0].Previews != nil && services[0].VisualQA != nil {
+		r.Add(&visualStart{previews: services[0].Previews, manager: services[0].VisualQA})
+		r.Add(&visualInspect{manager: services[0].VisualQA})
+		r.Add(&visualAct{manager: services[0].VisualQA})
+		r.Add(&visualStop{manager: services[0].VisualQA})
 	}
 	if len(services) > 0 && services[0].ComputerUse != nil {
 		r.Add(&computerList{manager: services[0].ComputerUse})
@@ -465,11 +467,10 @@ func (t *fileWrite) Call(ctx context.Context, args json.RawMessage) (string, err
 // ---- shell.run ----
 
 type shellRun struct {
-	ws          *Workspaces
-	autoApprove []string
-	forbid      []string
-	skillEnv    SkillEnvFunc
-	compute     compute.Runner
+	ws       *Workspaces
+	forbid   []string
+	skillEnv SkillEnvFunc
+	compute  compute.Runner
 	// sandbox confines host commands; nil means they run unconfined.
 	sandbox sandbox.Sandbox
 }
@@ -518,10 +519,10 @@ func (w *liveOutput) Len() int {
 
 func (*shellRun) Name() string { return "shell.run" }
 func (*shellRun) Description() string {
-	return "Run a shell command (sh -c) in the open project. Returns exit code, stdout and stderr. On the host the command is sandboxed when the platform supports it: it can write only inside the project (and temp/cache folders), cannot read credential folders such as ~/.ssh, and has no network unless the project allows it."
+	return "Run a shell command (sh -c) in the open project. Returns exit code, stdout and stderr. Commands run in the project's configured compute environment and are subject to UMCode's workspace sandbox and chat approval policy."
 }
 func (*shellRun) Schema() json.RawMessage {
-	return schema(`{"type":"object","properties":{"command":{"type":"string"},"workspace":{"type":"string","description":"Folder inside the project to run in; default the project root"},"timeout_seconds":{"type":"integer","description":"Default 60, max 600"},"skill":{"type":"string","description":"Run with this skill's environment (its venv, PATH and env vars; SKILL_DIR is set)"}},"required":["command"]}`)
+	return schema(`{"type":"object","properties":{"command":{"type":"string"},"workspace":{"type":"string","description":"Existing folder path inside the project, not the project's display name; omit to run in the project root"},"timeout_seconds":{"type":"integer","description":"Default 60, max 600"},"skill":{"type":"string","description":"Run with this skill's environment (its venv, PATH and env vars; SKILL_DIR is set)"}},"required":["command"]}`)
 }
 
 func (t *shellRun) Assess(args json.RawMessage) (Risk, string) {
@@ -531,8 +532,6 @@ func (t *shellRun) Assess(args json.RawMessage) (Risk, string) {
 	switch {
 	case class == ClassForbidden:
 		return RiskRed, "Blocked (" + reason + "): " + cmd
-	case AllSegmentsMatch(cmd, t.autoApprove):
-		return RiskYellow, "Run: " + cmd
 	case class == ClassSafe:
 		return RiskGreen, "Run (read-only): " + cmd
 	}
@@ -552,12 +551,67 @@ func (t *shellRun) Forbidden(args json.RawMessage) (string, bool) {
 func safeEnv() []string {
 	keep := []string{"PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "SHELL", "TERM"}
 	var env []string
+	values := make(map[string]string, len(keep))
 	for _, k := range keep {
 		if v, ok := os.LookupEnv(k); ok {
+			values[k] = v
+		}
+	}
+	values["PATH"] = discoveredToolPath(values["PATH"], values["HOME"])
+	for _, k := range keep {
+		if v, ok := values[k]; ok {
 			env = append(env, k+"="+v)
 		}
 	}
 	return env
+}
+
+// discoveredToolPath adds common per-user toolchain locations that GUI-launched
+// macOS apps do not inherit from interactive shell startup files. It does not
+// evaluate shell rc files or import any additional environment variables.
+func discoveredToolPath(path, home string) string {
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	if path == "" {
+		path = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+	}
+	var candidates []string
+	if home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".volta", "bin"),
+			filepath.Join(home, ".local", "share", "mise", "shims"),
+			filepath.Join(home, ".asdf", "shims"),
+			filepath.Join(home, ".fnm", "current", "bin"),
+		)
+		if matches, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin")); len(matches) > 0 {
+			// Glob is sorted lexically; newest Node releases sort last.
+			for i := len(matches) - 1; i >= 0; i-- {
+				candidates = append(candidates, matches[i])
+			}
+		}
+	}
+	candidates = append(candidates, "/opt/homebrew/bin", "/usr/local/bin")
+	parts := filepath.SplitList(path)
+	seen := make(map[string]bool, len(parts)+len(candidates))
+	var result []string
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		if st, err := os.Stat(p); err != nil || !st.IsDir() {
+			return
+		}
+		seen[p] = true
+		result = append(result, p)
+	}
+	for _, p := range parts {
+		add(p)
+	}
+	for _, p := range candidates {
+		add(p)
+	}
+	return strings.Join(result, string(os.PathListSeparator))
 }
 
 func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
@@ -577,25 +631,19 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if scope == nil {
 		return "", ErrNoProject
 	}
-	if !scope.AllowShell {
-		return "", fmt.Errorf("shell commands are switched off for the project %s; do not try to run commands through Computer Use as a workaround — tell the user that Shell needs to be turned on in this project's settings (or in the chat's approval controls) before commands can run", scope.ProjectName)
-	}
 	sandboxed := !scope.UseCompute && t.sandbox != nil
-	if !scope.AllowNet && !scope.UseCompute && !sandboxed {
-		return "", errors.New("shell execution is blocked while network access is off unless the project's microVM is enabled or the host sandbox is available; host shell networking cannot be safely restricted")
+	trusted := scope.TrustedAutonomy()
+	if !scope.AllowNet && !scope.UseCompute && !sandboxed && !trusted {
+		return "", errors.New("shell execution is blocked while network access is off unless the project's microVM is enabled, the host sandbox is available, or the chat's approval mode is auto_workspace/auto_all; host shell networking cannot be safely restricted otherwise")
 	}
-	if !scope.AllowNet && !sandboxed {
+	if !scope.AllowNet && !sandboxed && !trusted {
 		if prog, yes := NeedsNetwork(a.Command); yes {
-			return "", fmt.Errorf("%s needs the network, which is off for the project %s (turn it on in the project's settings)", prog, scope.ProjectName)
+			return "", fmt.Errorf("%s needs the network, which is off for the project %s (turn it on in the project's settings, or set this chat's approval mode to auto_workspace/auto_all)", prog, scope.ProjectName)
 		}
 	}
-	dir := scope.Root
-	if a.Workspace != "" {
-		if d, err := scope.Resolve(a.Workspace); err == nil {
-			dir = d
-		} else {
-			return "", err
-		}
+	dir, err := scope.CommandDir(a.Workspace)
+	if err != nil {
+		return "", err
 	}
 	timeout := time.Duration(a.TimeoutSeconds) * time.Second
 	if timeout <= 0 {

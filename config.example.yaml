@@ -40,7 +40,6 @@ models:
 # Tools
 # ---------------------------------------------------------------------------
 tools:
-  shell_enabled: true        # allow shell.run tool (RISK_RED — requires approval)
   host_sandbox: auto         # auto | off — confine host shell commands (Seatbelt on macOS, bubblewrap on Linux):
                              # writes only inside the project and temp/cache folders, no credential folders,
                              # no network unless the project allows it
@@ -57,7 +56,6 @@ tools:
         write: true
         create_files: true
         delete_files: false  # explicit — agents can't rm files here
-        shell: true          # shell.run allowed with this dir as cwd
 
     - name: downloads
       path: ~/Downloads
@@ -155,14 +153,6 @@ agents:
 # Policy
 # ---------------------------------------------------------------------------
 policy:
-  confirmation_strictness: normal  # normal (RED only) | strict (all tools)
-  # normal | auto_approve_workspace
-  # auto_approve_workspace skips admin confirmation for eligible tool calls
-  # in allowed workspaces.
-  approval_mode: normal
-  auto_approve_workspaces: []       # workspace names, e.g. ["websites", "projects"]
-  auto_approve_tools: []            # tool names/globs, e.g. ["file.*", "shell.run"]
-  auto_approve_shell_commands: []
   # Command prefixes (word by word, per pipeline segment) refused without asking,
   # e.g. ["git push", "npm publish"]. Destructive commands (sudo, rm -rf /, curl | sh)
   # are always refused. Read-only commands (ls, cat, rg, git status/diff/log, ...) run
@@ -186,4 +176,3 @@ runtime:
   ws_token: null             # auto-generated on first start
   engine_ws_port: 8766       # engine protocol WebSocket (0 = off); used by the Mac app
   socket_path: ~/.umcode/run/engine.sock
-

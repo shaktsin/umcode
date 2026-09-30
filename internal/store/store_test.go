@@ -72,6 +72,22 @@ func TestThreadsCredentialsUsage(t *testing.T) {
 	a, _ := s.CreateThread(ctx, protocol.Thread{Title: "a"})
 	time.Sleep(2 * time.Millisecond)
 	b, _ := s.CreateThread(ctx, protocol.Thread{Title: "b"})
+	if err := s.UpdateThread(ctx, a.ID, map[string]any{"approval_mode": "auto_workspace"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RememberThreadDecision(ctx, a.ID, "shell.run", "npm test", "allow"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.RememberedThreadDecision(ctx, a.ID, "shell.run", "npm test"); got != "allow" {
+		t.Fatalf("chat-scoped decision = %q, want allow", got)
+	}
+	if got := s.RememberedThreadDecision(ctx, b.ID, "shell.run", "npm test"); got != "" {
+		t.Fatalf("decision leaked across chats: %q", got)
+	}
+	a, err = s.GetThread(ctx, a.ID)
+	if err != nil || a.ApprovalMode != "auto_workspace" {
+		t.Fatalf("chat approval mode = %q, err=%v", a.ApprovalMode, err)
+	}
 	if err := s.UpdateThread(ctx, a.ID, map[string]any{"pinned": true}); err != nil {
 		t.Fatal(err)
 	}

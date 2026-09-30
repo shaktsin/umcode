@@ -36,19 +36,19 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 			a.Screenshot = shot
 		}
 	}
-	// A decision the user asked to remember for this project answers
+	// A decision the user asked to remember for this chat answers
 	// immediately. Computer Use actions are excluded: their approval
 	// signature can't distinguish one click or keystroke from another (see
 	// ApprovalSignature), so "remember" would silently rubber-stamp every
 	// future action in the project rather than the one the person actually
 	// reviewed. Each one always gets a fresh, human decision.
-	if th.ProjectID != "" && !isComputerUseTool(tool) {
-		switch e.Store.RememberedDecision(sctx, th.ProjectID, tool, ApprovalSignature(tool, args)) {
+	if th.ID != "" && !isComputerUseTool(tool) {
+		switch e.Store.RememberedThreadDecision(sctx, th.ID, tool, ApprovalSignature(tool, args)) {
 		case "allow":
-			_ = e.Store.Audit(sctx, "approval.remembered", map[string]any{"tool": tool, "project": th.ProjectID, "decision": "allow"})
+			_ = e.Store.Audit(sctx, "approval.remembered", map[string]any{"tool": tool, "thread": th.ID, "decision": "allow"})
 			return true, nil
 		case "deny":
-			_ = e.Store.Audit(sctx, "approval.remembered", map[string]any{"tool": tool, "project": th.ProjectID, "decision": "deny"})
+			_ = e.Store.Audit(sctx, "approval.remembered", map[string]any{"tool": tool, "thread": th.ID, "decision": "deny"})
 			return false, nil
 		}
 	}
@@ -125,12 +125,12 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 		}
 	}
 	if remember && decided.ID != "" && !isComputerUseTool(decided.Tool) {
-		if th, err := e.Store.GetThread(ctx, decided.ThreadID); err == nil && th.ProjectID != "" {
+		if _, err := e.Store.GetThread(ctx, decided.ThreadID); err == nil {
 			decision := "deny"
 			if approve {
 				decision = "allow"
 			}
-			if err := e.Store.RememberDecision(ctx, th.ProjectID, decided.Tool, ApprovalSignature(decided.Tool, decided.Args), decision); err != nil {
+			if err := e.Store.RememberThreadDecision(ctx, decided.ThreadID, decided.Tool, ApprovalSignature(decided.Tool, decided.Args), decision); err != nil {
 				e.Log.Warn("remember approval", "err", err)
 			}
 		}

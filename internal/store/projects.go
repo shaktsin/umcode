@@ -12,7 +12,7 @@ import (
 )
 
 const projectCols = `id, name, root, instructions_path, provider, model, complexity, credential_id,
-	tools, archived, approval_mode, created_at, last_opened_at`
+	tools, archived, created_at, last_opened_at`
 
 func scanProject(sc interface{ Scan(...any) error }) (protocol.Project, error) {
 	var p protocol.Project
@@ -20,7 +20,7 @@ func scanProject(sc interface{ Scan(...any) error }) (protocol.Project, error) {
 	var archived int
 	err := sc.Scan(&p.ID, &p.Name, &p.Root, &p.InstructionsPath,
 		&p.Settings.Provider, &p.Settings.Model, &complexity, &p.Settings.CredentialID,
-		&toolsJSON, &archived, &p.ApprovalMode, &created, &opened)
+		&toolsJSON, &archived, &created, &opened)
 	if err != nil {
 		return p, err
 	}
@@ -44,10 +44,10 @@ func (s *Store) CreateProject(ctx context.Context, p protocol.Project) (protocol
 	if err != nil {
 		return p, err
 	}
-	_, err = s.DB.ExecContext(ctx, `INSERT INTO projects (`+projectCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO projects (`+projectCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Name, p.Root, p.InstructionsPath,
 		p.Settings.Provider, p.Settings.Model, string(p.Settings.Complexity), p.Settings.CredentialID,
-		string(tools), b2i(p.Archived), p.ApprovalMode, FormatTime(now), FormatTime(now))
+		string(tools), b2i(p.Archived), FormatTime(now), FormatTime(now))
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return p, ErrDuplicate
 	}
@@ -146,17 +146,14 @@ func (s *Store) UpdateProject(ctx context.Context, p protocol.ProjectUpdateParam
 	if p.Archived != nil {
 		cur.Archived = *p.Archived
 	}
-	if p.ApprovalMode != nil {
-		cur.ApprovalMode = *p.ApprovalMode
-	}
 	tools, err := json.Marshal(cur.Tools)
 	if err != nil {
 		return cur, err
 	}
 	_, err = s.DB.ExecContext(ctx, `UPDATE projects SET name = ?, root = ?, instructions_path = ?, provider = ?, model = ?,
-		complexity = ?, credential_id = ?, tools = ?, archived = ?, approval_mode = ? WHERE id = ?`,
+		complexity = ?, credential_id = ?, tools = ?, archived = ? WHERE id = ?`,
 		cur.Name, cur.Root, cur.InstructionsPath, cur.Settings.Provider, cur.Settings.Model,
-		string(cur.Settings.Complexity), cur.Settings.CredentialID, string(tools), b2i(cur.Archived), cur.ApprovalMode, cur.ID)
+		string(cur.Settings.Complexity), cur.Settings.CredentialID, string(tools), b2i(cur.Archived), cur.ID)
 	return cur, err
 }
 
@@ -185,33 +182,6 @@ func (s *Store) DeleteProject(ctx context.Context, id string) error {
 		}
 	}
 	return tx.Commit()
-}
-
-// ---- remembered approvals ----
-
-// RememberDecision stores an "always allow/deny" answer for a project.
-func (s *Store) RememberDecision(ctx context.Context, projectID, tool, signature, decision string) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO project_approvals (project_id, tool, signature, decision, created_at)
-		VALUES (?,?,?,?,?) ON CONFLICT(project_id, tool, signature) DO UPDATE SET decision = excluded.decision`,
-		projectID, tool, signature, decision, FormatTime(time.Now().UTC()))
-	return err
-}
-
-// RememberedDecision returns "allow", "deny" or "" for a project and tool call.
-func (s *Store) RememberedDecision(ctx context.Context, projectID, tool, signature string) string {
-	var d string
-	err := s.DB.QueryRowContext(ctx, `SELECT decision FROM project_approvals
-		WHERE project_id = ? AND tool = ? AND signature = ?`, projectID, tool, signature).Scan(&d)
-	if err != nil {
-		return ""
-	}
-	return d
-}
-
-// ForgetDecisions drops the remembered answers of a project.
-func (s *Store) ForgetDecisions(ctx context.Context, projectID string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM project_approvals WHERE project_id = ?`, projectID)
-	return err
 }
 
 // ---- file changes ----

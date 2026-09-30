@@ -19,6 +19,7 @@ const (
 	MethodThreadSearch      = "thread/search"
 	MethodThreadExport      = "thread/export"
 	MethodThreadSetSettings = "thread/setSettings"
+	MethodThreadSetApproval = "thread/setApprovalMode"
 	MethodThreadCompact     = "thread/compact"
 
 	MethodTurnStart     = "turn/start"
@@ -53,6 +54,11 @@ const (
 
 	MethodComplexityGetDefaults = "complexity/getDefaults"
 	MethodComplexitySetDefaults = "complexity/setDefaults"
+	MethodComputerUseGetDefault = "settings/computerUse/getDefault"
+	MethodComputerUseSetDefault = "settings/computerUse/setDefault"
+	MethodComputerUseAct        = "computer/act"
+	MethodComputerUseInspect    = "computer/inspect"
+	MethodComputerUseStop       = "computer/stop"
 )
 
 // Notification names (engine → client).
@@ -116,6 +122,7 @@ type ThreadStartParams struct {
 	ParentThreadID string         `json:"parentThreadId,omitempty"`
 	Channel        string         `json:"channel,omitempty"`
 	Settings       ModelSelection `json:"settings,omitempty"`
+	ApprovalMode   string         `json:"approvalMode,omitempty"`
 }
 
 type ThreadListParams struct {
@@ -206,6 +213,30 @@ type ThreadExportResult struct {
 type ThreadSetSettingsParams struct {
 	ThreadID string         `json:"threadId"`
 	Settings ModelSelection `json:"settings"`
+}
+
+type ThreadSetApprovalModeParams struct {
+	ThreadID string `json:"threadId"`
+	Mode     string `json:"mode"`
+}
+
+type ComputerUseDefaultParams struct {
+	Enabled bool `json:"enabled"`
+}
+type ComputerUseDefaultResult struct {
+	Enabled bool `json:"enabled"`
+}
+type ComputerUseActParams struct {
+	ThreadID          string  `json:"threadId"`
+	Action            string  `json:"action"`
+	ObservationID     string  `json:"observation_id,omitempty"`
+	ElementID         string  `json:"element_id,omitempty"`
+	TargetDescription string  `json:"target_description,omitempty"`
+	X                 float64 `json:"x,omitempty"`
+	Y                 float64 `json:"y,omitempty"`
+	Text              string  `json:"text,omitempty"`
+	Key               string  `json:"key,omitempty"`
+	Delta             int     `json:"delta,omitempty"`
 }
 
 type TurnStartParams struct {

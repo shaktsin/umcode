@@ -23,22 +23,15 @@ const (
 	NotifyProjectUpdated = "project/updated"
 )
 
-// ProjectTools says which tool groups are available inside a project.
-// A nil field means "use the engine default".
+// ProjectTools stores project-scoped compute and workspace settings.
 type ProjectTools struct {
-	Shell       *bool `json:"shell,omitempty"`
-	Network     *bool `json:"network,omitempty"`     // network access from shell commands
-	Compute     *bool `json:"compute,omitempty"`     // run shell commands in an app-bundled microVM
-	VisualQA    *bool `json:"visualQa,omitempty"`    // let the agent control the isolated preview browser
-	ComputerUse *bool `json:"computerUse,omitempty"` // let the agent control explicitly selected desktop apps
-	// ComputerUseApps restricts Computer Use to these apps: matched
-	// case-insensitively against app_name, bundle_id, or app_path (basename).
-	// Empty or nil means no restriction (every app is allowed).
-	ComputerUseApps  []string `json:"computerUseApps,omitempty"`
-	ComputeVCPUs     *int     `json:"computeVcpus,omitempty"`
-	ComputeMemoryMiB *int     `json:"computeMemoryMiB,omitempty"`
-	ComputeDiskMiB   *int     `json:"computeDiskMiB,omitempty"`
-	Git              *bool    `json:"git,omitempty"`
+	Network          *bool `json:"network,omitempty"`     // network access from shell commands
+	Compute          *bool `json:"compute,omitempty"`     // run shell commands in an app-bundled microVM
+	ComputerUse      *bool `json:"computerUse,omitempty"` // nil inherits the global default
+	ComputeVCPUs     *int  `json:"computeVcpus,omitempty"`
+	ComputeMemoryMiB *int  `json:"computeMemoryMiB,omitempty"`
+	ComputeDiskMiB   *int  `json:"computeDiskMiB,omitempty"`
+	Git              *bool `json:"git,omitempty"`
 	// MCPServers, when set, limits which configured MCP servers this project
 	// may use. An empty slice means none; nil means all of them.
 	MCPServers []string `json:"mcpServers,omitempty"`
@@ -64,12 +57,6 @@ type Project struct {
 	Settings         ModelSelection `json:"settings"`
 	Tools            ProjectTools   `json:"tools"`
 	Archived         bool           `json:"archived,omitempty"`
-	// ApprovalMode is this project's auto-approve tier: "" (or "normal"),
-	// "auto_workspace" (auto-approve red actions confined to the project
-	// workspace: shell, file edits, exec sessions, browser verification —
-	// never Computer Use), or "auto_all" (also auto-approves Computer Use,
-	// which drives the real desktop outside the sandbox).
-	ApprovalMode string `json:"approvalMode,omitempty"`
 	// Missing is true when the folder is gone from disk.
 	Missing      bool      `json:"missing,omitempty"`
 	VCS          *VCSInfo  `json:"vcs,omitempty"`
@@ -87,11 +74,10 @@ type ProjectListResult struct {
 }
 
 type ProjectCreateParams struct {
-	Root         string         `json:"root"`
-	Name         string         `json:"name,omitempty"`
-	Settings     ModelSelection `json:"settings,omitempty"`
-	Tools        ProjectTools   `json:"tools,omitempty"`
-	ApprovalMode string         `json:"approvalMode,omitempty"`
+	Root     string         `json:"root"`
+	Name     string         `json:"name,omitempty"`
+	Settings ModelSelection `json:"settings,omitempty"`
+	Tools    ProjectTools   `json:"tools,omitempty"`
 }
 
 type ProjectIDParams struct {
@@ -106,7 +92,6 @@ type ProjectUpdateParams struct {
 	Tools            *ProjectTools   `json:"tools,omitempty"`
 	InstructionsPath *string         `json:"instructionsPath,omitempty"`
 	Archived         *bool           `json:"archived,omitempty"`
-	ApprovalMode     *string         `json:"approvalMode,omitempty"`
 }
 
 // InstructionSource is one file that contributed to a project's instructions.

@@ -17,13 +17,12 @@ func execHarness(t *testing.T) (context.Context, *ExecManager, Registry2) {
 		t.Skip("exec sessions need /bin/sh")
 	}
 	cfg := config.Default(t.TempDir())
-	cfg.Tools.ShellEnabled = true
 	cfg.Tools.HostSandbox = "off"
 	m := NewExecManager()
 	t.Cleanup(m.Close)
 	r := NewRegistry()
 	RegisterBuiltins(r, cfg, NewWorkspaces(cfg), nil, BuiltinServices{Exec: m})
-	ctx := WithScope(context.Background(), &Scope{ThreadID: "thr_1", ProjectID: "prj_1", ProjectName: "demo", Root: t.TempDir(), AllowShell: true, AllowNet: true})
+	ctx := WithScope(context.Background(), &Scope{ThreadID: "thr_1", ProjectID: "prj_1", ProjectName: "demo", Root: t.TempDir(), AllowNet: true})
 	return ctx, m, Registry2{r}
 }
 
@@ -81,7 +80,7 @@ func TestExecSessionIsolationAndLimits(t *testing.T) {
 	ctx, m, r := execHarness(t)
 	out := r.call(t, ctx, "exec__start", map[string]any{"command": "sleep 30", "yield_seconds": 1})
 	id := strings.TrimSpace(strings.SplitN(strings.TrimPrefix(out, "session_id: "), "\n", 2)[0])
-	other := WithScope(context.Background(), &Scope{ThreadID: "thr_other", Root: t.TempDir(), AllowShell: true})
+	other := WithScope(context.Background(), &Scope{ThreadID: "thr_other", Root: t.TempDir()})
 	tool, _ := r.Get("exec__write")
 	if _, err := tool.Call(other, json.RawMessage(`{"session_id":"`+id+`"}`)); err == nil {
 		t.Fatal("another chat reached the session")
@@ -132,5 +131,20 @@ func TestExecStartUsesShellPolicy(t *testing.T) {
 	}
 	if risk, _ := tool.Assess(json.RawMessage(`{"command":"npm run dev"}`)); risk != RiskRed {
 		t.Fatalf("risk = %s", risk)
+	}
+}
+
+func TestExecStartRejectsDisplayNameAsWorkspace(t *testing.T) {
+	ctx, m, r := execHarness(t)
+	tool, _ := r.Get("exec__start")
+	_, err := tool.Call(ctx, json.RawMessage(`{"command":"echo should-not-run","workspace":"demo"}`))
+	if err == nil || !strings.Contains(err.Error(), `workspace "demo" does not exist`) || !strings.Contains(err.Error(), "omit workspace") {
+		t.Fatalf("expected a clear missing-workspace error, got %v", err)
+	}
+	if m.Count() != 0 {
+		t.Fatalf("invalid workspace started a session: %d", m.Count())
+	}
+	if strings.Contains(err.Error(), "sandbox-exec") {
+		t.Fatalf("invalid cwd was misreported as a missing sandbox launcher: %v", err)
 	}
 }

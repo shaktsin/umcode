@@ -18,15 +18,14 @@ const (
 	OpWrite  Operation = "write"
 	OpCreate Operation = "create"
 	OpDelete Operation = "delete"
-	OpShell  Operation = "shell"
 )
 
 // Workspace is a directory the agent may operate in.
 type Workspace struct {
-	Name                                         string
-	Path                                         string
-	Read, Write, CreateFiles, DeleteFiles, Shell bool
-	Default                                      bool
+	Name                                  string
+	Path                                  string
+	Read, Write, CreateFiles, DeleteFiles bool
+	Default                               bool
 }
 
 // Workspaces is the set of configured workspaces.
@@ -53,12 +52,11 @@ func NewWorkspaces(cfg *config.Config) *Workspaces {
 			Name: c.Name, Path: filepath.Clean(c.Path), Default: c.Default,
 			Read: boolOr(c.ACL.Read, true), Write: boolOr(c.ACL.Write, true),
 			CreateFiles: boolOr(c.ACL.CreateFiles, true), DeleteFiles: boolOr(c.ACL.DeleteFiles, false),
-			Shell: boolOr(c.ACL.Shell, true),
 		})
 	}
 	if len(w.list) == 0 {
 		w.list = []Workspace{{Name: "default", Path: filepath.Join(cfg.Home, "workspace"), Default: true,
-			Read: true, Write: true, CreateFiles: true, Shell: true}}
+			Read: true, Write: true, CreateFiles: true}}
 	}
 	hasDefault := false
 	for _, ws := range w.list {
@@ -114,7 +112,7 @@ func (ws Workspace) Resolve(p string, op Operation) (string, error) {
 		return "", fmt.Errorf("path %s is outside workspace %q (%s)", p, ws.Name, ws.Path)
 	}
 	allowed := map[Operation]bool{OpRead: ws.Read, OpWrite: ws.Write, OpCreate: ws.CreateFiles,
-		OpDelete: ws.DeleteFiles, OpShell: ws.Shell}[op]
+		OpDelete: ws.DeleteFiles}[op]
 	if !allowed {
 		return "", fmt.Errorf("workspace %q does not allow %s", ws.Name, op)
 	}

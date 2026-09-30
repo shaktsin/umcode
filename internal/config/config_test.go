@@ -19,7 +19,6 @@ llm:
     Google: {default_model: gemini-2.5-pro}
 control_panel: {enabled: true, ui_type: web}   # unknown to the Go engine: ignored
 tools:
-  shell_enabled: true
   workspaces:
     - {name: projects, path: ~/projects, default: true, acl: {delete_files: true}}
 storage: {db_path: ~/.umcode/custom.db}

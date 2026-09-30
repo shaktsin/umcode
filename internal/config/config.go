@@ -77,7 +77,6 @@ type WorkspaceACL struct {
 	Write       *bool `yaml:"write"`
 	CreateFiles *bool `yaml:"create_files"`
 	DeleteFiles *bool `yaml:"delete_files"`
-	Shell       *bool `yaml:"shell"`
 }
 
 type WorkspaceConfig struct {
@@ -88,7 +87,6 @@ type WorkspaceConfig struct {
 }
 
 type ToolsConfig struct {
-	ShellEnabled bool `yaml:"shell_enabled"`
 	// HostSandbox confines host shell commands (Seatbelt on macOS,
 	// bubblewrap on Linux): "auto" (default) uses it when available, "off"
 	// runs commands unconfined.
@@ -97,17 +95,6 @@ type ToolsConfig struct {
 }
 
 type PolicyConfig struct {
-	ConfirmationStrictness string `yaml:"confirmation_strictness"` // normal | strict
-	// ApprovalMode is the engine-wide default auto-approve tier, used for a
-	// project that has not picked its own mode (see protocol.Project.ApprovalMode
-	// and policy.Gate.Check): normal | auto_approve_workspace | auto_approve_all.
-	// Projects normally set this themselves, from the project's settings panel
-	// or the selector in the chat header, so this is mostly a fallback default.
-	ApprovalMode     string   `yaml:"approval_mode"`
-	AutoApproveTools []string `yaml:"auto_approve_tools"`
-	// AutoApproveShellCommands is not currently read anywhere; use
-	// auto_approve_tools (e.g. "shell.*") or a project's approval_mode instead.
-	AutoApproveShellCommands []string `yaml:"auto_approve_shell_commands"`
 	// ShellForbidCommands are command prefixes (word by word, per pipeline
 	// segment, e.g. "git push") that are refused without asking.
 	ShellForbidCommands    []string `yaml:"shell_forbid_commands"`
@@ -288,11 +275,7 @@ func Default(home string) *Config {
 			EngineWSPort: 8766,
 			SocketPath:   filepath.Join(home, "run", "engine.sock"),
 		},
-		Policy: PolicyConfig{
-			ConfirmationStrictness: "normal",
-			ApprovalMode:           "normal",
-			ApprovalTimeoutMinutes: 30,
-		},
+		Policy: PolicyConfig{ApprovalTimeoutMinutes: 30},
 		Models: ModelsConfig{DefaultComplexity: "auto", ExecutionLimits: ExecutionLimits{
 			MaxDurationMinutes: 120, MaxTokens: 1_000_000, MaxCostUSD: 10, MaxToolRounds: 200,
 		}},
@@ -474,12 +457,6 @@ func applyEnv(c *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.Runtime.EngineWSPort = n
 		}
-	}
-	if v, ok := getenv("SHELL_TOOL"); ok {
-		c.Tools.ShellEnabled = v == "1" || strings.EqualFold(v, "true")
-	}
-	if v, ok := getenv("APPROVAL_MODE"); ok {
-		c.Policy.ApprovalMode = v
 	}
 }
 

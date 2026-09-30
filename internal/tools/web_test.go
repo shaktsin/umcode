@@ -68,16 +68,13 @@ func TestWebToolContracts(t *testing.T) {
 	}
 }
 
-func TestRegisterBuiltinsIncludesWebToolsWithoutShell(t *testing.T) {
+func TestRegisterBuiltinsRegisterShellToolsWhenProjectMayEnableThem(t *testing.T) {
 	cfg := &config.Config{Home: t.TempDir()}
 	registry := NewRegistry()
 	RegisterBuiltins(registry, cfg, NewWorkspaces(cfg), nil)
-	for _, name := range []string{"web.search", "web.fetch", "file.read", "file.list", "file.write"} {
+	for _, name := range []string{"web.search", "web.fetch", "file.read", "file.list", "file.write", "shell.run", "verification.plan", "verification.run", "browser.verify"} {
 		if _, ok := registry.Get(name); !ok {
 			t.Errorf("built-in %q is not registered", name)
 		}
-	}
-	if _, ok := registry.Get("shell.run"); ok {
-		t.Fatal("shell.run should remain disabled when shell_enabled is false")
 	}
 }

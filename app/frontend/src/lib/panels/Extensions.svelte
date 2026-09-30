@@ -87,8 +87,8 @@
     <div class="w-9 h-9 rounded-lg bg-raised flex items-center justify-center text-clay"><MonitorCheck class="w-5 h-5" /></div>
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2"><span class="text-sm font-medium">Computer Use</span><span class="pill bg-raised text-muted">opt-in · macOS</span></div>
-      <p class="text-xs text-muted mt-1">Controls an explicitly selected desktop app or browser through screenshots and user-like click, fill, type, key, and scroll actions.</p>
-      <p class="text-[11px] text-faint mt-1">Actions require approval. A separately signed helper owns Screen Recording and Accessibility permissions; stopping a session never quits your app.</p>
+      <p class="text-xs text-muted mt-1">Controls an explicitly selected desktop app or browser with a visible pointer, accessibility-aware targeting, and screenshot-based click, fill, type, key, and scroll actions.</p>
+      <p class="text-[11px] text-faint mt-1">Actions require approval. UMCode uses its own macOS Screen Recording and Accessibility permissions; stopping a session never quits your app.</p>
     </div>
   </div>
   </div>

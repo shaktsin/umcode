@@ -1,6 +1,6 @@
 import { app } from './app.svelte';
 import { errMsg } from '$lib/format';
-import type { ApprovalMode, FileEntry, Project, ProjectFilesResult, ProjectTools } from '$lib/types';
+import type { FileEntry, Project, ProjectFilesResult, ProjectTools } from '$lib/types';
 
 const LAST_PROJECT = 'umcode.lastProject';
 
@@ -95,7 +95,7 @@ class ProjectStore {
     return p;
   }
 
-  async update(id: string, patch: { name?: string; root?: string; settings?: unknown; tools?: ProjectTools; archived?: boolean; approvalMode?: ApprovalMode }) {
+  async update(id: string, patch: { name?: string; root?: string; settings?: unknown; tools?: ProjectTools; archived?: boolean }) {
     const p = await app.try<Project>('project/update', { projectId: id, ...patch });
     if (!p) return;
     const i = this.list.findIndex((x) => x.id === p.id);

@@ -3,11 +3,13 @@
   import Models from './settings/Models.svelte';
   import ComplexityTab from './settings/Complexity.svelte';
   import Engine from './settings/Engine.svelte';
+  import ComputerUse from './settings/ComputerUse.svelte';
 
   const tabs = [
     { id: 'keys', label: 'API keys' },
     { id: 'models', label: 'Models' },
     { id: 'complexity', label: 'Complexity' },
+    { id: 'computer-use', label: 'Computer Use' },
     { id: 'engine', label: 'Engine & app' },
   ] as const;
   let tab = $state<(typeof tabs)[number]['id']>('keys');
@@ -26,5 +28,6 @@
 {#if tab === 'keys'}<Keys />
 {:else if tab === 'models'}<Models />
 {:else if tab === 'complexity'}<ComplexityTab />
+{:else if tab === 'computer-use'}<ComputerUse />
 {:else}<Engine />
 {/if}

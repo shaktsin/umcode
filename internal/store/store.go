@@ -19,9 +19,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ncruces/go-sqlite3"
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
+	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
 )
+
+func init() {
+	// The default Wazero compiler emits native code into executable memory.
+	// macOS code-signing validation can terminate the signed UMCode engine
+	// when those generated pages are executed (CODESIGNING: Invalid Page).
+	// SQLite is local bookkeeping, so use Wazero's interpreter to avoid JIT
+	// pages and keep the engine compatible with normal signed app builds.
+	sqlite3.RuntimeConfig = wazero.NewRuntimeConfigInterpreter().
+		WithCoreFeatures(api.CoreFeaturesV2).
+		WithMemoryLimitPages(4096)
+}
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS

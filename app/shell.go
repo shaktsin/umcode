@@ -170,24 +170,23 @@ func (s *Shell) SetStatus(status, detail string) {
 
 // SetCounts updates the pending-approval and running-turn counts. A negative
 // running count keeps the previous value.
+//
+// This used to also auto-pop the mini overlay on a new approval (the 0→n
+// edge), even while the main window was already open and showing that same
+// approval inline in chat — a redundant second copy of the same card. The
+// chat's inline ApprovalCard is now the only place an approval shows up; the
+// overlay is still available from the tray menu ("Mini Overlay") for anyone
+// who wants it, it just no longer appears on its own.
 func (s *Shell) SetCounts(pending, running int) {
 	s.mu.Lock()
 	if running < 0 {
 		running = s.running
 	}
 	changed := s.pending != pending || s.running != running
-	wasWaiting := s.pending > 0
 	s.pending, s.running = pending, running
 	s.mu.Unlock()
 	if changed {
 		s.refreshTray()
-	}
-	// A new approval needs the user's attention even when the main window is
-	// closed or another app is in front, so surface the overlay for it. It
-	// never steals focus (see mini.go), and it only pops up on the 0→n edge,
-	// not on every refresh while approvals are already showing.
-	if pending > 0 && !wasWaiting {
-		s.ShowMini()
 	}
 }
 

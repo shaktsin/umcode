@@ -159,6 +159,21 @@ func (m *EngineManager) Ensure(ctx context.Context) error {
 	// still in progress. Serialize both paths so they cannot launch two engines.
 	m.ensureMu.Lock()
 	defer m.ensureMu.Unlock()
+	if serviceStatus() != serviceUnsupported && !serviceCanUseSMAppService() {
+		// A self-signed local-development identity has no Team ID. macOS 26
+		// rejects its SMAppService agent with CODESIGNING / Launch Constraint
+		// Violation and launchd repeatedly respawns it. Remove that registration
+		// and keep the engine owned by the app process instead.
+		reuse, err := m.prepareChildEngine(ctx)
+		if err != nil {
+			m.setMode(ModeStopped, err.Error())
+			return err
+		}
+		if reuse {
+			return nil
+		}
+		return m.startChild(ctx)
+	}
 	if m.Reachable() {
 		if st := serviceStatus(); st == serviceEnabled {
 			if BuildID != "" {
@@ -209,6 +224,45 @@ func (m *EngineManager) Ensure(ctx context.Context) error {
 		}
 	}
 	return m.startChild(ctx)
+}
+
+func (m *EngineManager) prepareChildEngine(ctx context.Context) (bool, error) {
+	if serviceStatus() == serviceEnabled {
+		if m.Reachable() {
+			if status, err := m.engineStatus(ctx); err == nil && (status.ActiveTurns > 0 || status.PendingApprovals > 0) {
+				// Do not interrupt active work. It can finish normally; the next app
+				// launch will migrate to an app-owned engine.
+				m.setMode(ModeService, "finishing active work before switching to app-owned engine")
+				return true, nil
+			}
+		}
+		if err := unregisterService(); err != nil {
+			return false, fmt.Errorf("remove the incompatible background engine registration: %w", err)
+		}
+		deadline := time.Now().Add(8 * time.Second)
+		for m.Reachable() && time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		if m.Reachable() {
+			m.stopRunningEngines(ctx)
+			if m.Reachable() {
+				return false, errors.New("the incompatible background engine did not stop after unregistering")
+			}
+		}
+	}
+	if m.Reachable() {
+		status, err := m.engineStatus(ctx)
+		if err == nil && (BuildID == "" || status.BuildID == BuildID) {
+			m.setMode(ModeExternal, "")
+			return true, nil
+		}
+		m.stopRunningEngines(ctx)
+	}
+	return false, nil
 }
 
 func (m *EngineManager) engineStatus(ctx context.Context) (protocol.EngineStatus, error) {
@@ -393,6 +447,10 @@ func (m *EngineManager) Restart(ctx context.Context) error {
 // InstallService switches to the background service.
 func (m *EngineManager) InstallService(ctx context.Context) error {
 	m.stopChild()
+	if serviceStatus() != serviceUnsupported && !serviceCanUseSMAppService() {
+		_ = m.startChild(ctx)
+		return errors.New("this local signing identity has no Team ID; UMCode is running its engine as an app-owned process instead")
+	}
 	if err := registerService(); err != nil {
 		if errors.Is(err, errServiceUnsupported) {
 			// Fall back to a plain LaunchAgent via the CLI.

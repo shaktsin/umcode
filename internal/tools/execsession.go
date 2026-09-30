@@ -312,7 +312,7 @@ func (*execStart) Description() string {
 	return "Start a long-running or interactive command (dev server, watcher, REPL, prompting installer) that keeps running between tool calls. Returns a session_id and the first output. Then use exec.write to send input or poll for new output, and exec.stop to end it. For commands that simply finish, use shell.run. Sandboxed like shell.run."
 }
 func (*execStart) Schema() json.RawMessage {
-	return schema(`{"type":"object","properties":{"command":{"type":"string"},"workspace":{"type":"string","description":"Folder inside the project to run in; default the project root"},"yield_seconds":{"type":"integer","description":"How long to wait for first output. Default 10, max 60"}},"required":["command"]}`)
+	return schema(`{"type":"object","properties":{"command":{"type":"string"},"workspace":{"type":"string","description":"Existing folder path inside the project, not the project's display name; omit to run in the project root"},"yield_seconds":{"type":"integer","description":"How long to wait for first output. Default 10, max 60"}},"required":["command"]}`)
 }
 func (t *execStart) Assess(args json.RawMessage) (Risk, string) {
 	risk, summary := t.shell.Assess(args)
@@ -336,23 +336,16 @@ func (t *execStart) Call(ctx context.Context, args json.RawMessage) (string, err
 	if scope == nil {
 		return "", ErrNoProject
 	}
-	if !scope.AllowShell {
-		return "", fmt.Errorf("shell commands are switched off for the project %s; do not try to run commands through Computer Use as a workaround — tell the user that Shell needs to be turned on in this project's settings (or in the chat's approval controls) before commands can run", scope.ProjectName)
-	}
 	if scope.UseCompute {
 		return "", errors.New("exec sessions run on the host and are not available while the project uses the isolated microVM; use shell.run")
 	}
 	sandboxed := t.shell.sandbox != nil
-	if !scope.AllowNet && !sandboxed {
-		return "", errors.New("exec sessions need the host sandbox or network access enabled for the project")
+	if !scope.AllowNet && !sandboxed && !scope.TrustedAutonomy() {
+		return "", errors.New("exec sessions need the host sandbox, network access enabled for the project, or this chat's approval mode set to auto_workspace/auto_all")
 	}
-	dir := scope.Root
-	if a.Workspace != "" {
-		d, err := scope.Resolve(a.Workspace)
-		if err != nil {
-			return "", err
-		}
-		dir = d
+	dir, err := scope.CommandDir(a.Workspace)
+	if err != nil {
+		return "", err
 	}
 	sctx, cancel := context.WithCancel(t.manager.base)
 	cmd := exec.CommandContext(sctx, "/bin/sh", "-c", a.Command)

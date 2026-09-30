@@ -38,6 +38,12 @@ const bundleID = "com.umcode.app"
 
 func main() {
 	logger := newLogger()
+	computerUse, err := startComputerUseHost()
+	if err != nil {
+		logger.Error("start in-app Computer Use host", "err", err)
+	} else if computerUse != nil {
+		defer computerUse.Close()
+	}
 	eng, err := NewEngineManager(logger)
 	if err != nil {
 		log.Fatal(err)

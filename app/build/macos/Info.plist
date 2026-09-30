@@ -30,6 +30,6 @@
     <key>NSAppleEventsUsageDescription</key>
     <string>UMCode uses AppleScript to install the command-line tool.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>UMCode can capture an app window when you enable the Computer Use plugin for a project.</string>
+    <string>UMCode captures the selected app window so you can watch and verify Computer Use actions in the app.</string>
 </dict>
 </plist>
