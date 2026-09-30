@@ -237,9 +237,9 @@
   };
 
   async function setApprovalMode(e: Event) {
-    if (!threadProject) return;
+    if (!view.id) return;
     const mode = (e.currentTarget as HTMLSelectElement).value as 'normal' | 'auto_workspace' | 'auto_all';
-    await projects.update(threadProject.id, { approvalMode: mode });
+    await app.try('thread/setApprovalMode', { threadId: view.id, mode });
   }
 </script>
 
@@ -255,20 +255,21 @@
             <span class="font-mono truncate" title={threadProject.root}>{threadProject.root}</span>
             {#if view.thread?.workspaceMode === 'worktree'}<span class="shrink-0">isolated worktree</span>{:else}<span class="shrink-0">project folder</span>{/if}
             {#if threadProject.vcs?.branch}<span class="shrink-0">branch {threadProject.vcs.branch}</span>{/if}
-            <span class="shrink-0">{threadProject.tools.shell === false ? 'shell off' : 'shell on'}</span>
-            <span class="shrink-0">{threadProject.tools.network ? 'network on' : 'network off'}</span>
+            <span class="shrink-0">compute {threadProject.tools.compute ? 'on' : 'off'}</span>
+          {:else}
+            <span>No project</span><span>read-only workspace</span>
+          {/if}
+          {#if view.thread}
             <select
               class="shrink-0 bg-transparent border border-line rounded px-1 py-0.5 text-[10px] text-muted hover:text-ink-soft"
-              title="How much the agent can do here without asking first"
-              value={threadProject.approvalMode || 'normal'}
+              title="Approval and auto-approve behavior for this chat"
+              value={view.thread.approvalMode || 'normal'}
               onchange={setApprovalMode}
             >
               <option value="normal">{approvalLabel.normal}</option>
               <option value="auto_workspace">{approvalLabel.auto_workspace}</option>
               <option value="auto_all">{approvalLabel.auto_all}</option>
             </select>
-          {:else}
-            <span>No project</span><span>read-only workspace</span>
           {/if}
         </div>
       </div>
@@ -302,7 +303,7 @@
     </header>
   {/if}
 
-  {#if variant === 'main' && threadProject?.tools.computerUse}
+  {#if variant === 'main' && view.id}
     <ComputerUseView items={view.items} projectId={threadProject?.id} threadId={view.thread?.id} />
   {/if}
 
@@ -355,7 +356,7 @@
                   <h3 class="text-sm font-semibold text-ink">Waiting for your approval</h3>
                   <span class="ml-auto text-[10px] uppercase tracking-wide text-amber-warm">{approval.risk} risk</span>
                 </div>
-                <ApprovalCard {approval} chatContext projectName={threadProject?.name} />
+                <ApprovalCard {approval} chatContext />
               </section>
             {/each}
             {#if g.turn?.status === 'running'}

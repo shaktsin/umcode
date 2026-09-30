@@ -112,6 +112,24 @@ func (s *Server) routes() map[string]handler {
 		protocol.MethodThreadSetSettings: bind(func(ctx context.Context, c *conn, p protocol.ThreadSetSettingsParams) (any, error) {
 			return e.SetThreadSettings(ctx, p)
 		}),
+		protocol.MethodThreadSetApproval: bind(func(ctx context.Context, c *conn, p protocol.ThreadSetApprovalModeParams) (any, error) {
+			return e.SetThreadApprovalMode(ctx, p)
+		}),
+		protocol.MethodComputerUseGetDefault: bind(func(ctx context.Context, c *conn, _ struct{}) (any, error) {
+			return e.ComputerUseDefault(ctx), nil
+		}),
+		protocol.MethodComputerUseSetDefault: bind(func(ctx context.Context, c *conn, p protocol.ComputerUseDefaultParams) (any, error) {
+			return e.SetComputerUseDefault(ctx, p)
+		}),
+		protocol.MethodComputerUseAct: bind(func(ctx context.Context, c *conn, p protocol.ComputerUseActParams) (any, error) {
+			return e.ComputerUseAct(ctx, p)
+		}),
+		protocol.MethodComputerUseInspect: bind(func(ctx context.Context, c *conn, p protocol.ThreadIDParams) (any, error) {
+			return e.ComputerUseInspect(ctx, p.ThreadID)
+		}),
+		protocol.MethodComputerUseStop: bind(func(ctx context.Context, c *conn, p protocol.ThreadIDParams) (any, error) {
+			return okResult{true}, e.StopComputerUse(ctx, p.ThreadID)
+		}),
 		protocol.MethodThreadCompact: bind(func(ctx context.Context, c *conn, p protocol.ThreadIDParams) (any, error) {
 			return okResult{true}, e.CompactThread(ctx, p.ThreadID)
 		}),

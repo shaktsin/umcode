@@ -3,8 +3,8 @@
   import type { Approval, ProjectArtifactContent } from '$lib/types';
   import { prettyJSON } from '$lib/format';
 
-  let { approval, compact = false, chatContext = false, projectName }: {
-    approval: Approval; compact?: boolean; chatContext?: boolean; projectName?: string;
+  let { approval, compact = false, chatContext = false }: {
+    approval: Approval; compact?: boolean; chatContext?: boolean;
   } = $props();
   let showDetails = $state(false);
   let screenshotUrl = $state('');
@@ -13,8 +13,7 @@
   // scroll gets its own approval signature (see ApprovalSignature on the
   // backend), so a remembered decision here would silently rubber-stamp
   // every future action instead of the one specific one that was reviewed.
-  const canRemember = $derived(Boolean(projectName) && !approval.tool.startsWith('computer.'));
-  const rememberLabel = $derived(projectName || 'this project');
+  const canRemember = $derived(Boolean(approval.threadId) && !approval.tool.startsWith('computer.'));
   const rememberAction = $derived(approval.tool === 'shell.run' ? 'command' : 'action');
 
   // Approvals for a running Computer Use session carry a path to its latest
@@ -48,7 +47,7 @@
   <div class="w-full flex justify-end gap-2">
     <button class="btn-outline btn-sm" onclick={() => app.respondApproval(approval.id, false)}>Deny</button>
     {#if canRemember}
-      <button class="btn-outline btn-sm" title={`Always allow this exact ${rememberAction} in ${rememberLabel}`} onclick={() => app.respondApproval(approval.id, true, true)}>Always allow here</button>
+    <button class="btn-outline btn-sm" title={`Always allow this exact ${rememberAction} in this chat`} onclick={() => app.respondApproval(approval.id, true, true)}>Always allow in this chat</button>
     {/if}
     <button class="btn-primary btn-sm" onclick={() => app.respondApproval(approval.id, true)}>Allow once</button>
   </div>

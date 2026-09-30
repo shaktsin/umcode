@@ -29,7 +29,8 @@ func (f *fakeDriver) Inspect(_ context.Context, _ Target, screenshot string) (St
 		return State{}, err
 	}
 	return State{App: App{Name: "Fixture", BundleID: "com.example.fixture", PID: 42},
-		Window: Window{ID: 7, Width: 800, Height: 600}, Permission: "ready"}, nil
+		Window: Window{ID: 7, Width: 800, Height: 600}, Permission: "ready",
+		Controls: []Control{{ID: "w0/0", Role: "button", Label: "Continue", X: 10, Y: 20, Width: 30, Height: 10, Enabled: true}}}, nil
 }
 func (f *fakeDriver) Act(_ context.Context, _ Target, action Action) error {
 	f.actions = append(f.actions, action)
@@ -53,6 +54,9 @@ func TestPersistentComputerUseSession(t *testing.T) {
 	report, err = manager.Act(context.Background(), "thread-1", Action{Type: "fill", X: 10, Y: 20, Text: "hello"})
 	if err != nil || len(driver.actions) != 1 || report.State == nil {
 		t.Fatalf("act report=%+v actions=%+v err=%v", report, driver.actions, err)
+	}
+	if report.Status != "dispatched" {
+		t.Fatalf("action dispatch must not be reported as a verified pass: status=%q", report.Status)
 	}
 	manager.Stop("thread-1")
 	if _, err := manager.Inspect(context.Background(), "thread-1"); err == nil {
@@ -120,6 +124,35 @@ func TestComputerUseLastScreenshot(t *testing.T) {
 	}
 }
 
+func TestComputerUseRefreshReusesLiveArtifact(t *testing.T) {
+	manager := NewManagerWithDriver(context.Background(), &fakeDriver{})
+	root := t.TempDir()
+	if _, err := manager.Start(context.Background(), "thread-1", root, Target{Name: "Fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	start, err := manager.Inspect(context.Background(), "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := manager.Refresh(context.Background(), "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Refresh(context.Background(), "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Artifacts) != 1 || first.Artifacts[0].Path != second.Artifacts[0].Path || filepath.Base(first.Artifacts[0].Path) != "live.png" {
+		t.Fatalf("live refresh should replace one stable screenshot artifact: first=%+v second=%+v", first.Artifacts, second.Artifacts)
+	}
+	if second.ActionCount != 0 {
+		t.Fatalf("passive refresh unexpectedly counted as user input: %d", second.ActionCount)
+	}
+	if first.ObservationID != second.ObservationID || first.ObservationID != start.ObservationID {
+		t.Fatalf("passive live refresh should not invalidate the model observation: inspect=%q first=%q second=%q", start.ObservationID, first.ObservationID, second.ObservationID)
+	}
+}
+
 // realPNGDriver is like fakeDriver but writes an actual decodable PNG for
 // Inspect, so it can exercise markClick end to end.
 type realPNGDriver struct{ fakeDriver }
@@ -159,14 +192,17 @@ func TestComputerUseMarksClicks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := driver.actions[0]; got.X != 320 || got.Y != 225 {
+		t.Fatalf("driver should receive window-local points scaled exactly once: got (%.2f, %.2f), want (320, 225)", got.X, got.Y)
+	}
 	var marked *Artifact
 	for i := range report.Artifacts {
-		if report.Artifacts[i].Kind == "screenshot_click" {
+		if report.Artifacts[i].Kind == "screenshot_action" {
 			marked = &report.Artifacts[i]
 		}
 	}
 	if marked == nil {
-		t.Fatal("expected a screenshot_click artifact for a click action")
+		t.Fatal("expected a screenshot_action artifact for a click action")
 	}
 	if marked.Path == rawBefore {
 		t.Fatal("annotated screenshot should be a separate file from the raw one")
@@ -180,8 +216,54 @@ func TestComputerUseMarksClicks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, a := range report.Artifacts {
-		if a.Kind == "screenshot_click" {
+		if a.Kind == "screenshot_action" {
 			t.Fatal("scroll should not produce a click marker")
 		}
+	}
+}
+
+func TestComputerUseMoveAndStaleObservationGuard(t *testing.T) {
+	driver := &fakeDriver{}
+	manager := NewManagerWithDriver(context.Background(), driver)
+	start, err := manager.Start(context.Background(), "thread-move", t.TempDir(), Target{Name: "Fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start.ObservationID == "" {
+		t.Fatal("start screenshot should include an observation ID")
+	}
+	if _, err := manager.Act(context.Background(), "thread-move", Action{Type: "move", X: 21, Y: 32, ObservationID: start.ObservationID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := driver.actions[0]; got.Type != "move" || got.X != 21 || got.Y != 32 {
+		t.Fatalf("move action was not forwarded as requested: %+v", got)
+	}
+	if got := manager.ForThread("thread-move"); got == nil || got.LastScreenshotRel == "" {
+		t.Fatal("move should refresh the screenshot")
+	}
+	if _, err := manager.Act(context.Background(), "thread-move", Action{Type: "click", X: 10, Y: 10, ObservationID: start.ObservationID}); err == nil {
+		t.Fatal("action against an old observation should be rejected")
+	}
+}
+
+func TestComputerUseTargetsAccessibilityControlByID(t *testing.T) {
+	driver := &fakeDriver{}
+	manager := NewManagerWithDriver(context.Background(), driver)
+	start, err := manager.Start(context.Background(), "thread-ax", t.TempDir(), Target{Name: "Fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start.State == nil || len(start.State.Controls) != 1 || start.State.Controls[0].Label != "Continue" {
+		t.Fatalf("expected structured accessibility controls: %+v", start.State)
+	}
+	actionReport, err := manager.Act(context.Background(), "thread-ax", Action{Type: "click", ElementID: "w0/0", ObservationID: start.ObservationID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := driver.actions[0]; got.ElementID != "w0/0" || got.X != 25 || got.Y != 25 {
+		t.Fatalf("expected exact element target and its center, got %+v", got)
+	}
+	if _, err := manager.Act(context.Background(), "thread-ax", Action{Type: "click", ElementID: "w0/stale", ObservationID: actionReport.ObservationID}); err == nil {
+		t.Fatal("unknown accessibility control id should be rejected")
 	}
 }

@@ -3,9 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/shaktsin/umcode/internal/computeruse"
@@ -15,16 +13,13 @@ type computerList struct{ manager *computeruse.Manager }
 
 func (*computerList) Name() string { return "computer.list" }
 func (*computerList) Description() string {
-	return "List visible desktop applications available to the opt-in Computer Use plugin. Use this before selecting an application by name or bundle ID."
+	return "List visible desktop applications available for Computer Use. Use this before selecting an application by name or bundle ID."
 }
 func (*computerList) Schema() json.RawMessage { return schema(`{"type":"object","properties":{}}`) }
 func (*computerList) Assess(json.RawMessage) (Risk, string) {
 	return RiskGreen, "List visible desktop applications"
 }
 func (t *computerList) Call(ctx context.Context, _ json.RawMessage) (string, error) {
-	if err := requireComputerUse(ctx); err != nil {
-		return "", err
-	}
 	r, err := t.manager.List(ctx)
 	return encodeComputerReport(r), err
 }
@@ -33,7 +28,7 @@ type computerStart struct{ manager *computeruse.Manager }
 
 func (*computerStart) Name() string { return "computer.start" }
 func (*computerStart) Description() string {
-	return "Open or select a macOS application for this task, optionally open a URL in that application, and return a full-resolution screenshot. The session persists across later computer.inspect and computer.act calls. The project may restrict this to an allowed-apps list; an unlisted app is refused."
+	return "Open or select a macOS application for this task, optionally open a URL in that application, and return a full-resolution screenshot. Starting control requires approval in Ask every time mode; later routine interactions do not. The session persists across later computer.inspect and computer.act calls."
 }
 func (*computerStart) Schema() json.RawMessage {
 	return schema(`{"type":"object","properties":{"app_name":{"type":"string"},"bundle_id":{"type":"string"},"app_path":{"type":"string"},"url":{"type":"string"}},"additionalProperties":false}`)
@@ -47,7 +42,7 @@ func (*computerStart) Assess(args json.RawMessage) (Risk, string) {
 	}
 	_ = json.Unmarshal(args, &a)
 	target := firstNonBlank(a.AppName, a.BundleID, a.AppPath, a.URL, "desktop application")
-	return RiskYellow, "Open Computer Use session for " + target
+	return RiskRed, "Start Computer Use session for " + target
 }
 func (t *computerStart) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	s, err := requireComputerScope(ctx)
@@ -63,43 +58,15 @@ func (t *computerStart) Call(ctx context.Context, args json.RawMessage) (string,
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	if !computerUseAppAllowed(s, a.AppName, a.BundleID, a.AppPath) {
-		return "", fmt.Errorf("%q is not on this project's Computer Use allowed-apps list; add it in project settings", firstNonBlank(a.AppName, a.BundleID, a.AppPath))
-	}
 	r, err := t.manager.Start(ctx, s.ThreadID, s.Root, computeruse.Target{Name: a.AppName, BundleID: a.BundleID, Path: a.AppPath, URL: a.URL})
 	return encodeComputerReport(r), err
-}
-
-// computerUseAppAllowed checks a requested target against the project's
-// Computer Use allowlist. An empty list means every app is allowed, matching
-// the behavior before this list existed.
-func computerUseAppAllowed(s *Scope, appName, bundleID, appPath string) bool {
-	if len(s.ComputerUseApps) == 0 {
-		return true
-	}
-	candidates := []string{appName, bundleID, appPath}
-	if appPath != "" {
-		candidates = append(candidates, filepath.Base(appPath))
-	}
-	for _, allowed := range s.ComputerUseApps {
-		allowed = strings.TrimSpace(allowed)
-		if allowed == "" {
-			continue
-		}
-		for _, c := range candidates {
-			if c != "" && strings.EqualFold(strings.TrimSpace(c), allowed) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 type computerInspect struct{ manager *computeruse.Manager }
 
 func (*computerInspect) Name() string { return "computer.inspect" }
 func (*computerInspect) Description() string {
-	return "Capture the selected application's current window at original resolution and return its window metadata and a bounded accessibility summary. Inspect before acting and after short groups of actions."
+	return "Capture the selected application's current window at original resolution and return its window metadata plus redacted accessibility controls. Prefer an enabled control's exact id with computer.act when available; bounds are screenshot-pixel coordinates. Fall back to vision-coordinates for inaccessible/custom UI. Inspect before acting and verify after each action."
 }
 func (*computerInspect) Schema() json.RawMessage { return schema(`{"type":"object","properties":{}}`) }
 func (*computerInspect) Assess(json.RawMessage) (Risk, string) {
@@ -118,25 +85,47 @@ type computerAct struct{ manager *computeruse.Manager }
 
 func (*computerAct) Name() string { return "computer.act" }
 func (*computerAct) Description() string {
-	return "Perform one user-like action in the selected desktop app, then return a fresh screenshot. Coordinates are relative to the latest screenshot. Supported actions: click, double_click, fill, type, key, scroll. Use fill for form fields."
+	return "Dispatch one user-like action in the selected desktop app, then return a fresh screenshot. Routine navigation and editing do not require individual approval after the session starts. Consequential actions (submitting/sending, purchases, deletion, security changes, or entering credentials/secrets) require approval in Ask every time mode. Include a short target_description without field values or secrets. Prefer element_id copied exactly from the latest accessibility controls; otherwise use x/y screenshot pixels. For pointer actions, copy observation_id from the screenshot report. Use move first when helpful to position the visible pointer, then click separately. Inspect the returned screenshot and verify the intended state change. Supported actions: move, click, double_click, fill, type, key, scroll."
 }
 func (*computerAct) Schema() json.RawMessage {
-	return schema(`{"type":"object","properties":{"action":{"type":"string","enum":["click","double_click","fill","type","key","scroll"]},"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"text":{"type":"string"},"key":{"type":"string"},"delta":{"type":"integer","minimum":-4000,"maximum":4000}},"required":["action"],"additionalProperties":false}`)
+	return schema(`{"type":"object","properties":{"action":{"type":"string","enum":["move","click","double_click","fill","type","key","scroll"]},"element_id":{"type":"string","description":"Exact control id from the latest computer.inspect accessibility controls."},"target_description":{"type":"string","description":"Short intended target or outcome; never include form values or secrets."},"x":{"type":"number","minimum":0},"y":{"type":"number","minimum":0},"observation_id":{"type":"string","description":"The observation_id from the screenshot currently being used to choose coordinates."},"text":{"type":"string"},"key":{"type":"string"},"delta":{"type":"integer","minimum":-4000,"maximum":4000}},"required":["action"],"additionalProperties":false}`)
 }
 func (*computerAct) Assess(args json.RawMessage) (Risk, string) {
 	var a struct {
-		Action string `json:"action"`
-		Text   string `json:"text"`
-		Key    string `json:"key"`
+		Action            string `json:"action"`
+		Key               string `json:"key"`
+		TargetDescription string `json:"target_description"`
 	}
 	_ = json.Unmarshal(args, &a)
-	detail := a.Action
+	detail := strings.TrimSpace(a.Action)
 	if a.Action == "key" {
-		detail += " " + a.Key
+		detail += " " + strings.TrimSpace(a.Key)
 	}
-	// Host UI mutations always require a review in normal mode. A click or
-	// keystroke may submit data even when its visual target looked harmless.
-	return RiskRed, "Computer Use " + strings.TrimSpace(detail)
+	if computerActionIsConsequential(a.Action, a.Key, a.TargetDescription) {
+		return RiskRed, "Computer Use " + detail + " — " + firstNonBlank(a.TargetDescription, "consequential app action")
+	}
+	// Pointer movement, scrolling, navigation, and ordinary edits are part of
+	// the already-approved Computer Use session. They remain visible in the
+	// activity stream but do not each interrupt the user with an approval card.
+	return RiskYellow, "Computer Use " + detail + " — " + firstNonBlank(a.TargetDescription, "routine app interaction")
+}
+
+func computerActionIsConsequential(action, key, target string) bool {
+	// Never echo or inspect the actual value being typed; classify from the
+	// action and target metadata only, which should not contain field values.
+	combined := strings.ToLower(strings.Join([]string{action, key, target}, " "))
+	for _, word := range []string{
+		"password", "passcode", "credential", "api key", "access token", "secret", "private key",
+		"submit", "send", "publish", "purchase", "checkout", "pay now", "place order", "delete", "remove permanently",
+		"revoke", "transfer", "security setting", "permission", "two-factor", "2fa", "factory reset",
+	} {
+		if strings.Contains(combined, word) {
+			return true
+		}
+	}
+	// Return/Enter often submits a form; keep this boundary explicit even if
+	// the target is a custom control that accessibility cannot name.
+	return action == "key" && (strings.EqualFold(key, "return") || strings.EqualFold(key, "enter"))
 }
 func (t *computerAct) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	s, err := requireComputerScope(ctx)
@@ -150,23 +139,29 @@ func (t *computerAct) Call(ctx context.Context, args json.RawMessage) (string, e
 	// on Action's zero-value Type and gets rejected as "unsupported computer
 	// action """.
 	var parsed struct {
-		Action string  `json:"action"`
-		X      float64 `json:"x"`
-		Y      float64 `json:"y"`
-		Text   string  `json:"text"`
-		Key    string  `json:"key"`
-		Delta  int     `json:"delta"`
+		Action            string  `json:"action"`
+		X                 float64 `json:"x"`
+		Y                 float64 `json:"y"`
+		Text              string  `json:"text"`
+		Key               string  `json:"key"`
+		Delta             int     `json:"delta"`
+		ObservationID     string  `json:"observation_id"`
+		ElementID         string  `json:"element_id"`
+		TargetDescription string  `json:"target_description"`
 	}
 	if err := json.Unmarshal(args, &parsed); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 	a := computeruse.Action{
-		Type:  parsed.Action,
-		X:     parsed.X,
-		Y:     parsed.Y,
-		Text:  parsed.Text,
-		Key:   parsed.Key,
-		Delta: parsed.Delta,
+		Type:              parsed.Action,
+		X:                 parsed.X,
+		Y:                 parsed.Y,
+		Text:              parsed.Text,
+		Key:               parsed.Key,
+		Delta:             parsed.Delta,
+		ObservationID:     parsed.ObservationID,
+		ElementID:         parsed.ElementID,
+		TargetDescription: parsed.TargetDescription,
 	}
 	r, err := t.manager.Act(ctx, s.ThreadID, a)
 	return encodeComputerReport(r), err
@@ -191,21 +186,10 @@ func (t *computerStop) Call(ctx context.Context, _ json.RawMessage) (string, err
 	return `{"status":"stopped","framework":"umcode-computer-use","artifacts":[]}`, nil
 }
 
-func requireComputerUse(ctx context.Context) error {
-	s := ScopeFrom(ctx)
-	if s == nil || !s.AllowComputerUse {
-		return errors.New("Computer Use is disabled for this project")
-	}
-	return nil
-}
-
 func requireComputerScope(ctx context.Context) (*Scope, error) {
 	s := ScopeFrom(ctx)
 	if s == nil || s.Root == "" || s.ThreadID == "" {
 		return nil, ErrNoProject
-	}
-	if !s.AllowComputerUse {
-		return nil, errors.New("Computer Use is disabled for this project")
 	}
 	return s, nil
 }

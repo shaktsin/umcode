@@ -1,6 +1,6 @@
 // Package computeruse owns persistent, opt-in desktop automation sessions.
-// The engine never synthesizes host input itself; a separately bundled helper
-// owns macOS Screen Recording and Accessibility permissions.
+// On macOS, native capture and input are brokered by the UMCode desktop app so
+// the user grants permissions to one first-party app rather than a helper.
 package computeruse
 
 import (
@@ -47,10 +47,25 @@ type Target struct {
 }
 
 type State struct {
-	App        App      `json:"app"`
-	Window     Window   `json:"window"`
-	Permission string   `json:"permission,omitempty"`
-	Controls   []string `json:"controls,omitempty"`
+	App        App       `json:"app"`
+	Window     Window    `json:"window"`
+	Permission string    `json:"permission,omitempty"`
+	Controls   []Control `json:"controls,omitempty"`
+}
+
+// Control is a redacted accessibility-tree node. Bounds use screenshot-pixel
+// coordinates, matching the coordinate space accepted by computer.act.
+type Control struct {
+	ID         string  `json:"id"`
+	Role       string  `json:"role,omitempty"`
+	Label      string  `json:"label,omitempty"`
+	Identifier string  `json:"identifier,omitempty"`
+	X          float64 `json:"x,omitempty"`
+	Y          float64 `json:"y,omitempty"`
+	Width      float64 `json:"width,omitempty"`
+	Height     float64 `json:"height,omitempty"`
+	Enabled    bool    `json:"enabled,omitempty"`
+	Focused    bool    `json:"focused,omitempty"`
 }
 
 type Artifact struct {
@@ -61,24 +76,43 @@ type Artifact struct {
 }
 
 type Report struct {
-	Status      string     `json:"status"`
-	Framework   string     `json:"framework"`
-	SessionID   string     `json:"session_id,omitempty"`
-	State       *State     `json:"state,omitempty"`
-	Apps        []App      `json:"apps,omitempty"`
-	Artifacts   []Artifact `json:"artifacts"`
-	Reason      string     `json:"reason,omitempty"`
-	DurationMS  int64      `json:"duration_ms,omitempty"`
-	ActionCount int        `json:"action_count,omitempty"`
+	Status        string          `json:"status"`
+	Framework     string          `json:"framework"`
+	SessionID     string          `json:"session_id,omitempty"`
+	State         *State          `json:"state,omitempty"`
+	Apps          []App           `json:"apps,omitempty"`
+	Artifacts     []Artifact      `json:"artifacts"`
+	Reason        string          `json:"reason,omitempty"`
+	DurationMS    int64           `json:"duration_ms,omitempty"`
+	ActionCount   int             `json:"action_count,omitempty"`
+	ObservationID string          `json:"observation_id,omitempty"`
+	LastAction    *ActionEvidence `json:"last_action,omitempty"`
+}
+
+// ActionEvidence pairs the input with the exact observation returned to the
+// model. It records dispatch, not success; the next observation must verify it.
+type ActionEvidence struct {
+	Type              string  `json:"type"`
+	TargetDescription string  `json:"target_description,omitempty"`
+	ElementID         string  `json:"element_id,omitempty"`
+	X                 float64 `json:"x,omitempty"`
+	Y                 float64 `json:"y,omitempty"`
+	ScreenshotWidth   int     `json:"screenshot_width,omitempty"`
+	ScreenshotHeight  int     `json:"screenshot_height,omitempty"`
+	ObservationID     string  `json:"observation_id,omitempty"`
+	Result            string  `json:"result"`
 }
 
 type Action struct {
-	Type  string  `json:"type"`
-	X     float64 `json:"x,omitempty"`
-	Y     float64 `json:"y,omitempty"`
-	Text  string  `json:"text,omitempty"`
-	Key   string  `json:"key,omitempty"`
-	Delta int     `json:"delta,omitempty"`
+	Type              string  `json:"type"`
+	X                 float64 `json:"x,omitempty"`
+	Y                 float64 `json:"y,omitempty"`
+	Text              string  `json:"text,omitempty"`
+	Key               string  `json:"key,omitempty"`
+	Delta             int     `json:"delta,omitempty"`
+	ObservationID     string  `json:"observation_id,omitempty"`
+	ElementID         string  `json:"element_id,omitempty"`
+	TargetDescription string  `json:"target_description,omitempty"`
 }
 
 type driver interface {
@@ -111,7 +145,8 @@ type Session struct {
 	// ActionCount is how many Act calls have run in this session. Surfaced on
 	// every report as a lightweight, always-on audit trail of how much this
 	// session has actually done, independent of the approval log.
-	ActionCount int
+	ActionCount      int
+	ObservationCount uint64
 }
 
 func NewManager(ctx context.Context) *Manager {
@@ -140,7 +175,7 @@ func (m *Manager) Start(ctx context.Context, threadID, root string, target Targe
 	// turn), reuse it instead of relaunching: relaunching re-activates the
 	// app and steals focus from whatever the person switched to since.
 	if existing := m.ForThread(threadID); existing != nil && target.URL == "" && sameApp(existing.Target, target) {
-		report, err := m.inspect(ctx, existing, fmt.Sprintf("start-%d.png", time.Now().UnixMilli()))
+		report, err := m.inspect(ctx, existing, fmt.Sprintf("start-%d.png", time.Now().UnixMilli()), true)
 		if err != nil {
 			return Report{}, err
 		}
@@ -157,7 +192,7 @@ func (m *Manager) Start(ctx context.Context, threadID, root string, target Targe
 	m.mu.Lock()
 	m.sessions[threadID] = s
 	m.mu.Unlock()
-	report, err := m.inspect(ctx, s, "initial.png")
+	report, err := m.inspect(ctx, s, "initial.png", true)
 	if err != nil {
 		m.Stop(threadID)
 		return Report{}, err
@@ -171,7 +206,20 @@ func (m *Manager) Inspect(ctx context.Context, threadID string) (Report, error) 
 	if s == nil {
 		return Report{}, errors.New("no Computer Use session is running for this task")
 	}
-	return m.inspect(ctx, s, fmt.Sprintf("inspect-%d.png", time.Now().UnixMilli()))
+	return m.inspect(ctx, s, fmt.Sprintf("inspect-%d.png", time.Now().UnixMilli()), true)
+}
+
+// Refresh captures the current target window into one stable artifact path for
+// the embedded Computer Use workspace. Unlike agent inspect calls, repeated UI
+// refreshes replace this rolling screenshot instead of growing the artifact set.
+func (m *Manager) Refresh(ctx context.Context, threadID string) (Report, error) {
+	s := m.ForThread(threadID)
+	if s == nil {
+		return Report{}, errors.New("no Computer Use session is running for this task")
+	}
+	// Passive live-view polling must not invalidate coordinates the model just
+	// selected from its own observation while it is reasoning about an action.
+	return m.inspect(ctx, s, "live.png", false)
 }
 
 func (m *Manager) Act(ctx context.Context, threadID string, action Action) (Report, error) {
@@ -180,12 +228,12 @@ func (m *Manager) Act(ctx context.Context, threadID string, action Action) (Repo
 		return Report{}, errors.New("no Computer Use session is running for this task")
 	}
 	switch action.Type {
-	case "click", "double_click":
-		if action.X < 0 || action.Y < 0 {
+	case "move", "click", "double_click":
+		if action.ElementID == "" && (action.X < 0 || action.Y < 0) {
 			return Report{}, errors.New("click coordinates must be non-negative")
 		}
 	case "fill":
-		if action.X < 0 || action.Y < 0 || action.Text == "" {
+		if (action.ElementID == "" && (action.X < 0 || action.Y < 0)) || action.Text == "" {
 			return Report{}, errors.New("fill requires coordinates and text")
 		}
 	case "type":
@@ -208,33 +256,79 @@ func (m *Manager) Act(ctx context.Context, threadID string, action Action) (Repo
 	// current window's coordinate space before sending input. clickX/clickY
 	// keep the original screenshot-pixel coordinates for the click marker
 	// drawn below, independent of that rescaling.
-	pointAction := action.Type == "click" || action.Type == "double_click" || action.Type == "fill"
+	pointAction := action.Type == "move" || action.Type == "click" || action.Type == "double_click" || action.Type == "fill"
+	visualPoint := pointAction
+	if action.ObservationID != "" && action.ObservationID != observationID(s) {
+		return Report{}, errors.New("Computer Use action used a stale screenshot; inspect the target app again before acting")
+	}
+	sourceObservationID := observationID(s)
+	sourceWidth, sourceHeight := s.Last.Window.PixelWidth, s.Last.Window.PixelHeight
+	if action.ElementID != "" {
+		control, ok := findControl(s.Last.Controls, action.ElementID)
+		if !ok {
+			return Report{}, fmt.Errorf("accessibility control %q is not in the latest observation; inspect and re-target", action.ElementID)
+		}
+		if !control.Enabled {
+			return Report{}, fmt.Errorf("accessibility control %q is disabled", action.ElementID)
+		}
+		if control.Width > 0 && control.Height > 0 {
+			action.X, action.Y = control.X+control.Width/2, control.Y+control.Height/2
+			if sourceWidth > 0 && action.X >= float64(sourceWidth) {
+				action.X = float64(sourceWidth - 1)
+			}
+			if sourceHeight > 0 && action.Y >= float64(sourceHeight) {
+				action.Y = float64(sourceHeight - 1)
+			}
+			if action.X < 0 {
+				action.X = 0
+			}
+			if action.Y < 0 {
+				action.Y = 0
+			}
+		} else {
+			visualPoint = false
+		}
+	}
 	clickX, clickY := action.X, action.Y
 	if pointAction && s.Last.Window.PixelWidth > 0 && s.Last.Window.PixelHeight > 0 {
 		action.X *= s.Last.Window.Width / float64(s.Last.Window.PixelWidth)
 		action.Y *= s.Last.Window.Height / float64(s.Last.Window.PixelHeight)
 	}
-	// No focus juggling here: the helper (native/computer-use-helper) posts
-	// this action straight to the target process's window via
-	// CGEventPostToPid, which does not require it to be frontmost or even
-	// on top of other windows. See that package's README for the technique.
+	// The desktop broker targets the selected app and refreshes its in-app view
+	// after every action; the engine itself does not synthesize host input.
 	if err := m.driver.Act(ctx, s.Target, action); err != nil {
 		return Report{}, err
 	}
 	s.ActionCount++
-	report, err := m.inspect(ctx, s, fmt.Sprintf("action-%d.png", time.Now().UnixMilli()))
+	report, err := m.inspect(ctx, s, fmt.Sprintf("action-%d.png", time.Now().UnixMilli()), true)
 	if err != nil {
 		return Report{}, err
 	}
-	if pointAction {
+	// The native event being dispatched is not proof that the target app
+	// accepted it or changed state. Keep this distinct from verification; the
+	// agent must inspect the returned screenshot before reporting an outcome.
+	report.Status = "dispatched"
+	if visualPoint {
 		if rel, aerr := m.markClick(s, clickX, clickY); aerr == nil {
-			report.Artifacts = append(report.Artifacts, Artifact{Path: rel, Kind: "screenshot_click", MimeType: "image/png"})
+			report.Artifacts = append(report.Artifacts, Artifact{Path: rel, Kind: "screenshot_action", MimeType: "image/png"})
 		}
 	}
+	report.LastAction = &ActionEvidence{Type: action.Type, TargetDescription: action.TargetDescription, ElementID: action.ElementID, X: clickX, Y: clickY,
+		ScreenshotWidth: sourceWidth, ScreenshotHeight: sourceHeight,
+		ObservationID: sourceObservationID, Result: "dispatched; verify against this fresh screenshot"}
 	return report, nil
 }
 
-func (m *Manager) inspect(ctx context.Context, s *Session, name string) (Report, error) {
+func findControl(controls []Control, id string) (Control, bool) {
+	for _, control := range controls {
+		if control.ID == id {
+			return control, true
+		}
+	}
+	return Control{}, false
+}
+
+func (m *Manager) inspect(ctx context.Context, s *Session, name string, advanceObservation bool) (Report, error) {
 	if err := os.MkdirAll(s.ArtifactDir, 0o700); err != nil {
 		return Report{}, err
 	}
@@ -244,6 +338,9 @@ func (m *Manager) inspect(ctx context.Context, s *Session, name string) (Report,
 		return Report{}, err
 	}
 	s.Last = state
+	if advanceObservation {
+		s.ObservationCount++
+	}
 	st, err := os.Stat(abs)
 	if err != nil {
 		return Report{}, fmt.Errorf("computer use screenshot: %w", err)
@@ -257,15 +354,19 @@ func (m *Manager) inspect(ctx context.Context, s *Session, name string) (Report,
 	// No hide/show step here either: the helper captures this screenshot
 	// with CGWindowListCreateImage, which works on an occluded or
 	// non-frontmost window just as well as a visible one.
-	return Report{Status: "passed", Framework: "umcode-computer-use", SessionID: s.ID, State: &state,
+	return Report{Status: "passed", Framework: "umcode-computer-use", SessionID: s.ID, State: &state, ObservationID: observationID(s),
 		Artifacts:   []Artifact{{Path: relSlash, Kind: "screenshot", MimeType: "image/png", Bytes: st.Size()}},
 		ActionCount: s.ActionCount}, nil
 }
 
-// markClick draws a small ring-and-crosshair marker onto a copy of the
-// session's latest screenshot at (x, y) — screenshot-pixel coordinates, the
-// same space the model targets — so a person watching Computer Use live can
-// see exactly what the last click landed on. Best-effort: a screenshot that
+func observationID(s *Session) string {
+	return fmt.Sprintf("%s-%d", s.ID, s.ObservationCount)
+}
+
+// markClick draws a pointer marker onto a copy of the session's latest
+// screenshot at (x, y) — screenshot-pixel coordinates, the same space the
+// model targets — so both the model and a person watching Computer Use can
+// inspect where the action was aimed. Best-effort: a screenshot that
 // isn't a decodable PNG (as in tests, or a driver hiccup) just means no
 // marker, not a failed action.
 func (m *Manager) markClick(s *Session, x, y float64) (string, error) {
@@ -303,12 +404,12 @@ func (m *Manager) markClick(s *Session, x, y float64) (string, error) {
 	return relSlash, nil
 }
 
-// drawClickMarker paints a white-and-red ring with a crosshair centered on
+// drawClickMarker paints a prominent white-and-blue ring with a crosshair centered on
 // (x, y), clipped to the image bounds.
 func drawClickMarker(img *image.RGBA, x, y float64) {
 	cx, cy := int(x), int(y)
 	b := img.Bounds()
-	red := color.RGBA{237, 63, 63, 255}
+	blue := color.RGBA{56, 189, 248, 255}
 	white := color.RGBA{255, 255, 255, 255}
 	ring := func(radius, thickness int, c color.RGBA) {
 		for dy := -radius; dy <= radius; dy++ {
@@ -345,9 +446,9 @@ func drawClickMarker(img *image.RGBA, x, y float64) {
 			}
 		}
 	}
-	ring(14, 3, white)
-	ring(11, 3, red)
-	const armInner, armOuter = 4, 10
+	ring(30, 5, white)
+	ring(25, 4, blue)
+	const armInner, armOuter = 7, 26
 	line(cx-armOuter, cy, cx-armInner, cy, white)
 	line(cx+armInner, cy, cx+armOuter, cy, white)
 	line(cx, cy-armOuter, cx, cy-armInner, white)

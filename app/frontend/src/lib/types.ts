@@ -2,11 +2,9 @@
 
 export type Complexity = '' | 'auto' | 'quick' | 'standard' | 'deep';
 
-// Per-project auto-approve tier. '' behaves like 'normal': every red-risk
-// action always asks. 'auto_workspace' auto-approves red actions confined to
-// the project's sandboxed workspace (shell, file edits, exec sessions,
-// browser verification) but never Computer Use. 'auto_all' also auto-approves
-// Computer Use, which drives the real desktop outside the sandbox.
+// Per-chat auto-approve tier. 'normal' asks for red-risk actions;
+// 'auto_workspace' auto-approves workspace actions; 'auto_all' also includes
+// Computer Use actions in the user's desktop apps.
 export type ApprovalMode = '' | 'normal' | 'auto_workspace' | 'auto_all';
 
 export interface ModelSelection {
@@ -27,12 +25,9 @@ export interface UsageTotals {
 }
 
 export interface ProjectTools {
-  shell?: boolean;
   network?: boolean;
   compute?: boolean;
-	visualQa?: boolean;
-	computerUse?: boolean;
-	computerUseApps?: string[];
+  computerUse?: boolean;
   computeVcpus?: number;
   computeMemoryMiB?: number;
   computeDiskMiB?: number;
@@ -56,7 +51,6 @@ export interface Project {
   settings: ModelSelection;
   tools: ProjectTools;
   archived?: boolean;
-  approvalMode?: ApprovalMode;
   missing?: boolean;
   vcs?: VCSInfo;
   threads: number;
@@ -121,6 +115,7 @@ export interface Thread {
   pinned: boolean;
   archived: boolean;
   settings: ModelSelection;
+  approvalMode?: ApprovalMode;
   forkedFrom?: string;
   usage: UsageTotals;
   createdAt: string;

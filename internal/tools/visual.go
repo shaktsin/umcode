@@ -17,7 +17,7 @@ type visualStart struct {
 
 func (*visualStart) Name() string { return "visual.start" }
 func (*visualStart) Description() string {
-	return "Open this task's live preview in UMCode's opt-in isolated Chromium, inspect the rendered UI as a black-box user, and capture an initial screenshot plus console/network diagnostics. Use after frontend changes when Visual QA is enabled."
+	return "Open this task's live preview in UMCode's isolated Chromium, inspect the rendered UI as a black-box user, and capture an initial screenshot plus console/network diagnostics. Use after frontend changes."
 }
 func (*visualStart) Schema() json.RawMessage {
 	return schema(`{"type":"object","properties":{"preview_id":{"type":"string"}},"required":["preview_id"]}`)
@@ -35,9 +35,6 @@ func (t *visualStart) Call(ctx context.Context, args json.RawMessage) (string, e
 	s := ScopeFrom(ctx)
 	if s == nil || s.Root == "" {
 		return "", ErrNoProject
-	}
-	if !s.AllowVisualQA {
-		return visualNotRun("Visual QA is disabled for this project"), nil
 	}
 	p, err := t.previews.GetFor(a.PreviewID, s.ThreadID)
 	if err != nil {
@@ -71,8 +68,8 @@ func (t *visualInspect) Call(ctx context.Context, args json.RawMessage) (string,
 		return "", err
 	}
 	s := ScopeFrom(ctx)
-	if s == nil || !s.AllowVisualQA {
-		return visualNotRun("Visual QA is disabled for this project"), nil
+	if s == nil {
+		return "", ErrNoProject
 	}
 	session := t.manager.ForThread(s.ThreadID)
 	if session == nil {
@@ -120,8 +117,8 @@ func (t *visualAct) Call(ctx context.Context, args json.RawMessage) (string, err
 		return "", err
 	}
 	s := ScopeFrom(ctx)
-	if s == nil || !s.AllowVisualQA {
-		return visualNotRun("Visual QA is disabled for this project"), nil
+	if s == nil {
+		return "", ErrNoProject
 	}
 	session := t.manager.ForThread(s.ThreadID)
 	if session == nil {

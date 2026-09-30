@@ -18,26 +18,37 @@ type Scope struct {
 	ProjectID        string
 	ProjectName      string
 	Root             string
-	AllowShell       bool
 	AllowNet         bool
 	UseCompute       bool
-	AllowVisualQA    bool
 	AllowComputerUse bool
-	// ApprovalMode is this project's auto-approve tier ("", "normal",
-	// "auto_workspace", or "auto_all"); see policy.Gate.Check.
-	ApprovalMode string
-	// ComputerUseApps restricts Computer Use to these apps (case-insensitive
-	// match against app_name, bundle_id, or app_path's basename). Empty means
-	// unrestricted.
-	ComputerUseApps  []string
 	ComputeVCPUs     int
 	ComputeMemoryMiB int
 	ComputeDiskMiB   int
+	// ApprovalMode is the calling chat's auto-approve tier ("", "normal",
+	// "auto_workspace" or "auto_all" — see internal/policy.Gate). A project
+	// with no microVM has no UI toggle for network access (ProjectSettings
+	// only shows "Allow this microVM to use the network" once the microVM
+	// itself is on), so on a host without a working sandbox (no
+	// sandbox-exec) there would otherwise be no way to run shell/exec at
+	// all. Once the chat has already opted into auto_workspace or auto_all,
+	// that stands in for the missing toggle: see the trustedAutonomy checks
+	// in builtin.go and execsession.go.
+	ApprovalMode string
 	// Progress streams command output while a tool is running.
 	Progress func(output string)
 	// Record is called after a successful write with the file's previous
 	// content (nil when it did not exist) or deleted=true.
 	Record func(ctx context.Context, abs string, before *string, deleted bool)
+}
+
+// TrustedAutonomy reports whether the chat has opted into an auto-approve
+// tier that also stands in for the missing network-access toggle in the
+// host-shell/exec-session sandbox gate (see ApprovalMode's doc comment
+// above). These are internal/policy's ApprovalAutoWorkspace/ApprovalAutoAll
+// tier names, duplicated as literals here rather than imported: policy
+// already imports this package, so importing back would cycle.
+func (s *Scope) TrustedAutonomy() bool {
+	return s.ApprovalMode == "auto_workspace" || s.ApprovalMode == "auto_all"
 }
 
 type scopeKey struct{}
@@ -64,6 +75,30 @@ func (s *Scope) Resolve(rel string) (string, error) {
 		return "", fmt.Errorf("%s (project %s)", err, s.ProjectName)
 	}
 	return abs, err
+}
+
+// CommandDir resolves a command's working directory and checks that it exists
+// before process launch. An invalid cwd can otherwise surface as a misleading
+// "fork/exec <sandbox launcher>: no such file or directory" error.
+func (s *Scope) CommandDir(workspace string) (string, error) {
+	dir, err := s.Resolve(workspace)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if strings.TrimSpace(workspace) == "" {
+				return "", fmt.Errorf("project folder %q does not exist", s.Root)
+			}
+			return "", fmt.Errorf("workspace %q does not exist in project %q; omit workspace to run in the project root", workspace, s.ProjectName)
+		}
+		return "", fmt.Errorf("cannot access workspace %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("workspace %q is not a directory", dir)
+	}
+	return dir, nil
 }
 
 // Rel is the project-relative, slash-separated form of abs.

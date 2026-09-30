@@ -117,7 +117,6 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	dir := t.TempDir()
 	t.Setenv("UMCODE_HOME", dir)
 	cfg := config.Default(dir)
-	cfg.Tools.ShellEnabled = true
 	cfg.Runtime.SocketPath = filepath.Join(dir, "e.sock")
 	// The project folder lives outside the engine's own data folder, as it does in real use.
 	wsDir := t.TempDir()
@@ -172,7 +171,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 		}
 	}
 	h.call(protocol.MethodProjectCreate, protocol.ProjectCreateParams{Root: h.ws, Name: "demo",
-		Tools: protocol.ProjectTools{Shell: boolPtr(true)}}, &h.proj)
+		Tools: protocol.ProjectTools{}}, &h.proj)
 	return h
 }
 
@@ -244,7 +243,7 @@ func (h *harness) addKey(provider, label, secret string) protocol.Credential {
 func TestChatWithApprovedShellTool(t *testing.T) {
 	h := newHarness(t, nil)
 	h.call(protocol.MethodProjectUpdate, protocol.ProjectUpdateParams{ProjectID: h.proj.ID,
-		Tools: &protocol.ProjectTools{Shell: boolPtr(true), Network: boolPtr(true)}}, &h.proj)
+		Tools: &protocol.ProjectTools{Network: boolPtr(true)}}, &h.proj)
 	key := h.addKey("claude", "personal", "sk-test-abcd1234")
 	if key.Last4 != "1234" || !key.IsDefault {
 		t.Fatalf("key = %+v", key)
@@ -356,7 +355,7 @@ func TestDeniedToolAndHistory(t *testing.T) {
 func TestAgentFixLoop(t *testing.T) {
 	h := newHarness(t, nil)
 	h.call(protocol.MethodProjectUpdate, protocol.ProjectUpdateParams{ProjectID: h.proj.ID,
-		Tools: &protocol.ProjectTools{Shell: boolPtr(true), Network: boolPtr(true)}}, &h.proj)
+		Tools: &protocol.ProjectTools{Network: boolPtr(true)}}, &h.proj)
 	h.addKey("claude", "verification", "sk-verify")
 	h.fake.push(
 		toolReply("verification__plan", `{}`),

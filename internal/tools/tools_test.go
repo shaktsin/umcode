@@ -42,18 +42,16 @@ func TestWorkspaceACLAndSymlinks(t *testing.T) {
 
 func TestShellRunAndRisk(t *testing.T) {
 	cfg := config.Default(t.TempDir())
-	cfg.Tools.ShellEnabled = true
-	cfg.Policy.AutoApproveShellCommands = []string{"ls", "git status"}
 	t.Setenv("OPENAI_API_KEY", "must-not-leak")
 	r := NewRegistry()
 	RegisterBuiltins(r, cfg, NewWorkspaces(cfg), nil)
 	project := t.TempDir()
-	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: project, AllowShell: true, AllowNet: true})
+	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: project, AllowNet: true})
 	sh, ok := r.Get("shell__run")
 	if !ok {
 		t.Fatal("shell.run not registered")
 	}
-	for cmd, want := range map[string]Risk{"ls -la": RiskYellow, "git status": RiskYellow, "ls; rm -rf /": RiskRed, "rm x": RiskRed} {
+	for cmd, want := range map[string]Risk{"ls -la": RiskGreen, "git status": RiskGreen, "ls; rm -rf /": RiskRed, "rm x": RiskRed} {
 		args, _ := json.Marshal(map[string]string{"command": cmd})
 		if got, _ := sh.Assess(args); got != want {
 			t.Errorf("%q risk = %s, want %s", cmd, got, want)
@@ -75,14 +73,35 @@ func TestShellRunAndRisk(t *testing.T) {
 	}
 }
 
+func TestDiscoveredToolPathIncludesPerUserNodeWithoutLoadingShellConfig(t *testing.T) {
+	home := t.TempDir()
+	nodeBin := filepath.Join(home, ".nvm", "versions", "node", "v24.3.0", "bin")
+	if err := os.MkdirAll(nodeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := discoveredToolPath("/usr/bin", home)
+	parts := filepath.SplitList(path)
+	found := false
+	for _, part := range parts {
+		if part == nodeBin {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("per-user Node bin missing from PATH %q", path)
+	}
+	if got := strings.Count(path, "/usr/bin"); got != 1 {
+		t.Fatalf("existing PATH entry should remain once, got %q", path)
+	}
+}
+
 func TestShellStreamsOutputBeforeCommandExits(t *testing.T) {
 	cfg := config.Default(t.TempDir())
-	cfg.Tools.ShellEnabled = true
 	r := NewRegistry()
 	RegisterBuiltins(r, cfg, NewWorkspaces(cfg), nil)
 	sh, _ := r.Get("shell__run")
 	progress := make(chan string, 4)
-	ctx := WithScope(context.Background(), &Scope{ProjectName: "demo", Root: t.TempDir(), AllowShell: true, AllowNet: true,
+	ctx := WithScope(context.Background(), &Scope{ProjectName: "demo", Root: t.TempDir(), AllowNet: true,
 		Progress: func(s string) { progress <- s }})
 	done := make(chan error, 1)
 	go func() {
@@ -116,13 +135,13 @@ func TestNetworkOffRequiresMicroVMAndPassesDenySetting(t *testing.T) {
 	root := t.TempDir()
 	args := json.RawMessage(`{"command":"echo safe"}`)
 	host := &shellRun{}
-	ctx := WithScope(context.Background(), &Scope{ProjectName: "demo", Root: root, AllowShell: true})
+	ctx := WithScope(context.Background(), &Scope{ProjectName: "demo", Root: root})
 	if _, err := host.Call(ctx, args); err == nil || !strings.Contains(err.Error(), "microVM") {
 		t.Fatalf("host shell should fail closed with network off: %v", err)
 	}
 	fake := &fakeComputeRunner{}
 	vm := &shellRun{compute: fake}
-	ctx = WithScope(context.Background(), &Scope{ProjectName: "demo", Root: root, AllowShell: true, UseCompute: true})
+	ctx = WithScope(context.Background(), &Scope{ProjectName: "demo", Root: root, UseCompute: true})
 	output, err := vm.Call(ctx, args)
 	if err != nil || fake.request.Network || !strings.Contains(output, "offline guest output") {
 		t.Fatalf("microVM offline call = %q, %+v, %v", output, fake.request, err)
@@ -145,7 +164,7 @@ func TestVerificationRunReportsEvidenceAndStopsOnFailure(t *testing.T) {
 	fake := &verificationCompute{}
 	tool := &verificationRun{shell: &shellRun{compute: fake}}
 	ctx := WithScope(context.Background(), &Scope{
-		ProjectID: "prj_1", ProjectName: "demo", Root: t.TempDir(), AllowShell: true, AllowNet: true, UseCompute: true,
+		ProjectID: "prj_1", ProjectName: "demo", Root: t.TempDir(), AllowNet: true, UseCompute: true,
 	})
 	out, err := tool.Call(ctx, json.RawMessage(`{"checks":[{"label":"typecheck","command":"check"},{"label":"tests","command":"fail"},{"label":"build","command":"build"}]}`))
 	if err != nil {
@@ -198,7 +217,7 @@ func (*missingCommandCompute) Run(_ context.Context, req compute.Request) (int, 
 
 func TestVerificationReportsMissingPrerequisiteAsNotRun(t *testing.T) {
 	tool := &verificationRun{shell: &shellRun{compute: &missingCommandCompute{}}}
-	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: t.TempDir(), AllowShell: true, AllowNet: true, UseCompute: true})
+	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: t.TempDir(), AllowNet: true, UseCompute: true})
 	out, err := tool.Call(ctx, json.RawMessage(`{"checks":[{"label":"browser","command":"pnpm test","required_command":"pnpm"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +252,7 @@ func TestBrowserVerifyCapturesDiagnosticsAndArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := &browserVerify{shell: &shellRun{compute: &browserCompute{}}}
-	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: root, AllowShell: true, AllowNet: true, UseCompute: true})
+	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: root, AllowNet: true, UseCompute: true})
 	out, err := tool.Call(ctx, json.RawMessage(`{"framework":"playwright","command":"npm run test:e2e"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +266,7 @@ func TestBrowserVerifyCapturesDiagnosticsAndArtifacts(t *testing.T) {
 func TestBrowserVerifyReportsMissingDependencyAsNotRun(t *testing.T) {
 	root := t.TempDir()
 	tool := &browserVerify{shell: &shellRun{compute: &browserCompute{}}}
-	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: root, AllowShell: true, AllowNet: true, UseCompute: true})
+	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: root, AllowNet: true, UseCompute: true})
 	out, err := tool.Call(ctx, json.RawMessage(`{"framework":"playwright","command":"npm run test:e2e"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +292,7 @@ func TestBrowserVerifyReportsMissingRuntimeAsNotRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := &browserVerify{shell: &shellRun{compute: &missingBrowserRuntimeCompute{}}}
-	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: root, AllowShell: true, AllowNet: true, UseCompute: true})
+	ctx := WithScope(context.Background(), &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: root, AllowNet: true, UseCompute: true})
 	out, err := tool.Call(ctx, json.RawMessage(`{"framework":"playwright","command":"npm run test:e2e"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -291,17 +310,15 @@ func TestProjectScope(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "notes.txt"), []byte("one\ntwo\n"), 0o644)
 
 	var changed []string
-	scope := &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: root, AllowShell: true,
-		Record: func(_ context.Context, abs string, before *string, deleted bool) {
-			kind := "modified"
-			if before == nil {
-				kind = "created"
-			}
-			changed = append(changed, kind+" "+filepath.Base(abs))
-		}}
+	scope := &Scope{ProjectID: "prj_1", ProjectName: "demo", Root: root, Record: func(_ context.Context, abs string, before *string, deleted bool) {
+		kind := "modified"
+		if before == nil {
+			kind = "created"
+		}
+		changed = append(changed, kind+" "+filepath.Base(abs))
+	}}
 	ctx := WithScope(context.Background(), scope)
 	cfg := config.Default(t.TempDir())
-	cfg.Tools.ShellEnabled = true
 	cfg.Tools.HostSandbox = "off" // exercise the guard used when no sandbox is available
 	r := NewRegistry()
 	RegisterBuiltins(r, cfg, NewWorkspaces(cfg), nil)
@@ -345,7 +362,7 @@ func TestProjectScope(t *testing.T) {
 	}
 }
 
-func TestComputerToolsAreOptInAndActionsRequireApproval(t *testing.T) {
+func TestComputerToolsAreFirstPartyAndClassifyApprovals(t *testing.T) {
 	cfg := config.Default(t.TempDir())
 	r := NewRegistry()
 	RegisterBuiltins(r, cfg, NewWorkspaces(cfg), nil, BuiltinServices{ComputerUse: nil})
@@ -360,41 +377,30 @@ func TestComputerToolsAreOptInAndActionsRequireApproval(t *testing.T) {
 		}
 	}
 	tool := &computerAct{}
-	if risk, _ := tool.Assess(json.RawMessage(`{"action":"click","x":10,"y":20}`)); risk != RiskRed {
-		t.Fatalf("computer action risk = %s, want red", risk)
+	cases := []struct {
+		args string
+		want Risk
+	}{
+		{`{"action":"move","x":10,"y":20}`, RiskYellow},
+		{`{"action":"scroll","delta":400}`, RiskYellow},
+		{`{"action":"click","target_description":"Open settings"}`, RiskYellow},
+		{`{"action":"fill","target_description":"Email address"}`, RiskYellow},
+		{`{"action":"fill","target_description":"Password field"}`, RiskRed},
+		{`{"action":"click","target_description":"Submit order"}`, RiskRed},
+		{`{"action":"key","key":"Enter"}`, RiskRed},
+	}
+	for _, tc := range cases {
+		if risk, _ := tool.Assess(json.RawMessage(tc.args)); risk != tc.want {
+			t.Errorf("Assess(%s) = %s, want %s", tc.args, risk, tc.want)
+		}
+	}
+	start := &computerStart{}
+	if risk, _ := start.Assess(json.RawMessage(`{"app_name":"Google Chrome"}`)); risk != RiskRed {
+		t.Fatalf("computer.start risk = %s, want red", risk)
 	}
 	ctx := WithScope(context.Background(), &Scope{ThreadID: "thread-1", Root: t.TempDir()})
-	if _, err := requireComputerScope(ctx); err == nil || !strings.Contains(err.Error(), "disabled") {
-		t.Fatalf("disabled Computer Use was allowed: %v", err)
-	}
-}
-
-// A project's Computer Use allowlist, when set, refuses any app not on it;
-// an empty list keeps today's unrestricted behavior.
-func TestComputerUseAppAllowlist(t *testing.T) {
-	open := &Scope{AllowComputerUse: true}
-	if !computerUseAppAllowed(open, "Safari", "", "") {
-		t.Fatal("an empty allowlist must allow every app")
-	}
-	restricted := &Scope{AllowComputerUse: true, ComputerUseApps: []string{"Safari", "com.apple.mail"}}
-	if !computerUseAppAllowed(restricted, "safari", "", "") {
-		t.Fatal("allowlist match must be case-insensitive")
-	}
-	if !computerUseAppAllowed(restricted, "", "com.apple.mail", "") {
-		t.Fatal("allowlist must match by bundle id")
-	}
-	if computerUseAppAllowed(restricted, "Chrome", "com.google.chrome", "") {
-		t.Fatal("an app not on the allowlist must be refused")
-	}
-}
-
-func TestComputerStartRefusesAppNotOnAllowlist(t *testing.T) {
-	manager := computeruse.NewManager(context.Background())
-	tool := &computerStart{manager: manager}
-	scope := &Scope{ThreadID: "thread-1", Root: t.TempDir(), AllowComputerUse: true, ComputerUseApps: []string{"Safari"}}
-	ctx := WithScope(context.Background(), scope)
-	if _, err := tool.Call(ctx, json.RawMessage(`{"app_name":"Chrome"}`)); err == nil || !strings.Contains(err.Error(), "allowed-apps") {
-		t.Fatalf("expected an allowlist refusal, got %v", err)
+	if _, err := requireComputerScope(ctx); err != nil {
+		t.Fatalf("Computer Use should not require a project opt-in: %v", err)
 	}
 }
 
@@ -419,7 +425,7 @@ func TestHostShellRunsInSandboxWhenNetworkIsOff(t *testing.T) {
 	project := t.TempDir()
 	sb := &wrapSandbox{}
 	sh := &shellRun{sandbox: sb}
-	ctx := WithScope(context.Background(), &Scope{ProjectID: "p", ProjectName: "demo", Root: project, AllowShell: true, AllowNet: false})
+	ctx := WithScope(context.Background(), &Scope{ProjectID: "p", ProjectName: "demo", Root: project, AllowNet: false})
 	args, _ := json.Marshal(map[string]string{"command": "echo $SANDBOXED"})
 	out, err := sh.Call(ctx, args)
 	if err != nil {
@@ -434,6 +440,20 @@ func TestHostShellRunsInSandboxWhenNetworkIsOff(t *testing.T) {
 	// Commands that reach for the network are not pre-empted: the sandbox decides.
 	if _, err := sh.Call(ctx, json.RawMessage(`{"command":"echo curl"}`)); err != nil {
 		t.Errorf("sandboxed command refused by the heuristic: %v", err)
+	}
+}
+
+func TestShellRunRejectsMissingWorkspaceBeforeSandboxLaunch(t *testing.T) {
+	project := t.TempDir()
+	sb := &wrapSandbox{}
+	sh := &shellRun{sandbox: sb}
+	ctx := WithScope(context.Background(), &Scope{ProjectID: "p", ProjectName: "Demo app", Root: project})
+	_, err := sh.Call(ctx, json.RawMessage(`{"command":"echo should-not-run","workspace":"Demo app"}`))
+	if err == nil || !strings.Contains(err.Error(), `workspace "Demo app" does not exist`) || !strings.Contains(err.Error(), "omit workspace") {
+		t.Fatalf("expected a clear missing-workspace error, got %v", err)
+	}
+	if len(sb.policies) != 0 {
+		t.Fatalf("invalid workspace reached sandbox launch: %+v", sb.policies)
 	}
 }
 

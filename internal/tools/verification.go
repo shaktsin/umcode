@@ -47,11 +47,7 @@ func (*verificationPlan) Call(ctx context.Context, _ json.RawMessage) (string, e
 		Summary      string         `json:"summary"`
 	}{ChangedFiles: changed, Manifests: manifests, Checks: checks}
 	if frontendChanged(changed) {
-		if scope.AllowVisualQA {
-			result.VisualQA = "required: start the preview, then use visual.start, visual.act for affected user flows, and visual.inspect with a final screenshot"
-		} else {
-			result.VisualQA = "not_run: autonomous Visual QA is disabled for this project"
-		}
+		result.VisualQA = "required: start the preview, then use visual.start, visual.act for affected user flows, and visual.inspect with a final screenshot"
 	} else {
 		result.VisualQA = "not_applicable"
 	}

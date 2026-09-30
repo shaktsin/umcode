@@ -62,9 +62,6 @@ func (s *Service) Create(ctx context.Context, p protocol.ProjectCreateParams) (p
 	if err := validateComputeTools(p.Tools); err != nil {
 		return protocol.Project{}, err
 	}
-	if err := validateApprovalMode(p.ApprovalMode); err != nil {
-		return protocol.Project{}, err
-	}
 	root, err := ExpandPath(p.Root)
 	if err != nil {
 		return protocol.Project{}, err
@@ -98,7 +95,7 @@ func (s *Service) Create(ctx context.Context, p protocol.ProjectCreateParams) (p
 		name = filepath.Base(root)
 	}
 	rec, err := s.st.CreateProject(ctx, protocol.Project{
-		Name: name, Root: root, Settings: p.Settings, Tools: p.Tools, ApprovalMode: p.ApprovalMode,
+		Name: name, Root: root, Settings: p.Settings, Tools: p.Tools,
 	})
 	if errors.Is(err, store.ErrDuplicate) {
 		existing, gerr := s.st.ProjectByRoot(ctx, root)
@@ -189,11 +186,6 @@ func (s *Service) Update(ctx context.Context, p protocol.ProjectUpdateParams) (p
 			return protocol.Project{}, err
 		}
 	}
-	if p.ApprovalMode != nil {
-		if err := validateApprovalMode(*p.ApprovalMode); err != nil {
-			return protocol.Project{}, err
-		}
-	}
 	if p.InstructionsPath != nil && *p.InstructionsPath != "" {
 		cur, err := s.st.GetProject(ctx, p.ProjectID)
 		if err != nil {
@@ -271,18 +263,6 @@ func validateComputeTools(t protocol.ProjectTools) error {
 		return fmt.Errorf("compute workspace limit must be between 1024 and 16384 MiB")
 	}
 	return nil
-}
-
-// validateApprovalMode rejects anything but the three known auto-approve
-// tiers. "" and "normal" both mean the default (always ask for red risk
-// unless matched by AutoApproveTools).
-func validateApprovalMode(m string) error {
-	switch m {
-	case "", "normal", "auto_workspace", "auto_all":
-		return nil
-	default:
-		return fmt.Errorf("unknown approval mode %q; use normal, auto_workspace, or auto_all", m)
-	}
 }
 
 // Delete forgets a project. The folder is left alone.

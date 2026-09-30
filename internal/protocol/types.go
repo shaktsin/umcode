@@ -47,6 +47,7 @@ type Thread struct {
 	Pinned        bool           `json:"pinned"`
 	Archived      bool           `json:"archived"`
 	Settings      ModelSelection `json:"settings"`
+	ApprovalMode  string         `json:"approvalMode,omitempty"`
 	ForkedFrom    string         `json:"forkedFrom,omitempty"`
 	Usage         UsageTotals    `json:"usage"`
 	CreatedAt     time.Time      `json:"createdAt"`

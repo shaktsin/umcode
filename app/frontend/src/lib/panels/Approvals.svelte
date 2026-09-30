@@ -36,7 +36,7 @@
         </div>
         <div class="shrink-0 text-xs text-muted">Open chat ↗</div>
       </div>
-      <div class="mt-2 -mx-4 -mb-4 rounded-b-xl overflow-hidden"><ApprovalCard approval={a} projectName={projects.list.find((project) => project.id === chat.threads.find((thread) => thread.id === a.threadId)?.projectId)?.name} /></div>
+      <div class="mt-2 -mx-4 -mb-4 rounded-b-xl overflow-hidden"><ApprovalCard approval={a} /></div>
     </div>
   {/each}
 </div>

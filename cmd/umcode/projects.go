@@ -56,7 +56,7 @@ func runProject(args []string) error {
 		model := fs.String("m", "", "default model for chats in this project")
 		provider := fs.String("p", "", "default provider")
 		cplx := fs.String("c", "", "default complexity: auto|quick|standard|deep")
-		shell := fs.Bool("shell", true, "allow shell commands")
+		compute := fs.Bool("compute", false, "run commands in the isolated microVM")
 		network := fs.Bool("network", false, "allow commands that use the network")
 		fs.Parse(rest)
 		root := ""
@@ -82,7 +82,7 @@ func runProject(args []string) error {
 		if err := call(protocol.MethodProjectCreate, protocol.ProjectCreateParams{
 			Root: abs, Name: *name,
 			Settings: protocol.ModelSelection{Provider: *provider, Model: *model, Complexity: protocol.Complexity(*cplx)},
-			Tools:    protocol.ProjectTools{Shell: shell, Network: network},
+			Tools:    protocol.ProjectTools{Compute: compute, Network: network},
 		}, &p); err != nil {
 			return err
 		}
@@ -105,7 +105,7 @@ func runProject(args []string) error {
 		}
 		fmt.Printf("  chats    %d\n", p.Threads)
 		fmt.Printf("  model    %s\n", describeSelection(p.Settings))
-		fmt.Printf("  shell    %s, network %s\n", onOff(p.Tools.Shell, true), onOff(p.Tools.Network, false))
+		fmt.Printf("  compute  %s, network %s\n", onOff(p.Tools.Compute, false), onOff(p.Tools.Network, false))
 		var ins protocol.ProjectInstructionsResult
 		if err := call(protocol.MethodProjectInstructions, protocol.ProjectInstructionsParams{ProjectID: id}, &ins); err == nil {
 			fmt.Printf("  AGENT.md %s\n", ins.Path)
@@ -242,7 +242,7 @@ func runProject(args []string) error {
 		model := fs.String("m", "", "default model")
 		cplx := fs.String("c", "", "default complexity")
 		key := fs.String("k", "", "default API key id")
-		shell := fs.String("shell", "", "on|off: allow shell commands")
+		compute := fs.String("compute", "", "on|off: run commands in the isolated microVM")
 		network := fs.String("network", "", "on|off: allow commands that use the network")
 		fs.Parse(rest[1:])
 		params := protocol.ProjectUpdateParams{ProjectID: id}
@@ -253,10 +253,10 @@ func runProject(args []string) error {
 			params.Settings = &protocol.ModelSelection{Provider: *provider, Model: *model,
 				Complexity: protocol.Complexity(*cplx), CredentialID: *key}
 		}
-		if *shell != "" || *network != "" {
+		if *compute != "" || *network != "" {
 			tools := protocol.ProjectTools{}
-			if v, err := onOffFlag(*shell); err == nil && *shell != "" {
-				tools.Shell = v
+			if v, err := onOffFlag(*compute); err == nil && *compute != "" {
+				tools.Compute = v
 			}
 			if v, err := onOffFlag(*network); err == nil && *network != "" {
 				tools.Network = v

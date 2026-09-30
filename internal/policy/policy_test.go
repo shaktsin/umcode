@@ -3,12 +3,11 @@ package policy
 import (
 	"testing"
 
-	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
 func TestGate(t *testing.T) {
-	g := New(config.PolicyConfig{AutoApproveTools: []string{"file.*"}})
+	g := New()
 	cases := []struct {
 		tool     string
 		risk     tools.Risk
@@ -18,7 +17,7 @@ func TestGate(t *testing.T) {
 	}{
 		{"file.read", tools.RiskGreen, false, "", Allow},
 		{"shell.run", tools.RiskRed, false, "", Ask},
-		{"file.write", tools.RiskRed, false, "", Allow},
+		{"file.write", tools.RiskRed, false, "", Ask},
 		{"file.write", tools.RiskRed, true, "", Ask},
 		{"gmail.send", tools.RiskYellow, false, "", Allow},
 		// auto_workspace auto-approves red workspace actions...
@@ -34,9 +33,5 @@ func TestGate(t *testing.T) {
 		if got, _ := g.Check(c.tool, c.risk, c.listener, c.mode); got != c.want {
 			t.Errorf("%s/%s/%v/%s = %s, want %s", c.tool, c.risk, c.listener, c.mode, got, c.want)
 		}
-	}
-	strict := New(config.PolicyConfig{ConfirmationStrictness: "strict"})
-	if got, _ := strict.Check("gmail.send", tools.RiskYellow, false, ""); got != Ask {
-		t.Error("strict mode should ask for yellow")
 	}
 }

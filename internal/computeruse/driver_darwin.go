@@ -3,57 +3,71 @@
 package computeruse
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"net"
+	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/shaktsin/umcode/internal/config"
 )
 
-type helperDriver struct{ path string }
-
-func newDriver() driver { return &helperDriver{path: computerHelperPath()} }
-
-func computerHelperPath() string {
-	if p := os.Getenv("UMCODE_COMPUTER_HELPER_PATH"); p != "" {
-		return p
-	}
-	exe, _ := os.Executable()
-	resources := filepath.Dir(exe)
-	if filepath.Base(resources) == "MacOS" {
-		resources = filepath.Join(filepath.Dir(resources), "Resources")
-	}
-	return filepath.Join(resources, "computer", "UMCode Computer Use.app", "Contents", "MacOS", "UMCode Computer Use")
+type desktopDriver struct {
+	socket string
+	client *http.Client
 }
 
-func (d *helperDriver) invoke(ctx context.Context, command string, input any, output any) error {
-	if st, err := os.Stat(d.path); err != nil || st.IsDir() {
-		return errors.New("the Computer Use plugin is enabled, but its signed macOS helper is not installed")
+func newDriver() driver {
+	home, err := config.HomeDir()
+	if err != nil {
+		return &desktopDriver{}
+	}
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(home, "computer-use.sock"))
+	}}
+	return &desktopDriver{socket: filepath.Join(home, "computer-use.sock"), client: &http.Client{Transport: transport, Timeout: 60 * time.Second}}
+}
+
+func (d *desktopDriver) invoke(ctx context.Context, command string, input any, output any) error {
+	if d.socket == "" {
+		return errors.New("Computer Use is available only while the UMCode desktop app is running")
 	}
 	b, _ := json.Marshal(input)
-	cmd := exec.CommandContext(ctx, d.path, command)
-	cmd.Stdin = bytes.NewReader(b)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("Computer Use helper: %s", msg)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://umcode/v1/"+command, strings.NewReader(string(b)))
+	if err != nil {
+		return err
 	}
-	if output != nil && json.Unmarshal(stdout.Bytes(), output) != nil {
-		return fmt.Errorf("Computer Use helper returned invalid output: %s", strings.TrimSpace(stdout.String()))
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("Computer Use requires the UMCode desktop app to be open: %w", err)
+	}
+	defer resp.Body.Close()
+	var body json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return fmt.Errorf("UMCode Computer Use returned invalid output: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var failure struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &failure)
+		if failure.Error == "" {
+			return fmt.Errorf("UMCode Computer Use failed with HTTP %d", resp.StatusCode)
+		}
+		return errors.New(failure.Error)
+	}
+	if output != nil && json.Unmarshal(body, output) != nil {
+		return fmt.Errorf("UMCode Computer Use returned invalid output: %s", strings.TrimSpace(string(body)))
 	}
 	return nil
 }
 
-func (d *helperDriver) List(ctx context.Context) ([]App, error) {
+func (d *desktopDriver) List(ctx context.Context) ([]App, error) {
 	var out struct {
 		Apps []App `json:"apps"`
 	}
@@ -61,7 +75,7 @@ func (d *helperDriver) List(ctx context.Context) ([]App, error) {
 	return out.Apps, err
 }
 
-func (d *helperDriver) Open(ctx context.Context, target Target) (Target, error) {
+func (d *desktopDriver) Open(ctx context.Context, target Target) (Target, error) {
 	args := []string{}
 	if target.BundleID != "" {
 		args = append(args, "-b", target.BundleID)
@@ -99,12 +113,12 @@ func (d *helperDriver) Open(ctx context.Context, target Target) (Target, error) 
 	return Target{}, errors.New("application did not become available for Computer Use")
 }
 
-func (d *helperDriver) Inspect(ctx context.Context, target Target, screenshot string) (State, error) {
+func (d *desktopDriver) Inspect(ctx context.Context, target Target, screenshot string) (State, error) {
 	var state State
 	err := d.invoke(ctx, "inspect", map[string]any{"target": target, "screenshot": screenshot}, &state)
 	return state, err
 }
 
-func (d *helperDriver) Act(ctx context.Context, target Target, action Action) error {
+func (d *desktopDriver) Act(ctx context.Context, target Target, action Action) error {
 	return d.invoke(ctx, "act", map[string]any{"target": target, "action": action}, nil)
 }
