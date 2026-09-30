@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "echo": {
+      "type": "stdio",
+      "command": "echo-server",
+      "args": ["--stdio"]
+    }
+  }
+}

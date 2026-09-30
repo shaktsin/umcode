@@ -1,0 +1,6 @@
+{
+  "name": "sample-plugin",
+  "version": "1.0.0",
+  "description": "Claude adapter fixture",
+  "agents": ["./agents/reviewer.md"]
+}
