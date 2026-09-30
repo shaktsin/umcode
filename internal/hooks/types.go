@@ -38,9 +38,12 @@ type Declaration struct {
 	Command  string            `json:"command"`
 	Args     []string          `json:"args,omitempty"`
 	Env      map[string]string `json:"env,omitempty"`
-	Required bool              `json:"required"`
-	Timeout  time.Duration     `json:"timeout"`
-	Order    int               `json:"order"`
+	// SecretValues are available to the process through explicitly declared
+	// Env entries but are redacted from outcomes and audit records.
+	SecretValues []string      `json:"-"`
+	Required     bool          `json:"required"`
+	Timeout      time.Duration `json:"timeout"`
+	Order        int           `json:"order"`
 }
 
 // CanBlock reports whether the event is allowed to prevent pending work.
