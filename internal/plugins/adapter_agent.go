@@ -26,6 +26,7 @@ type rawAgentManifest struct {
 	Version     string                     `json:"version"`
 	Description string                     `json:"description"`
 	Extensions  map[string]json.RawMessage `json:"extensions"`
+	Settings    []Setting                  `json:"settings"`
 }
 
 type rawOpenAIExtension struct {
@@ -40,7 +41,7 @@ func (agentAdapter) Load(root string) (Package, error) {
 	if manifest.Schema != agentPluginSchema {
 		return Package{}, pluginError("adapt", "adapt/unsupported_schema", "plugin.json", fmt.Sprintf("unsupported Agent Plugins schema %q", manifest.Schema), "Use https://agent-plugins.org/schemas/1.0.0/plugin.schema.json.", nil)
 	}
-	pkg := Package{ID: strings.TrimSpace(manifest.Name), Name: strings.TrimSpace(manifest.Name), Version: strings.TrimSpace(manifest.Version), Format: FormatAgent, Root: root}
+	pkg := Package{ID: strings.TrimSpace(manifest.Name), Name: strings.TrimSpace(manifest.Name), Version: strings.TrimSpace(manifest.Version), Format: FormatAgent, Root: root, Settings: manifest.Settings}
 	var err error
 	pkg.Skills, err = loadSkills(root, []string{"./skills"})
 	if err != nil {

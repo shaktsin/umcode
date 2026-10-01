@@ -47,10 +47,12 @@ type Engine struct {
 	LLMs        *llm.Registry
 	Catalog     *models.Catalog
 	Creds       *credentials.Service
+	Secrets     secrets.Store
 	Tools       *tools.Registry
 	Skills      *skills.Registry
 	MCP         *mcp.Manager
 	Plugins     *plugins.Manager
+	Installer   *plugins.Installer
 	Hooks       *hooks.Runner
 	Projects    *projects.Service
 	Router      *router.Router
@@ -153,8 +155,8 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 
 	e := &Engine{
 		Cfg: o.Config, Store: o.Store, LLMs: o.LLMs, Catalog: cat,
-		Creds: credentials.New(o.Store, o.Secrets, o.LLMs), Tools: reg, Skills: sk, MCP: mcpm,
-		Plugins: pluginManager, Hooks: hookRunner,
+		Creds: credentials.New(o.Store, o.Secrets, o.LLMs), Secrets: o.Secrets, Tools: reg, Skills: sk, MCP: mcpm,
+		Plugins: pluginManager, Installer: plugins.NewInstaller(o.Config.Home, o.Store, nil), Hooks: hookRunner,
 		Projects:  projects.New(o.Store, o.Config),
 		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs,
 		Bus: bus, Log: o.Logger,

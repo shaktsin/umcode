@@ -24,6 +24,7 @@ type rawLegacyManifest struct {
 	Skills     json.RawMessage `json:"skills"`
 	MCPServers json.RawMessage `json:"mcpServers"`
 	Hooks      json.RawMessage `json:"hooks"`
+	Settings   []Setting       `json:"settings"`
 }
 
 func (codexAdapter) Load(root string) (Package, error) {
@@ -31,7 +32,7 @@ func (codexAdapter) Load(root string) (Package, error) {
 	if err := readJSON(filepath.Join(root, ".codex-plugin", "plugin.json"), &manifest, "adapt"); err != nil {
 		return Package{}, err
 	}
-	pkg := Package{ID: strings.TrimSpace(manifest.Name), Name: strings.TrimSpace(manifest.Name), Version: strings.TrimSpace(manifest.Version), Format: FormatCodex, Root: root}
+	pkg := Package{ID: strings.TrimSpace(manifest.Name), Name: strings.TrimSpace(manifest.Name), Version: strings.TrimSpace(manifest.Version), Format: FormatCodex, Root: root, Settings: manifest.Settings}
 	skillRoots, err := decodePaths(manifest.Skills, "./skills")
 	if err != nil {
 		return Package{}, pluginError("adapt", "adapt/invalid_skills", "skills", "skills must be a path or path array", "Reference package-relative skill roots.", err)

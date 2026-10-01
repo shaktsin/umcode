@@ -68,7 +68,10 @@ Chat
          set ID [-p PROVIDER] [-m MODEL] [-c LEVEL] [-k KEY]
   approvals                      List pending approvals
 
-Tasks, skills and MCP
+Plugins and automation
+  plugin inspect SOURCE | install [--linked] [--project ID] SOURCE | list [--project ID]
+         show ID | enable ID --project ID | disable ID --project ID | reload ID
+         remove [--disable-projects] ID
   task list [--all] | add (--at T | --daily HH:MM | --weekly DAY@HH:MM | --hourly M | --cron EXPR)
        [--name N] [--tz ZONE] [-p P] [-m M] [-c LEVEL] PROMPT | cancel ID | run ID | runs ID
   skill list | show NAME | install PATH_OR_GIT_URL [--name N] | remove NAME
@@ -140,6 +143,8 @@ func main() {
 		err = runProject(rest)
 	case "task", "tasks":
 		err = runTask(rest)
+	case "plugin", "plugins":
+		err = runPlugin(rest)
 	case "skill", "skills":
 		err = runSkill(rest)
 	case "mcp":
