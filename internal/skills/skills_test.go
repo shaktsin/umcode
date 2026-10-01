@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -106,6 +107,41 @@ func TestParseAndRun(t *testing.T) {
 	}
 	if _, ok := r.Match("hello there"); ok {
 		t.Error("unexpected match")
+	}
+}
+
+func TestPluginSkillsAreNamespacedAndContextBound(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "greet")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: greet\ndescription: Greet someone from a plugin.\n---\nPlugin instructions."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, errs := CompileSnapshot([]Root{{PluginID: "acme", Paths: []string{skillDir}, Config: map[string]any{"tone": "warm"}}})
+	if len(errs) != 0 {
+		t.Fatalf("CompileSnapshot() errors = %v", errs)
+	}
+	cfg := config.Default(t.TempDir())
+	registry := NewRegistry(cfg)
+	if _, ok := registry.Get("acme:greet"); ok {
+		t.Fatal("plugin skill leaked into legacy registry")
+	}
+	ctx := WithSnapshot(context.Background(), snapshot)
+	skill, ok := registry.GetContext(ctx, "acme:greet")
+	if !ok || skill.Name != "acme:greet" || skill.Dir != skillDir {
+		t.Fatalf("GetContext() = %#v, %v", skill, ok)
+	}
+	if catalog := registry.CatalogContext(ctx); !strings.Contains(catalog, "acme:greet: Greet someone") {
+		t.Fatalf("CatalogContext() = %q", catalog)
+	}
+	matched, ok := registry.MatchContext(ctx, "please greet someone")
+	if !ok || matched.Name != "acme:greet" {
+		t.Fatalf("MatchContext() = %#v, %v", matched, ok)
+	}
+	if got := snapshot.Config("acme:greet"); !reflect.DeepEqual(got, map[string]any{"tone": "warm"}) {
+		t.Fatalf("snapshot config = %#v", got)
 	}
 }
 

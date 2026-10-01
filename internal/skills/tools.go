@@ -36,17 +36,17 @@ func (*getInstructions) Assess(args json.RawMessage) (tools.Risk, string) {
 	_ = json.Unmarshal(args, &a)
 	return tools.RiskGreen, "Read instructions for skill " + a.SkillName
 }
-func (t *getInstructions) Call(_ context.Context, args json.RawMessage) (string, error) {
+func (t *getInstructions) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		SkillName string `json:"skill_name"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
 	}
-	s, ok := t.r.Get(strings.TrimSpace(a.SkillName))
+	s, ok := t.r.GetContext(ctx, strings.TrimSpace(a.SkillName))
 	if !ok {
 		var names []string
-		for _, x := range t.r.List() {
+		for _, x := range t.r.ListContext(ctx) {
 			if x.Error == "" {
 				names = append(names, x.Name)
 			}
@@ -106,7 +106,7 @@ func (t *runScript) Call(ctx context.Context, args json.RawMessage) (string, err
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
 	}
-	if s, ok := t.r.Get(a.Skill); ok {
+	if s, ok := t.r.GetContext(ctx, a.Skill); ok {
 		if sc, ok := s.Scripts[a.Script]; ok {
 			if err := checkRequired(sc.InputSchema, a.Args); err != nil {
 				return "", err

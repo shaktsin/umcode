@@ -234,7 +234,7 @@ var ErrUnknownScript = errors.New("unknown script")
 // RunScript runs one declared script. Its stdin is the skill-template envelope
 // {"input": <args>, "config": <skills.<name>.config from config.yaml>}.
 func (r *Registry) RunScript(ctx context.Context, skill, script string, argsJSON []byte) (string, error) {
-	s, ok := r.Get(skill)
+	s, ok := r.GetContext(ctx, skill)
 	if !ok {
 		return "", fmt.Errorf("skill %q is not installed", skill)
 	}
@@ -277,6 +277,11 @@ func (r *Registry) RunScript(ctx context.Context, skill, script string, argsJSON
 		argsJSON = []byte("{}")
 	}
 	cfgMap := r.cfg.Skills[s.Name].Config
+	if snapshot := snapshotFromContext(ctx); snapshot != nil {
+		if pluginConfig := snapshot.Config(s.Name); pluginConfig != nil {
+			cfgMap = pluginConfig
+		}
+	}
 	if cfgMap == nil {
 		cfgMap = map[string]any{}
 	}
@@ -303,7 +308,7 @@ func (r *Registry) RunScript(ctx context.Context, skill, script string, argsJSON
 
 // EnvFor returns a skill's environment for shell.run.
 func (r *Registry) EnvFor(ctx context.Context, skill string) ([]string, error) {
-	s, ok := r.Get(skill)
+	s, ok := r.GetContext(ctx, skill)
 	if !ok {
 		return nil, fmt.Errorf("skill %q is not installed", skill)
 	}
