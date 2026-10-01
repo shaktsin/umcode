@@ -7,17 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/credentials"
+	"github.com/shaktsin/umcode/internal/hooks"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/policy"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/router"
+	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
 )
@@ -352,6 +355,33 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		ctx = tools.WithScope(ctx, scope)
 		sctx = tools.WithScope(sctx, scope)
 	}
+	var snapshot pluginSnapshot
+	if e.Plugins != nil {
+		acquired, err := e.Plugins.Acquire(sctx, th.ProjectID)
+		if err != nil {
+			e.finishTurn(sctx, th, turn, fmt.Errorf("load project plugins: %w", err), release)
+			return
+		}
+		snapshot = acquired
+		ctx = skills.WithSnapshot(ctx, snapshot.SkillSnapshot())
+		sctx = skills.WithSnapshot(sctx, snapshot.SkillSnapshot())
+	}
+	finish := func(turnErr error) {
+		e.runTurnCompleteHooks(sctx, snapshot, turn, turnErr)
+		if snapshot != nil {
+			snapshot.Release()
+		}
+		e.finishTurn(sctx, th, turn, turnErr, release)
+	}
+	var hookContext []string
+	startHooks := e.runPluginHooks(ctx, snapshot, hooks.Invocation{
+		Event: hooks.TurnStart, ProjectID: th.ProjectID, ThreadID: th.ID, TurnID: turn.ID,
+	})
+	hookContext = append(hookContext, startHooks.Context...)
+	if startHooks.Blocked {
+		finish(fmt.Errorf("blocked by plugin hook: %s", startHooks.Reason))
+		return
+	}
 	user := llm.Message{Role: llm.RoleUser}
 	if p.Text != "" {
 		user.Parts = append(user.Parts, llm.Part{Type: "text", Text: p.Text})
@@ -365,7 +395,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	// starts with room to work. Failure is not fatal: the history limit and
 	// tool-result trimming still bound the request.
 	if overWindow(msgs, 0, res.meta.ContextWindow, contextCompactFraction) {
-		if err := e.compactLocked(sctx, th.ID, turn.ID); err != nil {
+		if err := e.compactLocked(sctx, th.ID, turn.ID, snapshot); err != nil {
 			log.Warn("automatic context compaction failed", "err", err)
 		} else if h, err := e.history(sctx, th.ID, turn.ID); err == nil {
 			msgs = h
@@ -376,15 +406,16 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 
 	var specs []llm.ToolSpec
 	if res.meta.Tools {
-		for _, t := range e.Tools.All() {
-			if !toolAllowed(t.Name(), proj) {
+		for _, candidate := range e.turnTools(snapshot) {
+			if !candidate.plugin && !toolAllowed(candidate.tool.Name(), proj) {
 				continue
 			}
+			t := candidate.tool
 			specs = append(specs, llm.ToolSpec{Name: tools.ToWire(t.Name()), Description: t.Description(), Schema: t.Schema()})
 		}
 	}
 	req := llm.Request{
-		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, ""), Tools: specs, MaxTokens: res.preset.MaxOutputTokens,
+		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, "", hookContext), Tools: specs, MaxTokens: res.preset.MaxOutputTokens,
 	}
 	if res.meta.Reasoning {
 		req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
@@ -405,7 +436,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			pause(reason)
 			break
 		}
-		req.System = e.systemPrompt(sctx, p.Text, proj, instructionHint)
+		req.System = e.systemPrompt(sctx, p.Text, proj, instructionHint, hookContext)
 		// Old tool output is the first thing to go when the request nears the
 		// window; the newest results stay.
 		if n := trimToolResults(msgs, tokens(req.System)+toolSpecTokens(specs), int(float64(res.meta.ContextWindow)*contextTrimFraction)); n > 0 {
@@ -432,7 +463,9 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		results := make([]string, 0, len(out.calls))
 		lastToolMsg := -1
 		for _, call := range out.calls {
-			result, isErr := e.runTool(ctx, sctx, th, turn, call)
+			toolResult := e.runTool(ctx, sctx, th, turn, call, snapshot)
+			result, isErr := toolResult.Output, toolResult.IsError
+			hookContext = append(hookContext, toolResult.HookContext...)
 			if hint := instructionPathHint(call.Args); hint != "" {
 				instructionHint = hint
 			}
@@ -467,7 +500,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			log.Warn("could not record which models the turn used", "err", err)
 		}
 	}
-	e.finishTurn(sctx, th, turn, turnErr, release)
+	finish(turnErr)
 }
 
 // visualEvidenceMessage feeds a bounded screenshot back to vision-capable
@@ -812,29 +845,120 @@ func (e *Engine) checkBudget(ctx context.Context, c protocol.Credential) error {
 	return nil
 }
 
+type pluginSnapshot interface {
+	Tools() []tools.Tool
+	Tool(string) (tools.Tool, bool)
+	SkillSnapshot() *skills.Snapshot
+	Hooks() hooks.Set
+	Release()
+}
+
+type turnTool struct {
+	tool   tools.Tool
+	plugin bool
+}
+
+type toolRunResult struct {
+	Output      string
+	IsError     bool
+	HookContext []string
+}
+
+func (e *Engine) turnTools(snapshot pluginSnapshot) []turnTool {
+	byName := map[string]turnTool{}
+	if e.Tools != nil {
+		for _, tool := range e.Tools.All() {
+			byName[tool.Name()] = turnTool{tool: tool}
+		}
+	}
+	if snapshot != nil {
+		for _, tool := range snapshot.Tools() {
+			if _, exists := byName[tool.Name()]; !exists {
+				byName[tool.Name()] = turnTool{tool: tool, plugin: true}
+			}
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]turnTool, 0, len(names))
+	for _, name := range names {
+		result = append(result, byName[name])
+	}
+	return result
+}
+
+func (e *Engine) runPluginHooks(ctx context.Context, snapshot pluginSnapshot, invocation hooks.Invocation) hooks.Outcome {
+	if e.Hooks == nil || snapshot == nil {
+		return hooks.Outcome{}
+	}
+	invocation.Version = hooks.EnvelopeVersion
+	if scope := tools.ScopeFrom(ctx); scope != nil {
+		if invocation.ProjectID == "" {
+			invocation.ProjectID = scope.ProjectID
+		}
+		if invocation.ProjectRoot == "" {
+			invocation.ProjectRoot = scope.Root
+		}
+	}
+	outcome := e.Hooks.Run(ctx, snapshot.Hooks(), invocation)
+	for _, warning := range outcome.Warnings {
+		if e.Log != nil {
+			e.Log.Warn("plugin hook warning", "event", invocation.Event, "warning", warning)
+		}
+	}
+	return outcome
+}
+
+func (e *Engine) runTurnCompleteHooks(ctx context.Context, snapshot pluginSnapshot, turn protocol.Turn, turnErr error) hooks.Outcome {
+	invocation := hooks.Invocation{Event: hooks.TurnComplete, ProjectID: "", ThreadID: turn.ThreadID, TurnID: turn.ID}
+	if turnErr != nil {
+		invocation.ToolError = turnErr.Error()
+	}
+	return e.runPluginHooks(ctx, snapshot, invocation)
+}
+
 // runTool executes one tool call, asking for approval when policy requires it.
-func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn protocol.Turn, call llm.ToolCall) (string, bool) {
+func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn protocol.Turn, call llm.ToolCall, snapshot pluginSnapshot) toolRunResult {
 	name := call.Name
 	tool, ok := e.Tools.Get(call.Name)
+	if !ok && snapshot != nil {
+		tool, ok = snapshot.Tool(call.Name)
+	}
 	if ok {
 		name = tool.Name()
 	}
+	invocation := hooks.Invocation{ProjectID: th.ProjectID, ThreadID: th.ID, TurnID: turn.ID, ToolName: name, ToolArgs: call.Args}
+	result := func(output string, isError bool, contextValues ...string) toolRunResult {
+		return toolRunResult{Output: output, IsError: isError, HookContext: contextValues}
+	}
+	observe := func(event hooks.Event, output, toolError string, priorContext []string) toolRunResult {
+		invocation.Event, invocation.ToolOutput, invocation.ToolError = event, output, toolError
+		outcome := e.runPluginHooks(sctx, snapshot, invocation)
+		contextValues := append(append([]string(nil), priorContext...), outcome.Context...)
+		if toolError != "" {
+			return result(output, true, contextValues...)
+		}
+		return result(output, false, contextValues...)
+	}
 	it, err := e.newItem(sctx, turn, protocol.ItemToolCall)
 	if err != nil {
-		return "internal error: " + err.Error(), true
+		return result("internal error: "+err.Error(), true)
 	}
 	it.Tool = &protocol.ToolCallData{CallID: call.ID, Name: name, Args: call.Args}
 	if !ok {
 		it.Status, it.Tool.Error = protocol.ItemFailed, "unknown tool "+name
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
-		return it.Tool.Error, true
+		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, nil)
 	}
 	if strings.HasPrefix(name, "computer.") {
 		scope := tools.ScopeFrom(ctx)
 		if scope == nil || !scope.AllowComputerUse {
 			it.Status, it.Tool.Error = protocol.ItemDenied, "Computer Use is disabled for this project."
 			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
-			return it.Tool.Error, true
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, nil)
 		}
 	}
 	risk, summary := tool.Assess(call.Args)
@@ -845,8 +969,18 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		if why, forbidden := g.Forbidden(call.Args); forbidden {
 			it.Status, it.Tool.Error = protocol.ItemDenied, "Blocked: "+why+". Choose a safer approach; do not retry this command."
 			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
-			return it.Tool.Error, true
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, nil)
 		}
+	}
+
+	before := e.runPluginHooks(ctx, snapshot, hooks.Invocation{
+		Event: hooks.BeforeToolUse, ProjectID: th.ProjectID, ThreadID: th.ID, TurnID: turn.ID,
+		ToolName: name, ToolArgs: call.Args,
+	})
+	if before.Blocked {
+		it.Status, it.Tool.Error = protocol.ItemDenied, "Blocked by plugin hook: "+before.Reason
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 	}
 
 	approvalMode := normalizedApprovalMode(th.ApprovalMode)
@@ -860,12 +994,12 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 				it.Tool.Error = "Approval not granted: " + err.Error()
 			}
 			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
-			return it.Tool.Error, true
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 		}
 	} else if decision == policy.Deny {
 		it.Status, it.Tool.Error = protocol.ItemDenied, "Blocked by policy: "+reason
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
-		return it.Tool.Error, true
+		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 	}
 
 	toolCtx := ctx
@@ -895,11 +1029,11 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	if err != nil {
 		it.Status, it.Tool.Error = protocol.ItemFailed, err.Error()
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
-		return "Error: " + err.Error(), true
+		return observe(hooks.ToolUseFailed, "Error: "+err.Error(), err.Error(), before.Context)
 	}
 	it.Status, it.Tool.Output = protocol.ItemCompleted, output
 	_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
-	return output, false
+	return observe(hooks.AfterToolUse, output, "", before.Context)
 }
 
 // finishTurn records the outcome, publishes it and generates a title if needed.

@@ -20,9 +20,11 @@ import (
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/credentials"
+	"github.com/shaktsin/umcode/internal/hooks"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/mcp"
 	"github.com/shaktsin/umcode/internal/models"
+	"github.com/shaktsin/umcode/internal/plugins"
 	"github.com/shaktsin/umcode/internal/policy"
 	"github.com/shaktsin/umcode/internal/preview"
 	"github.com/shaktsin/umcode/internal/projects"
@@ -48,6 +50,8 @@ type Engine struct {
 	Tools       *tools.Registry
 	Skills      *skills.Registry
 	MCP         *mcp.Manager
+	Plugins     *plugins.Manager
+	Hooks       *hooks.Runner
 	Projects    *projects.Service
 	Router      *router.Router
 	Tasks       *tasks.Service
@@ -133,10 +137,24 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 
 	mcpm := mcp.NewManager(o.Config.MCPServers, o.Logger)
 	reg.AddSource(mcpm)
+	pluginManager, err := plugins.NewManager(plugins.Options{Store: o.Store, Log: o.Logger})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	hookRunner := hooks.NewRunner(func(ctx context.Context, record hooks.Record) error {
+		return o.Store.RecordPluginHookRun(ctx, store.PluginHookRun{
+			PluginID: record.PluginID, PluginVersion: record.PluginVersion, ProjectID: record.ProjectID,
+			ThreadID: record.ThreadID, TurnID: record.TurnID, Event: string(record.Event), Status: record.Status,
+			Blocked: record.Blocked, Reason: record.Reason, Warning: record.Warning, Context: record.Context,
+			Error: record.Error, DurationMS: record.Duration.Milliseconds(), CreatedAt: record.CreatedAt,
+		})
+	})
 
 	e := &Engine{
 		Cfg: o.Config, Store: o.Store, LLMs: o.LLMs, Catalog: cat,
 		Creds: credentials.New(o.Store, o.Secrets, o.LLMs), Tools: reg, Skills: sk, MCP: mcpm,
+		Plugins: pluginManager, Hooks: hookRunner,
 		Projects:  projects.New(o.Store, o.Config),
 		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs,
 		Bus: bus, Log: o.Logger,
@@ -198,6 +216,7 @@ func (e *Engine) Shutdown(ctx context.Context) {
 	go func() {
 		e.wg.Wait()
 		e.Tasks.Wait()
+		e.Plugins.Close()
 		e.MCP.Close()
 		close(done)
 	}()
@@ -752,7 +771,7 @@ func validateSelection(s protocol.ModelSelection) error {
 
 // systemPrompt builds the system prompt from the built-in instructions, the
 // skills catalog and AGENT.md. userText is used to point at a matching skill.
-func (e *Engine) systemPrompt(ctx context.Context, userText string, proj *protocol.Project, instructionHint string) string {
+func (e *Engine) systemPrompt(ctx context.Context, userText string, proj *protocol.Project, instructionHint string, hookContext []string) string {
 	var b strings.Builder
 	b.WriteString("You are UMCode, a personal AI assistant running on the user's own computer. ")
 	b.WriteString("Be direct and concise. Use tools when they help; never invent tool results. ")
@@ -763,10 +782,19 @@ func (e *Engine) systemPrompt(ctx context.Context, userText string, proj *protoc
 	b.WriteString("To explore code use file.search (content or file-name search) before falling back to the shell. To change an existing file use file.edit with an exact old_string; use file.write only to create a file or replace it entirely. ")
 	b.WriteString("Risky actions (shell commands, writing files) may require the user's approval; if an action is denied, explain and suggest an alternative.\n")
 	b.WriteString(fmt.Sprintf("Current time: %s (%s).\n", time.Now().Format(time.RFC1123), tasks.ZoneName(time.Local)))
-	if cat := e.Skills.Catalog(); cat != "" {
+	if cat := e.Skills.CatalogContext(ctx); cat != "" {
 		b.WriteString("\n" + cat)
-		if sk, ok := e.Skills.Match(userText); ok && userText != "" {
+		if sk, ok := e.Skills.MatchContext(ctx, userText); ok && userText != "" {
 			b.WriteString(fmt.Sprintf("The current request may match the %q skill; read its instructions before acting.\n", sk.Name))
+		}
+	}
+	if len(hookContext) > 0 {
+		b.WriteString("\n# Plugin context\n")
+		for _, value := range hookContext {
+			if value = strings.TrimSpace(value); value != "" {
+				b.WriteString(value)
+				b.WriteByte('\n')
+			}
 		}
 	}
 	if proj != nil {
