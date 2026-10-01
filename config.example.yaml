@@ -67,7 +67,7 @@ tools:
         shell: false         # no shell in Downloads
 
 # ---------------------------------------------------------------------------
-# MCP Servers — Model Context Protocol tool servers
+# Legacy MCP compatibility — prefer installing an MCP server inside a plugin
 # Each server is started as a subprocess; its tools become available to agents
 # as  mcp_<name>_<tool>  (e.g. mcp_playwright_screenshot).
 # Requires the server package to be installed (e.g. via npx or pip).
@@ -99,9 +99,11 @@ mcp_servers: []
 #     enabled: false
 
 # ---------------------------------------------------------------------------
-# Skills — agent capability packs loaded from SKILL.md directories
+# Legacy skill compatibility — prefer installing skills inside a plugin
 # ---------------------------------------------------------------------------
 
+# These paths remain supported by the backend but are not shown separately in
+# the desktop Plugins screen.
 # Directories scanned for skills at startup (each child dir with SKILL.md loaded)
 skill_dirs:
   - ~/projects/skills/skills
