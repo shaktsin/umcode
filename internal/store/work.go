@@ -212,6 +212,10 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 		n.CreatedAt, n.UpdatedAt = ParseTime(created), ParseTime(updated)
 		d.Nodes = append(d.Nodes, n)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return d, err
+	}
 	rows.Close()
 
 	rows, err = s.DB.QueryContext(ctx, `SELECT work_id, from_node_id, relation, to_node_id FROM work_edges WHERE work_id = ? ORDER BY rowid`, workID)
@@ -225,6 +229,10 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 			return d, err
 		}
 		d.Edges = append(d.Edges, e)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return d, err
 	}
 	rows.Close()
 
@@ -244,6 +252,10 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 		}
 		e.NodeID, e.ObservedAt, e.StaleAt = node.String, ParseTime(observed), nullTime(stale)
 		d.Evidence = append(d.Evidence, e)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return d, err
 	}
 	rows.Close()
 

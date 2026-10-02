@@ -292,9 +292,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	sctx := context.WithoutCancel(ctx)
 	log := e.Log.With("thread", th.ID, "turn", turn.ID)
 	if e.Work != nil {
-		if werr := e.Work.Begin(sctx, th, p.Text); werr != nil {
-			log.Warn("record work", "err", werr)
-		}
+		_ = e.Work.Begin(sctx, th, p.Text) // failures are logged and counted by the service
 	}
 	pause := func(reason string) {
 		e.markPaused(turn.ID)
@@ -954,9 +952,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	riskLevel := ""
 	observe := func(event hooks.Event, output, toolError string, priorContext []string) toolRunResult {
 		if e.Work != nil {
-			if werr := e.Work.Observe(sctx, th.ID, work.Observation{Tool: name, Args: call.Args, Output: output, Err: toolError, Risk: riskLevel, Root: scopeRoot(ctx)}); werr != nil {
-				e.Log.Warn("record work", "thread", th.ID, "tool", name, "err", werr)
-			}
+			_ = e.Work.Observe(sctx, th.ID, work.Observation{Tool: name, Args: call.Args, Output: output, Err: toolError, Risk: riskLevel, Root: scopeRoot(ctx)})
 		}
 		invocation.Event, invocation.ToolOutput, invocation.ToolError = event, output, toolError
 		outcome := e.runPluginHooks(sctx, snapshot, invocation)
@@ -1094,9 +1090,7 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 	_ = e.Store.TouchThread(ctx, th.ID)
 	paused := e.takePaused(turn.ID)
 	if e.Work != nil {
-		if werr := e.Work.End(ctx, th.ID, turn.Status, paused); werr != nil {
-			e.Log.Warn("record work", "thread", th.ID, "err", werr)
-		}
+		_ = e.Work.End(ctx, th.ID, turn.Status, paused)
 	}
 	release()
 	e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
