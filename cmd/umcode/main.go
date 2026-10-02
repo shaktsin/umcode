@@ -48,9 +48,9 @@ Engine
 Projects
   project list [--all]           Folders the agent may work in
   project add [PATH] [--name N] [-p P] [-m M] [-c LEVEL] [--shell=false] [--network]
-  project show ID                Folder, git state, model defaults and AGENT.md
+  project show ID                Folder, git state, model defaults and UMCODE.md
   project instructions ID [-f FILE|-] [--composed]
-                                 Read or write the project's AGENT.md
+                                 Read or write the project's UMCODE.md
   project files ID [PATH] [--depth N] | diff ID [--turn TURN] | revert TURN [PATH…]
   project set ID [--name N] [-p P] [-m M] [-c LEVEL] [-k KEY] [--shell on|off] [--network on|off]
   project archive ID | unarchive ID | remove ID

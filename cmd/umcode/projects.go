@@ -108,7 +108,7 @@ func runProject(args []string) error {
 		fmt.Printf("  compute  %s, network %s\n", onOff(p.Tools.Compute, false), onOff(p.Tools.Network, false))
 		var ins protocol.ProjectInstructionsResult
 		if err := call(protocol.MethodProjectInstructions, protocol.ProjectInstructionsParams{ProjectID: id}, &ins); err == nil {
-			fmt.Printf("  AGENT.md %s\n", ins.Path)
+			fmt.Printf("  UMCODE.md %s\n", ins.Path)
 			for _, s := range ins.Sources {
 				fmt.Printf("           %s: %s (%d bytes)%s\n", s.Scope, home(s.Path), s.Bytes, note(s.Error))
 			}
@@ -121,7 +121,7 @@ func runProject(args []string) error {
 			return err
 		}
 		fs := flag.NewFlagSet("project instructions", flag.ExitOnError)
-		edit := fs.String("f", "", "write the contents of this file as the project's AGENT.md ('-' for stdin)")
+		edit := fs.String("f", "", "write the contents of this file as the project's UMCODE.md ('-' for stdin)")
 		composed := fs.Bool("composed", false, "print the full instructions the agent receives")
 		fs.Parse(rest[1:])
 		params := protocol.ProjectInstructionsParams{ProjectID: id}

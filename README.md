@@ -8,7 +8,7 @@ Choose a project folder and UMCode keeps its chats and project instructions toge
 
 ---
 
-- **Project-aware chats** — work in a selected folder with its `AGENTS.md` or `CLAUDE.md` instructions
+- **Project-aware chats** — work in a selected folder with its `UMCODE.md` instructions
 - **Provider and model choice** — use configured models directly or create ordered pools across providers
 - **Quota-aware routing** — move to the next model in a pool when a provider reports a retryable quota or rate-limit failure
 - **Local controls** — keep chat history, model settings, engine status, and approval workflows in one desktop app
