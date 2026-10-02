@@ -127,6 +127,10 @@ Plugin skills are namespaced as `<plugin>:<skill>`, and plugin MCP servers are n
 
 **Scheduled tasks** are stored in the `tasks` table. Each run becomes a turn in the task's own thread (so you can read its history and cost), with the task's provider/model/complexity. Approvals work as in chat. The agent can create, list and cancel tasks itself (`task.create`, `task.list`, `task.cancel`). A failed one-time task is not retried in a loop. Tasks are leased before running, so a task never runs twice.
 
+## Work record
+
+Each chat keeps a quiet record of what a request set out to do: a goal, the verification criteria the agent planned, the files it changed, failed tools, and each verification attempt with its evidence. A work spans turns until it is resolved: it closes when a turn completes (not paused) with no unresolved criterion, stays open after an interrupted, paused or failed turn, and is marked abandoned when the chat is archived. Recording is best-effort and never changes the chat, the prompt, or a tool result. Read it with `work/list` (`threadId`, newest first) and `work/get` (`workId`).
+
 ## Usage and cost
 
 Every model request writes one row to `llm_usage`: key, provider, model, thread, turn, role (`chat`, `title`), input / cached / output / reasoning tokens, cost, latency and status. Cost uses the bundled price table (`internal/models/catalog.json`, list prices checked 2026-09-18) or your override (`umcode model price`). Models without a known price cost $0 and show `?`. When a provider reports no usage, tokens are estimated and flagged.

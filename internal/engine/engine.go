@@ -353,6 +353,27 @@ func (e *Engine) UpdateThread(ctx context.Context, id string, cols map[string]an
 	return e.Store.GetThread(ctx, id)
 }
 
+// ListWorks returns a thread's works, newest first (never nil).
+func (e *Engine) ListWorks(ctx context.Context, threadID string) (protocol.WorkListResult, error) {
+	works, err := e.Store.ListWorks(ctx, threadID)
+	if err != nil {
+		return protocol.WorkListResult{}, err
+	}
+	if works == nil {
+		works = []protocol.Work{}
+	}
+	return protocol.WorkListResult{Works: works}, nil
+}
+
+// GetWork returns one work with its nodes, edges, evidence and attempts.
+func (e *Engine) GetWork(ctx context.Context, workID string) (protocol.WorkDetail, error) {
+	d, err := e.Store.GetWorkDetail(ctx, workID)
+	if errors.Is(err, store.ErrNotFound) {
+		return protocol.WorkDetail{}, protocol.Errorf(protocol.CodeInvalidParams, "work %s not found", workID)
+	}
+	return d, err
+}
+
 // markPaused records that a turn stopped on a budget pause, which still ends
 // as completed but must leave its work open.
 func (e *Engine) markPaused(turnID string) {
