@@ -199,6 +199,9 @@ type MCPServerConfig struct {
 	DisabledTools     []string          `yaml:"disabled_tools"`
 	// RiskLevel overrides the risk of every tool on this server: green | yellow | red.
 	RiskLevel string `yaml:"risk_level"`
+	// DisableHostEnvExpansion is set for untrusted plugin declarations after
+	// their explicit setting references have been resolved.
+	DisableHostEnvExpansion bool `yaml:"-"`
 }
 
 // IsEnabled defaults to true when unset.

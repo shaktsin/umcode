@@ -25,6 +25,7 @@ package skills
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -156,6 +157,119 @@ type Registry struct {
 	rt   *runtimes
 }
 
+// Root contributes one plugin's skill directories and non-secret settings.
+type Root struct {
+	PluginID      string
+	Paths         []string
+	Config        map[string]any
+	RuntimeValues map[string]string
+	SecretValues  []string
+}
+
+// Snapshot is an immutable set of namespaced plugin skills for one project
+// capability generation.
+type Snapshot struct {
+	byID    map[string]*Skill
+	config  map[string]map[string]any
+	secrets map[string][]string
+}
+
+type snapshotContextKey struct{}
+
+func CompileSnapshot(roots []Root) (*Snapshot, []error) {
+	snapshot := &Snapshot{byID: map[string]*Skill{}, config: map[string]map[string]any{}, secrets: map[string][]string{}}
+	var errs []error
+	for _, root := range roots {
+		for _, skillPath := range root.Paths {
+			skill, err := Parse(skillPath)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("plugin %s skill %s: %w", root.PluginID, skillPath, err))
+				continue
+			}
+			name := root.PluginID + ":" + skill.Name
+			if _, exists := snapshot.byID[name]; exists {
+				errs = append(errs, fmt.Errorf("duplicate plugin skill %s", name))
+				continue
+			}
+			copy := *skill
+			copy.Name = name
+			copy.Runtime.Env = cloneStringMap(skill.Runtime.Env)
+			for key, value := range copy.Runtime.Env {
+				for token, replacement := range root.RuntimeValues {
+					value = strings.ReplaceAll(value, token, replacement)
+				}
+				if strings.Contains(value, "{{secret:") || strings.Contains(value, "{{setting:") {
+					errs = append(errs, fmt.Errorf("plugin %s skill %s runtime references an undeclared or unset plugin setting", root.PluginID, skillPath))
+					continue
+				}
+				copy.Runtime.Env[key] = value
+			}
+			snapshot.byID[name] = &copy
+			snapshot.secrets[name] = append([]string(nil), root.SecretValues...)
+			if root.Config != nil {
+				snapshot.config[name] = cloneAnyMap(root.Config)
+			}
+		}
+	}
+	return snapshot, errs
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return nil
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func WithSnapshot(ctx context.Context, snapshot *Snapshot) context.Context {
+	if snapshot == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, snapshotContextKey{}, snapshot)
+}
+
+func snapshotFromContext(ctx context.Context) *Snapshot {
+	if ctx == nil {
+		return nil
+	}
+	snapshot, _ := ctx.Value(snapshotContextKey{}).(*Snapshot)
+	return snapshot
+}
+
+func (s *Snapshot) Config(name string) map[string]any {
+	if s == nil {
+		return nil
+	}
+	return cloneAnyMap(s.config[name])
+}
+
+func (s *Snapshot) redact(name, value string) string {
+	if s == nil {
+		return value
+	}
+	for _, secret := range s.secrets[name] {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return value
+}
+
+func cloneAnyMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	output := make(map[string]any, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
 // NewRegistry builds a registry for the configured skill directories.
 func NewRegistry(cfg *config.Config) *Registry {
 	return &Registry{cfg: cfg, byID: map[string]*Skill{}, rt: newRuntimes(cfg)}
@@ -239,6 +353,18 @@ func (r *Registry) List() []*Skill {
 	return append(out, r.bad...)
 }
 
+// ListContext returns legacy skills plus the context's namespaced plugin skills.
+func (r *Registry) ListContext(ctx context.Context) []*Skill {
+	out := r.List()
+	if snapshot := snapshotFromContext(ctx); snapshot != nil {
+		for _, skill := range snapshot.byID {
+			out = append(out, skill)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	}
+	return out
+}
+
 // Get returns a valid skill by name.
 func (r *Registry) Get(name string) (*Skill, bool) {
 	r.Refresh()
@@ -248,10 +374,27 @@ func (r *Registry) Get(name string) (*Skill, bool) {
 	return s, ok
 }
 
+func (r *Registry) GetContext(ctx context.Context, name string) (*Skill, bool) {
+	if snapshot := snapshotFromContext(ctx); snapshot != nil {
+		if skill, ok := snapshot.byID[name]; ok {
+			return skill, true
+		}
+	}
+	return r.Get(name)
+}
+
 // Catalog is the short skills list placed in the system prompt.
 func (r *Registry) Catalog() string {
+	return catalog(r.List())
+}
+
+func (r *Registry) CatalogContext(ctx context.Context) string {
+	return catalog(r.ListContext(ctx))
+}
+
+func catalog(skills []*Skill) string {
 	var b strings.Builder
-	for _, s := range r.List() {
+	for _, s := range skills {
 		if s.Error != "" {
 			continue
 		}
@@ -280,13 +423,21 @@ var tokenRE = regexp.MustCompile(`[a-z0-9]+`)
 // Match returns the skill whose description shares the most keywords with
 // text (at least one), like the Python app's trigger matching.
 func (r *Registry) Match(text string) (*Skill, bool) {
+	return matchSkills(r.List(), text)
+}
+
+func (r *Registry) MatchContext(ctx context.Context, text string) (*Skill, bool) {
+	return matchSkills(r.ListContext(ctx), text)
+}
+
+func matchSkills(skills []*Skill, text string) (*Skill, bool) {
 	words := map[string]bool{}
 	for _, w := range tokenRE.FindAllString(strings.ToLower(text), -1) {
 		words[w] = true
 	}
 	var best *Skill
 	bestScore := 0
-	for _, s := range r.List() {
+	for _, s := range skills {
 		if s.Error != "" {
 			continue
 		}

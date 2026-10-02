@@ -1,0 +1,5 @@
+{
+  "name": "overlay-must-not-win",
+  "version": "9.9.9",
+  "hooks": "./hooks/hooks.json"
+}

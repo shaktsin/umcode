@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/hooks"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -39,18 +40,50 @@ func (e *Engine) CompactThread(ctx context.Context, threadID string) error {
 		e.mu.Unlock()
 	}()
 
-	return e.compactLocked(ctx, threadID, "")
+	var snapshot pluginSnapshot
+	if e.Plugins != nil {
+		thread, err := e.Store.GetThread(ctx, threadID)
+		if err != nil {
+			return err
+		}
+		acquired, err := e.Plugins.Acquire(ctx, thread.ProjectID)
+		if err != nil {
+			return fmt.Errorf("load project plugins: %w", err)
+		}
+		snapshot = acquired
+		defer snapshot.Release()
+	}
+	return e.compactLocked(ctx, threadID, "", snapshot)
 }
 
 // compactLocked summarizes the context of every turn except currentTurn and
 // stores the summary on the newest of those turns. The caller must hold the
 // thread's turn lock (a manual compaction takes it; a running turn already has
 // it). currentTurn is empty for a manual compaction.
-func (e *Engine) compactLocked(ctx context.Context, threadID, currentTurn string) error {
+func (e *Engine) compactLocked(ctx context.Context, threadID, currentTurn string, snapshot pluginSnapshot) error {
 	thread, err := e.Store.GetThread(ctx, threadID)
 	if err != nil {
 		return err
 	}
+	return e.withCompactionHooks(ctx, snapshot, thread, currentTurn, func() error {
+		return e.compactConversation(ctx, thread, currentTurn)
+	})
+}
+
+func (e *Engine) withCompactionHooks(ctx context.Context, snapshot pluginSnapshot, thread protocol.Thread, currentTurn string, compact func() error) error {
+	invocation := hooks.Invocation{Event: hooks.BeforeCompaction, ProjectID: thread.ProjectID, ThreadID: thread.ID, TurnID: currentTurn}
+	e.runPluginHooks(ctx, snapshot, invocation)
+	err := compact()
+	invocation.Event = hooks.AfterCompaction
+	if err != nil {
+		invocation.ToolError = err.Error()
+	}
+	e.runPluginHooks(ctx, snapshot, invocation)
+	return err
+}
+
+func (e *Engine) compactConversation(ctx context.Context, thread protocol.Thread, currentTurn string) error {
+	threadID := thread.ID
 	allTurns, err := e.Store.ListTurns(ctx, threadID)
 	if err != nil {
 		return err

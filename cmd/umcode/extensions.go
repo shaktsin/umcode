@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,172 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/tasks"
 )
+
+// ---- plugins ----
+
+func runPlugin(args []string) error {
+	if len(args) == 0 {
+		args = []string{"list"}
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "inspect":
+		if len(rest) != 1 {
+			return errors.New("usage: umcode plugin inspect SOURCE")
+		}
+		var inspection protocol.PluginInspection
+		if err := call(protocol.MethodPluginInspect, protocol.PluginInspectParams{Source: rest[0]}, &inspection); err != nil {
+			return err
+		}
+		fmt.Printf("%s %s (%s)\n", inspection.Plugin.Name, or(inspection.Plugin.Version, "unversioned"), inspection.Plugin.Format)
+		fmt.Printf("Source: %s\nMode: %s\nComponents: %d\nRequires approval: %t\nToken: %s\n", inspection.Source, inspection.Mode, len(inspection.Plugin.Components), inspection.RequiresApproval, inspection.Token)
+		return nil
+	case "install":
+		source, projectID, linked, err := parsePluginInstallArgs(rest)
+		if err != nil {
+			return errors.New("usage: umcode plugin install [--linked] [--project ID] SOURCE")
+		}
+		mode := "managed"
+		if linked {
+			mode = "linked"
+		}
+		var inspection protocol.PluginInspection
+		if err := call(protocol.MethodPluginInspect, protocol.PluginInspectParams{Source: source, Mode: mode}, &inspection); err != nil {
+			return err
+		}
+		var installed protocol.PluginInfo
+		if err := call(protocol.MethodPluginInstall, protocol.PluginInstallParams{Token: inspection.Token, ProjectID: projectID}, &installed); err != nil {
+			return err
+		}
+		fmt.Printf("Installed %s (%s) as %s.\n", installed.Name, or(installed.Version, "unversioned"), installed.ID)
+		return nil
+	case "list", "ls":
+		fs := flag.NewFlagSet("plugin list", flag.ExitOnError)
+		projectID := fs.String("project", "", "show enablement for this project")
+		fs.Parse(rest)
+		var result protocol.PluginListResult
+		if err := call(protocol.MethodPluginList, protocol.PluginListParams{ProjectID: *projectID}, &result); err != nil {
+			return err
+		}
+		if len(result.Plugins) == 0 {
+			fmt.Println("No plugins installed.")
+			return nil
+		}
+		w := table()
+		fmt.Fprintln(w, "ID\tNAME\tVERSION\tFORMAT\tMODE\tENABLED\tCOMPONENTS")
+		for _, plugin := range result.Plugins {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%t\t%d\n", plugin.ID, plugin.Name, or(plugin.Version, "-"), plugin.Format, plugin.Mode, plugin.Enabled, len(plugin.Components))
+		}
+		return w.Flush()
+	case "show":
+		if len(rest) != 1 {
+			return errors.New("usage: umcode plugin show ID")
+		}
+		var plugin protocol.PluginInfo
+		if err := call(protocol.MethodPluginGet, protocol.PluginGetParams{PluginID: rest[0]}, &plugin); err != nil {
+			return err
+		}
+		data, _ := json.MarshalIndent(plugin, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	case "enable", "disable":
+		pluginID, projectID, err := parsePluginProjectArgs(rest)
+		if err != nil {
+			return fmt.Errorf("usage: umcode plugin %s --project ID PLUGIN_ID", sub)
+		}
+		var plugin protocol.PluginInfo
+		if err := call(protocol.MethodPluginSetEnabled, protocol.PluginSetEnabledParams{PluginID: pluginID, ProjectID: projectID, Enabled: sub == "enable"}, &plugin); err != nil {
+			return err
+		}
+		verb := "Enabled"
+		if sub == "disable" {
+			verb = "Disabled"
+		}
+		fmt.Printf("%s %s for project %s.\n", verb, plugin.Name, projectID)
+		return nil
+	case "reload":
+		if len(rest) != 1 {
+			return errors.New("usage: umcode plugin reload ID")
+		}
+		var plugin protocol.PluginInfo
+		if err := call(protocol.MethodPluginReload, protocol.PluginIDParams{PluginID: rest[0]}, &plugin); err != nil {
+			return err
+		}
+		fmt.Printf("Reloaded %s (%s).\n", plugin.Name, or(plugin.Version, "unversioned"))
+		return nil
+	case "remove", "rm", "uninstall":
+		pluginID, disable, err := parsePluginRemoveArgs(rest)
+		if err != nil {
+			return errors.New("usage: umcode plugin remove [--disable-projects] ID")
+		}
+		if err := call(protocol.MethodPluginUninstall, protocol.PluginUninstallParams{PluginID: pluginID, DisableProjects: disable}, nil); err != nil {
+			return err
+		}
+		fmt.Println("Removed.")
+		return nil
+	default:
+		return fmt.Errorf("unknown plugin command %q", sub)
+	}
+}
+
+func parsePluginInstallArgs(args []string) (source, projectID string, linked bool, err error) {
+	for index := 0; index < len(args); index++ {
+		switch {
+		case args[index] == "--linked":
+			linked = true
+		case args[index] == "--project" && index+1 < len(args):
+			index++
+			projectID = args[index]
+		case strings.HasPrefix(args[index], "--project="):
+			projectID = strings.TrimPrefix(args[index], "--project=")
+		case strings.HasPrefix(args[index], "-") || source != "":
+			return "", "", false, errors.New("invalid plugin install arguments")
+		default:
+			source = args[index]
+		}
+	}
+	if source == "" {
+		err = errors.New("source is required")
+	}
+	return
+}
+
+func parsePluginProjectArgs(args []string) (pluginID, projectID string, err error) {
+	for index := 0; index < len(args); index++ {
+		switch {
+		case args[index] == "--project" && index+1 < len(args):
+			index++
+			projectID = args[index]
+		case strings.HasPrefix(args[index], "--project="):
+			projectID = strings.TrimPrefix(args[index], "--project=")
+		case strings.HasPrefix(args[index], "-") || pluginID != "":
+			return "", "", errors.New("invalid plugin project arguments")
+		default:
+			pluginID = args[index]
+		}
+	}
+	if pluginID == "" || projectID == "" {
+		err = errors.New("plugin and project are required")
+	}
+	return
+}
+
+func parsePluginRemoveArgs(args []string) (pluginID string, disable bool, err error) {
+	for _, arg := range args {
+		switch {
+		case arg == "--disable-projects":
+			disable = true
+		case strings.HasPrefix(arg, "-") || pluginID != "":
+			return "", false, errors.New("invalid plugin remove arguments")
+		default:
+			pluginID = arg
+		}
+	}
+	if pluginID == "" {
+		err = errors.New("plugin is required")
+	}
+	return
+}
 
 // ---- tasks ----
 
