@@ -61,6 +61,22 @@ func TestAdaptersNormalizeEquivalentCapabilities(t *testing.T) {
 	}
 }
 
+func TestClaudeAdapterLoadsInlineHooks(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".claude-plugin", "plugin.json"), `{"name":"inline-hooks","version":"1.0.0","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"hook-helper","timeout":12}]}]}}`)
+
+	pkg, err := LoadPackage(root)
+	if err != nil {
+		t.Fatalf("LoadPackage() error = %v", err)
+	}
+	if pkg.Format != FormatClaude {
+		t.Fatalf("Format = %q, want %q", pkg.Format, FormatClaude)
+	}
+	if len(pkg.Hooks) != 1 || pkg.Hooks[0].Event != hooks.TurnStart || pkg.Hooks[0].Command != "hook-helper" || pkg.Hooks[0].Timeout.Seconds() != 12 {
+		t.Fatalf("Hooks = %#v, want one TurnStart hook-helper hook with a 12 second timeout", pkg.Hooks)
+	}
+}
+
 func TestPortableManifestWinsOverCodexOverlayIdentity(t *testing.T) {
 	t.Parallel()
 

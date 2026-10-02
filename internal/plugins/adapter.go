@@ -243,9 +243,13 @@ func loadHooksPath(root, pluginID, resource string) ([]hooks.Declaration, []Diag
 	if err != nil {
 		return nil, nil, err
 	}
+	return loadHooksBytes(root, pluginID, rel, data)
+}
+
+func loadHooksBytes(root, pluginID, source string, data []byte) ([]hooks.Declaration, []Diagnostic, error) {
 	var raw rawHooksFile
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, nil, pluginError("adapt", "adapt/invalid_hooks", rel, "invalid hooks declaration", "Correct the hooks JSON.", err)
+		return nil, nil, pluginError("adapt", "adapt/invalid_hooks", source, "invalid hooks declaration", "Correct the hooks JSON.", err)
 	}
 	var declarations []hooks.Declaration
 	var diagnostics []Diagnostic
@@ -266,7 +270,7 @@ func loadHooksPath(root, pluginID, resource string) ([]hooks.Declaration, []Diag
 				if timeout == 0 {
 					timeout = entry.Timeout
 				}
-				declaration := hooks.Declaration{PluginID: pluginID, Root: root, Source: rel, Event: event, Matcher: group.Matcher, Command: strings.TrimSpace(entry.Command), Args: entry.Args, Env: entry.Env, Required: entry.Required, Order: order}
+				declaration := hooks.Declaration{PluginID: pluginID, Root: root, Source: source, Event: event, Matcher: group.Matcher, Command: strings.TrimSpace(entry.Command), Args: entry.Args, Env: entry.Env, Required: entry.Required, Order: order}
 				if timeout > 0 {
 					declaration.Timeout = durationSeconds(timeout)
 				}

@@ -1,6 +1,7 @@
 package plugins
 
 import (
+	"bytes"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -56,17 +57,30 @@ func (claudeAdapter) Load(root string) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	hookPaths, err := decodePaths(manifest.Hooks, "./hooks/hooks.json")
-	if err != nil {
-		return Package{}, pluginError("adapt", "adapt/invalid_hooks", "hooks", "hooks must be a path or path array", "Reference package-relative hooks files.", err)
-	}
-	for _, path := range hookPaths {
-		declarations, diagnostics, err := loadHooksPath(root, pkg.ID, path)
+	if raw := bytes.TrimSpace(manifest.Hooks); len(raw) > 0 && raw[0] == '{' {
+		// Claude declares hooks inline as an event-keyed object, while the shared
+		// hooks loader consumes the hooks.json wrapper used by Codex and portable plugins.
+		wrapped := append([]byte(`{"hooks":`), raw...)
+		wrapped = append(wrapped, '}')
+		declarations, diagnostics, err := loadHooksBytes(root, pkg.ID, ".claude-plugin/plugin.json#hooks", wrapped)
 		if err != nil {
 			return Package{}, err
 		}
 		pkg.Hooks = append(pkg.Hooks, declarations...)
 		pkg.Diagnostics = append(pkg.Diagnostics, diagnostics...)
+	} else {
+		hookPaths, err := decodePaths(manifest.Hooks, "./hooks/hooks.json")
+		if err != nil {
+			return Package{}, pluginError("adapt", "adapt/invalid_hooks", "hooks", "hooks must be an object, path, or path array", "Use Claude's inline hooks object or reference package-relative hooks files.", err)
+		}
+		for _, path := range hookPaths {
+			declarations, diagnostics, err := loadHooksPath(root, pkg.ID, path)
+			if err != nil {
+				return Package{}, err
+			}
+			pkg.Hooks = append(pkg.Hooks, declarations...)
+			pkg.Diagnostics = append(pkg.Diagnostics, diagnostics...)
+		}
 	}
 	if err := addUnsupportedPaths(root, &pkg, "agent", manifest.Agents); err != nil {
 		return Package{}, err
