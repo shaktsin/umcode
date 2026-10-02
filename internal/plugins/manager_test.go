@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
 )
@@ -52,6 +53,96 @@ func TestSnapshotIncludesNamespacedMCPTools(t *testing.T) {
 		t.Fatalf("tool call = %q, %v", out, err)
 	}
 }
+
+func TestPluginMCPRejectsHostEnvironmentForwarding(t *testing.T) {
+	t.Setenv("ENGINE_SECRET", "must-not-leak")
+	root := t.TempDir()
+	writeInstallerManifest(t, root, "1.0.0")
+	writeInstallerFile(t, filepath.Join(root, "mcp.json"), `{"mcpServers":{"bad":{"type":"stdio","command":"missing","env_vars":["ENGINE_SECRET"],"required":true}}}`)
+	manager, _, project, _ := pluginTestManager(t, t.Context(), root)
+	if _, err := manager.Acquire(t.Context(), project.ID); err == nil || !strings.Contains(err.Error(), "host environment") {
+		t.Fatalf("Acquire error = %v, want host environment rejection", err)
+	}
+}
+
+func TestPluginMCPResolvesDeclaredSecretReference(t *testing.T) {
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		authorization = request.Header.Get("Authorization")
+		var message map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&message)
+		writer.Header().Set("Content-Type", "application/json")
+		id := message["id"]
+		switch message["method"] {
+		case "initialize":
+			_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"protocolVersion": "2025-06-18", "serverInfo": map[string]any{"name": "secure", "version": "1"}}})
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"tools": []any{map[string]any{"name": "echo", "description": "credential=" + "plugin-token", "inputSchema": map[string]any{"type": "object", "description": "plugin-token"}}}}})
+		case "tools/call":
+			_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "echoed plugin-token"}}}})
+		}
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	writeInstallerFile(t, filepath.Join(root, "plugin.json"), `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-plugin","version":"1.0.0","settings":[{"name":"api_key","secret":true,"required":true}]}`)
+	writeInstallerFile(t, filepath.Join(root, "mcp.json"), fmt.Sprintf(`{"mcpServers":{"secure":{"type":"http","url":%q,"http_headers":{"Authorization":"Bearer {{secret:api_key}}"},"required":true}}}`, server.URL))
+	manager, st, project, installation := pluginTestManager(t, t.Context(), root)
+	manager.Close()
+	secretStore := secrets.NewMemoryStore()
+	if err := secretStore.Set("plugin/"+installation.ID+"/api_key", "plugin-token"); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(Options{Store: st, Secrets: secretStore, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	snapshot, err := manager.Acquire(t.Context(), project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, ok := snapshot.Tool("mcp_sample-plugin__secure_echo")
+	if !ok {
+		t.Fatalf("secret MCP tool missing from snapshot: %v", toolNames(snapshot.Tools()))
+	}
+	if strings.Contains(tool.Description(), "plugin-token") || strings.Contains(string(tool.Schema()), "plugin-token") {
+		t.Fatalf("secret leaked through tool metadata: %q %s", tool.Description(), tool.Schema())
+	}
+	out, callErr := tool.Call(t.Context(), json.RawMessage(`{}`))
+	if strings.Contains(out, "plugin-token") || (callErr != nil && strings.Contains(callErr.Error(), "plugin-token")) {
+		t.Fatalf("secret leaked through MCP result: %q %v", out, callErr)
+	}
+	snapshot.Release()
+	if authorization != "Bearer plugin-token" {
+		t.Fatalf("Authorization = %q", authorization)
+	}
+}
+
+func TestPluginMCPToolRedactsSecretFromResultsAndErrors(t *testing.T) {
+	secret := `plugin "quoted" token\\do-not-leak`
+	wrapped := &redactingTool{Tool: testTool{result: secret, err: fmt.Errorf("server echoed %s", secret)}, values: []string{secret}}
+	out, err := wrapped.Call(t.Context(), json.RawMessage(`{}`))
+	encoded, _ := json.Marshal(map[string]string{"secret": secret})
+	if strings.Contains(out, secret) || strings.Contains(err.Error(), secret) || !strings.Contains(out, "[REDACTED]") || strings.Contains(string(wrapped.Schema()), string(encoded)) || strings.Contains(string(wrapped.Schema()), `\"quoted\"`) {
+		t.Fatalf("redaction failed: output=%q err=%v", out, err)
+	}
+}
+
+type testTool struct {
+	result string
+	err    error
+}
+
+func (t testTool) Name() string        { return "test" }
+func (t testTool) Description() string { return t.result }
+func (t testTool) Schema() json.RawMessage {
+	value, _ := json.Marshal(map[string]string{"description": t.result})
+	return value
+}
+func (t testTool) Assess(json.RawMessage) (tools.Risk, string)           { return tools.RiskGreen, "" }
+func (t testTool) Call(context.Context, json.RawMessage) (string, error) { return t.result, t.err }
 
 func TestSnapshotReferenceKeepsOldVersionAlive(t *testing.T) {
 	ctx := context.Background()
@@ -125,7 +216,7 @@ func TestDisableAffectsOnlyNewSnapshots(t *testing.T) {
 	}
 }
 
-func TestActivationFailureRollsBackAndClosesProcesses(t *testing.T) {
+func TestActivationFailureKeepsFallbackProjectLocalAndClosesProcesses(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process liveness assertion uses signal 0")
 	}
@@ -162,9 +253,9 @@ func TestActivationFailureRollsBackAndClosesProcesses(t *testing.T) {
 	if out, err := tool.Call(ctx, nil); err != nil || out != "stable" {
 		t.Fatalf("fallback tool = %q, %v", out, err)
 	}
-	rolledBack, err := st.GetPluginInstallation(ctx, installation.ID)
-	if err != nil || rolledBack.Root != oldRoot || rolledBack.Version != "1.0.0" {
-		t.Fatalf("installation rollback = %#v, %v", rolledBack, err)
+	unchanged, err := st.GetPluginInstallation(ctx, installation.ID)
+	if err != nil || unchanged.Root != failingRoot || unchanged.Version != "2.0.0" {
+		t.Fatalf("project-local fallback mutated global installation: %#v, %v", unchanged, err)
 	}
 	pidBytes, err := os.ReadFile(pidPath)
 	if err != nil {

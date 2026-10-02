@@ -40,6 +40,19 @@ func TestTurnStartHookContextReachesModel(t *testing.T) {
 	}
 }
 
+func TestPluginHookWarningCreatesUserVisibleTurnItem(t *testing.T) {
+	e, th, turn, st := pluginHookEngine(t)
+	snapshot := &fakePluginSnapshot{hookSet: hookSet(t, hooks.TurnStart, `{"version":1,"warning":"plugin needs attention"}`)}
+	e.runPluginHooks(t.Context(), snapshot, hooks.Invocation{Event: hooks.TurnStart, ThreadID: th.ID, TurnID: turn.ID})
+	items, err := st.ListItems(t.Context(), th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Kind != protocol.ItemError || !strings.Contains(items[0].Text, "plugin needs attention") {
+		t.Fatalf("warning items = %#v", items)
+	}
+}
+
 func TestBeforeToolHookCanBlock(t *testing.T) {
 	e, th, turn, _ := pluginHookEngine(t)
 	tool := &engineTestTool{name: "test.safe", risk: tools.RiskGreen, output: "ran"}
@@ -105,6 +118,36 @@ func TestPluginHookCannotBypassToolPolicy(t *testing.T) {
 			t.Fatalf("approval result = %#v, calls=%d", result, tool.calls.Load())
 		}
 	})
+}
+
+func TestRedPluginSkillRequiresApproval(t *testing.T) {
+	e, th, turn, st := pluginHookEngine(t)
+	th.ApprovalMode = policy.ApprovalNormal
+	skillRoot := filepath.Join(t.TempDir(), "danger")
+	if err := os.MkdirAll(skillRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillRoot, "SKILL.md"), []byte("---\nname: danger\ndescription: dangerous plugin skill\nrisk_level: red\nscripts:\n  run:\n    path: run.sh\n---\nDangerous.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillRoot, "run.sh"), []byte("#!/bin/sh\necho ran\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	skillSnapshot, errs := skills.CompileSnapshot([]skills.Root{{PluginID: "plugin", Paths: []string{skillRoot}}})
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	e.Skills.Register(e.Tools)
+	snapshot := &fakePluginSnapshot{skills: skillSnapshot}
+	args := json.RawMessage(`{"skill":"plugin:danger","script":"run","args":{}}`)
+	if err := st.RememberThreadDecision(t.Context(), th.ID, "skill.run_script", ApprovalSignature("skill.run_script", args), "deny"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := skills.WithSnapshot(t.Context(), skillSnapshot)
+	result := e.runTool(ctx, ctx, th, turn, llm.ToolCall{ID: "red-skill", Name: tools.ToWire("skill.run_script"), Args: args}, snapshot)
+	if !result.IsError || !strings.Contains(strings.ToLower(result.Output), "denied") {
+		t.Fatalf("red plugin skill bypassed approval: %#v", result)
+	}
 }
 
 func TestTurnCompleteHookRunsOnFailureAndSuccess(t *testing.T) {

@@ -46,6 +46,12 @@ type Tool interface {
 	Call(ctx context.Context, args json.RawMessage) (string, error)
 }
 
+// ContextAssessor lets tools whose metadata is scoped to a turn (for example
+// plugin skills) assess risk from that turn's immutable capability snapshot.
+type ContextAssessor interface {
+	AssessContext(context.Context, json.RawMessage) (Risk, string)
+}
+
 // Guard is implemented by tools that can refuse a call outright, before any
 // approval is requested (for example a destructive shell command).
 type Guard interface {

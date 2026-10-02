@@ -111,7 +111,7 @@ Uninstall refuses while any project enables the plugin unless the request explic
 
 ### Linked development mode
 
-Linked mode is explicit and accepts only a local folder. It never becomes the default merely because a source is local. The UI labels linked plugins and explains that source edits affect execution.
+Linked mode is explicit and accepts only a local folder. It never becomes the default merely because a source is local. Linked records track the source folder, but each active generation runs from an immutable content-addressed snapshot; edits take effect only after an explicit reload. The UI labels linked plugins and explains this workflow.
 
 Reload re-runs detection, normalization, and validation, then atomically replaces the active capability snapshot. A failed reload leaves the prior valid snapshot active.
 
@@ -122,6 +122,8 @@ Global installation records package identity and provenance. Project configurati
 Installation, active-version, project-enablement, settings, component-health, and hook-audit records are persisted in the existing SQLite store through new migrations. The filesystem cache contains package payloads only and is not the authority for enablement.
 
 Secret values are stored through UMCode's protected credential mechanism. Manifests and project settings contain references, never secret values. Hook logs, compatibility reports, audit records, and model-visible context redact secret values.
+
+Runtime declarations use `{{setting:name}}` for validated non-secret values and `{{secret:name}}` for protected values. Plugin MCP declarations cannot forward arbitrary host environment variables; sensitive headers must use declared secret references.
 
 Plugins containing executable hooks or subprocess MCP servers require explicit review during installation. UMCode does not support third-party install scripts in this release.
 

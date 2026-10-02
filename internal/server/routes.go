@@ -406,7 +406,7 @@ func (s *Server) routes() map[string]handler {
 				e.Plugins.Invalidate(p.ProjectID)
 			}
 			_ = e.Store.Audit(ctx, "plugin.install", map[string]any{"plugin": installed.ID, "project": p.ProjectID, "mode": installed.Mode})
-			return pluginInfo(ctx, e.Store, installed, p.ProjectID)
+			return pluginInfo(ctx, e.Store, e.Secrets, e.Plugins, installed, p.ProjectID)
 		}),
 		protocol.MethodPluginList: bind(func(ctx context.Context, c *conn, p protocol.PluginListParams) (any, error) {
 			installed, err := e.Store.ListPluginInstallations(ctx)
@@ -415,7 +415,7 @@ func (s *Server) routes() map[string]handler {
 			}
 			result := protocol.PluginListResult{Plugins: []protocol.PluginInfo{}}
 			for _, installation := range installed {
-				info, infoErr := pluginInfo(ctx, e.Store, installation, p.ProjectID)
+				info, infoErr := pluginInfo(ctx, e.Store, e.Secrets, e.Plugins, installation, p.ProjectID)
 				if infoErr != nil {
 					return nil, pluginRPCError(infoErr, installation.ID)
 				}
@@ -428,31 +428,46 @@ func (s *Server) routes() map[string]handler {
 			if err != nil {
 				return nil, pluginRPCError(err, p.PluginID)
 			}
-			return pluginInfo(ctx, e.Store, installed, p.ProjectID)
+			return pluginInfo(ctx, e.Store, e.Secrets, e.Plugins, installed, p.ProjectID)
 		}),
 		protocol.MethodPluginSetEnabled: bind(func(ctx context.Context, c *conn, p protocol.PluginSetEnabledParams) (any, error) {
 			if p.PluginID == "" || p.ProjectID == "" {
 				return nil, protocol.Errorf(protocol.CodeInvalidParams, "pluginId and projectId are required")
 			}
+			activate, finishMutation := e.Plugins.BeginLifecycleMutation()
+			defer finishMutation()
 			current, err := e.Store.ProjectPlugin(ctx, p.ProjectID, p.PluginID)
+			hadCurrent := err == nil
 			if errors.Is(err, store.ErrNotFound) {
 				current = store.ProjectPlugin{ProjectID: p.ProjectID, PluginID: p.PluginID, Settings: map[string]any{}}
 			} else if err != nil {
 				return nil, err
 			}
+			previous := current
 			current.Enabled = p.Enabled
 			if err := e.Store.SetProjectPlugin(ctx, current); err != nil {
 				return nil, err
 			}
-			e.Plugins.Invalidate(p.ProjectID)
+			if err := activate(ctx, []string{p.ProjectID}); err != nil {
+				if hadCurrent {
+					_ = e.Store.SetProjectPlugin(ctx, previous)
+				} else {
+					previous.Enabled = false
+					_ = e.Store.SetProjectPlugin(ctx, previous)
+				}
+				_ = activate(ctx, []string{p.ProjectID})
+				return nil, pluginRPCError(&plugins.Error{Diagnostic: plugins.Diagnostic{Phase: "activate", Code: "activate/required_component", Severity: plugins.SeverityError, Message: "plugin activation failed: " + err.Error(), Remediation: "Fix the required component before enabling the plugin."}, Cause: err}, p.PluginID)
+			}
 			_ = e.Store.Audit(ctx, "plugin.set_enabled", map[string]any{"plugin": p.PluginID, "project": p.ProjectID, "enabled": p.Enabled})
 			installed, err := e.Store.GetPluginInstallation(ctx, p.PluginID)
 			if err != nil {
 				return nil, err
 			}
-			return pluginInfo(ctx, e.Store, installed, p.ProjectID)
+			return pluginInfo(ctx, e.Store, e.Secrets, e.Plugins, installed, p.ProjectID)
 		}),
 		protocol.MethodPluginConfigure: bind(func(ctx context.Context, c *conn, p protocol.PluginConfigureParams) (any, error) {
+			activate, finishMutation := e.Plugins.BeginLifecycleMutation()
+			defer finishMutation()
 			installed, err := e.Store.GetPluginInstallation(ctx, p.PluginID)
 			if err != nil {
 				return nil, pluginRPCError(err, p.PluginID)
@@ -461,7 +476,7 @@ func (s *Server) routes() map[string]handler {
 			if err != nil {
 				return nil, pluginRPCError(err, p.PluginID)
 			}
-			if err := configurePluginSecrets(e.Secrets, p.PluginID, pkg, p.Secrets); err != nil {
+			if err := validatePluginConfiguration(e.Secrets, p.PluginID, pkg, p.Settings, p.Secrets); err != nil {
 				return nil, protocol.Errorf(protocol.CodeInvalidParams, "%v", err)
 			}
 			current, err := e.Store.ProjectPlugin(ctx, p.ProjectID, p.PluginID)
@@ -470,16 +485,31 @@ func (s *Server) routes() map[string]handler {
 			} else if err != nil {
 				return nil, err
 			}
+			previous := current
+			rollbackSecrets, err := configurePluginSecrets(e.Secrets, p.PluginID, pkg, p.Secrets)
+			if err != nil {
+				return nil, protocol.Errorf(protocol.CodeInvalidParams, "%v", err)
+			}
 			current.Settings = p.Settings
 			if current.Settings == nil {
 				current.Settings = map[string]any{}
 			}
 			if err := e.Store.SetProjectPlugin(ctx, current); err != nil {
+				rollbackSecrets()
 				return nil, err
 			}
-			e.Plugins.Invalidate(p.ProjectID)
+			if current.Enabled {
+				if err := activate(ctx, []string{p.ProjectID}); err != nil {
+					_ = e.Store.SetProjectPlugin(ctx, previous)
+					rollbackSecrets()
+					_ = activate(ctx, []string{p.ProjectID})
+					return nil, pluginRPCError(&plugins.Error{Diagnostic: plugins.Diagnostic{Phase: "activate", Code: "activate/configuration", Severity: plugins.SeverityError, Message: "plugin configuration could not activate: " + err.Error(), Remediation: "Correct the plugin settings and try again."}, Cause: err}, p.PluginID)
+				}
+			} else {
+				e.Plugins.Invalidate(p.ProjectID)
+			}
 			_ = e.Store.Audit(ctx, "plugin.configure", map[string]any{"plugin": p.PluginID, "project": p.ProjectID, "settingNames": sortedKeys(p.Settings), "secretNames": sortedKeys(p.Secrets)})
-			return pluginInfo(ctx, e.Store, installed, p.ProjectID)
+			return pluginInfo(ctx, e.Store, e.Secrets, e.Plugins, installed, p.ProjectID)
 		}),
 		protocol.MethodPluginReload: bind(func(ctx context.Context, c *conn, p protocol.PluginIDParams) (any, error) {
 			updated, err := e.Installer.Reload(ctx, p.PluginID)
@@ -494,31 +524,41 @@ func (s *Server) routes() map[string]handler {
 				e.Plugins.Invalidate(projectID)
 			}
 			_ = e.Store.Audit(ctx, "plugin.reload", map[string]any{"plugin": p.PluginID})
-			return pluginInfo(ctx, e.Store, updated, "")
+			return pluginInfo(ctx, e.Store, e.Secrets, e.Plugins, updated, "")
 		}),
 		protocol.MethodPluginUninstall: bind(func(ctx context.Context, c *conn, p protocol.PluginUninstallParams) (any, error) {
-			installed, err := e.Store.GetPluginInstallation(ctx, p.PluginID)
-			if err != nil {
-				return nil, pluginRPCError(err, p.PluginID)
-			}
-			pkg, err := plugins.LoadPackage(installed.Root)
-			if err != nil {
-				return nil, pluginRPCError(err, p.PluginID)
-			}
-			projects, err := e.Store.ProjectsUsingPlugin(ctx, p.PluginID)
-			if err != nil {
-				return nil, err
-			}
-			if err := e.Installer.Uninstall(ctx, p.PluginID, p.DisableProjects); err != nil {
-				return nil, pluginRPCError(err, p.PluginID)
-			}
-			for _, projectID := range projects {
-				e.Plugins.Invalidate(projectID)
-			}
-			for _, setting := range pkg.Settings {
-				if setting.Secret {
-					_ = e.Secrets.Delete("plugin/" + p.PluginID + "/" + setting.Name)
+			err := e.Installer.UninstallWithCleanup(ctx, p.PluginID, p.DisableProjects, func(installed store.PluginInstallation) error {
+				pkg, err := plugins.LoadPackage(installed.Root)
+				if err != nil {
+					return err
 				}
+				type savedSecret struct{ name, value string }
+				var saved []savedSecret
+				for _, setting := range pkg.Settings {
+					if !setting.Secret {
+						continue
+					}
+					value, err := e.Secrets.Get("plugin/" + p.PluginID + "/" + setting.Name)
+					if errors.Is(err, secrets.ErrNotFound) {
+						continue
+					}
+					if err != nil {
+						return err
+					}
+					saved = append(saved, savedSecret{setting.Name, value})
+				}
+				for _, item := range saved {
+					if err := e.Secrets.Delete("plugin/" + p.PluginID + "/" + item.name); err != nil {
+						for _, restore := range saved {
+							_ = e.Secrets.Set("plugin/"+p.PluginID+"/"+restore.name, restore.value)
+						}
+						return err
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, pluginRPCError(err, p.PluginID)
 			}
 			_ = e.Store.Audit(ctx, "plugin.uninstall", map[string]any{"plugin": p.PluginID, "disabledProjects": p.DisableProjects})
 			return okResult{true}, nil
@@ -600,7 +640,7 @@ func pluginInspection(inspection plugins.Inspection) protocol.PluginInspection {
 	}
 }
 
-func pluginInfo(ctx context.Context, st *store.Store, installed store.PluginInstallation, projectID string) (protocol.PluginInfo, error) {
+func pluginInfo(ctx context.Context, st *store.Store, secretStore secrets.Store, manager *plugins.Manager, installed store.PluginInstallation, projectID string) (protocol.PluginInfo, error) {
 	pkg, err := plugins.LoadPackage(installed.Root)
 	if err != nil {
 		return protocol.PluginInfo{}, err
@@ -619,19 +659,101 @@ func pluginInfo(ctx context.Context, st *store.Store, installed store.PluginInst
 	if info.Settings == nil {
 		info.Settings = map[string]any{}
 	}
+	if manager != nil && projectID != "" {
+		componentHealth := manager.ComponentHealth(projectID, installed.ID)
+		if len(componentHealth) == 0 {
+			persisted, healthErr := st.ListPluginComponentHealth(ctx, installed.ID, projectID)
+			if healthErr != nil {
+				return protocol.PluginInfo{}, healthErr
+			}
+			componentHealth = make(map[string]plugins.ComponentHealth, len(persisted))
+			for _, health := range persisted {
+				componentHealth[health.Component] = plugins.ComponentHealth{Status: health.Status, Error: health.Error}
+			}
+		}
+		for index := range info.Components {
+			if health, ok := componentHealth[info.Components[index].Kind+":"+info.Components[index].Name]; ok {
+				info.Components[index].Health = health.Status
+				info.Components[index].Error = health.Error
+			}
+		}
+	}
+	runs, err := st.ListPluginHookRuns(ctx, installed.ID, projectID, "", 20)
+	if err != nil {
+		return protocol.PluginInfo{}, err
+	}
+	for _, run := range runs {
+		if run.Status == "failed" {
+			info.HookFailures = append(info.HookFailures, protocol.PluginHookFailureInfo{PluginVersion: run.PluginVersion, Event: run.Event, Error: run.Error, CreatedAt: run.CreatedAt})
+		}
+	}
+	info.Health = pluginHealth(info, secretStore, installed.ID)
 	return info, nil
 }
 
 func pluginPackageInfo(pkg plugins.Package) protocol.PluginInfo {
-	info := protocol.PluginInfo{ID: pkg.ID, Name: pkg.Name, Version: pkg.Version, Format: string(pkg.Format), Settings: map[string]any{},
-		Components: []protocol.PluginComponentInfo{}, Diagnostics: pluginDiagnostics(pkg.Diagnostics), Schema: []protocol.PluginSettingInfo{}}
+	info := protocol.PluginInfo{ID: pkg.ID, Name: pkg.Name, Version: pkg.Version, Format: string(pkg.Format), Settings: map[string]any{}, Health: "healthy",
+		Components: []protocol.PluginComponentInfo{}, Diagnostics: pluginDiagnostics(pkg.Diagnostics), Schema: []protocol.PluginSettingInfo{}, Executables: []protocol.PluginExecutableInfo{}, HookFailures: []protocol.PluginHookFailureInfo{}}
 	for _, component := range pkg.Components {
-		info.Components = append(info.Components, protocol.PluginComponentInfo{Kind: component.Kind, Name: component.Name, Path: component.Path, Required: component.Required, Supported: component.Supported})
+		health := "available"
+		if !component.Supported {
+			health = "unsupported"
+		}
+		info.Components = append(info.Components, protocol.PluginComponentInfo{Kind: component.Kind, Name: component.Name, Path: component.Path, Required: component.Required, Supported: component.Supported, Health: health})
 	}
 	for _, setting := range pkg.Settings {
 		info.Schema = append(info.Schema, protocol.PluginSettingInfo{Name: setting.Name, Description: setting.Description, Type: setting.Type, Required: setting.Required, Secret: setting.Secret})
 	}
+	for _, component := range pkg.MCPServers {
+		command := component.Config.Command
+		if component.Config.Transport == "http" {
+			command = component.Config.URL
+		}
+		info.Executables = append(info.Executables, protocol.PluginExecutableInfo{Kind: "mcp", Name: component.Name, Command: command, Args: append([]string(nil), component.Config.Args...), Required: component.Required})
+	}
+	for _, declaration := range pkg.Hooks {
+		info.Executables = append(info.Executables, protocol.PluginExecutableInfo{Kind: "hook", Name: string(declaration.Event), Command: declaration.Command, Args: append([]string(nil), declaration.Args...), Required: declaration.Required})
+	}
+	info.Health = pluginHealth(info, nil, "")
 	return info
+}
+
+func pluginHealth(info protocol.PluginInfo, secretStore secrets.Store, pluginID string) string {
+	if len(info.HookFailures) > 0 {
+		return "partially_unavailable"
+	}
+	for _, component := range info.Components {
+		if component.Health == "failed" || component.Health == "stopped" {
+			return "partially_unavailable"
+		}
+	}
+	for _, diagnostic := range info.Diagnostics {
+		if diagnostic.Severity == "error" {
+			return "activation_failed"
+		}
+	}
+	for _, setting := range info.Schema {
+		if !setting.Required {
+			continue
+		}
+		if setting.Secret {
+			if secretStore == nil {
+				return "configuration_required"
+			}
+			if value, err := secretStore.Get(pluginSecretKey(pluginID, setting.Name)); err != nil || value == "" {
+				return "configuration_required"
+			}
+			continue
+		}
+		value, ok := info.Settings[setting.Name]
+		if !ok || value == nil || value == "" {
+			return "configuration_required"
+		}
+	}
+	if len(info.Diagnostics) > 0 {
+		return "compatibility_warning"
+	}
+	return "healthy"
 }
 
 func pluginDiagnostics(diagnostics []plugins.Diagnostic) []protocol.PluginDiagnostic {
@@ -656,9 +778,97 @@ func pluginRPCError(err error, pluginID string) error {
 	return err
 }
 
-func configurePluginSecrets(secretStore secrets.Store, pluginID string, pkg plugins.Package, values map[string]string) error {
+func validatePluginConfiguration(secretStore secrets.Store, pluginID string, pkg plugins.Package, settings map[string]any, secretValues map[string]string) error {
+	declared := make(map[string]plugins.Setting, len(pkg.Settings))
+	for _, setting := range pkg.Settings {
+		declared[setting.Name] = setting
+	}
+	for name, value := range settings {
+		setting, ok := declared[name]
+		if !ok {
+			return fmt.Errorf("%s is not a declared plugin setting", name)
+		}
+		if setting.Secret {
+			return fmt.Errorf("%s is secret and must be provided through secrets", name)
+		}
+		if !pluginSettingTypeMatches(setting.Type, value) {
+			return fmt.Errorf("%s must be %s", name, normalizedPluginSettingType(setting.Type))
+		}
+	}
+	for name := range secretValues {
+		setting, ok := declared[name]
+		if !ok || !setting.Secret {
+			return fmt.Errorf("%s is not a declared secret setting", name)
+		}
+	}
+	for _, setting := range pkg.Settings {
+		if !setting.Required {
+			continue
+		}
+		if !setting.Secret {
+			if value, ok := settings[setting.Name]; !ok || value == nil || value == "" {
+				return fmt.Errorf("required setting %s is missing", setting.Name)
+			}
+			continue
+		}
+		if value, supplied := secretValues[setting.Name]; supplied {
+			if value == "" {
+				return fmt.Errorf("required secret %s cannot be empty", setting.Name)
+			}
+			continue
+		}
+		if _, err := secretStore.Get(pluginSecretKey(pluginID, setting.Name)); err != nil {
+			return fmt.Errorf("required secret %s is missing", setting.Name)
+		}
+	}
+	return nil
+}
+
+func normalizedPluginSettingType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "string"
+	}
+	return value
+}
+
+func pluginSettingTypeMatches(kind string, value any) bool {
+	switch normalizedPluginSettingType(kind) {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "boolean", "bool":
+		_, ok := value.(bool)
+		return ok
+	case "number":
+		switch value.(type) {
+		case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			return true
+		}
+	case "integer", "int":
+		switch number := value.(type) {
+		case float64:
+			return number == float64(int64(number))
+		case float32:
+			return number == float32(int64(number))
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			return true
+		}
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	case "array":
+		_, ok := value.([]any)
+		return ok
+	}
+	return false
+}
+
+func pluginSecretKey(pluginID, name string) string { return "plugin/" + pluginID + "/" + name }
+
+func configurePluginSecrets(secretStore secrets.Store, pluginID string, pkg plugins.Package, values map[string]string) (func(), error) {
 	if len(values) == 0 {
-		return nil
+		return func() {}, nil
 	}
 	allowed := map[string]bool{}
 	for _, setting := range pkg.Settings {
@@ -666,20 +876,40 @@ func configurePluginSecrets(secretStore secrets.Store, pluginID string, pkg plug
 			allowed[setting.Name] = true
 		}
 	}
-	for name, value := range values {
-		if !allowed[name] {
-			return fmt.Errorf("%s is not a declared secret setting", name)
-		}
-		key := "plugin/" + pluginID + "/" + name
-		if value == "" {
-			if err := secretStore.Delete(key); err != nil {
-				return err
+	type priorValue struct {
+		value string
+		found bool
+	}
+	prior := make(map[string]priorValue, len(values))
+	rollback := func() {
+		for name, old := range prior {
+			key := pluginSecretKey(pluginID, name)
+			if old.found {
+				_ = secretStore.Set(key, old.value)
+			} else {
+				_ = secretStore.Delete(key)
 			}
-		} else if err := secretStore.Set(key, value); err != nil {
-			return err
 		}
 	}
-	return nil
+	for name, value := range values {
+		if !allowed[name] {
+			rollback()
+			return nil, fmt.Errorf("%s is not a declared secret setting", name)
+		}
+		key := pluginSecretKey(pluginID, name)
+		old, err := secretStore.Get(key)
+		prior[name] = priorValue{value: old, found: err == nil}
+		if value == "" {
+			if err := secretStore.Delete(key); err != nil {
+				rollback()
+				return nil, err
+			}
+		} else if err := secretStore.Set(key, value); err != nil {
+			rollback()
+			return nil, err
+		}
+	}
+	return rollback, nil
 }
 
 func sortedKeys[V any](values map[string]V) []string {

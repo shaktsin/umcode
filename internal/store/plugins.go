@@ -51,6 +51,15 @@ type PluginHookRun struct {
 	CreatedAt     time.Time
 }
 
+type PluginComponentHealth struct {
+	PluginID  string
+	ProjectID string
+	Component string
+	Status    string
+	Error     string
+	UpdatedAt time.Time
+}
+
 const pluginInstallationCols = `id, name, version, format, source, source_id, mode, root, digest,
 	diagnostics_json, active, installed_at, updated_at`
 
@@ -142,6 +151,11 @@ func (s *Store) SetProjectPlugin(ctx context.Context, p ProjectPlugin) error {
 	return err
 }
 
+func (s *Store) DeleteProjectPlugin(ctx context.Context, projectID, pluginID string) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM project_plugins WHERE project_id = ? AND plugin_id = ?`, projectID, pluginID)
+	return err
+}
+
 func scanProjectPlugin(sc interface{ Scan(...any) error }) (ProjectPlugin, error) {
 	var p ProjectPlugin
 	var enabled int
@@ -202,6 +216,24 @@ func (s *Store) ProjectsUsingPlugin(ctx context.Context, pluginID string) ([]str
 	return projectIDs, rows.Err()
 }
 
+func (s *Store) ProjectPluginReferences(ctx context.Context, pluginID string) ([]ProjectPlugin, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT project_id, plugin_id, enabled, settings_json, updated_at
+		FROM project_plugins WHERE plugin_id = ? ORDER BY project_id`, pluginID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ProjectPlugin
+	for rows.Next() {
+		project, err := scanProjectPlugin(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, project)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) RecordPluginHookRun(ctx context.Context, run PluginHookRun) error {
 	if run.CreatedAt.IsZero() {
 		run.CreatedAt = time.Now().UTC()
@@ -254,4 +286,59 @@ func (s *Store) ListPluginHookRuns(ctx context.Context, pluginID, projectID, tur
 		runs = append(runs, run)
 	}
 	return runs, rows.Err()
+}
+
+func (s *Store) ReplacePluginComponentHealth(ctx context.Context, pluginID, projectID string, values []PluginComponentHealth) error {
+	return s.ReplacePluginComponentHealthBatch(ctx, []PluginComponentHealthSet{{PluginID: pluginID, ProjectID: projectID, Values: values}})
+}
+
+type PluginComponentHealthSet struct {
+	PluginID  string
+	ProjectID string
+	Values    []PluginComponentHealth
+}
+
+func (s *Store) ReplacePluginComponentHealthBatch(ctx context.Context, sets []PluginComponentHealthSet) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, set := range sets {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM plugin_component_health WHERE plugin_id = ? AND project_id = ?`, set.PluginID, set.ProjectID); err != nil {
+			return err
+		}
+		for _, value := range set.Values {
+			updatedAt := value.UpdatedAt
+			if updatedAt.IsZero() {
+				updatedAt = time.Now().UTC()
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_component_health
+				(plugin_id, project_id, component, status, error_text, updated_at) VALUES (?,?,?,?,?,?)`,
+				set.PluginID, set.ProjectID, value.Component, value.Status, value.Error, FormatTime(updatedAt)); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ListPluginComponentHealth(ctx context.Context, pluginID, projectID string) ([]PluginComponentHealth, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT plugin_id, project_id, component, status, error_text, updated_at
+		FROM plugin_component_health WHERE plugin_id = ? AND project_id = ? ORDER BY component`, pluginID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var values []PluginComponentHealth
+	for rows.Next() {
+		var value PluginComponentHealth
+		var updatedAt string
+		if err := rows.Scan(&value.PluginID, &value.ProjectID, &value.Component, &value.Status, &value.Error, &updatedAt); err != nil {
+			return nil, err
+		}
+		value.UpdatedAt = ParseTime(updatedAt)
+		values = append(values, value)
+	}
+	return values, rows.Err()
 }

@@ -908,6 +908,14 @@ func (e *Engine) runPluginHooks(ctx context.Context, snapshot pluginSnapshot, in
 		if e.Log != nil {
 			e.Log.Warn("plugin hook warning", "event", invocation.Event, "warning", warning)
 		}
+		if invocation.ThreadID != "" && invocation.TurnID != "" && e.Store != nil {
+			turn := protocol.Turn{ID: invocation.TurnID, ThreadID: invocation.ThreadID}
+			if item, err := e.newItem(ctx, turn, protocol.ItemError); err == nil {
+				item.Status = protocol.ItemCompleted
+				item.Text = "Plugin hook warning: " + warning
+				_ = e.saveAndPublish(ctx, item, protocol.NotifyItemCompleted)
+			}
+		}
 	}
 	return outcome
 }
@@ -962,6 +970,9 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		}
 	}
 	risk, summary := tool.Assess(call.Args)
+	if assessor, ok := tool.(tools.ContextAssessor); ok {
+		risk, summary = assessor.AssessContext(ctx, call.Args)
+	}
 	it.Tool.Risk = string(risk)
 	_ = e.saveAndPublish(sctx, it, protocol.NotifyItemStarted)
 

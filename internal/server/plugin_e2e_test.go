@@ -113,6 +113,24 @@ func TestPluginEndToEndInstallUseDisableUninstall(t *testing.T) {
 	}
 }
 
+func TestPluginInspectionIncludesExecutableReview(t *testing.T) {
+	h := newHarness(t, nil)
+	source := writeFullPluginFixture(t, "portable", false)
+	var inspection protocol.PluginInspection
+	h.call(protocol.MethodPluginInspect, protocol.PluginInspectParams{Source: source}, &inspection)
+	if len(inspection.Plugin.Executables) < 2 {
+		t.Fatalf("executable review = %#v", inspection.Plugin.Executables)
+	}
+	foundMCP, foundHook := false, false
+	for _, executable := range inspection.Plugin.Executables {
+		foundMCP = foundMCP || executable.Kind == "mcp" && strings.Contains(executable.Command, "helper")
+		foundHook = foundHook || executable.Kind == "hook" && strings.Contains(executable.Command, "helper")
+	}
+	if !foundMCP || !foundHook {
+		t.Fatalf("executable review = %#v", inspection.Plugin.Executables)
+	}
+}
+
 func TestCodexPluginInstallsAndRuns(t *testing.T)  { testCompatiblePluginRuns(t, "codex") }
 func TestClaudePluginInstallsAndRuns(t *testing.T) { testCompatiblePluginRuns(t, "claude") }
 
@@ -175,14 +193,29 @@ func TestPluginActivationRollbackKeepsPreviousVersion(t *testing.T) {
 	h.waitTurn(first.Turn.ID, nil)
 
 	writeFixtureFile(t, filepath.Join(source, "mcp.json"), `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"echo":{"type":"stdio","command":"./missing-helper","required":true}}}`)
-	var reloaded protocol.PluginInfo
-	h.call(protocol.MethodPluginReload, protocol.PluginIDParams{PluginID: installed.ID}, &reloaded)
+	if err := h.callErr(protocol.MethodPluginReload, protocol.PluginIDParams{PluginID: installed.ID}); err == nil {
+		t.Fatal("broken required MCP reload unexpectedly succeeded")
+	}
 	h.fake.push(toolReply("mcp_full-plugin__echo_ping", `{}`), textReply("rollback worked"))
 	var second protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: thread.ID, Text: "use stable snapshot"}, &second)
 	turn, _, items := h.waitTurn(second.Turn.ID, nil)
 	if turn.Status != protocol.TurnCompleted || len(items) != 1 || items[0].Tool == nil || items[0].Tool.Output != "mcp-ok" {
 		t.Fatalf("rollback result: turn=%#v items=%#v", turn, items)
+	}
+}
+
+func TestPluginInstallFailsBeforePublishingBrokenRequiredMCP(t *testing.T) {
+	h := newHarness(t, nil)
+	source := writeFullPluginFixture(t, "portable", false)
+	writeFixtureFile(t, filepath.Join(source, "mcp.json"), `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"echo":{"type":"stdio","command":"./missing-helper","required":true}}}`)
+	var inspection protocol.PluginInspection
+	h.call(protocol.MethodPluginInspect, protocol.PluginInspectParams{Source: source}, &inspection)
+	if err := h.callErr(protocol.MethodPluginInstall, protocol.PluginInstallParams{Token: inspection.Token, ProjectID: h.proj.ID}); err == nil {
+		t.Fatal("broken required MCP install unexpectedly succeeded")
+	}
+	if installations, err := h.eng.Store.ListPluginInstallations(h.ctx); err != nil || len(installations) != 0 {
+		t.Fatalf("installations after activation failure = %#v, %v", installations, err)
 	}
 }
 

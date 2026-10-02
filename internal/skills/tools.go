@@ -87,11 +87,26 @@ func (*runScript) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string"},"script":{"type":"string","description":"Script name from skill.get_instructions"},"args":{"type":"object","description":"Arguments matching the script's input schema"}},"required":["skill","script"]}`)
 }
 func (t *runScript) Assess(args json.RawMessage) (tools.Risk, string) {
+	return t.assess(nil, args)
+}
+
+func (t *runScript) AssessContext(ctx context.Context, args json.RawMessage) (tools.Risk, string) {
+	return t.assess(ctx, args)
+}
+
+func (t *runScript) assess(ctx context.Context, args json.RawMessage) (tools.Risk, string) {
 	var a runArgs
 	_ = json.Unmarshal(args, &a)
 	risk := tools.RiskYellow
-	if s, ok := t.r.Get(a.Skill); ok {
-		if r, ok := tools.ParseRisk(s.RiskLevel); ok {
+	var skill *Skill
+	var ok bool
+	if ctx != nil {
+		skill, ok = t.r.GetContext(ctx, a.Skill)
+	} else {
+		skill, ok = t.r.Get(a.Skill)
+	}
+	if ok {
+		if r, ok := tools.ParseRisk(skill.RiskLevel); ok {
 			risk = r
 		}
 	}

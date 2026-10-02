@@ -13,11 +13,30 @@ type agentAdapter struct{}
 func (agentAdapter) Format() Format { return FormatAgent }
 
 func (agentAdapter) Detect(root string) (bool, error) {
-	exists, err := fileExists(filepath.Join(root, "plugin.json"))
+	path := filepath.Join(root, "plugin.json")
+	exists, err := fileExists(path)
 	if err != nil {
 		return false, pluginError("detect", "detect/read", "plugin.json", "cannot inspect root plugin.json", "Check the file and its permissions.", err)
 	}
-	return exists, nil
+	if !exists {
+		return false, nil
+	}
+	var manifest struct {
+		Schema string `json:"$schema"`
+	}
+	if err := readJSON(path, &manifest, "detect"); err != nil {
+		return false, err
+	}
+	if manifest.Schema == agentPluginSchema {
+		return true, nil
+	}
+	// A root plugin.json is portable only when it declares an Agent Plugins
+	// schema. Other tools commonly use the same filename, so let the Codex and
+	// Claude adapters inspect their dedicated manifest folders.
+	if strings.Contains(manifest.Schema, "agent-plugins.org/") {
+		return true, nil
+	}
+	return false, nil
 }
 
 type rawAgentManifest struct {

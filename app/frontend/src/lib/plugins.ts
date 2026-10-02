@@ -1,4 +1,45 @@
-import type { PluginComponentInfo, PluginInfo, PluginInspection } from './types';
+import type { PluginComponentInfo, PluginInfo, PluginInspection, PluginSettingInfo } from './types';
+
+export function convertPluginSettings(schema: PluginSettingInfo[], draft: Record<string, string>): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	for (const setting of schema) {
+		if (setting.secret || !(setting.name in draft)) continue;
+		const value = draft[setting.name];
+		switch ((setting.type || 'string').toLowerCase()) {
+		case 'boolean':
+		case 'bool':
+			if (value !== 'true' && value !== 'false') throw new Error(`${setting.name} must be true or false`);
+			result[setting.name] = value === 'true';
+			break;
+		case 'number': {
+			const number = Number(value);
+			if (!Number.isFinite(number)) throw new Error(`${setting.name} must be a number`);
+			result[setting.name] = number;
+			break;
+		}
+		case 'integer':
+		case 'int': {
+			const number = Number(value);
+			if (!Number.isSafeInteger(number)) throw new Error(`${setting.name} must be an integer`);
+			result[setting.name] = number;
+			break;
+		}
+		case 'object':
+		case 'array': {
+			let parsed: unknown;
+			try { parsed = JSON.parse(value); }
+			catch { throw new Error(`${setting.name} must contain valid JSON`); }
+			if (setting.type === 'object' && (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object')) throw new Error(`${setting.name} must be a JSON object`);
+			if (setting.type === 'array' && !Array.isArray(parsed)) throw new Error(`${setting.name} must be a JSON array`);
+			result[setting.name] = parsed;
+			break;
+		}
+		default:
+			result[setting.name] = value;
+		}
+	}
+	return result;
+}
 
 export type PluginCall = (method: string, params?: unknown) => Promise<unknown>;
 

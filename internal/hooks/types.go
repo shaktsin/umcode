@@ -30,14 +30,15 @@ const (
 
 // Declaration is one normalized command hook contributed by a plugin.
 type Declaration struct {
-	PluginID string            `json:"pluginId"`
-	Root     string            `json:"root"`
-	Source   string            `json:"source"`
-	Event    Event             `json:"event"`
-	Matcher  string            `json:"matcher,omitempty"`
-	Command  string            `json:"command"`
-	Args     []string          `json:"args,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
+	PluginID      string            `json:"pluginId"`
+	PluginVersion string            `json:"pluginVersion,omitempty"`
+	Root          string            `json:"root"`
+	Source        string            `json:"source"`
+	Event         Event             `json:"event"`
+	Matcher       string            `json:"matcher,omitempty"`
+	Command       string            `json:"command"`
+	Args          []string          `json:"args,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
 	// SecretValues are available to the process through explicitly declared
 	// Env entries but are redacted from outcomes and audit records.
 	SecretValues []string      `json:"-"`

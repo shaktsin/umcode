@@ -9,6 +9,14 @@ import (
 	"github.com/shaktsin/umcode/internal/hooks"
 )
 
+func TestPackageValidationRejectsInvalidSettingSchema(t *testing.T) {
+	pkg := Package{ID: "valid-plugin", Settings: []Setting{{Name: "", Type: "string"}, {Name: "mode", Type: "map"}}}
+	diagnostics := ValidatePackage(pkg)
+	if !hasErrorDiagnostic(diagnostics) {
+		t.Fatalf("invalid setting schema passed validation: %#v", diagnostics)
+	}
+}
+
 func TestAdaptersNormalizeEquivalentCapabilities(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +125,19 @@ func TestLoadPackageRejectsEscapingResources(t *testing.T) {
 		}
 		assertPathEscape(t, root)
 	})
+}
+
+func TestUnrelatedRootPluginJSONFallsBackToCodexManifest(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "plugin.json"), `{"name":"unrelated-app-config"}`)
+	writeTestFile(t, filepath.Join(root, ".codex-plugin", "plugin.json"), `{"name":"codex-fallback","version":"1.0.0"}`)
+	pkg, err := LoadPackage(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg.Format != FormatCodex || pkg.Name != "codex-fallback" {
+		t.Fatalf("package = %#v", pkg)
+	}
 }
 
 func assertPathEscape(t *testing.T, root string) {

@@ -512,6 +512,23 @@ export interface PluginComponentInfo {
   path?: string;
   required: boolean;
   supported: boolean;
+	health: string;
+	error?: string;
+}
+
+export interface PluginExecutableInfo {
+	kind: string;
+	name: string;
+	command: string;
+	args?: string[];
+	required: boolean;
+}
+
+export interface PluginHookFailureInfo {
+	pluginVersion?: string;
+	event: string;
+	error: string;
+	createdAt: string;
 }
 
 export interface PluginSettingInfo {
@@ -534,6 +551,9 @@ export interface PluginInfo {
   schema: PluginSettingInfo[];
   components: PluginComponentInfo[];
   diagnostics: PluginDiagnostic[];
+	executables: PluginExecutableInfo[];
+	health: string;
+	hookFailures: PluginHookFailureInfo[];
   installedAt?: string;
   updatedAt?: string;
 }

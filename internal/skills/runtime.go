@@ -293,17 +293,23 @@ func (r *Registry) RunScript(ctx context.Context, skill, script string, argsJSON
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
+	redact := func(value string) string {
+		if snapshot := snapshotFromContext(ctx); snapshot != nil {
+			return snapshot.redact(s.Name, value)
+		}
+		return value
+	}
 	if cctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf("script timed out after %s", env.Timeout)
 	}
 	out := stdout.String()
 	if err != nil {
-		return "", fmt.Errorf("script failed (%v): %s", err, tail(stderr.String()+"\n"+out, 4000))
+		return "", fmt.Errorf("script failed (%v): %s", err, redact(tail(stderr.String()+"\n"+out, 4000)))
 	}
 	if stderr.Len() > 0 {
 		out += "\n--- stderr ---\n" + tail(stderr.String(), 4000)
 	}
-	return out, nil
+	return redact(out), nil
 }
 
 // EnvFor returns a skill's environment for shell.run.
@@ -311,6 +317,9 @@ func (r *Registry) EnvFor(ctx context.Context, skill string) ([]string, error) {
 	s, ok := r.GetContext(ctx, skill)
 	if !ok {
 		return nil, fmt.Errorf("skill %q is not installed", skill)
+	}
+	if snapshot := snapshotFromContext(ctx); snapshot != nil && len(snapshot.secrets[s.Name]) > 0 {
+		return nil, fmt.Errorf("plugin skill %q uses protected secrets; run its declared scripts with skill.run_script", skill)
 	}
 	env, err := r.rt.Resolve(ctx, s)
 	if err != nil {

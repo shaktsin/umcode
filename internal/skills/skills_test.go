@@ -145,6 +145,39 @@ func TestPluginSkillsAreNamespacedAndContextBound(t *testing.T) {
 	}
 }
 
+func TestPluginSkillResolvesRuntimeReferenceAndRedactsOutput(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "secure")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "---\nname: secure\ndescription: Secure plugin skill.\nruntime:\n  type: shell\n  env:\n    TOKEN: '{{secret:api_key}}'\nscripts:\n  show:\n    path: show.sh\n---\nSecure.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "show.sh"), []byte("#!/bin/sh\nprintf '%s' \"$TOKEN\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, errs := CompileSnapshot([]Root{{
+		PluginID: "acme", Paths: []string{skillDir},
+		RuntimeValues: map[string]string{"{{secret:api_key}}": "plugin-secret"}, SecretValues: []string{"plugin-secret"},
+	}})
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	registry := NewRegistry(config.Default(t.TempDir()))
+	out, err := registry.RunScript(WithSnapshot(t.Context(), snapshot), "acme:secure", "show", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "[REDACTED]" {
+		t.Fatalf("script output = %q", out)
+	}
+	if _, err := registry.EnvFor(WithSnapshot(t.Context(), snapshot), "acme:secure"); err == nil {
+		t.Fatal("secret-bearing plugin skill environment was exposed to shell.run")
+	}
+}
+
 func TestToolsAndInstall(t *testing.T) {
 	r, cfg, _ := newTestRegistry(t)
 	src := writeSkill(t, t.TempDir(), "weather-fetch", weatherSkill, map[string]string{

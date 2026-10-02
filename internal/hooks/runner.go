@@ -196,6 +196,7 @@ type hookResult struct {
 }
 
 func (r *Runner) execute(ctx context.Context, declaration Declaration, invocation Invocation) hookExecution {
+	invocation = attributedInvocation(declaration, invocation)
 	started := time.Now()
 	record := baseRecord(declaration, invocation)
 	fail := func(err error) hookExecution {
@@ -291,11 +292,18 @@ func (r *Runner) record(ctx context.Context, record Record) {
 }
 
 func baseRecord(declaration Declaration, invocation Invocation) Record {
-	pluginID := declaration.PluginID
-	if pluginID == "" {
-		pluginID = invocation.PluginID
+	invocation = attributedInvocation(declaration, invocation)
+	return Record{PluginID: invocation.PluginID, PluginVersion: invocation.PluginVersion, ProjectID: invocation.ProjectID, ThreadID: invocation.ThreadID, TurnID: invocation.TurnID, Event: invocation.Event, CreatedAt: invocation.At}
+}
+
+func attributedInvocation(declaration Declaration, invocation Invocation) Invocation {
+	if declaration.PluginID != "" {
+		invocation.PluginID = declaration.PluginID
 	}
-	return Record{PluginID: pluginID, PluginVersion: invocation.PluginVersion, ProjectID: invocation.ProjectID, ThreadID: invocation.ThreadID, TurnID: invocation.TurnID, Event: invocation.Event, CreatedAt: invocation.At}
+	if declaration.PluginVersion != "" {
+		invocation.PluginVersion = declaration.PluginVersion
+	}
+	return invocation
 }
 
 type hookEnvelope struct {

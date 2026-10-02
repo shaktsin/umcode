@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -117,7 +118,12 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	dir := t.TempDir()
 	t.Setenv("UMCODE_HOME", dir)
 	cfg := config.Default(dir)
-	cfg.Runtime.SocketPath = filepath.Join(dir, "e.sock")
+	socketDir, err := os.MkdirTemp("/tmp", "umc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	cfg.Runtime.SocketPath = filepath.Join(socketDir, fmt.Sprintf("%x.sock", time.Now().UnixNano()))
 	// The project folder lives outside the engine's own data folder, as it does in real use.
 	wsDir := t.TempDir()
 	cfg.Tools.Workspaces = []config.WorkspaceConfig{{Name: "w", Path: wsDir, Default: true}}
@@ -900,7 +906,7 @@ func TestScheduledTasks(t *testing.T) {
 func TestAgentUsesSkillAndCreatesTask(t *testing.T) {
 	h := newHarness(t, nil)
 	h.addKey("claude", "k", "sk-1")
-	home := filepath.Dir(h.eng.Cfg.Runtime.SocketPath)
+	home := h.eng.Cfg.Home
 	dir := filepath.Join(home, "skills", "greeter")
 	os.MkdirAll(filepath.Join(dir, "scripts"), 0o755)
 	os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: greeter\ndescription: Greet people by name\nrisk_level: green\nscripts:\n  greet:\n    path: scripts/greet.sh\n    description: greet\n---\nCall greet.\n"), 0o644)

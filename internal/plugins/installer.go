@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,6 +45,41 @@ type inspectionEntry struct {
 	originalSource string
 }
 
+type installationLifecycle interface {
+	Activate(context.Context, string) error
+	DeferCleanup(string, func())
+}
+
+type batchInstallationLifecycle interface {
+	ActivateMany(context.Context, []string) error
+}
+
+type transactionalInstallationLifecycle interface {
+	BeginLifecycleMutation() (func(context.Context, []string) error, func())
+}
+
+func activateProjects(ctx context.Context, lifecycle installationLifecycle, projectIDs []string) error {
+	if len(projectIDs) == 0 {
+		return nil
+	}
+	if batch, ok := lifecycle.(batchInstallationLifecycle); ok {
+		return batch.ActivateMany(ctx, projectIDs)
+	}
+	for _, projectID := range projectIDs {
+		if err := lifecycle.Activate(ctx, projectID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func beginLifecycleMutation(lifecycle installationLifecycle) (func(context.Context, []string) error, func()) {
+	if transactional, ok := lifecycle.(transactionalInstallationLifecycle); ok {
+		return transactional.BeginLifecycleMutation()
+	}
+	return func(ctx context.Context, projects []string) error { return activateProjects(ctx, lifecycle, projects) }, func() {}
+}
+
 type Installer struct {
 	home string
 	st   *store.Store
@@ -51,7 +87,10 @@ type Installer struct {
 
 	mu          sync.Mutex
 	inspections map[string]inspectionEntry
+	lifecycle   installationLifecycle
 }
+
+func (i *Installer) SetLifecycle(lifecycle installationLifecycle) { i.lifecycle = lifecycle }
 
 func NewInstaller(home string, st *store.Store, now func() time.Time) *Installer {
 	if now == nil {
@@ -93,14 +132,18 @@ func (i *Installer) Inspect(ctx context.Context, req InspectRequest) (Inspection
 		RequiresApproval: packageRequiresApproval(pkg),
 	}
 	i.mu.Lock()
+	i.pruneExpiredLocked()
 	i.inspections[token] = inspectionEntry{inspection: inspection, originalSource: req.Source}
 	i.mu.Unlock()
 	return inspection, nil
 }
 
-func (i *Installer) Install(ctx context.Context, token, projectID string) (store.PluginInstallation, error) {
+func (i *Installer) Install(ctx context.Context, token, projectID string) (installed store.PluginInstallation, installErr error) {
 	i.mu.Lock()
 	entry, ok := i.inspections[token]
+	if ok {
+		delete(i.inspections, token)
+	}
 	i.mu.Unlock()
 	if !ok {
 		return store.PluginInstallation{}, pluginError("install", "install/invalid_token", "inspection", "inspection token is invalid or already used", "Inspect the plugin again.", nil)
@@ -108,6 +151,16 @@ func (i *Installer) Install(ctx context.Context, token, projectID string) (store
 	if i.now().UTC().After(entry.inspection.ExpiresAt) {
 		return store.PluginInstallation{}, pluginError("install", "install/inspection_expired", "inspection", "inspection token has expired", "Inspect the plugin again.", nil)
 	}
+	defer func() {
+		if installErr == nil || i.now().UTC().After(entry.inspection.ExpiresAt) {
+			return
+		}
+		i.mu.Lock()
+		if _, exists := i.inspections[token]; !exists {
+			i.inspections[token] = entry
+		}
+		i.mu.Unlock()
+	}()
 	materialized, err := materializeSource(ctx, entry.originalSource)
 	if err != nil {
 		return store.PluginInstallation{}, err
@@ -125,26 +178,41 @@ func (i *Installer) Install(ctx context.Context, token, projectID string) (store
 		return store.PluginInstallation{}, err
 	}
 
-	root := materialized.root
-	createdRoot := false
 	if entry.inspection.Package.Format != pkg.Format || entry.inspection.Package.ID != pkg.ID {
 		return store.PluginInstallation{}, pluginError("install", "install/source_changed", "manifest", "plugin identity changed after inspection", "Inspect the changed source again before installing.", nil)
 	}
 	requestedMode := entry.inspection.Mode
-	if requestedMode == InstallManaged {
-		root, createdRoot, err = i.stageManaged(pkg, digest, materialized.root, entry.inspection.SourceID)
-		if err != nil {
-			return store.PluginInstallation{}, err
-		}
+	// Both modes activate immutable snapshots. Linked mode tracks the source
+	// location and reloads it explicitly, but active turns never execute mutable
+	// source bytes that could change underneath a published capability set.
+	root, createdRoot, err := i.stageSnapshot(pkg, digest, materialized.root, entry.inspection.SourceID, requestedMode == InstallLinked)
+	if err != nil {
+		return store.PluginInstallation{}, err
 	}
 
 	diagnostics, _ := json.Marshal(pkg.Diagnostics)
 	pluginID := entry.inspection.SourceID + "/" + pkg.ID
 	now := i.now().UTC()
 	record := store.PluginInstallation{ID: pluginID, Name: pkg.Name, Version: pkg.Version, Format: string(pkg.Format), Source: entry.inspection.Source, SourceID: entry.inspection.SourceID, Mode: string(requestedMode), Root: root, Digest: digest, DiagnosticsJSON: string(diagnostics), Active: true, UpdatedAt: now}
+	activate := func(context.Context, []string) error { return nil }
+	finishMutation := func() {}
+	if i.lifecycle != nil {
+		activate, finishMutation = beginLifecycleMutation(i.lifecycle)
+	}
+	defer finishMutation()
 	previous, previousErr := i.st.GetPluginInstallation(ctx, pluginID)
+	var projectsToActivate []string
 	if previousErr == nil {
 		record.InstalledAt = previous.InstalledAt
+		if i.lifecycle != nil {
+			projectsToActivate, err = i.st.ProjectsUsingPlugin(ctx, pluginID)
+			if err != nil {
+				if createdRoot {
+					_ = os.RemoveAll(root)
+				}
+				return store.PluginInstallation{}, err
+			}
+		}
 	} else if !errors.Is(previousErr, store.ErrNotFound) {
 		if createdRoot {
 			_ = os.RemoveAll(root)
@@ -157,20 +225,79 @@ func (i *Installer) Install(ctx context.Context, token, projectID string) (store
 		}
 		return store.PluginInstallation{}, err
 	}
+	var previousProjectRecord store.ProjectPlugin
+	var hadProjectRecord bool
 	if projectID != "" {
-		if err := i.st.SetProjectPlugin(ctx, store.ProjectPlugin{ProjectID: projectID, PluginID: pluginID, Enabled: true}); err != nil {
+		projectRecord, projectErr := i.st.ProjectPlugin(ctx, projectID, pluginID)
+		hadProjectRecord = projectErr == nil
+		if errors.Is(projectErr, store.ErrNotFound) {
+			projectRecord = store.ProjectPlugin{ProjectID: projectID, PluginID: pluginID, Settings: map[string]any{}}
+		} else if projectErr != nil {
+			i.rollbackInstallation(ctx, record, previous, previousErr == nil, createdRoot)
+			return store.PluginInstallation{}, projectErr
+		}
+		previousProjectRecord = projectRecord
+		projectRecord.Enabled = true
+		if !hadProjectRecord && packageNeedsConfiguration(pkg) {
+			projectRecord.Enabled = false
+		}
+		if err := i.st.SetProjectPlugin(ctx, projectRecord); err != nil {
 			i.rollbackInstallation(ctx, record, previous, previousErr == nil, createdRoot)
 			return store.PluginInstallation{}, err
 		}
+		if projectRecord.Enabled && !containsString(projectsToActivate, projectID) {
+			projectsToActivate = append(projectsToActivate, projectID)
+		}
 	}
-	i.mu.Lock()
-	delete(i.inspections, token)
-	i.mu.Unlock()
+	if i.lifecycle != nil {
+		if err := activate(ctx, projectsToActivate); err != nil {
+			i.rollbackInstallation(ctx, record, previous, previousErr == nil, createdRoot)
+			if projectID != "" {
+				if hadProjectRecord {
+					_ = i.st.SetProjectPlugin(ctx, previousProjectRecord)
+				} else {
+					_ = i.st.DeleteProjectPlugin(ctx, projectID, pluginID)
+				}
+			}
+			_ = activate(ctx, projectsToActivate)
+			return store.PluginInstallation{}, pluginError("activate", "activate/required_component", pluginID, "plugin activation failed: "+err.Error(), "Fix the required component and inspect the plugin again.", err)
+		}
+	}
 	return i.st.GetPluginInstallation(ctx, pluginID)
 }
 
-func (i *Installer) stageManaged(pkg Package, digest, sourceRoot, sourceID string) (string, bool, error) {
+func containsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func (i *Installer) pruneExpiredLocked() {
+	now := i.now().UTC()
+	for token, entry := range i.inspections {
+		if now.After(entry.inspection.ExpiresAt) {
+			delete(i.inspections, token)
+		}
+	}
+}
+
+func packageNeedsConfiguration(pkg Package) bool {
+	for _, setting := range pkg.Settings {
+		if setting.Required {
+			return true
+		}
+	}
+	return false
+}
+
+func (i *Installer) stageSnapshot(pkg Package, digest, sourceRoot, sourceID string, digestAddressed bool) (string, bool, error) {
 	segment := versionSegment(pkg.Version, digest)
+	if digestAddressed {
+		segment = digest[:16]
+	}
 	base := filepath.Join(i.home, "plugins", "cache", sourceID, pkg.ID)
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", false, err
@@ -223,11 +350,21 @@ func (i *Installer) rollbackInstallation(ctx context.Context, current, previous 
 		_ = i.st.DeletePluginInstallation(ctx, current.ID)
 	}
 	if createdRoot {
-		_ = os.RemoveAll(current.Root)
+		if i.lifecycle != nil {
+			i.lifecycle.DeferCleanup(current.Root, func() { _ = os.RemoveAll(current.Root) })
+		} else {
+			_ = os.RemoveAll(current.Root)
+		}
 	}
 }
 
 func (i *Installer) Reload(ctx context.Context, pluginID string) (store.PluginInstallation, error) {
+	activate := func(context.Context, []string) error { return nil }
+	finishMutation := func() {}
+	if i.lifecycle != nil {
+		activate, finishMutation = beginLifecycleMutation(i.lifecycle)
+	}
+	defer finishMutation()
 	previous, err := i.st.GetPluginInstallation(ctx, pluginID)
 	if err != nil {
 		return store.PluginInstallation{}, err
@@ -253,15 +390,54 @@ func (i *Installer) Reload(ctx context.Context, pluginID string) (store.PluginIn
 	}
 	diagnostics, _ := json.Marshal(pkg.Diagnostics)
 	updated := previous
-	updated.Name, updated.Version, updated.Format, updated.Root, updated.Digest = pkg.Name, pkg.Version, string(pkg.Format), materialized.root, digest
+	updatedRoot, createdRoot, err := i.stageSnapshot(pkg, digest, materialized.root, previous.SourceID, true)
+	if err != nil {
+		return store.PluginInstallation{}, err
+	}
+	updated.Name, updated.Version, updated.Format, updated.Root, updated.Digest = pkg.Name, pkg.Version, string(pkg.Format), updatedRoot, digest
 	updated.DiagnosticsJSON, updated.UpdatedAt = string(diagnostics), i.now().UTC()
+	var projects []string
+	if i.lifecycle != nil {
+		projects, err = i.st.ProjectsUsingPlugin(ctx, pluginID)
+		if err != nil {
+			if createdRoot {
+				_ = os.RemoveAll(updatedRoot)
+			}
+			return store.PluginInstallation{}, err
+		}
+	}
 	if err := i.st.UpsertPluginInstallation(ctx, updated); err != nil {
 		return store.PluginInstallation{}, err
+	}
+	if i.lifecycle != nil {
+		if err := activate(ctx, projects); err != nil {
+			_ = i.st.UpsertPluginInstallation(ctx, previous)
+			_ = activate(ctx, projects)
+			if createdRoot {
+				i.lifecycle.DeferCleanup(updatedRoot, func() { _ = os.RemoveAll(updatedRoot) })
+			}
+			return store.PluginInstallation{}, pluginError("activate", "activate/required_component", pluginID, "plugin reload activation failed: "+err.Error(), "Fix the required component and reload again.", err)
+		}
+		if previous.Root != updatedRoot && pathWithin(filepath.Join(i.home, "plugins", "cache"), previous.Root) {
+			i.lifecycle.DeferCleanup(previous.Root, func() { _ = os.RemoveAll(previous.Root) })
+		}
 	}
 	return i.st.GetPluginInstallation(ctx, pluginID)
 }
 
 func (i *Installer) Uninstall(ctx context.Context, pluginID string, disableProjects bool) error {
+	return i.UninstallWithCleanup(ctx, pluginID, disableProjects, nil)
+}
+
+// UninstallWithCleanup keeps package-derived cleanup inside the same
+// serialized lifecycle transaction as deleting and replacing snapshots.
+func (i *Installer) UninstallWithCleanup(ctx context.Context, pluginID string, disableProjects bool, cleanup func(store.PluginInstallation) error) error {
+	activate := func(context.Context, []string) error { return nil }
+	finishMutation := func() {}
+	if i.lifecycle != nil {
+		activate, finishMutation = beginLifecycleMutation(i.lifecycle)
+	}
+	defer finishMutation()
 	installed, err := i.st.GetPluginInstallation(ctx, pluginID)
 	if err != nil {
 		return err
@@ -273,29 +449,60 @@ func (i *Installer) Uninstall(ctx context.Context, pluginID string, disableProje
 	if len(projects) > 0 && !disableProjects {
 		return pluginError("uninstall", "uninstall/enabled_projects", pluginID, "plugin is enabled by one or more projects", "Disable the plugin in those projects or explicitly disable project references during uninstall.", nil)
 	}
-	var moved string
-	if installed.Mode == string(InstallManaged) {
-		cacheRoot := filepath.Join(i.home, "plugins", "cache")
-		if !pathWithin(cacheRoot, installed.Root) {
-			return pluginError("uninstall", "uninstall/unsafe_root", pluginID, "managed plugin root is outside the plugin cache", "Repair the installation record before uninstalling.", nil)
-		}
-		if _, err := os.Stat(installed.Root); err == nil {
-			moved = installed.Root + ".uninstall-" + randomSuffix()
-			if err := os.Rename(installed.Root, moved); err != nil {
-				return err
+	projectRecords, err := i.st.ProjectPluginReferences(ctx, pluginID)
+	if err != nil {
+		return err
+	}
+	removeRoot := ""
+	cacheRoot := filepath.Join(i.home, "plugins", "cache")
+	if !pathWithin(cacheRoot, installed.Root) {
+		return pluginError("uninstall", "uninstall/unsafe_root", pluginID, "installed plugin snapshot is outside the plugin cache", "Repair the installation record before uninstalling.", nil)
+	}
+	if _, err := os.Stat(installed.Root); err == nil {
+		removeRoot = installed.Root
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := i.st.DeletePluginInstallation(ctx, pluginID); err != nil {
+		return err
+	}
+	if i.lifecycle != nil {
+		if err := activate(ctx, projects); err != nil {
+			if restoreErr := i.st.UpsertPluginInstallation(ctx, installed); restoreErr != nil {
+				return fmt.Errorf("uninstall activation failed (%v); restoring installation failed: %w", err, restoreErr)
 			}
-		} else if !os.IsNotExist(err) {
+			for _, project := range projectRecords {
+				if restoreErr := i.st.SetProjectPlugin(ctx, project); restoreErr != nil {
+					return fmt.Errorf("uninstall activation failed (%v); restoring project configuration failed: %w", err, restoreErr)
+				}
+			}
+			_ = activate(ctx, projects)
 			return err
 		}
 	}
-	if err := i.st.DeletePluginInstallation(ctx, pluginID); err != nil {
-		if moved != "" {
-			_ = os.Rename(moved, installed.Root)
+	if cleanup != nil {
+		if err := cleanup(installed); err != nil {
+			if restoreErr := i.st.UpsertPluginInstallation(ctx, installed); restoreErr != nil {
+				return fmt.Errorf("uninstall cleanup failed (%v); restoring installation failed: %w", err, restoreErr)
+			}
+			for _, project := range projectRecords {
+				if restoreErr := i.st.SetProjectPlugin(ctx, project); restoreErr != nil {
+					return fmt.Errorf("uninstall cleanup failed (%v); restoring project configuration failed: %w", err, restoreErr)
+				}
+			}
+			if i.lifecycle != nil {
+				_ = activate(ctx, projects)
+			}
+			return err
 		}
-		return err
 	}
-	if moved != "" {
-		return os.RemoveAll(moved)
+	if removeRoot != "" {
+		cleanup := func() { _ = os.RemoveAll(removeRoot) }
+		if i.lifecycle != nil {
+			i.lifecycle.DeferCleanup(removeRoot, cleanup)
+		} else {
+			cleanup()
+		}
 	}
 	return nil
 }
@@ -306,12 +513,6 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes[:]), nil
-}
-
-func randomSuffix() string {
-	var bytes [6]byte
-	_, _ = rand.Read(bytes[:])
-	return hex.EncodeToString(bytes[:])
 }
 
 func packageRequiresApproval(pkg Package) bool {

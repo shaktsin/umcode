@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -181,6 +182,22 @@ func TestHookEnvironmentDoesNotLeakEngineSecrets(t *testing.T) {
 	}
 }
 
+func TestHookEnvelopeAndAuditUseDeclarationIdentity(t *testing.T) {
+	root, command := hookTestCommand(t)
+	var recorded Record
+	runner := NewRunner(func(_ context.Context, record Record) error { recorded = record; return nil })
+	outcome := runner.Run(t.Context(), Set{Declarations: []Declaration{{
+		PluginID: "source/plugin", PluginVersion: "2.3.4", Root: root, Event: TurnStart,
+		Command: command, Required: true, Env: helperEnv("check-identity", nil),
+	}}}, Invocation{Event: TurnStart})
+	if outcome.Blocked || len(outcome.Records) != 1 || outcome.Records[0].Status != "continued" {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	if recorded.PluginID != "source/plugin" || recorded.PluginVersion != "2.3.4" {
+		t.Fatalf("record identity = %q %q", recorded.PluginID, recorded.PluginVersion)
+	}
+}
+
 func hookTestCommand(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -248,6 +265,14 @@ func runHookTestHelper(mode string) {
 			fmt.Printf(`{"version":1,"context":[%q]}`, "leaked:"+secret)
 		} else {
 			fmt.Print(`{"version":1,"context":["environment-clean"]}`)
+		}
+	case "check-identity":
+		text := string(input)
+		if strings.Contains(text, `"pluginId":"source/plugin"`) && strings.Contains(text, `"pluginVersion":"2.3.4"`) {
+			fmt.Print(`{"version":1,"continue":true}`)
+		} else {
+			fmt.Fprint(os.Stderr, "missing plugin identity: "+text)
+			os.Exit(3)
 		}
 	default:
 		os.Exit(2)

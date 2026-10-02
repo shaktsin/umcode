@@ -166,18 +166,81 @@ func TestInspectionTokenExpiresAndIsSingleUseAfterSuccess(t *testing.T) {
 	assertPluginErrorCode(t, err, "install/invalid_token")
 }
 
-func TestLinkedReloadKeepsPreviousPackageOnValidationFailure(t *testing.T) {
-	t.Parallel()
+func TestInspectionTokenCannotBeUsedConcurrently(t *testing.T) {
 	ctx := context.Background()
 	st := openInstallerStore(t, ctx)
 	defer st.Close()
 	source := writeInstallerPlugin(t, "1.0.0")
 	installer := NewInstaller(t.TempDir(), st, time.Now)
+	inspection, err := installer.Inspect(ctx, InspectRequest{Source: source, Mode: InstallManaged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, err := installer.Install(ctx, inspection.Token, "")
+			results <- err
+		}()
+	}
+	close(start)
+	var successes int
+	for range 2 {
+		if err := <-results; err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful concurrent installs = %d, want 1", successes)
+	}
+}
+
+func TestInspectPrunesExpiredInspectionTokens(t *testing.T) {
+	ctx := context.Background()
+	st := openInstallerStore(t, ctx)
+	defer st.Close()
+	source := writeInstallerPlugin(t, "1.0.0")
+	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	installer := NewInstaller(t.TempDir(), st, func() time.Time { return now })
+	if _, err := installer.Inspect(ctx, InspectRequest{Source: source}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(16 * time.Minute)
+	if _, err := installer.Inspect(ctx, InspectRequest{Source: source}); err != nil {
+		t.Fatal(err)
+	}
+	installer.mu.Lock()
+	remaining := len(installer.inspections)
+	installer.mu.Unlock()
+	if remaining != 1 {
+		t.Fatalf("unexpired inspections = %d, want 1", remaining)
+	}
+}
+
+func TestLinkedReloadKeepsPreviousPackageOnValidationFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openInstallerStore(t, ctx)
+	defer st.Close()
+	project, err := st.CreateProject(ctx, protocol.Project{Name: "linked", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := writeInstallerPlugin(t, "1.0.0")
+	installer := NewInstaller(t.TempDir(), st, time.Now)
+	manager, err := NewManager(Options{Store: st})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	installer.SetLifecycle(manager)
 	inspection, err := installer.Inspect(ctx, InspectRequest{Source: source, Mode: InstallLinked})
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed, err := installer.Install(ctx, inspection.Token, "")
+	installed, err := installer.Install(ctx, inspection.Token, project.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,6 +254,51 @@ func TestLinkedReloadKeepsPreviousPackageOnValidationFailure(t *testing.T) {
 	}
 	if got.Digest != installed.Digest || got.Version != installed.Version || got.Root != installed.Root {
 		t.Fatalf("failed reload changed active record: %#v, want %#v", got, installed)
+	}
+	manager.Close()
+	restarted, err := NewManager(Options{Store: st})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	snapshot, err := restarted.Acquire(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("last-known-good linked snapshot did not survive restart: %v", err)
+	}
+	snapshot.Release()
+}
+
+func TestLinkedReloadAllowsSameVersionContentEdits(t *testing.T) {
+	ctx := context.Background()
+	st := openInstallerStore(t, ctx)
+	defer st.Close()
+	project, err := st.CreateProject(ctx, protocol.Project{Name: "linked-same-version", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := writeInstallerPlugin(t, "1.0.0")
+	manager, err := NewManager(Options{Store: st})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	installer := NewInstaller(t.TempDir(), st, time.Now)
+	installer.SetLifecycle(manager)
+	inspection, err := installer.Inspect(ctx, InspectRequest{Source: source, Mode: InstallLinked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := installer.Install(ctx, inspection.Token, project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeInstallerFile(t, filepath.Join(source, "skills", "greet", "SKILL.md"), "---\nname: greet\ndescription: Changed without a version bump.\n---\n")
+	reloaded, err := installer.Reload(ctx, installed.ID)
+	if err != nil {
+		t.Fatalf("same-version linked reload failed: %v", err)
+	}
+	if reloaded.Version != installed.Version || reloaded.Root == installed.Root {
+		t.Fatalf("reload did not create a new immutable same-version snapshot: before=%#v after=%#v", installed, reloaded)
 	}
 }
 
@@ -229,6 +337,108 @@ func TestUninstallRefusesEnabledProjects(t *testing.T) {
 		t.Fatalf("managed code remains after uninstall: %v", err)
 	}
 }
+
+func TestManagedUpdateActivatesEveryEnabledProjectAndRollsBackGlobally(t *testing.T) {
+	ctx := context.Background()
+	st := openInstallerStore(t, ctx)
+	defer st.Close()
+	project1, err := st.CreateProject(ctx, protocol.Project{ID: "project-a", Name: "one", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project2, err := st.CreateProject(ctx, protocol.Project{ID: "project-b", Name: "two", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	installer := NewInstaller(home, st, time.Now)
+	source := writeInstallerPlugin(t, "1.0.0")
+	inspection, err := installer.Inspect(ctx, InspectRequest{Source: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := installer.Install(ctx, inspection.Token, project1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectPlugin(ctx, store.ProjectPlugin{ProjectID: project2.ID, PluginID: installed.ID, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	life := &recordingLifecycle{failProject: project2.ID}
+	installer.SetLifecycle(life)
+	writeInstallerManifest(t, source, "2.0.0")
+	inspection, err = installer.Inspect(ctx, InspectRequest{Source: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installer.Install(ctx, inspection.Token, project1.ID); err == nil {
+		t.Fatal("update unexpectedly succeeded after second project activation failed")
+	}
+	got, err := st.GetPluginInstallation(ctx, installed.ID)
+	if err != nil || got.Version != "1.0.0" || got.Root != installed.Root {
+		t.Fatalf("global installation not rolled back: %#v, %v", got, err)
+	}
+	if !containsString(life.activated, project1.ID) || !containsString(life.activated, project2.ID) {
+		t.Fatalf("activated projects = %v", life.activated)
+	}
+}
+
+func TestUninstallActivationFailureRestoresInstallationAndProjectSettings(t *testing.T) {
+	ctx := context.Background()
+	st := openInstallerStore(t, ctx)
+	defer st.Close()
+	project1, err := st.CreateProject(ctx, protocol.Project{Name: "one", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project2, err := st.CreateProject(ctx, protocol.Project{Name: "two", Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installer := NewInstaller(t.TempDir(), st, time.Now)
+	source := writeInstallerPlugin(t, "1.0.0")
+	inspection, err := installer.Inspect(ctx, InspectRequest{Source: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := installer.Install(ctx, inspection.Token, project1.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProjectPlugin(ctx, store.ProjectPlugin{ProjectID: project2.ID, PluginID: installed.ID, Enabled: true, Settings: map[string]any{"region": "west"}}); err != nil {
+		t.Fatal(err)
+	}
+	installer.SetLifecycle(&recordingLifecycle{failProject: project2.ID})
+	if err := installer.Uninstall(ctx, installed.ID, true); err == nil {
+		t.Fatal("uninstall unexpectedly succeeded")
+	}
+	if _, err := st.GetPluginInstallation(ctx, installed.ID); err != nil {
+		t.Fatalf("installation was not restored: %v", err)
+	}
+	for _, id := range []string{project1.ID, project2.ID} {
+		ref, err := st.ProjectPlugin(ctx, id, installed.ID)
+		if err != nil || !ref.Enabled {
+			t.Fatalf("project %s config not restored: %#v, %v", id, ref, err)
+		}
+	}
+	if _, err := os.Stat(installed.Root); err != nil {
+		t.Fatalf("managed code removed on failed uninstall: %v", err)
+	}
+}
+
+type recordingLifecycle struct {
+	activated   []string
+	failProject string
+}
+
+func (l *recordingLifecycle) Activate(_ context.Context, project string) error {
+	l.activated = append(l.activated, project)
+	if project == l.failProject {
+		return errors.New("test activation failure")
+	}
+	return nil
+}
+func (*recordingLifecycle) DeferCleanup(string, func()) {}
 
 func writeInstallerPlugin(t *testing.T, version string) string {
 	t.Helper()

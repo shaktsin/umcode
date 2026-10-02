@@ -28,6 +28,23 @@ type PluginComponentInfo struct {
 	Path      string `json:"path,omitempty"`
 	Required  bool   `json:"required"`
 	Supported bool   `json:"supported"`
+	Health    string `json:"health"`
+	Error     string `json:"error,omitempty"`
+}
+
+type PluginExecutableInfo struct {
+	Kind     string   `json:"kind"`
+	Name     string   `json:"name"`
+	Command  string   `json:"command"`
+	Args     []string `json:"args,omitempty"`
+	Required bool     `json:"required"`
+}
+
+type PluginHookFailureInfo struct {
+	PluginVersion string    `json:"pluginVersion,omitempty"`
+	Event         string    `json:"event"`
+	Error         string    `json:"error"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 type PluginSettingInfo struct {
@@ -39,19 +56,22 @@ type PluginSettingInfo struct {
 }
 
 type PluginInfo struct {
-	ID          string                `json:"id"`
-	Name        string                `json:"name"`
-	Version     string                `json:"version,omitempty"`
-	Format      string                `json:"format"`
-	Source      string                `json:"source"`
-	Mode        string                `json:"mode"`
-	Enabled     bool                  `json:"enabled"`
-	Settings    map[string]any        `json:"settings"`
-	Schema      []PluginSettingInfo   `json:"schema"`
-	Components  []PluginComponentInfo `json:"components"`
-	Diagnostics []PluginDiagnostic    `json:"diagnostics"`
-	InstalledAt time.Time             `json:"installedAt,omitempty"`
-	UpdatedAt   time.Time             `json:"updatedAt,omitempty"`
+	ID           string                  `json:"id"`
+	Name         string                  `json:"name"`
+	Version      string                  `json:"version,omitempty"`
+	Format       string                  `json:"format"`
+	Source       string                  `json:"source"`
+	Mode         string                  `json:"mode"`
+	Enabled      bool                    `json:"enabled"`
+	Settings     map[string]any          `json:"settings"`
+	Schema       []PluginSettingInfo     `json:"schema"`
+	Components   []PluginComponentInfo   `json:"components"`
+	Diagnostics  []PluginDiagnostic      `json:"diagnostics"`
+	Executables  []PluginExecutableInfo  `json:"executables"`
+	Health       string                  `json:"health"`
+	HookFailures []PluginHookFailureInfo `json:"hookFailures"`
+	InstalledAt  time.Time               `json:"installedAt,omitempty"`
+	UpdatedAt    time.Time               `json:"updatedAt,omitempty"`
 }
 
 type PluginInspection struct {

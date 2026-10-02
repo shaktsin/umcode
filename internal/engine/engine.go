@@ -139,7 +139,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 
 	mcpm := mcp.NewManager(o.Config.MCPServers, o.Logger)
 	reg.AddSource(mcpm)
-	pluginManager, err := plugins.NewManager(plugins.Options{Store: o.Store, Log: o.Logger})
+	pluginManager, err := plugins.NewManager(plugins.Options{Store: o.Store, Secrets: o.Secrets, Log: o.Logger})
 	if err != nil {
 		cancel()
 		return nil, err
@@ -153,10 +153,12 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		})
 	})
 
+	installer := plugins.NewInstaller(o.Config.Home, o.Store, nil)
+	installer.SetLifecycle(pluginManager)
 	e := &Engine{
 		Cfg: o.Config, Store: o.Store, LLMs: o.LLMs, Catalog: cat,
 		Creds: credentials.New(o.Store, o.Secrets, o.LLMs), Secrets: o.Secrets, Tools: reg, Skills: sk, MCP: mcpm,
-		Plugins: pluginManager, Installer: plugins.NewInstaller(o.Config.Home, o.Store, nil), Hooks: hookRunner,
+		Plugins: pluginManager, Installer: installer, Hooks: hookRunner,
 		Projects:  projects.New(o.Store, o.Config),
 		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs,
 		Bus: bus, Log: o.Logger,

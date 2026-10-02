@@ -137,6 +137,57 @@ func TestPluginHookRunPersistence(t *testing.T) {
 	}
 }
 
+func TestPluginComponentHealthPersistence(t *testing.T) {
+	ctx := context.Background()
+	s := openPluginTestStore(t, ctx)
+	defer s.Close()
+	project := createPluginTestProject(t, ctx, s, "health")
+	pluginID := insertPluginTestInstallation(t, ctx, s)
+	want := []PluginComponentHealth{
+		{PluginID: pluginID, ProjectID: project.ID, Component: "mcp:optional", Status: "failed", Error: "fixture failure"},
+		{PluginID: pluginID, ProjectID: project.ID, Component: "skill:greet", Status: "available"},
+	}
+	if err := s.ReplacePluginComponentHealth(ctx, pluginID, project.ID, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListPluginComponentHealth(ctx, pluginID, project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range got {
+		got[index].UpdatedAt = time.Time{}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("component health = %#v, want %#v", got, want)
+	}
+}
+
+func TestPluginComponentHealthBatchRollsBackAllProjectsOnFailure(t *testing.T) {
+	ctx := context.Background()
+	s := openPluginTestStore(t, ctx)
+	defer s.Close()
+	p1 := createPluginTestProject(t, ctx, s, "health-batch-a")
+	p2 := createPluginTestProject(t, ctx, s, "health-batch-b")
+	pluginID := insertPluginTestInstallation(t, ctx, s)
+	if err := s.ReplacePluginComponentHealth(ctx, pluginID, p1.ID, []PluginComponentHealth{{Component: "old", Status: "available"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecContext(ctx, `CREATE TRIGGER reject_component_health BEFORE INSERT ON plugin_component_health WHEN NEW.component = 'fail' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	err := s.ReplacePluginComponentHealthBatch(ctx, []PluginComponentHealthSet{
+		{PluginID: pluginID, ProjectID: p1.ID, Values: []PluginComponentHealth{{Component: "new", Status: "available"}}},
+		{PluginID: pluginID, ProjectID: p2.ID, Values: []PluginComponentHealth{{Component: "fail", Status: "failed"}}},
+	})
+	if err == nil {
+		t.Fatal("batch health write unexpectedly succeeded")
+	}
+	got, err := s.ListPluginComponentHealth(ctx, pluginID, p1.ID)
+	if err != nil || len(got) != 1 || got[0].Component != "old" {
+		t.Fatalf("partial health batch persisted: %#v, %v", got, err)
+	}
+}
+
 func openPluginTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 	s, err := Open(ctx, ":memory:")

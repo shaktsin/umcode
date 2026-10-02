@@ -159,22 +159,25 @@ type Registry struct {
 
 // Root contributes one plugin's skill directories and non-secret settings.
 type Root struct {
-	PluginID string
-	Paths    []string
-	Config   map[string]any
+	PluginID      string
+	Paths         []string
+	Config        map[string]any
+	RuntimeValues map[string]string
+	SecretValues  []string
 }
 
 // Snapshot is an immutable set of namespaced plugin skills for one project
 // capability generation.
 type Snapshot struct {
-	byID   map[string]*Skill
-	config map[string]map[string]any
+	byID    map[string]*Skill
+	config  map[string]map[string]any
+	secrets map[string][]string
 }
 
 type snapshotContextKey struct{}
 
 func CompileSnapshot(roots []Root) (*Snapshot, []error) {
-	snapshot := &Snapshot{byID: map[string]*Skill{}, config: map[string]map[string]any{}}
+	snapshot := &Snapshot{byID: map[string]*Skill{}, config: map[string]map[string]any{}, secrets: map[string][]string{}}
 	var errs []error
 	for _, root := range roots {
 		for _, skillPath := range root.Paths {
@@ -190,13 +193,36 @@ func CompileSnapshot(roots []Root) (*Snapshot, []error) {
 			}
 			copy := *skill
 			copy.Name = name
+			copy.Runtime.Env = cloneStringMap(skill.Runtime.Env)
+			for key, value := range copy.Runtime.Env {
+				for token, replacement := range root.RuntimeValues {
+					value = strings.ReplaceAll(value, token, replacement)
+				}
+				if strings.Contains(value, "{{secret:") || strings.Contains(value, "{{setting:") {
+					errs = append(errs, fmt.Errorf("plugin %s skill %s runtime references an undeclared or unset plugin setting", root.PluginID, skillPath))
+					continue
+				}
+				copy.Runtime.Env[key] = value
+			}
 			snapshot.byID[name] = &copy
+			snapshot.secrets[name] = append([]string(nil), root.SecretValues...)
 			if root.Config != nil {
 				snapshot.config[name] = cloneAnyMap(root.Config)
 			}
 		}
 	}
 	return snapshot, errs
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return nil
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
 }
 
 func WithSnapshot(ctx context.Context, snapshot *Snapshot) context.Context {
@@ -219,6 +245,18 @@ func (s *Snapshot) Config(name string) map[string]any {
 		return nil
 	}
 	return cloneAnyMap(s.config[name])
+}
+
+func (s *Snapshot) redact(name, value string) string {
+	if s == nil {
+		return value
+	}
+	for _, secret := range s.secrets[name] {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return value
 }
 
 func cloneAnyMap(input map[string]any) map[string]any {

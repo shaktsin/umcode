@@ -14,17 +14,24 @@ import (
 // one reference while the snapshot is current; every acquired turn owns one
 // additional reference.
 type Snapshot struct {
-	generation    string
-	tools         []tools.Tool
-	byTool        map[string]tools.Tool
-	skills        *skills.Snapshot
-	hooks         hooks.Set
-	mcp           *mcp.Manager
-	installations []store.PluginInstallation
+	generation      string
+	tools           []tools.Tool
+	byTool          map[string]tools.Tool
+	skills          *skills.Snapshot
+	hooks           hooks.Set
+	mcp             *mcp.Manager
+	installations   []store.PluginInstallation
+	componentHealth map[string]map[string]ComponentHealth
 
-	mu     sync.Mutex
-	refs   int
-	closed bool
+	mu      sync.Mutex
+	refs    int
+	closed  bool
+	onClose func()
+}
+
+type ComponentHealth struct {
+	Status string
+	Error  string
 }
 
 func (s *Snapshot) Tools() []tools.Tool {
@@ -87,7 +94,12 @@ func (s *Snapshot) Release() {
 		s.closed = true
 	}
 	s.mu.Unlock()
-	if closeNow && s.mcp != nil {
-		s.mcp.Close()
+	if closeNow {
+		if s.mcp != nil {
+			s.mcp.Close()
+		}
+		if s.onClose != nil {
+			s.onClose()
+		}
 	}
 }
