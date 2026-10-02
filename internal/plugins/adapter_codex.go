@@ -53,17 +53,21 @@ func (codexAdapter) Load(root string) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
-	hookPaths, err := decodePaths(manifest.Hooks, "./hooks/hooks.json")
-	if err != nil {
-		return Package{}, pluginError("adapt", "adapt/invalid_hooks", "hooks", "hooks must be a path or path array", "Reference package-relative hooks files.", err)
-	}
-	for _, path := range hookPaths {
-		declarations, diagnostics, err := loadHooksPath(root, pkg.ID, path)
+	var inlineHooks map[string]json.RawMessage
+	emptyHooksObject := json.Unmarshal(manifest.Hooks, &inlineHooks) == nil && inlineHooks != nil && len(inlineHooks) == 0
+	if !emptyHooksObject {
+		hookPaths, err := decodePaths(manifest.Hooks, "./hooks/hooks.json")
 		if err != nil {
-			return Package{}, err
+			return Package{}, pluginError("adapt", "adapt/invalid_hooks", "hooks", "hooks must be a path or path array", "Reference package-relative hooks files.", err)
 		}
-		pkg.Hooks = append(pkg.Hooks, declarations...)
-		pkg.Diagnostics = append(pkg.Diagnostics, diagnostics...)
+		for _, path := range hookPaths {
+			declarations, diagnostics, err := loadHooksPath(root, pkg.ID, path)
+			if err != nil {
+				return Package{}, err
+			}
+			pkg.Hooks = append(pkg.Hooks, declarations...)
+			pkg.Diagnostics = append(pkg.Diagnostics, diagnostics...)
+		}
 	}
 	addSupportedComponents(&pkg)
 	return pkg, nil

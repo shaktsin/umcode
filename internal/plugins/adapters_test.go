@@ -77,6 +77,22 @@ func TestClaudeAdapterLoadsInlineHooks(t *testing.T) {
 	}
 }
 
+func TestCodexAdapterAllowsEmptyInlineHooksObject(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".codex-plugin", "plugin.json"), `{"name":"empty-hooks","hooks":{}}`)
+
+	pkg, err := LoadPackage(root)
+	if err != nil {
+		t.Fatalf("LoadPackage() error = %v", err)
+	}
+	if pkg.Format != FormatCodex {
+		t.Fatalf("Format = %q, want %q", pkg.Format, FormatCodex)
+	}
+	if len(pkg.Hooks) != 0 {
+		t.Fatalf("Hooks = %#v, want no hooks", pkg.Hooks)
+	}
+}
+
 func TestPortableManifestWinsOverCodexOverlayIdentity(t *testing.T) {
 	t.Parallel()
 
