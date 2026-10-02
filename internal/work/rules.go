@@ -19,6 +19,9 @@ func EscalatesToGuided(tool, risk string) bool {
 	return false
 }
 
+// StatusSuperseded marks a criterion that a later verification plan dropped.
+const StatusSuperseded = "superseded"
+
 func isVerificationTool(tool string) bool {
 	return strings.HasPrefix(tool, "verification.") || tool == "browser.verify"
 }
@@ -45,7 +48,7 @@ func Unresolved(d protocol.WorkDetail) []string {
 	}
 	var out []string
 	for _, n := range d.Nodes {
-		if n.Kind != protocol.NodeCriterion {
+		if n.Kind != protocol.NodeCriterion || n.Status == StatusSuperseded {
 			continue
 		}
 		a, ok := latest[n.ID]

@@ -90,12 +90,17 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 			return err
 		}
 	}
+	if o.Err != "" {
+		return s.recordFailure(ctx, w.ID, o)
+	}
+	switch o.Tool {
+	case "file.write", "file.edit", "verification.plan", "verification.run", "browser.verify":
+	default:
+		return nil
+	}
 	d, err := s.Store.GetWorkDetail(ctx, w.ID)
 	if err != nil {
 		return err
-	}
-	if o.Err != "" {
-		return s.recordFailure(ctx, w.ID, o)
 	}
 	switch o.Tool {
 	case "file.write", "file.edit":
@@ -139,6 +144,8 @@ func (s *Service) recordFileChange(ctx context.Context, d protocol.WorkDetail, o
 	if json.Unmarshal(o.Args, &a) != nil || strings.TrimSpace(a.Path) == "" {
 		return nil
 	}
+	rel, full := normalizePath(o.Root, a.Path)
+	a.Path = rel
 	now := s.now()
 	var art *protocol.WorkNode
 	for i := range d.Nodes {
@@ -163,17 +170,33 @@ func (s *Service) recordFileChange(ctx context.Context, d protocol.WorkDetail, o
 		return err
 	}
 	_, err := s.Store.AddEvidence(ctx, protocol.Evidence{WorkID: d.Work.ID, NodeID: art.ID, Kind: protocol.EvidenceFileChange,
-		SourceURI: a.Path, ContentHash: fileHash(o.Root, a.Path), Summary: o.Tool, ObservedAt: now})
+		SourceURI: a.Path, ContentHash: fileHash(full), Summary: o.Tool, ObservedAt: now})
 	return err
 }
 
-// fileHash returns the hex SHA-256 of a project file, or "" when it cannot be read inside root.
-func fileHash(root, path string) string {
+// normalizePath returns the project-relative, slash-separated spelling of a
+// tool path and the absolute path to read. Paths that resolve outside root
+// (or any path when there is no root) keep their cleaned spelling and have no
+// absolute path, so they are never hashed.
+func normalizePath(root, path string) (rel, full string) {
+	path = filepath.Clean(strings.TrimSpace(path))
 	if root == "" {
-		return ""
+		return filepath.ToSlash(path), ""
 	}
-	full := filepath.Join(root, path)
-	if rel, err := filepath.Rel(root, full); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	full = path
+	if !filepath.IsAbs(path) {
+		full = filepath.Join(root, path)
+	}
+	r, err := filepath.Rel(root, full)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(path), ""
+	}
+	return filepath.ToSlash(r), full
+}
+
+// fileHash returns the hex SHA-256 of a file, or "" when there is no path or it cannot be read.
+func fileHash(full string) string {
+	if full == "" {
 		return ""
 	}
 	data, err := os.ReadFile(full)
@@ -187,12 +210,27 @@ func fileHash(root, path string) string {
 func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Observation) error {
 	known := map[string]bool{}
 	for _, n := range d.Nodes {
-		if n.Kind == protocol.NodeCriterion {
+		if n.Kind == protocol.NodeCriterion && n.Status != StatusSuperseded {
 			known[criterionCommand(n)] = true
 		}
 	}
 	goal, hasGoal := goalNode(d)
-	for _, c := range parsePlan(o.Output) {
+	checks := parsePlan(o.Output)
+	if len(checks) > 0 {
+		// A new plan replaces the old one: criteria it no longer lists stop counting.
+		planned := map[string]bool{}
+		for _, c := range checks {
+			planned[c.Command] = true
+		}
+		for _, n := range d.Nodes {
+			if n.Kind == protocol.NodeCriterion && n.Status != StatusSuperseded && !planned[criterionCommand(n)] {
+				if err := s.Store.UpdateWorkNode(ctx, n.ID, StatusSuperseded, n.Revision, s.now()); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, c := range checks {
 		if known[c.Command] {
 			continue
 		}
@@ -220,7 +258,7 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 // criterionFor finds the criterion whose planned command equals command.
 func criterionFor(d protocol.WorkDetail, command string) *protocol.WorkNode {
 	for i := range d.Nodes {
-		if d.Nodes[i].Kind == protocol.NodeCriterion && criterionCommand(d.Nodes[i]) == command {
+		if d.Nodes[i].Kind == protocol.NodeCriterion && d.Nodes[i].Status != StatusSuperseded && criterionCommand(d.Nodes[i]) == command {
 			return &d.Nodes[i]
 		}
 	}

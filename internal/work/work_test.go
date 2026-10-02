@@ -383,3 +383,40 @@ func TestFailuresCounted(t *testing.T) {
 		t.Fatal("failure was not counted")
 	}
 }
+
+func TestPathSpellingsShareOneArtifact(t *testing.T) {
+	f := newFixture(t)
+	f.begin(t, "g")
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello\n"), 0o644)
+	sum := sha256.Sum256([]byte("hello\n"))
+	for _, p := range []string{"a.txt", "./a.txt", " a.txt ", filepath.Join(root, "a.txt")} {
+		args, _ := json.Marshal(map[string]string{"path": p})
+		f.observe(t, Observation{Tool: "file.edit", Risk: "yellow", Root: root, Args: args})
+	}
+	d := f.detail(t)
+	arts := kinds(d, protocol.NodeArtifact)
+	if len(arts) != 1 || arts[0].Title != "a.txt" || arts[0].Revision != 4 {
+		t.Fatalf("artifacts = %+v", arts)
+	}
+	for _, ev := range d.Evidence {
+		if ev.ContentHash != hex.EncodeToString(sum[:]) || ev.SourceURI != "a.txt" {
+			t.Fatalf("evidence = %+v", ev)
+		}
+	}
+}
+
+func TestReplanSupersedesDroppedCriteria(t *testing.T) {
+	f := newFixture(t)
+	f.begin(t, "g")
+	f.observe(t, Observation{Tool: "verification.plan", Output: planOut})
+	f.observe(t, Observation{Tool: "verification.plan", Output: `{"checks":[{"label":"unit","command":"go test ./..."}]}`})
+	f.observe(t, Observation{Tool: "verification.run", Output: `{"status":"passed","results":[{"label":"unit","command":"go test ./...","status":"passed"}]}`})
+	if u := Unresolved(f.detail(t)); len(u) != 0 {
+		t.Fatalf("dropped criterion still blocks: %v", u)
+	}
+	f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false)
+	if d := f.detail(t); d.Work.Status != protocol.WorkCompleted {
+		t.Fatalf("status = %s", d.Work.Status)
+	}
+}
