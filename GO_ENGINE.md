@@ -60,14 +60,14 @@ Shell commands are parsed per pipeline segment (`&&`, `||`, `;`, `|`). Known rea
 
 Each project carries its own defaults (provider, model, complexity, key), compute/network settings, and plugin enablement/configuration. Compute selects the isolated execution environment; network is scoped to that environment. Shell commands run with the project root as the working directory and an environment with no API keys in it; with network off, commands that obviously reach out (`curl`, `git push`, `npm install`, …) are refused with a message rather than failing halfway.
 
-**`AGENT.md` is the project's system prompt.** Every turn composes `~/.umcode/AGENT.md` (your standing instructions) → the project's `AGENT.md` → the nearest `AGENT.md` in the subtree being worked on. `AGENTS.md` (Codex) and `CLAUDE.md` (Claude Code) are read as fallbacks, so a repo set up for either works unchanged. Files are re-read when they change on disk and capped at 32 KB each; `umcode project instructions ID --composed` prints exactly what the agent receives.
+**`UMCODE.md` is the project's instruction file.** Every turn composes the project's `UMCODE.md` → the nearest `UMCODE.md` files in the subtree being worked on. UMCode reads no other instruction files: `AGENTS.md`, `CLAUDE.md` and `~/.umcode/AGENT.md` are not scanned. Files are re-read when they change on disk and capped at 32 KB each; `umcode project instructions ID --composed` prints exactly what the agent receives.
 
 Every file the agent creates, changes or deletes becomes a **`fileChange` item** in the chat with a unified diff, and is recorded with the previous content (up to 1 MB), so `umcode project diff` shows what a turn did and `umcode project revert TURN_ID` puts it back. Answering an approval with `remember: true` stores that exact decision for the chat only.
 
 ```sh
 umcode project add ~/code/my-app --name my-app        # register a folder
-umcode project show prj_…                             # folder, git branch, defaults, AGENT.md
-umcode project instructions prj_… -f AGENT.md         # write the project's instructions
+umcode project show prj_…                             # folder, git branch, defaults, UMCODE.md
+umcode project instructions prj_… -f UMCODE.md         # write the project's instructions
 umcode project diff prj_…                             # what the agent changed
 umcode project revert trn_…                           # undo one turn's edits
 umcode project set prj_… --network on -m claude-opus-5
@@ -201,7 +201,7 @@ internal/llm/        Claude, OpenAI(-compatible) and Gemini streaming adapters (
 internal/models/     catalog, prices, cost, complexity presets and Auto classifier
 internal/credentials/ API keys, Keychain, budgets, fallback
 internal/tools/      tool registry, built-in tools (file.read/list/write, shell.run), project scope + workspace ACL
-internal/projects/   projects, AGENT.md composition, file trees, diffs and undo
+internal/projects/   projects, UMCODE.md composition, file trees, diffs and undo
 internal/pathutil/   the containment rule every tool shares (symlink-safe, /var vs /private/var)
 internal/skills/     SKILL.md loader, runtimes/venvs, skill tools, install/remove
 internal/mcp/        MCP client (stdio + Streamable HTTP) and tool bridge

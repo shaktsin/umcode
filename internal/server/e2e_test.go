@@ -526,14 +526,14 @@ func TestProjectContainment(t *testing.T) {
 }
 
 // A chat with a project: edits land inside it, show up as fileChange items with
-// a diff, and can be undone. AGENTS.md in the project reaches the system prompt.
+// a diff, and can be undone. UMCODE.md in the project reaches the system prompt.
 func TestProjectEditsDiffAndRevert(t *testing.T) {
 	h := newHarness(t, nil)
 	h.addKey("claude", "k", "sk-1")
 	if err := os.WriteFile(filepath.Join(h.ws, "notes.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(h.ws, "AGENTS.md"), []byte("Always answer in haiku."), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(h.ws, "UMCODE.md"), []byte("Always answer in haiku."), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.fake.push(
@@ -554,7 +554,7 @@ func TestProjectEditsDiffAndRevert(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(h.ws, "notes.txt")); string(data) != "one\ntwo\nthree\n" {
 		t.Fatalf("default project-folder workspace was not modified = %q", data)
 	}
-	// The project's AGENTS.md is part of the prompt the model saw.
+	// The project's UMCODE.md is part of the prompt the model saw.
 	if sys := h.fake.lastSystem(); !strings.Contains(sys, "Always answer in haiku.") || !strings.Contains(sys, h.ws) {
 		t.Fatalf("system prompt = %q", sys)
 	}
@@ -712,12 +712,12 @@ func TestProjectMethods(t *testing.T) {
 	if ins.Path != filepath.Join(resolvedWS, "UMCODE.md") || !strings.Contains(ins.Composed, "make test") {
 		t.Fatalf("instructions = %+v", ins)
 	}
-	// A repo written for Codex or Claude Code works unchanged.
+	// Foreign instruction files are not read implicitly.
 	os.Remove(filepath.Join(h.ws, "UMCODE.md"))
 	os.WriteFile(filepath.Join(h.ws, "CLAUDE.md"), []byte("Prefer small commits."), 0o644)
 	h.call(protocol.MethodProjectInstructions, protocol.ProjectInstructionsParams{ProjectID: h.proj.ID}, &ins)
-	if !strings.Contains(ins.Composed, "Prefer small commits.") {
-		t.Fatalf("CLAUDE.md fallback: %+v", ins)
+	if strings.Contains(ins.Composed, "Prefer small commits.") || ins.Exists {
+		t.Fatalf("CLAUDE.md was read implicitly: %+v", ins)
 	}
 	// Files and reads are scoped to the project.
 	os.MkdirAll(filepath.Join(h.ws, "src"), 0o755)
