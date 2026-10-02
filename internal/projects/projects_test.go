@@ -280,6 +280,10 @@ func TestInstructionsSkipDirectoryNamedUMCode(t *testing.T) {
 	if composed, sources := svc.InstructionsFor(ctx, p, ""); composed != "" || len(sources) != 0 {
 		t.Fatalf("composed = %q sources = %+v", composed, sources)
 	}
+	res, err := svc.Instructions(ctx, p, nil)
+	if err != nil || res.Exists {
+		t.Fatalf("a directory was reported as an instruction file: %+v err = %v", res, err)
+	}
 }
 
 func TestInstructionsTruncateLargeUMCode(t *testing.T) {

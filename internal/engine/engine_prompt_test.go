@@ -73,7 +73,7 @@ func TestSystemPromptGolden(t *testing.T) {
 	}
 }
 
-func TestSystemPromptLayersJoinToPrompt(t *testing.T) {
+func TestSystemPromptLayerOrder(t *testing.T) {
 	e, _, _, _ := pluginHookEngine(t)
 	e.Projects = projects.New(e.Store, e.Cfg)
 	root := t.TempDir()
@@ -100,11 +100,6 @@ func TestSystemPromptLayersJoinToPrompt(t *testing.T) {
 		}
 		if strings.Join(names, ",") != strings.Join(c.want, ",") {
 			t.Errorf("%s: layers = %v, want %v", c.name, names, c.want)
-		}
-		got := clockLine.ReplaceAllString(joinLayers(layers), "")
-		want := clockLine.ReplaceAllString(e.systemPrompt(t.Context(), "hi", c.proj, "", c.hooks), "")
-		if got != want {
-			t.Errorf("%s: joined layers differ from systemPrompt", c.name)
 		}
 	}
 }

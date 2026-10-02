@@ -179,10 +179,10 @@ func (s *Service) Instructions(ctx context.Context, p protocol.Project, content 
 	if data, err := os.ReadFile(path); err == nil {
 		own = string(data)
 	}
-	_, statErr := os.Lstat(path)
+	st, statErr := os.Lstat(path)
 	composed, sources := s.InstructionsFor(ctx, p, "")
 	return protocol.ProjectInstructionsResult{
-		Composed: composed, Project: own, Path: path, Exists: statErr == nil, Sources: sources,
+		Composed: composed, Project: own, Path: path, Exists: statErr == nil && !st.IsDir(), Sources: sources,
 	}, nil
 }
 
