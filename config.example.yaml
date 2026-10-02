@@ -130,10 +130,6 @@ skills:
 agents:
   enabled: true              # route requests through DynamicOrchestrator
 
-  # Path to a Markdown file injected into every agent's system prompt.
-  # Edit this to give the bot standing instructions, persona, or domain context.
-  context_file: ~/.umcode/AGENT.md
-
   # Orchestrator uses a strong reasoning model; workers can use a cheaper one.
   # Leave provider/model blank to inherit from the top-level llm block.
   orchestrator:

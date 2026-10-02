@@ -51,3 +51,17 @@ models:
 		t.Fatal("expected validation error")
 	}
 }
+
+func TestLegacyContextFileKeyIsIgnored(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	cfg := filepath.Join(home, "config.yaml")
+	os.WriteFile(cfg, []byte("agents:\n  enabled: true\n  context_file: ~/.umcode/AGENT.md\n"), 0o600)
+	c, err := Load(cfg)
+	if err != nil {
+		t.Fatalf("legacy context_file key broke loading: %v", err)
+	}
+	if !c.Agents.Enabled {
+		t.Fatalf("agents = %+v", c.Agents)
+	}
+}
