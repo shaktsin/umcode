@@ -206,31 +206,30 @@ func TestInstructionsComposition(t *testing.T) {
 	os.MkdirAll(filepath.Join(root, "web"), 0o755)
 	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Project: run make test."), 0o644)
 	os.WriteFile(filepath.Join(root, "web", "CLAUDE.md"), []byte("Web: use Svelte 5 runes."), 0o644)
+	os.WriteFile(filepath.Join(root, "UMCODE.md"), []byte("Project: UMCode guidance."), 0o644)
+	os.WriteFile(filepath.Join(root, "web", "UMCODE.md"), []byte("Web: nested UMCode."), 0o644)
 
 	p, err := svc.Create(ctx, protocol.ProjectCreateParams{Root: root})
 	if err != nil {
 		t.Fatal(err)
 	}
+	foreign := []string{"Global: be terse.", "run make test", "Svelte 5 runes"}
 	composed, sources := svc.InstructionsFor(ctx, p, "")
-	if !strings.Contains(composed, "Global: be terse.") || !strings.Contains(composed, "Project: run make test.") {
+	if !strings.Contains(composed, "UMCode guidance") || strings.Contains(composed, "nested UMCode") {
 		t.Fatalf("composed = %q", composed)
 	}
-	if strings.Contains(composed, "Svelte 5") {
-		t.Fatal("nested file applied without a hint")
-	}
-	if len(sources) != 2 || sources[0].Scope != "global" || sources[1].Scope != "project" {
+	if len(sources) != 1 || sources[0].Scope != "project" {
 		t.Fatalf("sources = %+v", sources)
 	}
-	// Working in a nested directory composes root-to-leaf instructions.
+	// Working in a nested directory composes root-to-leaf UMCODE.md files.
 	composed, sources = svc.InstructionsFor(ctx, p, "web/App.svelte")
-	if !strings.Contains(composed, "Svelte 5 runes") || len(sources) != 3 || sources[2].Scope != "nested" {
+	if !strings.Contains(composed, "nested UMCode") || len(sources) != 2 || sources[1].Scope != "nested" {
 		t.Fatalf("nested: %q %+v", composed, sources)
 	}
-	// UMCODE, AGENTS, and CLAUDE instructions are all composed; external files remain inputs.
-	os.WriteFile(filepath.Join(root, "UMCODE.md"), []byte("Project: UMCode guidance."), 0o644)
-	composed, _ = svc.InstructionsFor(ctx, p, "")
-	if !strings.Contains(composed, "UMCode guidance") || !strings.Contains(composed, "run make test") {
-		t.Fatalf("precedence: %q", composed)
+	for _, f := range foreign {
+		if strings.Contains(composed, f) {
+			t.Fatalf("foreign instruction %q was composed: %q", f, composed)
+		}
 	}
 	// The editor writes only UMCODE.md and leaves AGENTS.md and CLAUDE.md untouched.
 	text := "Project: written by the app."
@@ -246,6 +245,59 @@ func TestInstructionsComposition(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(root, "web", "CLAUDE.md")); string(data) != "Web: use Svelte 5 runes." {
 		t.Fatalf("CLAUDE.md was modified: %q", data)
+	}
+}
+
+func TestInstructionsIgnoreForeignOnlyProject(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Project: run make test."), 0o644)
+	os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("Prefer small commits."), 0o644)
+	p, err := svc.Create(ctx, protocol.ProjectCreateParams{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, sources := svc.InstructionsFor(ctx, p, "")
+	if composed != "" || len(sources) != 0 {
+		t.Fatalf("composed = %q sources = %+v", composed, sources)
+	}
+	res, err := svc.Instructions(ctx, p, nil)
+	if err != nil || res.Exists {
+		t.Fatalf("res = %+v err = %v", res, err)
+	}
+}
+
+func TestInstructionsSkipDirectoryNamedUMCode(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "UMCODE.md"), 0o755)
+	p, err := svc.Create(ctx, protocol.ProjectCreateParams{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if composed, sources := svc.InstructionsFor(ctx, p, ""); composed != "" || len(sources) != 0 {
+		t.Fatalf("composed = %q sources = %+v", composed, sources)
+	}
+	res, err := svc.Instructions(ctx, p, nil)
+	if err != nil || res.Exists {
+		t.Fatalf("a directory was reported as an instruction file: %+v err = %v", res, err)
+	}
+}
+
+func TestInstructionsTruncateLargeUMCode(t *testing.T) {
+	svc, _, _ := newService(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "UMCODE.md"), []byte(strings.Repeat("a", 40<<10)), 0o644)
+	p, err := svc.Create(ctx, protocol.ProjectCreateParams{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sources := svc.InstructionsFor(ctx, p, "")
+	if len(sources) != 1 || !strings.Contains(sources[0].Error, "truncated to 32 KB") {
+		t.Fatalf("sources = %+v", sources)
 	}
 }
 

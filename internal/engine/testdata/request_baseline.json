@@ -1,0 +1,12 @@
+{
+  "layers": {
+    "core": 100,
+    "project": 200
+  },
+  "systemTokens": 300,
+  "toolSpecTokens": 50,
+  "toolCount": 2,
+  "conversationTokens": 43,
+  "toolResultTokens": 1000,
+  "totalTokens": 1393
+}

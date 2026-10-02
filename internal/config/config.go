@@ -64,7 +64,6 @@ type AgentModelConfig struct {
 
 type AgentsConfig struct {
 	Enabled                   bool             `yaml:"enabled"`
-	ContextFile               string           `yaml:"context_file"`
 	Orchestrator              AgentModelConfig `yaml:"orchestrator"`
 	Worker                    AgentModelConfig `yaml:"worker"`
 	MaxAgentIterations        int              `yaml:"max_agent_iterations"`
@@ -301,9 +300,6 @@ func (c *Config) finalize() {
 	}
 	for i := range c.MCPServers {
 		c.MCPServers[i].Cwd = expand(c.MCPServers[i].Cwd)
-	}
-	if c.Agents.ContextFile != "" {
-		c.Agents.ContextFile = expand(c.Agents.ContextFile)
 	}
 	if c.Policy.ApprovalTimeoutMinutes <= 0 {
 		c.Policy.ApprovalTimeoutMinutes = 30

@@ -436,13 +436,15 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			pause(reason)
 			break
 		}
-		req.System = e.systemPrompt(sctx, p.Text, proj, instructionHint, hookContext)
+		layers := e.systemPromptLayers(sctx, p.Text, proj, instructionHint, hookContext)
+		req.System = joinLayers(layers)
 		// Old tool output is the first thing to go when the request nears the
 		// window; the newest results stay.
 		if n := trimToolResults(msgs, tokens(req.System)+toolSpecTokens(specs), int(float64(res.meta.ContextWindow)*contextTrimFraction)); n > 0 {
 			log.Info("dropped old tool results to save context", "count", n)
 		}
 		req.Messages = msgs
+		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req))
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
 			if reason := budget.stopReason(); reason != "" {

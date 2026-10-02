@@ -57,7 +57,7 @@ await step('project settings shows instructions and changes', async () => {
   await p.waitForTimeout(300);
   await p.getByText('Project instructions').waitFor({ timeout: 5000 });
   const instructions = await p.locator('textarea').first().inputValue();
-  if (!instructions.includes('Mention the branch')) throw new Error('AGENT.md not loaded: ' + instructions);
+  if (!instructions.includes('Mention the branch')) throw new Error('UMCODE.md not loaded: ' + instructions);
   await p.getByText('Changes the agent has made').waitFor({ timeout: 5000 });
   await p.screenshot({ path: scheme + '-06-project.png' });
 });

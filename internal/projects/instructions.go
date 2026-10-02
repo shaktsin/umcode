@@ -13,9 +13,9 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
-// Instruction files are read-only inputs except UMCODE.md, which UMCODE owns.
-// Keep AGENTS.md and CLAUDE.md compatible without ever selecting them as write targets.
-var instructionNames = []string{"UMCODE.md", "AGENTS.md", "CLAUDE.md"}
+// UMCODE.md is the only instruction file UMCode reads implicitly. AGENTS.md,
+// CLAUDE.md and any global agent file are deliberately not scanned.
+var instructionNames = []string{"UMCODE.md"}
 
 // maxInstructionBytes caps one instruction file; the rest is dropped with a note.
 const maxInstructionBytes = 32 << 10
@@ -27,8 +27,8 @@ type instructionCache struct {
 	nested   string
 }
 
-// InstructionsFor composes global instructions, all project-root instructions,
-// then nested instructions from the project root through the hinted path.
+// InstructionsFor composes the project-root UMCODE.md, then nested UMCODE.md
+// files from the project root through the hinted path.
 func (s *Service) InstructionsFor(ctx context.Context, p protocol.Project, hint string) (string, []protocol.InstructionSource) {
 	files := s.instructionFiles(p, hint)
 	key := p.ID + "\x00" + hint
@@ -58,7 +58,6 @@ func (s *Service) InstructionsFor(ctx context.Context, p protocol.Project, hint 
 			src.Error = fmt.Sprintf("truncated to %d KB", maxInstructionBytes>>10)
 		}
 		title := map[string]string{
-			"global": "# Your standing instructions (~/.umcode/AGENT.md)",
 			"project": fmt.Sprintf("# Project instructions (%s)",
 				filepath.Base(f.path)),
 			"nested": fmt.Sprintf("# Instructions for %s", filepath.Dir(f.path)),
@@ -80,19 +79,14 @@ type instructionFile struct {
 	path  string
 }
 
-// instructionFiles lists the candidate files, global first.
+// instructionFiles lists the candidate UMCODE.md files, project root first.
 func (s *Service) instructionFiles(p protocol.Project, hint string) []instructionFile {
 	var out []instructionFile
-	global := s.cfg.Agents.ContextFile
-	if global == "" {
-		global = filepath.Join(s.cfg.Home, "AGENT.md")
-	}
-	out = append(out, instructionFile{scope: "global", path: global})
 	if p.Root == "" {
 		return out
 	}
 	out = append(out, instructionFilesAt(p.Root, "project")...)
-	// Include every nested instruction file root-to-leaf, as Codex does.
+	// Include every nested UMCODE.md root-to-leaf.
 	if hint != "" {
 		if abs, err := Resolve(p.Root, hint); err == nil {
 			dir := abs
@@ -185,10 +179,10 @@ func (s *Service) Instructions(ctx context.Context, p protocol.Project, content 
 	if data, err := os.ReadFile(path); err == nil {
 		own = string(data)
 	}
-	_, statErr := os.Lstat(path)
+	st, statErr := os.Lstat(path)
 	composed, sources := s.InstructionsFor(ctx, p, "")
 	return protocol.ProjectInstructionsResult{
-		Composed: composed, Project: own, Path: path, Exists: statErr == nil, Sources: sources,
+		Composed: composed, Project: own, Path: path, Exists: statErr == nil && !st.IsDir(), Sources: sources,
 	}, nil
 }
 
