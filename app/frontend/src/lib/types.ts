@@ -497,6 +497,78 @@ export interface ToolInfo {
   source: string;
 }
 
+export interface PluginDiagnostic {
+  code: string;
+  phase: string;
+  severity: 'info' | 'warning' | 'error' | string;
+  component?: string;
+  message: string;
+  remediation?: string;
+}
+
+export interface PluginComponentInfo {
+  kind: string;
+  name: string;
+  path?: string;
+  required: boolean;
+  supported: boolean;
+	health: string;
+	error?: string;
+}
+
+export interface PluginExecutableInfo {
+	kind: string;
+	name: string;
+	command: string;
+	args?: string[];
+	required: boolean;
+}
+
+export interface PluginHookFailureInfo {
+	pluginVersion?: string;
+	event: string;
+	error: string;
+	createdAt: string;
+}
+
+export interface PluginSettingInfo {
+  name: string;
+  description?: string;
+  type?: string;
+  required: boolean;
+  secret: boolean;
+}
+
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version?: string;
+  format: string;
+  source: string;
+  mode: 'managed' | 'linked' | string;
+  enabled: boolean;
+  settings: Record<string, unknown>;
+  schema: PluginSettingInfo[];
+  components: PluginComponentInfo[];
+  diagnostics: PluginDiagnostic[];
+	executables: PluginExecutableInfo[];
+	health: string;
+	hookFailures: PluginHookFailureInfo[];
+  installedAt?: string;
+  updatedAt?: string;
+}
+
+export interface PluginInspection {
+  token: string;
+  expiresAt: string;
+  source: string;
+  mode: 'managed' | 'linked' | string;
+  digest: string;
+  requiresApproval: boolean;
+  plugin: PluginInfo;
+  diagnostics: PluginDiagnostic[];
+}
+
 export interface BudgetWarning {
   credentialId: string;
   label: string;

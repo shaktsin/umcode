@@ -36,17 +36,17 @@ func (*getInstructions) Assess(args json.RawMessage) (tools.Risk, string) {
 	_ = json.Unmarshal(args, &a)
 	return tools.RiskGreen, "Read instructions for skill " + a.SkillName
 }
-func (t *getInstructions) Call(_ context.Context, args json.RawMessage) (string, error) {
+func (t *getInstructions) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	var a struct {
 		SkillName string `json:"skill_name"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
 	}
-	s, ok := t.r.Get(strings.TrimSpace(a.SkillName))
+	s, ok := t.r.GetContext(ctx, strings.TrimSpace(a.SkillName))
 	if !ok {
 		var names []string
-		for _, x := range t.r.List() {
+		for _, x := range t.r.ListContext(ctx) {
 			if x.Error == "" {
 				names = append(names, x.Name)
 			}
@@ -87,11 +87,26 @@ func (*runScript) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"skill":{"type":"string"},"script":{"type":"string","description":"Script name from skill.get_instructions"},"args":{"type":"object","description":"Arguments matching the script's input schema"}},"required":["skill","script"]}`)
 }
 func (t *runScript) Assess(args json.RawMessage) (tools.Risk, string) {
+	return t.assess(nil, args)
+}
+
+func (t *runScript) AssessContext(ctx context.Context, args json.RawMessage) (tools.Risk, string) {
+	return t.assess(ctx, args)
+}
+
+func (t *runScript) assess(ctx context.Context, args json.RawMessage) (tools.Risk, string) {
 	var a runArgs
 	_ = json.Unmarshal(args, &a)
 	risk := tools.RiskYellow
-	if s, ok := t.r.Get(a.Skill); ok {
-		if r, ok := tools.ParseRisk(s.RiskLevel); ok {
+	var skill *Skill
+	var ok bool
+	if ctx != nil {
+		skill, ok = t.r.GetContext(ctx, a.Skill)
+	} else {
+		skill, ok = t.r.Get(a.Skill)
+	}
+	if ok {
+		if r, ok := tools.ParseRisk(skill.RiskLevel); ok {
 			risk = r
 		}
 	}
@@ -106,7 +121,7 @@ func (t *runScript) Call(ctx context.Context, args json.RawMessage) (string, err
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
 	}
-	if s, ok := t.r.Get(a.Skill); ok {
+	if s, ok := t.r.GetContext(ctx, a.Skill); ok {
 		if sc, ok := s.Scripts[a.Script]; ok {
 			if err := checkRequired(sc.InputSchema, a.Args); err != nil {
 				return "", err

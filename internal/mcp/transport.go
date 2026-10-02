@@ -115,7 +115,11 @@ func serverEnv(cfg config.MCPServerConfig) []string {
 		}
 	}
 	for k, v := range cfg.Env {
-		env[k] = os.ExpandEnv(v)
+		if cfg.DisableHostEnvExpansion {
+			env[k] = v
+		} else {
+			env[k] = os.ExpandEnv(v)
+		}
 	}
 	out := make([]string, 0, len(env))
 	for k, v := range env {

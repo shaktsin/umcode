@@ -33,7 +33,7 @@ The window is a rail plus up to three columns:
 
 | Column | What it holds |
 | --- | --- |
-| Rail | Project switcher, the views (chat, approvals, tasks, skills & MCP, usage, settings), and either the project's chats or its file tree |
+| Rail | Project switcher, the views (chat, approvals, tasks, plugins, usage, settings), and either the project's chats or its file tree |
 | 1 · Chat | The conversation: streaming replies, tool calls, file changes with inline diffs, approvals in place, and a composer with the complexity dial and model picker |
 | 2 · Side chat | “Ask about this” on any message, file or diff opens a child chat in the same project; several stack as tabs, and *Promote* hands its answer back to the main composer |
 | 3 · Inspector | A file, a diff or a long tool result, read-only, with *Undo* for a change and *Ask about this* to spin off a side chat |
@@ -58,7 +58,7 @@ Shell commands are parsed per pipeline segment (`&&`, `||`, `;`, `|`). Known rea
 
 **Host shell sandbox.** On the host, `shell.run` runs confined when the platform allows: Seatbelt (`sandbox-exec`) on macOS, bubblewrap (`bwrap`) on Linux. Writes are limited to the project folder, temp folders and — only when the project's network is on — package-manager caches (`~/.npm`, `~/.cache`, `~/go/pkg`, ...); `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube` and similar are unreadable; `.git/hooks` and `.git/config` are read-only; and there is no network unless the project allows it. With a sandbox available, a project with network off can still run shell commands. Without one (for example bubblewrap is not installed or user namespaces are disabled) the earlier behaviour applies: shell commands need the microVM when network is off. Set `tools.host_sandbox: off` to run commands unconfined.
 
-Each project carries its own defaults (provider, model, complexity, key), compute/network settings, and optionally the MCP servers it may use. Compute selects the isolated execution environment; network is scoped to that environment. Shell commands run with the project root as the working directory and an environment with no API keys in it; with network off, commands that obviously reach out (`curl`, `git push`, `npm install`, …) are refused with a message rather than failing halfway.
+Each project carries its own defaults (provider, model, complexity, key), compute/network settings, and plugin enablement/configuration. Compute selects the isolated execution environment; network is scoped to that environment. Shell commands run with the project root as the working directory and an environment with no API keys in it; with network off, commands that obviously reach out (`curl`, `git push`, `npm install`, …) are refused with a message rather than failing halfway.
 
 **`AGENT.md` is the project's system prompt.** Every turn composes `~/.umcode/AGENT.md` (your standing instructions) → the project's `AGENT.md` → the nearest `AGENT.md` in the subtree being worked on. `AGENTS.md` (Codex) and `CLAUDE.md` (Claude Code) are read as fallbacks, so a repo set up for either works unchanged. Files are re-read when they change on disk and capped at 32 KB each; `umcode project instructions ID --composed` prints exactly what the agent receives.
 
@@ -87,8 +87,8 @@ umcode project set prj_… --network on -m claude-opus-5
 | `usage [--by credential\|model\|thread\|role\|day] [--days N] [--key ID]` | Tokens and cost. |
 | `approvals / approve ID / deny ID` | Answer approvals from another terminal. |
 | `task list [--all] / add / cancel ID / run ID / runs ID` | Scheduled tasks. `add` takes `--at 2026-09-20T09:00`, `--daily 09:00`, `--weekly mon@09:00`, `--hourly 15` or `--cron "0 9 * * mon-fri"`, plus `--tz`, `-p/-m/-c`. |
-| `skill list / show NAME / install PATH_OR_GIT_URL / remove NAME` | Skills in `./skills`, `~/.umcode/skills` and `skill_dirs`. |
-| `mcp [list] / mcp restart NAME` | MCP servers from `mcp_servers` and their status. |
+| `plugin inspect / install / list / show / enable / disable / reload / remove` | Inspect and manage portable, Codex, or Claude plugin packages. Installations are global; enablement is per project. |
+| `skill ...`, `mcp ...` | Legacy standalone compatibility commands; new extensions should be plugins. |
 | `tools` | Every tool the agent can call, with its source. |
 | `status`, `service install\|uninstall\|status`, `version` | Engine management. |
 
@@ -111,9 +111,17 @@ The key is the requested one, else the provider's default key, else its oldest e
 
 Reasoning maps to Claude adaptive thinking + `output_config.effort` (or a thinking budget for Haiku 4.5), OpenAI `reasoning_effort`, and Gemini `thinkingLevel` (or `thinkingBudget` for 2.5). Models without reasoning ignore it.
 
-## Skills, MCP and scheduled tasks
+## Plugins and scheduled tasks
 
-**Skills** use the `SKILL.md` format and are found in `./skills`, `~/.umcode/skills` and any `skill_dirs`. The system prompt lists each skill's name and description; the agent reads full instructions with `skill.get_instructions` and runs declared scripts with `skill.run_script`, or passes `skill: <name>` to `shell.run` to use the skill's environment. Scripts get `{"input": <args>, "config": <skills.<name>.config>}` on stdin (the `skill-template` contract), run in the skill folder with its `.venv` (created with `uv` when available), `extra_path`, `env` and `SKILL_DIR`, and never inherit the engine's own API keys. `risk_level` in `SKILL.md` (default yellow) decides approvals.
+**Plugins** are the primary extension model and the only extension type shown in the desktop app. A package may contain skills, MCP servers, hooks, settings, and visible unsupported compatibility metadata. UMCode detects a portable Agent Plugins `plugin.json` first, then Codex `.codex-plugin/plugin.json`, then Claude `.claude-plugin/plugin.json`. The desktop and CLI require inspect-before-install so users review executable capabilities and diagnostics before verified bytes are activated.
+
+Managed packages are copied atomically into `~/.umcode/plugins/cache/<source-id>/<plugin>/<version-or-digest>/`; linked packages load from a local folder and can be explicitly reloaded. Mutable data remains in `~/.umcode/plugins/data/<source-id>/<plugin>/`. Installations are user-global, while enablement and non-secret settings are stored per project. Secrets use `plugin/<plugin-id>/<setting-name>` in the protected secret store and never appear in RPC responses or SQLite settings.
+
+Plugin skills are namespaced as `<plugin>:<skill>`, and plugin MCP servers are namespaced as `<plugin>__<server>`. Hooks cover turn start/completion, tool use/failure, and compaction. Only `TurnStart` and `BeforeToolUse` can block, and built-in guards plus approval policy always run with final authority. A turn holds one immutable snapshot until its completion hook finishes; a failed activation keeps the previous snapshot alive.
+
+**Legacy compatibility.** Standalone skills from `skill_dirs` and MCP servers from `mcp_servers` continue to run through the backend and CLI during migration, but they do not appear as separate desktop extension sections.
+
+**Skills** use the `SKILL.md` format. The system prompt lists each skill's name and description; the agent reads full instructions with `skill.get_instructions` and runs declared scripts with `skill.run_script`, or passes `skill: <name>` to `shell.run` to use the skill's environment. Scripts get `{"input": <args>, "config": <project plugin settings>}` on stdin, run in the skill folder with its runtime environment, and never inherit the engine's own API keys. `risk_level` in `SKILL.md` (default yellow) decides approvals.
 
 **MCP servers** from `mcp_servers` (stdio or Streamable HTTP) start in the background; their tools appear as `mcp_<server>_<tool>`. Risk comes from the server's `risk_level` if set, otherwise from the tool's annotations: read-only is green, destructive is red, anything else yellow. A server that exits is restarted on the next call.
 
@@ -151,6 +159,8 @@ mcp_servers:
     risk_level: yellow                  # optional override for every tool on this server
 ```
 
+The `skills` and `mcp_servers` blocks above are legacy compatibility paths. New capabilities should be installed from the Plugins screen or `umcode plugin ...` commands.
+
 ## Protocol
 
 JSON-RPC 2.0, one message per line on the Unix socket `~/.umcode/run/engine.sock` (0600), or one per text frame on `ws://127.0.0.1:8766/ws` with `Authorization: Bearer <~/.umcode/run/token>` (or `?token=`). The token is regenerated at each engine start. Browser clients may connect from the Mac app's webview (`wails://…`) or a local dev server; other origins are refused. Clients must call `initialize` first (`protocolVersion` major must match; `admin: true` to receive and answer approvals).
@@ -170,8 +180,8 @@ Types are in `internal/protocol`. Methods:
 | Usage | `usage/summary`, `usage/setBudget` |
 | Complexity | `complexity/getDefaults`, `complexity/setDefaults` |
 | Tasks | `task/list`, `task/create`, `task/cancel`, `task/runNow`, `task/runs` |
-| Skills | `skill/list`, `skill/get`, `skill/install`, `skill/remove` |
-| MCP and tools | `mcp/list`, `mcp/restart`, `tool/list` |
+| Plugins | `plugin/inspect`, `plugin/install`, `plugin/list`, `plugin/get`, `plugin/setEnabled`, `plugin/configure`, `plugin/reload`, `plugin/uninstall` |
+| Legacy skills, MCP and tools | `skill/list`, `skill/get`, `skill/install`, `skill/remove`, `mcp/list`, `mcp/restart`, `tool/list` |
 
 Item kinds are `userMessage`, `agentMessage`, `reasoning`, `toolCall`, `fileChange` (path, action, diff, counts, the turn that made it), `inboundEvent` and `error`.
 
@@ -195,6 +205,8 @@ internal/projects/   projects, AGENT.md composition, file trees, diffs and undo
 internal/pathutil/   the containment rule every tool shares (symlink-safe, /var vs /private/var)
 internal/skills/     SKILL.md loader, runtimes/venvs, skill tools, install/remove
 internal/mcp/        MCP client (stdio + Streamable HTTP) and tool bridge
+internal/plugins/    package adapters, atomic installer, project capability snapshots
+internal/hooks/      bounded lifecycle hook runner and audit records
 internal/tasks/      schedules (incl. cron), scheduler loop, task tools
 internal/procutil/   subprocess cleanup (process groups, timeouts)
 internal/policy/     approval policy

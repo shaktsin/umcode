@@ -175,6 +175,7 @@ func (s *Store) DeleteProject(ctx context.Context, id string) error {
 		`UPDATE threads SET project_id = '' WHERE project_id = ?`,
 		`DELETE FROM project_approvals WHERE project_id = ?`,
 		`DELETE FROM file_changes WHERE project_id = ?`,
+		`DELETE FROM project_plugins WHERE project_id = ?`,
 		`DELETE FROM projects WHERE id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {

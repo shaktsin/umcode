@@ -1,168 +1,180 @@
 <script lang="ts">
-  import { RefreshCw, Trash2, Download, RotateCw, MonitorCheck } from '@lucide/svelte';
-  import { app } from '$lib/stores/app.svelte';
+  import { ArrowUpCircle, Download, PackageOpen, RefreshCw, RotateCw, Search, Settings2, ShieldCheck, Trash2 } from '@lucide/svelte';
+  import PluginInventory from '$lib/components/PluginInventory.svelte';
   import { errMsg } from '$lib/format';
+  import { convertPluginSettings, createPluginClient } from '$lib/plugins';
+  import { app } from '$lib/stores/app.svelte';
   import { dialog } from '$lib/stores/dialog.svelte';
-  import type { MCPServer, SkillInfo, ToolInfo } from '$lib/types';
+  import { projects } from '$lib/stores/projects.svelte';
+  import type { PluginInfo, PluginInspection } from '$lib/types';
 
-  let skills = $state<SkillInfo[]>([]);
-  let dirs = $state<string[]>([]);
-  let servers = $state<MCPServer[]>([]);
-  let tools = $state<ToolInfo[]>([]);
+  const client = createPluginClient((method, params) => app.call(method, params, 300_000));
+  let plugins = $state<PluginInfo[]>([]);
   let source = $state('');
-  let installName = $state('');
-  let installing = $state(false);
-  let detail = $state<{ name: string; text: string } | null>(null);
+  let mode = $state<'managed' | 'linked'>('managed');
+  let inspection = $state<PluginInspection | null>(null);
+  let updateTarget = $state<string | null>(null);
+  let busy = $state('');
+  let editing = $state<string | null>(null);
+  let settingsDraft = $state<Record<string, string>>({});
+  let secretDraft = $state<Record<string, string>>({});
 
   async function load() {
-    const [s, m, t] = await Promise.all([
-      app.try<{ skills: SkillInfo[]; dirs: string[] }>('skill/list'),
-      app.try<{ servers: MCPServer[] }>('mcp/list'),
-      app.try<{ tools: ToolInfo[] }>('tool/list'),
-    ]);
-    if (s) { skills = s.skills; dirs = s.dirs; }
-    if (m) servers = m.servers;
-    if (t) tools = t.tools;
+    try { plugins = await client.list(projects.activeId ?? undefined); }
+    catch (error) { app.toast('error', errMsg(error)); }
   }
 
   $effect(() => {
-    if (app.conn === 'open') void load();
+    const connected = app.conn === 'open';
+    const project = projects.activeId;
+    if (connected) void load();
+    void project;
   });
 
-  async function install() {
-    installing = true;
+  async function inspectSource() {
+    busy = 'inspect'; inspection = null; updateTarget = null;
+    try { inspection = await client.inspect(source.trim(), mode); }
+    catch (error) { app.toast('error', errMsg(error)); }
+    finally { busy = ''; }
+  }
+
+  async function installInspected() {
+    if (!inspection) return;
+    busy = 'install';
     try {
-      const r = await app.call<SkillInfo>('skill/install', { source: source.trim(), name: installName.trim() || undefined }, 300_000);
-      app.toast('info', `Installed ${r.name}.`);
-      source = installName = '';
-      await load();
-    } catch (e) {
-      app.toast('error', errMsg(e));
-    } finally {
-      installing = false;
+      const installed = await client.install(inspection.token, projects.activeId ?? undefined);
+      app.toast('info', `${updateTarget ? 'Updated' : 'Installed'} ${installed.name}.`);
+      source = ''; inspection = null; updateTarget = null; await load();
+    } catch (error) { app.toast('error', errMsg(error)); }
+    finally { busy = ''; }
+  }
+
+  async function setEnabled(plugin: PluginInfo, enabled: boolean) {
+    if (!projects.activeId) return;
+    busy = plugin.id;
+    try { await client.setEnabled(plugin.id, projects.activeId, enabled); await load(); }
+    catch (error) { app.toast('error', errMsg(error)); }
+    finally { busy = ''; }
+  }
+
+  function beginConfigure(plugin: PluginInfo) {
+    if (editing === plugin.id) { editing = null; return; }
+    editing = plugin.id; settingsDraft = {}; secretDraft = {};
+    for (const setting of plugin.schema) {
+      if (setting.secret) secretDraft[setting.name] = '';
+      else {
+				const value = plugin.settings[setting.name];
+				settingsDraft[setting.name] = value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
+			}
     }
   }
 
-  async function remove(s: SkillInfo) {
-    if (!(await dialog.confirm(`Remove the skill “${s.name}”? Its folder will be deleted.`, { okLabel: 'Remove', danger: true }))) return;
-    await app.try('skill/remove', { name: s.name }, `Removed ${s.name}.`);
-    await load();
+  async function saveConfiguration(plugin: PluginInfo) {
+    if (!projects.activeId) return;
+    busy = plugin.id;
+    try {
+      const changedSecrets = Object.fromEntries(Object.entries(secretDraft).filter(([, value]) => value !== ''));
+      await client.configure(plugin.id, projects.activeId, convertPluginSettings(plugin.schema, settingsDraft), changedSecrets);
+      editing = null; secretDraft = {};
+      app.toast('info', `Saved ${plugin.name} configuration.`); await load();
+    } catch (error) { app.toast('error', errMsg(error)); }
+    finally { busy = ''; }
   }
 
-  async function showSkill(s: SkillInfo) {
-    if (detail?.name === s.name) { detail = null; return; }
-    const r = await app.try<{ instructions: string }>('skill/get', { name: s.name });
-    if (r) detail = { name: s.name, text: r.instructions };
+  async function reload(plugin: PluginInfo) {
+    busy = plugin.id;
+    try { await client.reload(plugin.id); app.toast('info', `Reloaded ${plugin.name}.`); await load(); }
+    catch (error) { app.toast('error', errMsg(error)); }
+    finally { busy = ''; }
   }
 
-  async function restart(name: string) {
-    await app.try('mcp/restart', { name }, `Restarted ${name}.`);
-    await load();
+  async function update(plugin: PluginInfo) {
+    source = plugin.source; mode = 'managed'; updateTarget = plugin.id;
+    busy = 'inspect'; inspection = null;
+    try { inspection = await client.inspect(plugin.source, 'managed'); }
+    catch (error) { app.toast('error', errMsg(error)); }
+    finally { busy = ''; }
   }
 
-  const toolGroups = $derived.by(() => {
-    const g: Record<string, ToolInfo[]> = {};
-    for (const t of tools) (g[t.source] ??= []).push(t);
-    return Object.entries(g);
-  });
+  function updateIdentityMatches() {
+    return !!inspection && !!updateTarget && updateTarget.endsWith(`/${inspection.plugin.id}`);
+  }
+
+  async function remove(plugin: PluginInfo) {
+    const extra = plugin.enabled ? ' It will also be disabled for projects that use it.' : '';
+    if (!(await dialog.confirm(`Remove “${plugin.name}”?${extra}`, { okLabel: 'Remove', danger: true }))) return;
+    busy = plugin.id;
+    try { await client.uninstall(plugin.id, plugin.enabled); app.toast('info', `Removed ${plugin.name}.`); await load(); }
+    catch (error) { app.toast('error', errMsg(error)); }
+    finally { busy = ''; }
+  }
+
+  function health(plugin: PluginInfo) {
+		if (plugin.health === 'healthy') return { label: 'Healthy', style: 'bg-sage-soft text-sage' };
+		if (plugin.health === 'compatibility_warning') return { label: 'Compatibility warning', style: 'bg-clay-soft/40 text-amber-warm' };
+		if (plugin.health === 'configuration_required') return { label: 'Configuration required', style: 'bg-clay-soft/40 text-amber-warm' };
+		if (plugin.health === 'partially_unavailable') return { label: 'Partially unavailable', style: 'bg-rust-soft text-rust' };
+		return { label: 'Activation failed', style: 'bg-rust-soft text-rust' };
+  }
 </script>
 
-<div class="flex items-center mb-4">
-  <h1 class="page-title">Plugins</h1>
-  <button class="btn-ghost btn-sm ml-2" aria-label="Refresh" onclick={load}><RefreshCw class="w-3.5 h-3.5" /></button>
+<div class="mb-5 flex items-start justify-between gap-4">
+  <div><h1 class="page-title">Plugins</h1><p class="mt-1 max-w-2xl text-xs text-muted">Install one package that can carry skills, MCP integrations, hooks, and compatibility metadata.</p></div>
+  <button class="btn-ghost btn-sm" aria-label="Refresh plugins" onclick={load}><RefreshCw class="h-3.5 w-3.5" />Refresh</button>
 </div>
 
-<section class="mb-8">
-  <h2 class="text-sm font-semibold text-ink-soft mb-2">Built-in plugins</h2>
-  <div class="grid gap-2">
-  <div class="card p-3 flex items-start gap-3">
-    <div class="w-9 h-9 rounded-lg bg-raised flex items-center justify-center text-clay"><MonitorCheck class="w-5 h-5" /></div>
-    <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-2"><span class="text-sm font-medium">Visual QA</span><span class="pill bg-raised text-muted">opt-in</span></div>
-      <p class="text-xs text-muted mt-1">Controls an isolated, app-managed Chromium against a task's scoped live preview. It captures rendered screenshots, page controls, console errors, failed requests, and user-flow evidence.</p>
-      <p class="text-[11px] text-faint mt-1">Enable it per project under Project settings. It never uses your normal browser profile and blocks navigation outside the preview origin.</p>
+<section class="card mb-6 overflow-hidden">
+  <div class="border-b border-line px-4 py-3">
+    <div class="flex items-center gap-2 text-sm font-semibold text-ink"><PackageOpen class="h-4 w-4 text-clay" /> Add a plugin</div>
+    <p class="mt-0.5 text-xs text-muted">Inspect the package and its executable capabilities before installing it.</p>
+  </div>
+  <div class="grid gap-3 p-4 md:grid-cols-[minmax(0,1fr)_9rem_auto] md:items-end">
+    <div><label class="label" for="plugin-source">Git URL or local folder</label><input id="plugin-source" class="input" bind:value={source} placeholder="https://github.com/team/plugin.git or /path/to/plugin" oninput={() => { inspection = null; updateTarget = null; }} /></div>
+    <div><label class="label" for="plugin-mode">Install mode</label><select id="plugin-mode" class="select h-[38px] w-full" bind:value={mode} onchange={() => { inspection = null; updateTarget = null; }}><option value="managed">Managed copy</option><option value="linked">Linked source</option></select></div>
+    <button class="btn-outline h-[38px]" disabled={!source.trim() || !!busy} onclick={inspectSource}><Search class="h-4 w-4" />{busy === 'inspect' ? 'Inspecting…' : 'Inspect'}</button>
+  </div>
+  {#if inspection}
+    <div class="border-t border-line bg-raised/45 p-4">
+      <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div><div class="flex items-center gap-2"><span class="font-semibold text-ink">{inspection.plugin.name}</span>{#if inspection.plugin.version}<span class="text-xs text-muted">v{inspection.plugin.version}</span>{/if}<span class="pill bg-paper text-muted">{inspection.plugin.format}</span><span class="pill bg-paper text-muted">{inspection.mode}</span></div><p class="mt-1 font-mono text-[10px] text-faint">{inspection.source}</p></div>
+        <div class="flex items-center gap-2">{#if inspection.requiresApproval}<span class="pill bg-clay-soft/40 text-amber-warm">Executable capabilities</span>{/if}<button class="btn-primary" disabled={!!busy || (!!updateTarget && !updateIdentityMatches())} onclick={installInspected}><Download class="h-4 w-4" />{busy === 'install' ? 'Installing…' : updateTarget ? 'Approve and update' : 'Install'}</button></div>
+      </div>
+      {#if updateTarget && !updateIdentityMatches()}<div class="mb-3 rounded-lg border border-rust/30 bg-rust-soft px-3 py-2 text-xs text-rust">This source resolves to a different plugin identity. Cancel the update and install it separately instead.</div>{/if}
+      <PluginInventory plugin={inspection.plugin} />
+			{#if inspection.plugin.executables.length}<div class="mt-3 rounded-lg border border-line bg-paper/80 p-3"><div class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Processes and commands</div>{#each inspection.plugin.executables as executable}<div class="mb-1 grid gap-1 text-xs sm:grid-cols-[7rem_9rem_1fr]"><span class="text-muted">{executable.kind}{executable.required ? ' · required' : ''}</span><span class="text-ink">{executable.name}</span><code class="break-all text-[11px] text-ink-soft">{executable.command}{#if executable.args?.length} {executable.args.join(' ')}{/if}</code></div>{/each}</div>{/if}
+			{#if inspection.plugin.schema.length}<div class="mt-3 rounded-lg border border-line bg-paper/80 p-3"><div class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Requested settings</div>{#each inspection.plugin.schema as setting}<div class="text-xs text-ink">{setting.name} <span class="text-muted">· {setting.secret ? 'secret' : (setting.type || 'string')}{setting.required ? ' · required' : ''}</span></div>{/each}</div>{/if}
+      {#each inspection.diagnostics as diagnostic}<div class="mt-2 rounded-lg border border-line bg-paper px-3 py-2 text-xs text-ink-soft"><span class="font-medium">{diagnostic.message}</span>{#if diagnostic.remediation}<span class="text-muted"> — {diagnostic.remediation}</span>{/if}</div>{/each}
     </div>
-  </div>
-  <div class="card p-3 flex items-start gap-3">
-    <div class="w-9 h-9 rounded-lg bg-raised flex items-center justify-center text-clay"><MonitorCheck class="w-5 h-5" /></div>
-    <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-2"><span class="text-sm font-medium">Computer Use</span><span class="pill bg-raised text-muted">opt-in · macOS</span></div>
-      <p class="text-xs text-muted mt-1">Controls an explicitly selected desktop app or browser with a visible pointer, accessibility-aware targeting, and screenshot-based click, fill, type, key, and scroll actions.</p>
-      <p class="text-[11px] text-faint mt-1">Actions require approval. UMCode uses its own macOS Screen Recording and Accessibility permissions; stopping a session never quits your app.</p>
-    </div>
-  </div>
-  </div>
+  {/if}
 </section>
 
-<section class="mb-8">
-  <h2 class="text-sm font-semibold text-ink-soft mb-2">Skills</h2>
-  <div class="card p-3 mb-3 flex gap-2 items-end">
-    <div class="flex-1"><label class="label" for="sk-src">Install from a Git URL or a local folder</label><input id="sk-src" class="input" bind:value={source} placeholder="https://github.com/you/my-skill.git or ~/skills/my-skill" /></div>
-    <div class="w-40"><label class="label" for="sk-name">Name (optional)</label><input id="sk-name" class="input" bind:value={installName} /></div>
-    <button class="btn-primary" disabled={installing || !source.trim()} onclick={install}><Download class="w-4 h-4" />{installing ? 'Installing…' : 'Install'}</button>
-  </div>
-  {#if skills.length === 0}
-    <p class="text-sm text-muted">No skills installed. Skill folders: {dirs.join(', ') || 'none'}</p>
-  {/if}
-  <div class="grid gap-2">
-    {#each skills as s (s.name + s.dir)}
-      <div class="card p-3">
-        <div class="flex items-start gap-3">
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
-              <button class="text-sm font-medium text-ink hover:underline" onclick={() => showSkill(s)}>{s.name}</button>
-              {#if s.version}<span class="text-[10px] text-muted">v{s.version}</span>{/if}
-              <span class="pill bg-raised text-muted">{s.runtime}</span>
-              {#if s.riskLevel}<span class="risk-{s.riskLevel}">{s.riskLevel}</span>{/if}
-            </div>
-            <p class="text-xs text-muted mt-0.5">{s.description}</p>
-            {#if s.scripts?.length}<p class="text-[11px] text-muted mt-1 font-mono">{s.scripts.join(' · ')}</p>{/if}
-            {#if s.error}<p class="text-xs text-rust mt-1">{s.error}</p>{/if}
-            <p class="text-[10px] text-faint mt-1 font-mono selectable">{s.dir}</p>
+<div class="mb-2 flex items-center justify-between"><h2 class="text-sm font-semibold text-ink-soft">Installed packages</h2>{#if projects.active}<span class="text-[11px] text-muted">Enablement for {projects.active.name}</span>{:else}<span class="text-[11px] text-amber-warm">Open a project to manage enablement</span>{/if}</div>
+
+{#if plugins.length === 0}
+  <div class="rounded-xl border border-dashed border-line-strong px-5 py-8 text-center"><ShieldCheck class="mx-auto mb-2 h-6 w-6 text-faint" /><p class="text-sm font-medium text-ink-soft">No plugins installed</p><p class="mt-1 text-xs text-muted">Add a package above. You’ll review every capability before installation.</p></div>
+{:else}
+  <div class="grid gap-3">
+    {#each plugins as plugin (plugin.id)}
+      {@const state = health(plugin)}
+      <article class="card overflow-hidden">
+        <div class="flex flex-wrap items-start gap-3 p-4">
+          <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><h3 class="text-sm font-semibold text-ink">{plugin.name}</h3>{#if plugin.version}<span class="text-xs text-muted">v{plugin.version}</span>{/if}<span class="pill bg-raised text-muted">{plugin.format}</span><span class="pill bg-raised text-muted">{plugin.mode}</span><span class="pill {state.style}">{state.label}</span></div><p class="mt-1 truncate font-mono text-[10px] text-faint" title={plugin.source}>{plugin.source}</p></div>
+          <label class="flex items-center gap-2 text-xs text-muted" title={projects.activeId ? 'Enable for the current project' : 'Open a project first'}><input type="checkbox" checked={plugin.enabled} disabled={!projects.activeId || busy === plugin.id} onchange={(event) => setEnabled(plugin, event.currentTarget.checked)} /> Enabled</label>
+          {#if plugin.schema.length}<button class="btn-ghost btn-sm" disabled={!projects.activeId} onclick={() => beginConfigure(plugin)}><Settings2 class="h-3.5 w-3.5" />Configure</button>{/if}
+          {#if plugin.mode === 'linked'}<button class="btn-ghost btn-sm" disabled={busy === plugin.id} onclick={() => reload(plugin)}><RotateCw class="h-3.5 w-3.5" />Reload</button>{/if}
+					{#if plugin.mode === 'managed'}<button class="btn-ghost btn-sm" disabled={busy === plugin.id} onclick={() => update(plugin)}><ArrowUpCircle class="h-3.5 w-3.5" />Update</button>{/if}
+          <button class="btn-danger btn-sm" aria-label={`Remove ${plugin.name}`} disabled={busy === plugin.id} onclick={() => remove(plugin)}><Trash2 class="h-3.5 w-3.5" /></button>
+        </div>
+        <div class="border-t border-line bg-raised/25 p-3"><PluginInventory {plugin} /></div>
+        {#if plugin.diagnostics.length}<div class="divide-y divide-line border-t border-line px-4">{#each plugin.diagnostics as diagnostic}<div class="py-2 text-xs"><span class={diagnostic.severity === 'error' ? 'text-rust' : 'text-amber-warm'}>{diagnostic.message}</span>{#if diagnostic.remediation}<span class="text-muted"> — {diagnostic.remediation}</span>{/if}</div>{/each}</div>{/if}
+				{#if plugin.hookFailures.length}<div class="border-t border-line px-4 py-3"><div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-rust">Recent hook failures</div>{#each plugin.hookFailures as failure}<div class="text-xs text-ink"><span class="font-medium">{failure.event}</span>{#if failure.pluginVersion}<span class="text-muted"> · v{failure.pluginVersion}</span>{/if}<span class="text-muted"> — {failure.error}</span></div>{/each}</div>{/if}
+        {#if editing === plugin.id}
+          <div class="border-t border-line p-4">
+            <div class="grid gap-3 md:grid-cols-2">{#each plugin.schema as setting}<div><label class="label" for={`${plugin.id}-${setting.name}`}>{setting.name}{setting.required ? ' · required' : ''}</label>{#if setting.secret}<input id={`${plugin.id}-${setting.name}`} class="input" type="password" bind:value={secretDraft[setting.name]} placeholder="Enter a new secret" />{:else}<input id={`${plugin.id}-${setting.name}`} class="input" bind:value={settingsDraft[setting.name]} placeholder={setting.description} />{/if}</div>{/each}</div>
+            <div class="mt-3 flex justify-end gap-2"><button class="btn-ghost btn-sm" onclick={() => editing = null}>Cancel</button><button class="btn-primary btn-sm" disabled={busy === plugin.id} onclick={() => saveConfiguration(plugin)}>Save configuration</button></div>
           </div>
-          {#if s.removable}
-            <button class="btn-danger btn-sm" aria-label={`Remove ${s.name}`} onclick={() => remove(s)}><Trash2 class="w-3.5 h-3.5" /></button>
-          {/if}
-        </div>
-        {#if detail?.name === s.name}
-          <pre class="mt-2 text-[11px] text-muted bg-paper rounded p-2 whitespace-pre-wrap max-h-80 overflow-auto">{detail.text}</pre>
         {/if}
-      </div>
+      </article>
     {/each}
   </div>
-</section>
-
-<section class="mb-8">
-  <h2 class="text-sm font-semibold text-ink-soft mb-2">MCP servers</h2>
-  {#if servers.length === 0}
-    <p class="text-sm text-muted">No MCP servers configured. Add them under <code class="font-mono">mcp_servers</code> in config.yaml.</p>
-  {/if}
-  <div class="grid gap-2">
-    {#each servers as m (m.name)}
-      <div class="card p-3 flex items-start gap-3">
-        <span class="mt-1.5 w-2 h-2 rounded-full {m.status === 'ready' ? 'bg-sage' : m.status === 'starting' ? 'bg-amber-warm' : m.status === 'failed' ? 'bg-rust' : 'bg-faint'}"></span>
-        <div class="flex-1 min-w-0">
-          <div class="text-sm text-ink">{m.name} <span class="text-xs text-muted">{m.transport} · {m.status}</span></div>
-          {#if m.serverName}<div class="text-xs text-muted">{m.serverName} {m.serverVersion}</div>{/if}
-          {#if m.error}<div class="text-xs text-rust selectable">{m.error}</div>{/if}
-          {#if m.tools?.length}<div class="text-[11px] text-muted font-mono mt-1">{m.tools.join(' · ')}</div>{/if}
-        </div>
-        <button class="btn-ghost btn-sm" onclick={() => restart(m.name)}><RotateCw class="w-3.5 h-3.5" />Restart</button>
-      </div>
-    {/each}
-  </div>
-</section>
-
-<section>
-  <h2 class="text-sm font-semibold text-ink-soft mb-2">Tools available to the agent ({tools.length})</h2>
-  {#each toolGroups as [src, list]}
-    <details class="card mb-2">
-      <summary class="px-3 py-2 text-sm text-ink-soft cursor-default">{src} <span class="text-muted">({list.length})</span></summary>
-      <div class="px-3 pb-2 space-y-1">
-        {#each list as t}
-          <div class="text-xs"><code class="font-mono text-ink">{t.name}</code> <span class="text-muted">{t.description}</span></div>
-        {/each}
-      </div>
-    </details>
-  {/each}
-</section>
+{/if}

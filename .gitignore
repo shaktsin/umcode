@@ -225,6 +225,7 @@ docs/
 
 .staging/
 .tests/
+.worktrees/
 # Node / frontend tooling (anywhere in the project)
 node_modules/
 package-lock.json

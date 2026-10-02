@@ -209,3 +209,18 @@ func TestHTTPServer(t *testing.T) {
 		t.Fatalf("auth=%v session=%v version=%v", sawAuth, sawSession, sawVersion)
 	}
 }
+
+func TestServerEnvCanDisableHostExpansionForPluginValues(t *testing.T) {
+	t.Setenv("ENGINE_SECRET", "host-secret")
+	environment := serverEnv(config.MCPServerConfig{Env: map[string]string{"TOKEN": "$ENGINE_SECRET"}, DisableHostEnvExpansion: true})
+	values := map[string]string{}
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	if values["TOKEN"] != "$ENGINE_SECRET" {
+		t.Fatalf("TOKEN = %q", values["TOKEN"])
+	}
+}
