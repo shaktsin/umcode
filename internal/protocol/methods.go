@@ -28,6 +28,8 @@ const (
 	MethodPreviewStop   = "preview/stop"
 
 	MethodApprovalList    = "approval/list"
+	MethodWorkList        = "work/list"
+	MethodWorkGet         = "work/get"
 	MethodApprovalRespond = "approval/respond"
 
 	MethodProviderList   = "provider/list"
@@ -422,4 +424,16 @@ type ChatGPTSignInResult struct {
 	OK         bool        `json:"ok"`
 	Error      string      `json:"error,omitempty"`
 	Credential *Credential `json:"credential,omitempty"`
+}
+
+type WorkListParams struct {
+	ThreadID string `json:"threadId"`
+}
+
+type WorkListResult struct {
+	Works []Work `json:"works"`
+}
+
+type WorkGetParams struct {
+	WorkID string `json:"workId"`
 }

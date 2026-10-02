@@ -35,6 +35,7 @@ import (
 	"github.com/shaktsin/umcode/internal/tools"
 	"github.com/shaktsin/umcode/internal/version"
 	"github.com/shaktsin/umcode/internal/visualqa"
+	"github.com/shaktsin/umcode/internal/work"
 	"github.com/shaktsin/umcode/internal/worktree"
 )
 
@@ -62,6 +63,7 @@ type Engine struct {
 	Exec        *tools.ExecManager
 	Bus         *Bus
 	Log         *slog.Logger
+	Work        *work.Service
 
 	gate      *policy.Gate
 	started   time.Time
@@ -73,6 +75,7 @@ type Engine struct {
 	threadTurns  map[string]string      // thread id -> running turn id
 	approvals    map[string]chan bool   // pending approval id -> decision
 	budgetWarned map[string]string      // credential id -> month already warned
+	pausedTurns  map[string]bool        // turn id -> ended on a budget pause
 	routing      protocol.RoutingConfig // the models the user has approved
 	presets      map[protocol.Complexity]protocol.ComplexityPreset
 	defaultCplx  protocol.Complexity
@@ -160,6 +163,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		Projects:  projects.New(o.Store, o.Config),
 		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs,
 		Bus: bus, Log: o.Logger,
+		Work: &work.Service{Store: o.Store, Log: o.Logger},
 		gate: policy.New(), started: time.Now(), baseCtx: base, cancelAll: cancel,
 		activeTurns: map[string]*activeTurn{}, threadTurns: map[string]string{},
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
@@ -340,8 +344,53 @@ func (e *Engine) UpdateThread(ctx context.Context, id string, cols map[string]an
 	if err := e.Store.UpdateThread(ctx, id, cols); err != nil {
 		return protocol.Thread{}, err
 	}
+	if archived, _ := cols["archived"].(bool); archived && e.Work != nil {
+		if err := e.Work.Store.AbandonOpenWorks(ctx, id, time.Now().UTC()); err != nil {
+			e.Log.Warn("abandon work on archive", "thread", id, "err", err)
+		}
+	}
 	e.publishThread(ctx, id)
 	return e.Store.GetThread(ctx, id)
+}
+
+// ListWorks returns a thread's works, newest first (never nil).
+func (e *Engine) ListWorks(ctx context.Context, threadID string) (protocol.WorkListResult, error) {
+	works, err := e.Store.ListWorks(ctx, threadID)
+	if err != nil {
+		return protocol.WorkListResult{}, err
+	}
+	if works == nil {
+		works = []protocol.Work{}
+	}
+	return protocol.WorkListResult{Works: works}, nil
+}
+
+// GetWork returns one work with its nodes, edges, evidence and attempts.
+func (e *Engine) GetWork(ctx context.Context, workID string) (protocol.WorkDetail, error) {
+	d, err := e.Store.GetWorkDetail(ctx, workID)
+	if errors.Is(err, store.ErrNotFound) {
+		return protocol.WorkDetail{}, protocol.Errorf(protocol.CodeInvalidParams, "work %s not found", workID)
+	}
+	return d, err
+}
+
+// markPaused records that a turn stopped on a budget pause, which still ends
+// as completed but must leave its work open.
+func (e *Engine) markPaused(turnID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pausedTurns == nil {
+		e.pausedTurns = map[string]bool{}
+	}
+	e.pausedTurns[turnID] = true
+}
+
+func (e *Engine) takePaused(turnID string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	paused := e.pausedTurns[turnID]
+	delete(e.pausedTurns, turnID)
+	return paused
 }
 
 // SetThreadSettings stores a thread's provider/model/complexity/key choice.

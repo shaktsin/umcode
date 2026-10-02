@@ -23,6 +23,7 @@ import (
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
+	"github.com/shaktsin/umcode/internal/work"
 )
 
 // historyLimit caps how many prior messages are sent with a turn.
@@ -290,7 +291,13 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	// Store writes use a context that survives interruption.
 	sctx := context.WithoutCancel(ctx)
 	log := e.Log.With("thread", th.ID, "turn", turn.ID)
+	if e.Work != nil {
+		if werr := e.Work.Begin(sctx, th, p.Text); werr != nil {
+			log.Warn("record work", "err", werr)
+		}
+	}
 	pause := func(reason string) {
+		e.markPaused(turn.ID)
 		it, err := e.newItem(sctx, turn, protocol.ItemAgentMessage)
 		if err != nil {
 			return
@@ -944,7 +951,13 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	result := func(output string, isError bool, contextValues ...string) toolRunResult {
 		return toolRunResult{Output: output, IsError: isError, HookContext: contextValues}
 	}
+	riskLevel := ""
 	observe := func(event hooks.Event, output, toolError string, priorContext []string) toolRunResult {
+		if e.Work != nil {
+			if werr := e.Work.Observe(sctx, th.ID, work.Observation{Tool: name, Args: call.Args, Output: output, Err: toolError, Risk: riskLevel, Root: scopeRoot(ctx)}); werr != nil {
+				e.Log.Warn("record work", "thread", th.ID, "tool", name, "err", werr)
+			}
+		}
 		invocation.Event, invocation.ToolOutput, invocation.ToolError = event, output, toolError
 		outcome := e.runPluginHooks(sctx, snapshot, invocation)
 		contextValues := append(append([]string(nil), priorContext...), outcome.Context...)
@@ -976,6 +989,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		risk, summary = assessor.AssessContext(ctx, call.Args)
 	}
 	it.Tool.Risk = string(risk)
+	riskLevel = string(risk)
 	_ = e.saveAndPublish(sctx, it, protocol.NotifyItemStarted)
 
 	if g, ok := tool.(tools.Guard); ok {
@@ -1078,6 +1092,12 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 		}
 	}
 	_ = e.Store.TouchThread(ctx, th.ID)
+	paused := e.takePaused(turn.ID)
+	if e.Work != nil {
+		if werr := e.Work.End(ctx, th.ID, turn.Status, paused); werr != nil {
+			e.Log.Warn("record work", "thread", th.ID, "err", werr)
+		}
+	}
 	release()
 	e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
 	e.mu.Lock()
@@ -1233,4 +1253,12 @@ func toolSpecTokens(specs []llm.ToolSpec) int {
 		n += tokens(s.Name) + tokens(s.Description) + tokens(string(s.Schema))
 	}
 	return n
+}
+
+// scopeRoot is the project root of the running turn, or "" for a chat with no project.
+func scopeRoot(ctx context.Context) string {
+	if s := tools.ScopeFrom(ctx); s != nil {
+		return s.Root
+	}
+	return ""
 }

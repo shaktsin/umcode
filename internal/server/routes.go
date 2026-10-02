@@ -220,6 +220,12 @@ func (s *Server) routes() map[string]handler {
 			}
 			return protocol.ApprovalListResult{Approvals: list}, err
 		}),
+		protocol.MethodWorkList: bind(func(ctx context.Context, c *conn, p protocol.WorkListParams) (any, error) {
+			return e.ListWorks(ctx, p.ThreadID)
+		}),
+		protocol.MethodWorkGet: bind(func(ctx context.Context, c *conn, p protocol.WorkGetParams) (any, error) {
+			return e.GetWork(ctx, p.WorkID)
+		}),
 		protocol.MethodApprovalRespond: bind(func(ctx context.Context, c *conn, p protocol.ApprovalRespondParams) (any, error) {
 			if !c.IsAdmin() {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only admin clients can answer approvals")
