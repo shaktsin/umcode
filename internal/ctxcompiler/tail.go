@@ -85,9 +85,14 @@ func userIndexes(kept []turnMessage) []int {
 // request cannot begin with an assistant message.
 func withAnsweredQuestion(kept []turnMessage, start int) []turnMessage {
 	window := kept[start:]
-	q := lastQuestion(kept)
-	if q < 0 || q >= start {
-		return window // nothing was asked, or the question is already in the window
+	// Only a question whose answer sits at the edge of the window can be what
+	// the current request is replying to. An older one is noise.
+	q := lastQuestion(kept[:start])
+	if q < 0 {
+		return window
+	}
+	if a := nextUser(kept, q); a < 0 || a < start-1 {
+		return window
 	}
 	var extra []turnMessage
 	// The question is an assistant message, and a request must start with a user

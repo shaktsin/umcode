@@ -84,7 +84,7 @@ func TestTailKeepsAnsweredQuestionOutsideWindow(t *testing.T) {
 		item(protocol.ItemAgentMessage, "Which one should I use?"),
 		item(protocol.ItemUserMessage, "the second one"),
 	}
-	items = append(items, pairs(12)...)
+	items = append(items, pairs(10)...)
 	msgs, _ := tail(items, "now", 0)
 	s := texts(msgs)
 	if !strings.Contains(s, "Which one should I use?") || !strings.Contains(s, "the second one") {

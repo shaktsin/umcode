@@ -26,6 +26,20 @@ func chatItems(t *testing.T, mutate func(*config.Config)) []protocol.Item {
 	return items.Items
 }
 
+func TestFlagOffSendsNoWorkState(t *testing.T) {
+	off := verifyThread(t, nil)
+	for _, m := range off.Messages {
+		for _, p := range m.Parts {
+			if strings.Contains(p.Text, "Current work state") {
+				t.Fatal("the compiler ran with the flag off")
+			}
+		}
+	}
+	if requestChars(off) == 0 {
+		t.Fatal("the history path sent nothing")
+	}
+}
+
 func TestChatItemsUnchangedWithCompilerOnAndOff(t *testing.T) {
 	for _, c := range []struct {
 		name   string

@@ -13,26 +13,27 @@ import (
 // panic and prove the fallback.
 var compileHook func()
 
-// lastPackets is the packet accounting of the most recent successful
-// compilation for a turn, for the request breakdown.
+// compileOutcome is one successful compilation: the request prefix and what it
+// cost, for the request breakdown.
 type compileOutcome struct {
 	msgs    []llm.Message
 	packets RequestPackets
 }
 
-// compileMessages builds the request prefix from the thread's recorded work
-// instead of the transcript. The second result is false whenever the history
-// path should be used: the flag is off, no work is open, a read failed, the
-// compiler declined, or it panicked. Nothing here blocks or prompts.
-func (e *Engine) compileMessages(ctx context.Context, th protocol.Thread, turnID string, window, historyTokens int) ([]llm.Message, bool) {
-	out, ok := e.compile(ctx, th, turnID, window, historyTokens)
-	if !ok {
-		return nil, false
-	}
-	return out.msgs, true
+// requestMessages puts the compiled prefix in front of this turn's live
+// messages, copying rather than aliasing either slice.
+func requestMessages(prefix, live []llm.Message) []llm.Message {
+	out := make([]llm.Message, 0, len(prefix)+len(live))
+	out = append(out, prefix...)
+	return append(out, live...)
 }
 
-func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string, window, historyTokens int) (out compileOutcome, ok bool) {
+// compile builds the request prefix from the thread's recorded work instead of
+// the transcript. ok is false whenever the history path should be used: the flag
+// is off, no work is open, a read failed, the compiler declined, or it panicked.
+// items is the transcript the caller already read, so a long tool loop does not
+// re-read it for every model call. Nothing here blocks or prompts.
+func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string, window, historyTokens int, items []protocol.Item) (out compileOutcome, ok bool) {
 	if e.Cfg == nil || !e.Cfg.Models.ContextCompiler || e.Work == nil {
 		return compileOutcome{}, false
 	}
@@ -59,12 +60,6 @@ func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string,
 	if err != nil {
 		e.compilerFailures.Add(1)
 		e.Log.Debug("context compiler: work detail failed", "err", err)
-		return compileOutcome{}, false
-	}
-	items, err := e.Store.ListItems(ctx, th.ID, 0)
-	if err != nil {
-		e.compilerFailures.Add(1)
-		e.Log.Debug("context compiler: items failed", "err", err)
 		return compileOutcome{}, false
 	}
 	// Staleness is computed here rather than read from the node status, which is

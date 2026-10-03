@@ -24,12 +24,12 @@ func TestEvidencePacketIncludesOnlyActiveRows(t *testing.T) {
 	}
 	all[1].StaleAt = &stale
 	d := protocol.WorkDetail{Evidence: all}
-	text, rows, _ := evidencePacket(d, []protocol.Evidence{all[0]})
+	text, rows, _ := evidencePacket3(d, []protocol.Evidence{all[0]})
 	if rows != 1 || !strings.Contains(text, "go test") || strings.Contains(text, "go vet") {
 		t.Fatalf("rows = %d: %q", rows, text)
 	}
 	// A nil active list falls back to every row that is not stale.
-	text, rows, _ = evidencePacket(d, nil)
+	text, rows, _ = evidencePacket3(d, nil)
 	if rows != 1 || strings.Contains(text, "go vet") {
 		t.Fatalf("nil active: rows = %d: %q", rows, text)
 	}
@@ -43,7 +43,7 @@ func TestFailedCheckCarriesVaultReference(t *testing.T) {
 		Attempts: []protocol.VerificationAttempt{{CriterionNodeID: "c1", Status: protocol.AttemptFailed, EvidenceID: "e1", StartedAt: base}},
 		Evidence: []protocol.Evidence{e},
 	}
-	text, _, _ := evidencePacket(d, []protocol.Evidence{e})
+	text, _, _ := evidencePacket3(d, []protocol.Evidence{e})
 	want := "- FAILED go test ./...: FAIL: boom [full output: vault 01234567]"
 	if !strings.Contains(text, want) {
 		t.Fatalf("want %q in %q", want, text)
@@ -57,7 +57,7 @@ func TestMissingHashYieldsNoReference(t *testing.T) {
 		Attempts: []protocol.VerificationAttempt{{CriterionNodeID: "c1", Status: protocol.AttemptFailed, EvidenceID: "e1", StartedAt: base}},
 		Evidence: []protocol.Evidence{e},
 	}
-	text, _, _ := evidencePacket(d, []protocol.Evidence{e})
+	text, _, _ := evidencePacket3(d, []protocol.Evidence{e})
 	if strings.Contains(text, "vault") || !strings.Contains(text, "- FAILED go test ./...: FAIL: boom") {
 		t.Fatalf("text = %q", text)
 	}
@@ -70,7 +70,7 @@ func TestUnavailableRowIsMarkedNotRetained(t *testing.T) {
 		Attempts: []protocol.VerificationAttempt{{CriterionNodeID: "c1", Status: protocol.AttemptFailed, EvidenceID: "e1", StartedAt: base}},
 		Evidence: []protocol.Evidence{e},
 	}
-	text, _, _ := evidencePacket(d, []protocol.Evidence{e})
+	text, _, _ := evidencePacket3(d, []protocol.Evidence{e})
 	if !strings.Contains(text, "[full output not retained]") || strings.Contains(text, "vault 0123") {
 		t.Fatalf("text = %q", text)
 	}
@@ -82,7 +82,7 @@ func TestToolErrorsAreNewestFirstAndCapped(t *testing.T) {
 		rows = append(rows, protocol.Evidence{ID: fmt.Sprintf("t%d", i), Kind: protocol.EvidenceToolError,
 			SourceURI: fmt.Sprintf("tool%d", i), Summary: "boom", ObservedAt: base.Add(time.Duration(i) * time.Minute)})
 	}
-	text, _, _ := evidencePacket(protocol.WorkDetail{Evidence: rows}, rows)
+	text, _, _ := evidencePacket3(protocol.WorkDetail{Evidence: rows}, rows)
 	if n := strings.Count(text, "- tool "); n != maxToolErrors {
 		t.Fatalf("tool error lines = %d, want %d: %q", n, maxToolErrors, text)
 	}
@@ -105,7 +105,7 @@ func TestPassingLinesAreMarkedP2(t *testing.T) {
 		},
 		Evidence: []protocol.Evidence{pass, fail},
 	}
-	text, _, p2 := evidencePacket(d, []protocol.Evidence{pass, fail})
+	text, _, p2 := evidencePacket3(d, []protocol.Evidence{pass, fail})
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 	if len(p2) != 1 {
 		t.Fatalf("p2 = %v in %q", p2, text)
@@ -122,8 +122,14 @@ func TestEvidencePacketRedactsOldSecrets(t *testing.T) {
 		Attempts: []protocol.VerificationAttempt{{CriterionNodeID: "c1", Status: protocol.AttemptFailed, EvidenceID: "e1", StartedAt: base}},
 		Evidence: []protocol.Evidence{e},
 	}
-	text, _, _ := evidencePacket(d, []protocol.Evidence{e})
+	text, _, _ := evidencePacket3(d, []protocol.Evidence{e})
 	if strings.Contains(text, "abcdef1234567890") {
 		t.Fatalf("secret reached the packet: %q", text)
 	}
+}
+
+// evidencePacket3 calls evidencePacket with no caller-supplied staleness, which
+// is what most cases exercise.
+func evidencePacket3(d protocol.WorkDetail, active []protocol.Evidence) (string, int, []int) {
+	return evidencePacket(d, active, nil)
 }

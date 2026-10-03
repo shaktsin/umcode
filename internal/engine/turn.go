@@ -310,9 +310,6 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		e.finishTurn(sctx, th, turn, err, release)
 		return
 	}
-	// historyTokens lets the compiler refuse to produce something larger than
-	// the transcript it replaces. It is measured once, before compaction.
-	historyTokens := estimateMessageTokens(msgs)
 
 	// The project is the sandbox for this turn: file and shell tools resolve
 	// paths against its root, and every write becomes a fileChange item.
@@ -410,6 +407,20 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			log.Info("conversation context compacted automatically", "window", res.meta.ContextWindow)
 		}
 	}
+	// turnItems is this thread's transcript, read once: the compiler reuses it
+	// for every model call in the loop instead of re-reading it each time.
+	var turnItems []protocol.Item
+	if e.Cfg != nil && e.Cfg.Models.ContextCompiler {
+		if its, ierr := e.Store.ListItems(sctx, th.ID, 0); ierr == nil {
+			turnItems = its
+		} else {
+			log.Debug("context compiler: items failed", "err", ierr)
+		}
+	}
+	// historyTokens is the size of the transcript the compiler would replace,
+	// measured after automatic compaction has had its say so the comparison is
+	// against the history this turn would really send.
+	historyTokens := estimateMessageTokens(msgs)
 	// Everything from here on belongs to this turn: the new user message, the
 	// model's tool calls and their results. The compiler replaces what came
 	// before it, never this live suffix.
@@ -459,8 +470,8 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		// this turn reaches the model as a stale criterion rather than a pass.
 		packets := RequestPackets{}
 		req.Messages = msgs
-		if out, ok := e.compile(sctx, th, turn.ID, res.meta.ContextWindow, historyTokens); ok {
-			req.Messages = append(append([]llm.Message{}, out.msgs...), msgs[liveFrom:]...)
+		if out, ok := e.compile(sctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems); ok {
+			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
 			packets = out.packets
 		}
 		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req, packets))

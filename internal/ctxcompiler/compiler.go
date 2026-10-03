@@ -131,16 +131,21 @@ func Compile(in Input) (Result, bool) {
 		return Result{Report: Report{Declined: "no goal"}}, false
 	}
 	work, criteria := workPacket(in.Detail, in.Stale)
-	evidence, rows, p2 := evidencePacket(in.Detail, in.Active)
+	evidence, rows, p2 := evidencePacket(in.Detail, in.Active, in.Stale)
 
 	budget := packetBudget(in.Window)
 	var drops []Drop
 	if budget > 0 {
+		if textTokens(work) > budget {
+			return Result{Report: Report{Declined: "P0 over budget", Criteria: criteria}}, false
+		}
 		var dropped []Drop
 		evidence, rows, dropped = fitEvidence(evidence, rows, p2, budget-textTokens(work))
 		drops = append(drops, dropped...)
-		if textTokens(work) > budget {
-			return Result{Report: Report{Declined: "P0 over budget", Criteria: criteria, Drops: drops}}, false
+		// Failure lines are never dropped, so the packets can still be over the
+		// ceiling. The budget is a promise, so decline rather than break it.
+		if textTokens(work)+textTokens(evidence) > budget {
+			return Result{Report: Report{Declined: "packets over budget", Criteria: criteria, Evidence: rows, Drops: drops}}, false
 		}
 	}
 
@@ -151,6 +156,9 @@ func Compile(in Input) (Result, bool) {
 	msgs := []llm.Message{llm.Text(llm.RoleUser, head)}
 	tailMsgs, tailDropped := tail(in.Items, in.TurnID, tailBudget(in.Window))
 	msgs = append(msgs, tailMsgs...)
+	if tb := tailBudget(in.Window); tb > 0 && estimate(tailMsgs) > tb {
+		drops = append(drops, Drop{Class: "tail", Reason: "one exchange exceeds the tail budget", Count: 1})
+	}
 	if tailDropped > 0 {
 		drops = append(drops, Drop{Class: "tool and file-change notes", Reason: "carried by the work packet", Count: tailDropped})
 	}

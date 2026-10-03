@@ -9,10 +9,6 @@ import (
 	"github.com/shaktsin/umcode/internal/vault"
 )
 
-// statusSuperseded is the criterion status a later verification plan sets. It is
-// compared as a literal so this package does not depend on internal/work.
-const statusSuperseded = "superseded"
-
 // redact masks secrets on their way into a packet. Rows written before the
 // vault's redaction shipped still hold them unmasked.
 func redact(s string) string {
@@ -61,7 +57,7 @@ func workPacket(d protocol.WorkDetail, stale map[string]bool) (string, int) {
 
 	var criteria, unresolved []string
 	for _, n := range d.Nodes {
-		if n.Kind != protocol.NodeCriterion || n.Status == statusSuperseded {
+		if n.Kind != protocol.NodeCriterion || n.Status == protocol.StatusSuperseded {
 			continue
 		}
 		title, command := redact(n.Title), redact(criterionCommand(n))
@@ -71,11 +67,11 @@ func workPacket(d protocol.WorkDetail, stale map[string]bool) (string, int) {
 			status = "needs re-run, a change landed after it last succeeded"
 		}
 		criteria = append(criteria, "- "+title+" — "+status+" (`"+command+"`)")
+		// Only a criterion whose latest attempt did not pass has a failure to
+		// report. A stale pass needs re-running, which the status line already
+		// says; its output was a success and belongs nowhere near Unresolved.
 		a, ok := latest[n.ID]
-		if ok && a.Status == protocol.AttemptPassed && !isStale {
-			continue
-		}
-		if ok {
+		if ok && a.Status != protocol.AttemptPassed {
 			if s := strings.TrimSpace(summaries[a.EvidenceID]); s != "" {
 				unresolved = append(unresolved, "- "+title+": "+redact(s))
 			}

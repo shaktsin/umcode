@@ -51,7 +51,12 @@ func compiled(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	return e.compileMessages(t.Context(), th, turn.ID, 200000, estimateMessageTokens(hist))
+	items, err := e.Store.ListItems(t.Context(), th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, ok := e.compile(t.Context(), th, turn.ID, 200000, estimateMessageTokens(hist), items)
+	return out.msgs, ok
 }
 
 func joined(msgs []llm.Message) string {
@@ -66,6 +71,18 @@ func TestFlagOffRequestUnchanged(t *testing.T) {
 	e, th, turn, _ := compilerEngine(t, false)
 	if _, ok := compiled(t, e, th, turn); ok {
 		t.Fatal("the compiler must not run with the flag off")
+	}
+	// With the flag off the request is exactly what the history path builds.
+	hist, err := e.history(t.Context(), th.ID, turn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := e.history(t.Context(), th.ID, turn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined(hist) != joined(again) {
+		t.Fatal("the history path is not deterministic")
 	}
 }
 
@@ -162,5 +179,45 @@ func TestBreakdownReportsPacketTokens(t *testing.T) {
 	}
 	if b.TotalTokens != plain.TotalTokens {
 		t.Fatalf("total must be unchanged: %d vs %d", b.TotalTokens, plain.TotalTokens)
+	}
+}
+
+func TestCompiledPrefixKeepsTheLiveTurnSuffix(t *testing.T) {
+	prefix := []llm.Message{llm.Text(llm.RoleUser, "Current work state")}
+	live := []llm.Message{
+		llm.Text(llm.RoleUser, "do the thing"),
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "file__write"}}},
+		{Role: llm.RoleTool, ToolCallID: "c1", ToolName: "file__write", Result: "ok"},
+	}
+	got := requestMessages(prefix, live)
+	if len(got) != len(prefix)+len(live) {
+		t.Fatalf("messages = %d, want %d", len(got), len(prefix)+len(live))
+	}
+	for i := range live {
+		if got[len(prefix)+i].Role != live[i].Role {
+			t.Fatalf("live suffix reordered at %d: %+v", i, got)
+		}
+	}
+	if got[2].ToolCalls[0].ID != "c1" || got[3].ToolCallID != "c1" {
+		t.Fatalf("a tool call was separated from its result: %+v", got)
+	}
+	// The caller's slices must not be aliased: a later append to the result
+	// cannot be allowed to overwrite the live suffix.
+	got = append(got, llm.Text(llm.RoleUser, "later"))
+	if live[0].Parts[0].Text != "do the thing" {
+		t.Fatalf("live suffix was mutated: %+v", live)
+	}
+}
+
+func TestCompilerDeclinesAfterCompactionShrinksHistory(t *testing.T) {
+	e, th, turn, _ := compilerEngine(t, true)
+	runWorkTool(t, e, th, turn, &engineTestTool{name: "verification.plan", risk: tools.RiskGreen, output: testPlan})
+	// A compacted thread is small: the compiler must not replace a short
+	// history with a larger prefix.
+	if _, ok := e.compile(t.Context(), th, turn.ID, 200000, 20, nil); ok {
+		t.Fatal("a tiny history must make the compiler decline")
+	}
+	if e.compilerFailures.Load() == 0 {
+		t.Fatal("the decline must be counted")
 	}
 }

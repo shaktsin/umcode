@@ -48,10 +48,11 @@ func TestCompileLayoutIsPacketThenTail(t *testing.T) {
 
 func TestCompileDropsP2BeforeP1(t *testing.T) {
 	in := scenario()
-	// A window whose 15% share fits the work packet with only a few tokens to
-	// spare, so the evidence packet must give something up.
+	// A window whose 15% share fits everything except the passing line, so that
+	// line is what has to go.
 	w, _ := workPacket(in.Detail, nil)
-	in.Window = int(float64(textTokens(w)+4) / packetFraction)
+	e, _, _ := evidencePacket(in.Detail, in.Active, nil)
+	in.Window = int(float64(textTokens(w)+textTokens(e)-3) / packetFraction)
 	res, ok := Compile(in)
 	if !ok {
 		t.Fatalf("declined: %q", res.Report.Declined)
