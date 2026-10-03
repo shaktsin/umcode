@@ -187,3 +187,13 @@ func TestEnvironmentChangesWithGitHead(t *testing.T) {
 		t.Fatal("HEAD change did not change the environment fingerprint")
 	}
 }
+
+func TestGitDeletedAndBranchSwitchAreDetected(t *testing.T) {
+	root := gitRepo(t)
+	a := take(t, root)
+	os.Remove(filepath.Join(root, "a.txt"))
+	b := take(t, root)
+	if got := Diff(a, b); !reflect.DeepEqual(got, []string{"a.txt"}) {
+		t.Fatalf("deleted file diff = %v", got)
+	}
+}

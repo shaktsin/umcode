@@ -225,7 +225,11 @@ func (t *browserVerify) Call(ctx context.Context, args json.RawMessage) (string,
 		Reason      string            `json:"reason,omitempty"`
 	}{Status: "not_run", Framework: a.Framework, Command: a.Command, Directory: a.Directory,
 		Diagnostics: []string{}, Artifacts: []browserArtifact{}}
-	finish := func() (string, error) { b, _ := json.Marshal(result); return clip(string(b)), nil }
+	finish := func() (string, error) {
+		b, _ := json.Marshal(result)
+		SetRaw(ctx, string(b))
+		return clip(string(b)), nil
+	}
 	if !scope.UseCompute {
 		result.Reason = "browser verification requires isolated compute; host execution is not used as a fallback"
 		return finish()

@@ -139,6 +139,7 @@ func (t *verificationRun) Call(ctx context.Context, args json.RawMessage) (strin
 	}
 	scope := ScopeFrom(ctx)
 	results := make([]result, 0, len(a.Checks))
+	fulls := make([]string, 0, len(a.Checks)) // each check's unclipped shell output, parallel to results
 	for _, c := range a.Checks {
 		if strings.TrimSpace(c.Label) == "" || strings.TrimSpace(c.Command) == "" {
 			return "", errors.New("each verification check needs a label and command")
@@ -155,6 +156,7 @@ func (t *verificationRun) Call(ctx context.Context, args json.RawMessage) (strin
 			if probeErr != nil || shellExitCode(probeOutput) != 0 {
 				results = append(results, result{Label: c.Label, Command: c.Command, Directory: c.Directory, Reason: c.Reason,
 					Status: "not_run", DurationMS: time.Since(started).Milliseconds(), Error: "required command is unavailable: " + c.RequiredCommand})
+				fulls = append(fulls, "")
 				if !a.ContinueOnFailure {
 					break
 				}
@@ -175,6 +177,7 @@ func (t *verificationRun) Call(ctx context.Context, args json.RawMessage) (strin
 			}
 		}
 		results = append(results, r)
+		fulls = append(fulls, output)
 		if r.Status != "passed" && !a.ContinueOnFailure {
 			break
 		}
@@ -190,6 +193,18 @@ func (t *verificationRun) Call(ctx context.Context, args json.RawMessage) (strin
 		}
 	}
 	b, _ := json.Marshal(payload)
+	// The engine records attempts from the unclipped results: every check keeps
+	// the shell's own (64 KB) output instead of the 3 KB shown to the model.
+	rawPayload := payload
+	rawPayload.Results = append([]result(nil), results...)
+	for i := range rawPayload.Results {
+		if i < len(fulls) && fulls[i] != "" {
+			rawPayload.Results[i].Output = fulls[i]
+		}
+	}
+	if rb, err := json.Marshal(rawPayload); err == nil {
+		SetRaw(ctx, string(rb))
+	}
 	return clip(string(b)), nil
 }
 

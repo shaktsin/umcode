@@ -1090,7 +1090,7 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 	_ = e.Store.TouchThread(ctx, th.ID)
 	paused := e.takePaused(turn.ID)
 	if e.Work != nil {
-		_ = e.Work.End(ctx, th.ID, turn.Status, paused)
+		_ = e.Work.End(ctx, th.ID, turn.Status, paused, scopeRoot(ctx))
 	}
 	release()
 	e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})

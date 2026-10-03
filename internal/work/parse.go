@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/vault"
 )
 
 // summaryLimit caps stored verification output and error text.
@@ -18,6 +19,17 @@ func capText(s string, n int) string {
 		return s
 	}
 	return strings.ToValidUTF8(s[:n], "")
+}
+
+// tailText redacts s and keeps its last n bytes: the verdict of a check is at
+// the end of its output.
+func tailText(s string, n int) string {
+	b, _ := vault.Redact([]byte(s))
+	s = string(b)
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[len(s)-n:], "")
 }
 
 type plannedCheck struct {
