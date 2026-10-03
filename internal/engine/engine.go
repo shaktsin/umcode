@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/compute"
@@ -72,6 +73,8 @@ type Engine struct {
 	baseCtx   context.Context
 	retention work.Retention
 	cancelAll context.CancelFunc
+
+	compilerFailures atomic.Int64 // context-compiler errors, declines and panics
 
 	mu           sync.Mutex
 	activeTurns  map[string]*activeTurn // by turn id

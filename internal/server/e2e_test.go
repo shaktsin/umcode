@@ -141,6 +141,9 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	reg := llm.NewRegistry()
 	reg.Register(fake)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if os.Getenv("UMCODE_TEST_DEBUG") != "" {
+		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
 	eng, err := engine.New(ctx, engine.Options{Config: cfg, Store: st, Secrets: secrets.NewMemoryStore(), LLMs: reg, Logger: log,
 		SchedulerPoll: 50 * time.Millisecond})
 	if err != nil {
