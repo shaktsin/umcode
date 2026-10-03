@@ -32,7 +32,7 @@ func fixtureRequest() ([]promptLayer, llm.Request) {
 
 func TestMeasureRequestSumsParts(t *testing.T) {
 	layers, req := fixtureRequest()
-	b := measureRequest(layers, req)
+	b := measureRequest(layers, req, RequestPackets{})
 	if b.Layers[layerCore] != 100 || b.Layers[layerProject] != 200 || b.SystemTokens != 300 {
 		t.Fatalf("layers = %+v system = %d", b.Layers, b.SystemTokens)
 	}
@@ -51,7 +51,7 @@ func TestMeasureRequestSumsParts(t *testing.T) {
 }
 
 func TestMeasureRequestEmpty(t *testing.T) {
-	b := measureRequest(nil, llm.Request{})
+	b := measureRequest(nil, llm.Request{}, RequestPackets{})
 	if b.Layers == nil || len(b.Layers) != 0 || b.TotalTokens != 0 || b.ToolCount != 0 {
 		t.Fatalf("empty request = %+v", b)
 	}
@@ -61,7 +61,7 @@ func TestMeasureRequestEmpty(t *testing.T) {
 // the same request measures after optimization. Regenerate with UPDATE_GOLDEN=1.
 func TestRequestBaselineGolden(t *testing.T) {
 	layers, req := fixtureRequest()
-	got, err := json.MarshalIndent(measureRequest(layers, req), "", "  ")
+	got, err := json.MarshalIndent(measureRequest(layers, req, RequestPackets{}), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,7 +24,7 @@ func TestEstimateCountsTextAndImages(t *testing.T) {
 		llm.Text(llm.RoleUser, strings.Repeat("a", 400)),
 		{Role: llm.RoleUser, Parts: []llm.Part{{Type: "image", MimeType: "image/png", DataB64: "x"}}},
 	}
-	if got, want := estimate(msgs), 100+1500; got != want {
+	if got, want := estimate(msgs), 100+1500+2*messageOverhead; got != want {
 		t.Fatalf("estimate = %d, want %d", got, want)
 	}
 }

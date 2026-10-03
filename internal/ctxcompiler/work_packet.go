@@ -45,8 +45,9 @@ func latestAttempts(d protocol.WorkDetail) map[string]protocol.VerificationAttem
 }
 
 // workPacket renders the P0 section: the goal, every live criterion with its
-// status, the unresolved failures, and the files this work changed.
-func workPacket(d protocol.WorkDetail) (string, int) {
+// status, the unresolved failures, and the files this work changed. stale marks
+// criteria whose stored status still reads as a pass but no longer holds.
+func workPacket(d protocol.WorkDetail, stale map[string]bool) (string, int) {
 	var b strings.Builder
 	b.WriteString("## Work\nGoal: ")
 	b.WriteString(redact(d.Work.Goal))
@@ -65,12 +66,13 @@ func workPacket(d protocol.WorkDetail) (string, int) {
 		}
 		title, command := redact(n.Title), redact(criterionCommand(n))
 		status := n.Status
-		if status == protocol.StatusStale {
+		isStale := status == protocol.StatusStale || stale[n.ID]
+		if isStale {
 			status = "needs re-run, a change landed after it last succeeded"
 		}
 		criteria = append(criteria, "- "+title+" — "+status+" (`"+command+"`)")
 		a, ok := latest[n.ID]
-		if ok && a.Status == protocol.AttemptPassed && n.Status != protocol.StatusStale {
+		if ok && a.Status == protocol.AttemptPassed && !isStale {
 			continue
 		}
 		if ok {

@@ -139,6 +139,12 @@ A passing criterion goes `stale` when a file changes after it (including edits m
 
 Old objects are removed automatically at startup and daily, never while an open work or active evidence references them. Defaults (optional keys under `storage`): `retention_raw_days` 30, `retention_stale_days` 30, `retention_blob_days` 90 (objects of 1 MiB or more), `retention_redacted_days` 7, and `vault_max_object_bytes` 8388608. None of this asks for approval, shows a prompt or adds chat output; fingerprints and cleanup are engine-internal, time-bounded and only touch vault files, never project files.
 
+### Context compiler (off by default)
+
+With `models.context_compiler: true`, a turn that has an open work record stops replaying the transcript. The model instead receives the current work state — the goal, each criterion with its status, the unresolved failures, the changed files, and the evidence that is still true, with a vault reference for each failure's full output — followed by the last ten exchanges. A criterion whose pass no longer holds is shown as needing a re-run, never as a pass, and that is recomputed before every model call, so an edit made earlier in the same turn is reflected immediately. Secrets are masked on the way into the packets.
+
+The packets are capped at 15% of the model's context window and the tail at 25%; passing-check lines are dropped before failures, and the goal and criteria are never dropped. The compiler refuses, and the engine silently replays the transcript as before, whenever the work has no goal, the goal and criteria alone do not fit, or the compiled request would not be smaller than the transcript — which is the normal outcome for a short thread, since the tail already holds all of it. A read failure or a panic falls back the same way and is counted. The full transcript stays stored and visible in the app either way, and nothing here prompts, approves or adds chat output.
+
 ## Usage and cost
 
 Every model request writes one row to `llm_usage`: key, provider, model, thread, turn, role (`chat`, `title`), input / cached / output / reasoning tokens, cost, latency and status. Cost uses the bundled price table (`internal/models/catalog.json`, list prices checked 2026-09-18) or your override (`umcode model price`). Models without a known price cost $0 and show `?`. When a provider reports no usage, tokens are estimated and flagged.

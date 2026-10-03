@@ -23,6 +23,9 @@ const (
 	// imageTokens is the flat cost of an image part, matching the engine's own
 	// estimator: a base64 length says little about the real cost.
 	imageTokens = 1500
+	// messageOverhead is the engine's flat per-message cost, counted here so
+	// both sides of the history comparison measure the same way.
+	messageOverhead = 4
 )
 
 // Input is everything Compile needs. The caller reads it from its store.
@@ -30,6 +33,10 @@ type Input struct {
 	// Detail is the thread's open work. A zero value means there is nothing to
 	// compile and Compile declines.
 	Detail protocol.WorkDetail
+	// Stale marks criterion node ids whose latest pass no longer holds. The
+	// caller computes it, because a status stored on the node is only written
+	// back at turn end and is stale-blind in the middle of a turn.
+	Stale map[string]bool
 	// Active is the evidence that is still true. Nil means "every row that is
 	// not stale", which keeps this package usable without the work service.
 	Active []protocol.Evidence
@@ -86,7 +93,9 @@ func share(window int, fraction float64) int {
 	return int(float64(window) * fraction)
 }
 
-// estimate counts the tokens of a message list the same way the engine does.
+// estimate counts the tokens of a message list exactly as the engine's own
+// estimator does, including its flat per-message overhead. The two must agree,
+// because Compile compares its output against an engine-measured history size.
 func estimate(msgs []llm.Message) int {
 	n := 0
 	for _, m := range msgs {
@@ -97,7 +106,14 @@ func estimate(msgs []llm.Message) int {
 			}
 			n += int(llm.EstimateTokens(p.Text))
 		}
+		for _, t := range m.Thinking {
+			n += int(llm.EstimateTokens(t.Text))
+		}
+		for _, c := range m.ToolCalls {
+			n += int(llm.EstimateTokens(c.Name)) + int(llm.EstimateTokens(string(c.Args)))
+		}
 		n += int(llm.EstimateTokens(m.Result))
+		n += messageOverhead
 	}
 	return n
 }
@@ -114,7 +130,7 @@ func Compile(in Input) (Result, bool) {
 	if in.Detail.Work.Goal == "" {
 		return Result{Report: Report{Declined: "no goal"}}, false
 	}
-	work, criteria := workPacket(in.Detail)
+	work, criteria := workPacket(in.Detail, in.Stale)
 	evidence, rows, p2 := evidencePacket(in.Detail, in.Active)
 
 	budget := packetBudget(in.Window)

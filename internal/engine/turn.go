@@ -310,6 +310,9 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		e.finishTurn(sctx, th, turn, err, release)
 		return
 	}
+	// historyTokens lets the compiler refuse to produce something larger than
+	// the transcript it replaces. It is measured once, before compaction.
+	historyTokens := estimateMessageTokens(msgs)
 
 	// The project is the sandbox for this turn: file and shell tools resolve
 	// paths against its root, and every write becomes a fileChange item.
@@ -407,6 +410,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			log.Info("conversation context compacted automatically", "window", res.meta.ContextWindow)
 		}
 	}
+	// Everything from here on belongs to this turn: the new user message, the
+	// model's tool calls and their results. The compiler replaces what came
+	// before it, never this live suffix.
+	liveFrom := len(msgs)
 	msgs = append(msgs, user)
 
 	var specs []llm.ToolSpec
@@ -448,8 +455,15 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		if n := trimToolResults(msgs, tokens(req.System)+toolSpecTokens(specs), int(float64(res.meta.ContextWindow)*contextTrimFraction)); n > 0 {
 			log.Info("dropped old tool results to save context", "count", n)
 		}
+		// The work record is re-read for every call, so an edit made earlier in
+		// this turn reaches the model as a stale criterion rather than a pass.
+		packets := RequestPackets{}
 		req.Messages = msgs
-		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req))
+		if out, ok := e.compile(sctx, th, turn.ID, res.meta.ContextWindow, historyTokens); ok {
+			req.Messages = append(append([]llm.Message{}, out.msgs...), msgs[liveFrom:]...)
+			packets = out.packets
+		}
+		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req, packets))
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
 			if reason := budget.stopReason(); reason != "" {

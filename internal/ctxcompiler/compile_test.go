@@ -50,7 +50,7 @@ func TestCompileDropsP2BeforeP1(t *testing.T) {
 	in := scenario()
 	// A window whose 15% share fits the work packet with only a few tokens to
 	// spare, so the evidence packet must give something up.
-	w, _ := workPacket(in.Detail)
+	w, _ := workPacket(in.Detail, nil)
 	in.Window = int(float64(textTokens(w)+4) / packetFraction)
 	res, ok := Compile(in)
 	if !ok {

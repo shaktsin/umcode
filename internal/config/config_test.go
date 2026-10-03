@@ -80,3 +80,25 @@ func TestStorageVaultKeysOptional(t *testing.T) {
 		t.Fatalf("storage = %+v", s)
 	}
 }
+
+func TestContextCompilerFlagDefaultsFalse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	cfg := filepath.Join(home, "config.yaml")
+	os.WriteFile(cfg, []byte("llm: {provider: anthropic}\n"), 0o600)
+	c, err := Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Models.ContextCompiler {
+		t.Fatal("the context compiler must be off unless configured")
+	}
+	os.WriteFile(cfg, []byte("models: {context_compiler: true}\n"), 0o600)
+	c, err = Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Models.ContextCompiler {
+		t.Fatal("models.context_compiler: true must enable it")
+	}
+}

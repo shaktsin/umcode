@@ -31,7 +31,7 @@ func TestWorkPacketRendersCriteriaAndStatuses(t *testing.T) {
 		Attempts: []protocol.VerificationAttempt{a},
 		Evidence: []protocol.Evidence{ev},
 	}
-	text, n := workPacket(d)
+	text, n := workPacket(d, nil)
 	if !strings.Contains(text, "Goal: ship the parser") {
 		t.Fatalf("no goal line: %q", text)
 	}
@@ -51,7 +51,7 @@ func TestStaleCriterionNeverRendersAsPassed(t *testing.T) {
 		Attempts: []protocol.VerificationAttempt{a},
 		Evidence: []protocol.Evidence{ev},
 	}
-	text, _ := workPacket(d)
+	text, _ := workPacket(d, nil)
 	if !strings.Contains(text, "needs re-run") || strings.Contains(text, "passed") {
 		t.Fatalf("stale rendering wrong: %q", text)
 	}
@@ -66,7 +66,7 @@ func TestUnresolvedListsLatestFailedAttemptSummary(t *testing.T) {
 		Attempts: []protocol.VerificationAttempt{old, newer},
 		Evidence: []protocol.Evidence{oldEv, newerEv},
 	}
-	text, _ := workPacket(d)
+	text, _ := workPacket(d, nil)
 	if !strings.Contains(text, "Unresolved:") || !strings.Contains(text, "- unit: FAIL: parser panics") {
 		t.Fatalf("unresolved section wrong: %q", text)
 	}
@@ -84,11 +84,11 @@ func TestChangedFilesAreDistinctAndSorted(t *testing.T) {
 			{Kind: protocol.EvidenceFileChange, SourceURI: "b.go", ObservedAt: base},
 		},
 	}
-	text, _ := workPacket(d)
+	text, _ := workPacket(d, nil)
 	if !strings.Contains(text, "Changed files: a.go, b.go") {
 		t.Fatalf("changed files wrong: %q", text)
 	}
-	empty, _ := workPacket(protocol.WorkDetail{Work: protocol.Work{Goal: "g"}})
+	empty, _ := workPacket(protocol.WorkDetail{Work: protocol.Work{Goal: "g"}}, nil)
 	if strings.Contains(empty, "Changed files") {
 		t.Fatalf("empty changed-file list must be omitted: %q", empty)
 	}
@@ -99,8 +99,22 @@ func TestWorkPacketRedactsOldSecrets(t *testing.T) {
 		Work:  protocol.Work{Goal: "deploy with API_TOKEN=sk-abcdefghijklmnopqrstuvwxyz0123"},
 		Nodes: []protocol.WorkNode{crit("c1", "unit", "API_TOKEN=sk-abcdefghijklmnopqrstuvwxyz0123 npm test", "pending")},
 	}
-	text, _ := workPacket(d)
+	text, _ := workPacket(d, nil)
 	if strings.Contains(text, "sk-abcdef") {
 		t.Fatalf("secret reached the packet: %q", text)
+	}
+}
+
+func TestCallerSuppliedStalenessOverridesStoredStatus(t *testing.T) {
+	a, ev := attempt("c1", protocol.AttemptPassed, "ok", base)
+	d := protocol.WorkDetail{
+		Work:     protocol.Work{Goal: "g"},
+		Nodes:    []protocol.WorkNode{crit("c1", "unit", "go test ./...", protocol.AttemptPassed)},
+		Attempts: []protocol.VerificationAttempt{a},
+		Evidence: []protocol.Evidence{ev},
+	}
+	text, _ := workPacket(d, map[string]bool{"c1": true})
+	if !strings.Contains(text, "needs re-run") || strings.Contains(text, "— passed") {
+		t.Fatalf("a criterion the caller calls stale must not read as passed: %q", text)
 	}
 }
