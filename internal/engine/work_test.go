@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/shaktsin/umcode/internal/fingerprint"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
+	"github.com/shaktsin/umcode/internal/vault"
 	"github.com/shaktsin/umcode/internal/work"
 )
 
@@ -159,5 +163,77 @@ func TestEngineWithoutWorkServiceStillRuns(t *testing.T) {
 	e.finishTurn(context.Background(), th, turn, nil, func() {})
 	if _, err := e.UpdateThread(t.Context(), th.ID, map[string]any{"archived": true}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunToolPassesUnclippedResultToWork(t *testing.T) {
+	e, th, turn, st := workEngine(t)
+	runWorkTool(t, e, th, turn, &engineTestTool{name: "verification.plan", risk: tools.RiskGreen, output: testPlan})
+	runWorkTool(t, e, th, turn, &engineTestTool{name: "verification.run", risk: tools.RiskYellow,
+		output: `{"status":"passed","results":[{"label":"unit","comm…[output truncated]`, raw: testRunOK})
+	if d := openWorkDetail(t, st, th.ID); len(d.Attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1 recorded from the raw result", len(d.Attempts))
+	}
+}
+
+func TestFinishTurnPassesRootAndClosesStale(t *testing.T) {
+	e, th, turn, st := workEngine(t)
+	value := "ws1"
+	e.Work.Workspace = func(ctx context.Context, root string) (fingerprint.Workspace, bool) {
+		if root != "/proj" {
+			t.Errorf("root = %q", root)
+		}
+		return fingerprint.Workspace{Value: value, Paths: []string{"a.go"}}, true
+	}
+	ctx := tools.WithScope(t.Context(), &tools.Scope{Root: "/proj"})
+	run := func(tool *engineTestTool) {
+		e.Tools.Add(tool)
+		e.runTool(ctx, ctx, th, turn, llm.ToolCall{ID: "c-" + tool.name, Name: tools.ToWire(tool.name), Args: json.RawMessage(`{}`)}, &fakePluginSnapshot{})
+	}
+	run(&engineTestTool{name: "verification.plan", risk: tools.RiskGreen, output: testPlan})
+	run(&engineTestTool{name: "verification.run", risk: tools.RiskYellow, output: testRunOK})
+	value = "ws2" // the shell edited a file after the passing run
+	e.finishTurn(ctx, th, turn, nil, func() {})
+	d := openWorkDetail(t, st, th.ID)
+	if d.Work.Status != protocol.WorkOpen {
+		t.Fatalf("status = %s, want open", d.Work.Status)
+	}
+	for _, n := range d.Nodes {
+		if n.Kind == protocol.NodeCriterion && n.Status != protocol.StatusStale {
+			t.Fatalf("criterion status = %s, want stale", n.Status)
+		}
+	}
+}
+
+func TestGetWorkReportsCorruptOrDeletedObjectsUnavailable(t *testing.T) {
+	e, th, turn, st := workEngine(t)
+	e.Work.Vault = &vault.Vault{Dir: t.TempDir()}
+	runWorkTool(t, e, th, turn, &engineTestTool{name: "verification.run", risk: tools.RiskYellow,
+		output: `{"results":[{"command":"a","status":"passed","exit_code":0,"output":"output A"},{"command":"b","status":"passed","exit_code":0,"output":"output B"}]}`})
+	d := openWorkDetail(t, st, th.ID)
+	var hashes []string
+	for _, ev := range d.Evidence {
+		if ev.VaultHash != "" {
+			hashes = append(hashes, ev.VaultHash)
+		}
+	}
+	if len(hashes) != 2 {
+		t.Fatalf("hashes = %v", hashes)
+	}
+	os.Remove(filepath.Join(e.Work.Vault.Dir, "objects", hashes[0][:2], hashes[0]))
+	corrupt := filepath.Join(e.Work.Vault.Dir, "objects", hashes[1][:2], hashes[1])
+	os.WriteFile(corrupt, []byte("tampered"), 0o600)
+	got, err := e.GetWork(t.Context(), d.Work.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range got.Evidence {
+		if ev.VaultHash != "" && ev.Availability != protocol.AvailUnavailable {
+			t.Fatalf("evidence %s availability = %s, want unavailable", ev.VaultHash[:8], ev.Availability)
+		}
+	}
+	active, _ := e.GetWork(t.Context(), d.Work.ID, true)
+	if len(active.Evidence) != 0 {
+		t.Fatalf("activeOnly kept unavailable evidence: %+v", active.Evidence)
 	}
 }

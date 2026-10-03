@@ -30,6 +30,7 @@ const (
 	MethodApprovalList    = "approval/list"
 	MethodWorkList        = "work/list"
 	MethodWorkGet         = "work/get"
+	MethodVaultStats      = "vault/stats"
 	MethodApprovalRespond = "approval/respond"
 
 	MethodProviderList   = "provider/list"
@@ -436,4 +437,6 @@ type WorkListResult struct {
 
 type WorkGetParams struct {
 	WorkID string `json:"workId"`
+	// ActiveOnly limits evidence to what is still true (not stale, superseded or unavailable).
+	ActiveOnly bool `json:"activeOnly,omitempty"`
 }

@@ -950,9 +950,14 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return toolRunResult{Output: output, IsError: isError, HookContext: contextValues}
 	}
 	riskLevel := ""
+	var sink *tools.RawSink // the tool's unclipped result, when it provides one
 	observe := func(event hooks.Event, output, toolError string, priorContext []string) toolRunResult {
 		if e.Work != nil {
-			_ = e.Work.Observe(sctx, th.ID, work.Observation{Tool: name, Args: call.Args, Output: output, Err: toolError, Risk: riskLevel, Root: scopeRoot(ctx)})
+			raw := ""
+			if sink != nil {
+				raw = sink.Text
+			}
+			_ = e.Work.Observe(sctx, th.ID, work.Observation{Tool: name, Args: call.Args, Output: output, Raw: raw, Err: toolError, Risk: riskLevel, Root: scopeRoot(ctx)})
 		}
 		invocation.Event, invocation.ToolOutput, invocation.ToolError = event, output, toolError
 		outcome := e.runPluginHooks(sctx, snapshot, invocation)
@@ -1048,6 +1053,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		}
 		toolCtx = tools.WithScope(ctx, &streamScope)
 	}
+	toolCtx, sink = tools.WithRawSink(toolCtx)
 	output, err := tool.Call(toolCtx, call.Args)
 	if err != nil {
 		it.Status, it.Tool.Error = protocol.ItemFailed, err.Error()
@@ -1090,7 +1096,7 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 	_ = e.Store.TouchThread(ctx, th.ID)
 	paused := e.takePaused(turn.ID)
 	if e.Work != nil {
-		_ = e.Work.End(ctx, th.ID, turn.Status, paused)
+		_ = e.Work.End(ctx, th.ID, turn.Status, paused, scopeRoot(ctx))
 	}
 	release()
 	e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})

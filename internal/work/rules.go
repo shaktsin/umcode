@@ -13,7 +13,7 @@ func EscalatesToGuided(tool, risk string) bool {
 	switch tool {
 	case "file.write", "file.edit", "verification.plan", "verification.run", "browser.verify":
 		return true
-	case "shell.run":
+	case "shell.run", "exec.start", "exec.write":
 		return risk != "" && risk != "green"
 	}
 	return false
@@ -30,13 +30,38 @@ func isVerificationTool(tool string) bool {
 // those with no attempt, whose latest attempt did not pass, or that had a file
 // change recorded after their latest passing attempt.
 func Unresolved(d protocol.WorkDetail) []string {
-	var lastChange *protocol.Evidence
-	for i := range d.Evidence {
-		e := &d.Evidence[i]
-		if e.Kind == protocol.EvidenceFileChange && (lastChange == nil || e.ObservedAt.After(lastChange.ObservedAt)) {
-			lastChange = e
+	lastChange := lastFileChange(d)
+	latest := latestAttempts(d)
+	var out []string
+	for _, n := range d.Nodes {
+		if n.Kind != protocol.NodeCriterion || n.Status == StatusSuperseded {
+			continue
+		}
+		a, ok := latest[n.ID]
+		switch {
+		case !ok, a.Status != protocol.AttemptPassed, n.Status == protocol.StatusStale:
+			out = append(out, n.Title)
+		case lastChange != nil && lastChange.ObservedAt.After(a.FinishedAt):
+			out = append(out, n.Title)
 		}
 	}
+	return out
+}
+
+func lastFileChange(d protocol.WorkDetail) *protocol.Evidence {
+	var last *protocol.Evidence
+	for i := range d.Evidence {
+		e := &d.Evidence[i]
+		if e.Kind == protocol.EvidenceFileChange && (last == nil || e.ObservedAt.After(last.ObservedAt)) {
+			last = e
+		}
+	}
+	return last
+}
+
+// latestAttempts returns the newest attempt of each criterion; later attempts
+// win ties so re-runs in the same instant still supersede.
+func latestAttempts(d protocol.WorkDetail) map[string]protocol.VerificationAttempt {
 	latest := map[string]protocol.VerificationAttempt{}
 	for _, a := range d.Attempts {
 		if a.CriterionNodeID == "" {
@@ -46,18 +71,57 @@ func Unresolved(d protocol.WorkDetail) []string {
 			latest[a.CriterionNodeID] = a
 		}
 	}
-	var out []string
-	for _, n := range d.Nodes {
-		if n.Kind != protocol.NodeCriterion || n.Status == StatusSuperseded {
+	return latest
+}
+
+// Staleness returns the criteria (by node id) whose latest passing attempt no
+// longer holds: a file changed after it, or it ran in a different environment
+// than currentEnv. An empty currentEnv skips the environment rule.
+func Staleness(d protocol.WorkDetail, currentEnv string) map[string]bool {
+	out := map[string]bool{}
+	lastChange := lastFileChange(d)
+	env := map[string]string{}
+	for _, e := range d.Evidence {
+		env[e.ID] = e.EnvFingerprint
+	}
+	for id, a := range latestAttempts(d) {
+		if a.Status != protocol.AttemptPassed {
 			continue
 		}
-		a, ok := latest[n.ID]
 		switch {
-		case !ok, a.Status != protocol.AttemptPassed:
-			out = append(out, n.Title)
 		case lastChange != nil && lastChange.ObservedAt.After(a.FinishedAt):
-			out = append(out, n.Title)
+			out[id] = true
+		case currentEnv != "" && env[a.EvidenceID] != "" && env[a.EvidenceID] != currentEnv:
+			out[id] = true
 		}
+	}
+	return out
+}
+
+// ActiveEvidence returns the evidence that is still true: not stale, not on a
+// superseded criterion, not an older attempt of a re-run criterion, and not
+// backed by a vault object that is missing or corrupt. Evidence without a
+// vault object (summary only) stays active.
+func ActiveEvidence(d protocol.WorkDetail) []protocol.Evidence {
+	superseded := map[string]bool{}
+	for _, n := range d.Nodes {
+		if n.Kind == protocol.NodeCriterion && n.Status == StatusSuperseded {
+			superseded[n.ID] = true
+		}
+	}
+	older := map[string]bool{}
+	latest := latestAttempts(d)
+	for _, a := range d.Attempts {
+		if a.CriterionNodeID != "" && a.EvidenceID != "" && latest[a.CriterionNodeID].ID != a.ID {
+			older[a.EvidenceID] = true
+		}
+	}
+	var out []protocol.Evidence
+	for _, e := range d.Evidence {
+		if e.StaleAt != nil || superseded[e.NodeID] || older[e.ID] || e.Availability == protocol.AvailUnavailable {
+			continue
+		}
+		out = append(out, e)
 	}
 	return out
 }

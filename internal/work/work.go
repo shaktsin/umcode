@@ -15,9 +15,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/fingerprint"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/vault"
 )
+
+// fingerprintBudget bounds each workspace fingerprint taken by the service.
+var fingerprintBudget = 2 * time.Second
 
 // Service records and evaluates works. All methods find the thread's open work
 // themselves; with none open, Observe and End do nothing.
@@ -26,16 +31,57 @@ type Service struct {
 	Log      *slog.Logger
 	Now      func() time.Time // defaults to time.Now().UTC()
 	Failures atomic.Int64     // best-effort recording errors
+
+	Vault       *vault.Vault                 // full outputs; nil disables the vault
+	VaultDir    string                       // excluded from workspace fingerprints
+	ToolVersion func(context.Context) string // identity of the toolchain, optional
+	// Workspace takes a workspace fingerprint; nil uses fingerprint.TakeWorkspace.
+	Workspace func(ctx context.Context, root string) (fingerprint.Workspace, bool)
 }
 
 // Observation is one finished tool call as seen by the engine.
 type Observation struct {
 	Tool   string          // dotted name, e.g. "file.write"
 	Args   json.RawMessage // tool arguments
-	Output string          // tool output
+	Output string          // tool output as the model saw it (possibly clipped)
+	Raw    string          // unclipped structured output, preferred over Output when set
 	Err    string          // non-empty when the tool failed or was denied
 	Risk   string          // "green", "yellow" or "red"
 	Root   string          // project root, "" without a project
+
+	fp *obsFingerprints // shared by the results of one observation
+}
+
+// redactText masks secrets in text that is persisted outside the vault.
+func redactText(s string) string {
+	b, _ := vault.Redact([]byte(s))
+	return string(b)
+}
+
+// maxWorkspacePaths bounds the file_change rows one turn-end change may add;
+// beyond it the change is recorded workspace-wide ("." ).
+const maxWorkspacePaths = 50
+
+// obsFingerprints caches the workspace and environment fingerprints so one
+// observation (which may hold several results) takes them once.
+type obsFingerprints struct {
+	done bool
+	ws   fingerprint.Workspace
+	ok   bool
+	env  string
+}
+
+func (s *Service) snapshot(ctx context.Context, o Observation) (fingerprint.Workspace, bool, string) {
+	f := o.fp
+	if f == nil {
+		f = &obsFingerprints{}
+	}
+	if !f.done {
+		f.ws, f.ok = s.workspace(ctx, o.Root)
+		f.env = fingerprint.Environment(ctx, o.Root, s.ToolVersion)
+		f.done = true
+	}
+	return f.ws, f.ok, f.env
 }
 
 func (s *Service) now() time.Time {
@@ -64,7 +110,7 @@ func (s *Service) begin(ctx context.Context, th protocol.Thread, text string) er
 	if _, ok, err := s.Store.OpenWorkForThread(ctx, th.ID); err != nil || ok {
 		return err
 	}
-	goal := capText(text, goalLimit)
+	goal := capText(redactText(text), goalLimit)
 	now := s.now()
 	w, err := s.Store.CreateWork(ctx, protocol.Work{ThreadID: th.ID, ProjectID: th.ProjectID, Goal: goal, CreatedAt: now})
 	if err != nil {
@@ -81,6 +127,7 @@ func (s *Service) Observe(ctx context.Context, threadID string, o Observation) e
 }
 
 func (s *Service) observe(ctx context.Context, threadID string, o Observation) error {
+	o.fp = &obsFingerprints{}
 	w, ok, err := s.Store.OpenWorkForThread(ctx, threadID)
 	if err != nil || !ok {
 		return err
@@ -117,14 +164,24 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 
 func (s *Service) recordFailure(ctx context.Context, workID string, o Observation) error {
 	now := s.now()
-	content, _ := json.Marshal(map[string]string{"tool": o.Tool, "error": capText(o.Err, summaryLimit)})
+	content, _ := json.Marshal(map[string]string{"tool": o.Tool, "error": tailText(o.Err, summaryLimit)})
 	n, err := s.Store.AddWorkNode(ctx, protocol.WorkNode{WorkID: workID, Kind: protocol.NodeFact, Title: o.Tool + " failed",
 		Content: content, Status: "active", ValidFrom: now, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		return err
 	}
-	_, err = s.Store.AddEvidence(ctx, protocol.Evidence{WorkID: workID, NodeID: n.ID, Kind: protocol.EvidenceToolError,
-		SourceURI: o.Tool, Summary: capText(o.Err, summaryLimit), ObservedAt: now})
+	ev := protocol.Evidence{WorkID: workID, NodeID: n.ID, Kind: protocol.EvidenceToolError,
+		SourceURI: o.Tool, Summary: tailText(o.Err, summaryLimit), ObservedAt: now}
+	if obj, note := s.putVault(ctx, o.Err, now); obj != nil {
+		if err := s.Store.UpsertVaultObject(ctx, *obj); err == nil {
+			ev.VaultHash, ev.Availability = obj.Hash, protocol.AvailAvailable
+		} else {
+			s.count("vault index", err)
+		}
+	} else if note != "" {
+		ev.Summary = tailText(o.Err, summaryLimit-len(note)) + note
+	}
+	_, err = s.Store.AddEvidence(ctx, ev)
 	return err
 }
 
@@ -216,6 +273,12 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 	}
 	goal, hasGoal := goalNode(d)
 	checks := parsePlan(o.Output)
+	for i := range checks {
+		checks[i].Command = redactText(checks[i].Command)
+		checks[i].Directory = redactText(checks[i].Directory)
+		checks[i].Reason = redactText(checks[i].Reason)
+		checks[i].Label = redactText(checks[i].Label)
+	}
 	if len(checks) > 0 {
 		// A new plan replaces the old one: criteria it no longer lists stop counting.
 		planned := map[string]bool{}
@@ -265,40 +328,96 @@ func criterionFor(d protocol.WorkDetail, command string) *protocol.WorkNode {
 	return nil
 }
 
-// recordAttempt stores evidence and an append-only attempt, and updates the matched criterion.
-func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, checkType, command, status string, exit *int, summary string) error {
+const notRetained = "\n[full output not retained]"
+
+// putVault stores text in the vault. It returns the index row, or a note for the
+// summary when a configured vault could not keep the text; failures are counted.
+func (s *Service) putVault(ctx context.Context, text string, at time.Time) (*protocol.VaultObjectRow, string) {
+	if s.Vault == nil || text == "" {
+		return nil, ""
+	}
+	o, err := s.Vault.Put([]byte(text))
+	if err != nil {
+		s.count("vault put", err)
+		return nil, notRetained
+	}
+	row := protocol.VaultObjectRow{Hash: o.Hash, Class: o.Class, Status: "available", Size: o.Size,
+		OriginalSize: o.OriginalSize, Truncated: o.Truncated, CreatedAt: at, LastReferencedAt: at}
+	// Refresh the index row now so a concurrent GC pass sees the object as in use
+	// even when this put deduplicated onto an existing file.
+	s.count("vault index", s.Store.UpsertVaultObject(ctx, row))
+	return &row, ""
+}
+
+// workspace takes a fingerprint within its budget; false means "skip, invalidate nothing".
+func (s *Service) workspace(ctx context.Context, root string) (fingerprint.Workspace, bool) {
+	if root == "" {
+		return fingerprint.Workspace{}, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, fingerprintBudget)
+	defer cancel()
+	if s.Workspace != nil {
+		return s.Workspace(ctx, root)
+	}
+	return fingerprint.TakeWorkspace(ctx, root, s.VaultDir)
+}
+
+// recordAttempt stores the full output in the vault, then writes evidence, the
+// append-only attempt, the workspace fingerprint and the criterion update in one
+// transaction.
+func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Observation, checkType, command, status string, exit *int, full string) error {
 	now := s.now()
+	command = redactText(command)
 	crit := criterionFor(d, command)
 	critID := ""
 	if crit != nil {
 		critID = crit.ID
 	}
-	ev, err := s.Store.AddEvidence(ctx, protocol.Evidence{WorkID: d.Work.ID, NodeID: critID, Kind: protocol.EvidenceVerificationOutput,
-		SourceURI: command, Summary: capText(summary, summaryLimit), ObservedAt: now})
-	if err != nil {
-		return err
+	obj, note := s.putVault(ctx, full, now)
+	summary := tailText(full, summaryLimit)
+	if note != "" {
+		summary = tailText(full, summaryLimit-len(note)) + note
+	}
+	ev := protocol.Evidence{WorkID: d.Work.ID, NodeID: critID, Kind: protocol.EvidenceVerificationOutput, SourceURI: command,
+		Summary: summary, ObservedAt: now}
+	ws, wsOK, env := s.snapshot(ctx, o)
+	ev.EnvFingerprint = env
+	if obj != nil {
+		ev.VaultHash, ev.Availability = obj.Hash, protocol.AvailAvailable
 	}
 	if exit == nil && (status == protocol.AttemptPassed || status == protocol.AttemptFailed) {
 		zero := 0
 		exit = &zero
 	}
-	if _, err := s.Store.AddVerificationAttempt(ctx, protocol.VerificationAttempt{WorkID: d.Work.ID, CriterionNodeID: critID,
-		CheckType: checkType, Command: command, Status: status, ExitCode: exit, EvidenceID: ev.ID, StartedAt: now, FinishedAt: now}); err != nil {
-		return err
+	in := store.RecordAttemptInput{
+		Attempt: protocol.VerificationAttempt{WorkID: d.Work.ID, CriterionNodeID: critID, CheckType: checkType, Command: command,
+			Status: status, ExitCode: exit, StartedAt: now, FinishedAt: now},
+		Evidence: ev, Object: obj,
+	}
+	if wsOK {
+		in.Fingerprint = &protocol.Fingerprint{WorkID: d.Work.ID, Kind: protocol.FingerprintVerification, Value: ws.Value, Paths: ws.Paths, TakenAt: now}
 	}
 	if crit != nil && status != protocol.AttemptNotRun {
-		return s.Store.UpdateWorkNode(ctx, crit.ID, status, crit.Revision, now)
+		in.Criterion = &store.CriterionUpdate{NodeID: crit.ID, Status: status, Revision: crit.Revision, At: now}
 	}
-	return nil
+	_, err := s.Store.RecordAttempt(ctx, in)
+	return err
+}
+
+func (o Observation) structured() string {
+	if o.Raw != "" {
+		return o.Raw
+	}
+	return o.Output
 }
 
 func (s *Service) recordRun(ctx context.Context, d protocol.WorkDetail, o Observation) error {
-	for _, r := range parseRun(o.Output) {
-		summary := r.Output
-		if summary == "" {
-			summary = r.Error
+	for _, r := range parseRun(o.structured()) {
+		full := r.Output
+		if full == "" {
+			full = r.Error
 		}
-		if err := s.recordAttempt(ctx, d, "command", r.Command, r.Status, r.ExitCode, summary); err != nil {
+		if err := s.recordAttempt(ctx, d, o, "command", r.Command, r.Status, r.ExitCode, full); err != nil {
 			return err
 		}
 	}
@@ -306,38 +425,132 @@ func (s *Service) recordRun(ctx context.Context, d protocol.WorkDetail, o Observ
 }
 
 func (s *Service) recordBrowser(ctx context.Context, d protocol.WorkDetail, o Observation) error {
-	r, ok := parseBrowser(o.Output)
+	r, ok := parseBrowser(o.structured())
 	if !ok {
 		return nil
 	}
-	summary := r.Output
-	if summary == "" {
-		summary = r.Reason
+	full := r.Output
+	if full == "" {
+		full = r.Reason
 	}
-	return s.recordAttempt(ctx, d, "browser", r.Command, r.Status, r.ExitCode, summary)
+	return s.recordAttempt(ctx, d, o, "browser", r.Command, r.Status, r.ExitCode, full)
 }
 
-// End evaluates the thread's open work when a turn finishes. The work closes as
+// End finishes a turn for the thread's open work: it fingerprints the workspace
+// (recording shell-made changes), settles staleness, and closes the work as
 // completed only when the turn completed, was not paused, and no criterion is
-// unresolved; otherwise it stays open for the next turn.
-func (s *Service) End(ctx context.Context, threadID, turnStatus string, paused bool) error {
-	return s.count("end", s.end(ctx, threadID, turnStatus, paused))
+// unresolved. root is the turn's project root ("" without a project).
+func (s *Service) End(ctx context.Context, threadID, turnStatus string, paused bool, root string) error {
+	return s.count("end", s.end(ctx, threadID, turnStatus, paused, root))
 }
 
-func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused bool) error {
+func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused bool, root string) error {
 	w, ok, err := s.Store.OpenWorkForThread(ctx, threadID)
 	if err != nil || !ok {
 		return err
 	}
+	d, err := s.Store.GetWorkDetail(ctx, w.ID)
+	if err != nil {
+		return err
+	}
+	if err := s.turnEndFingerprint(ctx, d, root); err != nil {
+		s.count("fingerprint", err)
+	}
+	if d, err = s.Store.GetWorkDetail(ctx, w.ID); err != nil {
+		return err
+	}
+	if err := s.settle(ctx, d, root); err != nil {
+		s.count("staleness", err)
+	}
 	if turnStatus != protocol.TurnCompleted || paused {
 		return nil
 	}
-	d, err := s.Store.GetWorkDetail(ctx, w.ID)
-	if err != nil {
+	if d, err = s.Store.GetWorkDetail(ctx, w.ID); err != nil {
 		return err
 	}
 	if len(Unresolved(d)) > 0 {
 		return nil
 	}
 	return s.Store.CloseWork(ctx, w.ID, protocol.WorkCompleted, s.now())
+}
+
+// turnEndFingerprint stores the turn-end workspace fingerprint. When it differs
+// from the previous one and the work has attempts, the changed paths (every path
+// involved, or "." when only HEAD moved) become file_change evidence.
+func (s *Service) turnEndFingerprint(ctx context.Context, d protocol.WorkDetail, root string) error {
+	ws, ok := s.workspace(ctx, root)
+	if !ok {
+		return nil
+	}
+	now := s.now()
+	var prev *protocol.Fingerprint
+	for i := range d.Fingerprints {
+		if prev == nil || !d.Fingerprints[i].TakenAt.Before(prev.TakenAt) {
+			prev = &d.Fingerprints[i]
+		}
+	}
+	// A verification whose own fingerprint was skipped is newer than prev and
+	// cannot be judged against it, so nothing is invalidated.
+	skipped := false
+	for _, a := range d.Attempts {
+		if a.FingerprintID == "" && prev != nil && a.FinishedAt.After(prev.TakenAt) {
+			skipped = true
+		}
+	}
+	if prev != nil && prev.Value != ws.Value && len(d.Attempts) > 0 && !skipped {
+		seen := map[string]bool{}
+		var paths []string
+		for _, p := range append(append([]string{}, prev.Paths...), ws.Paths...) {
+			if !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+		if len(paths) == 0 || len(paths) > maxWorkspacePaths {
+			paths = []string{"."}
+		}
+		for _, p := range paths {
+			if _, err := s.Store.AddEvidence(ctx, protocol.Evidence{WorkID: d.Work.ID, Kind: protocol.EvidenceFileChange,
+				SourceURI: p, Summary: "workspace", ObservedAt: now}); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := s.Store.AddFingerprint(ctx, protocol.Fingerprint{WorkID: d.Work.ID, Kind: protocol.FingerprintTurnEnd,
+		Value: ws.Value, Paths: ws.Paths, TakenAt: now})
+	return err
+}
+
+// settle writes staleness back: stale criteria get status stale, and evidence of
+// superseded attempts, stale criteria and superseded criteria gets stale_at.
+func (s *Service) settle(ctx context.Context, d protocol.WorkDetail, root string) error {
+	now := s.now()
+	stale := Staleness(d, fingerprint.Environment(ctx, root, s.ToolVersion))
+	superseded := map[string]bool{}
+	for _, n := range d.Nodes {
+		if n.Kind != protocol.NodeCriterion {
+			continue
+		}
+		if n.Status == StatusSuperseded {
+			superseded[n.ID] = true
+		}
+		if stale[n.ID] && n.Status != protocol.StatusStale {
+			if err := s.Store.UpdateWorkNode(ctx, n.ID, protocol.StatusStale, n.Revision, now); err != nil {
+				return err
+			}
+		}
+	}
+	latest := latestAttempts(d)
+	var ids []string
+	for _, a := range d.Attempts {
+		if a.EvidenceID != "" && a.CriterionNodeID != "" && (latest[a.CriterionNodeID].ID != a.ID || stale[a.CriterionNodeID]) {
+			ids = append(ids, a.EvidenceID)
+		}
+	}
+	for _, e := range d.Evidence {
+		if superseded[e.NodeID] {
+			ids = append(ids, e.ID)
+		}
+	}
+	return s.Store.MarkEvidenceStale(ctx, ids, now)
 }

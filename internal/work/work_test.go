@@ -273,7 +273,7 @@ func TestFailedToolRecordsFactOnly(t *testing.T) {
 	if d.Work.WorkflowDepth != protocol.DepthDirect {
 		t.Fatalf("failed read escalated depth")
 	}
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false); err != nil {
+	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if d = f.detail(t); d.Work.Status != protocol.WorkCompleted {
@@ -326,7 +326,7 @@ func TestEndRules(t *testing.T) {
 			f := newFixture(t)
 			f.begin(t, "g")
 			c.setup(f, t)
-			if err := f.svc.End(context.Background(), f.th.ID, c.status, c.paused); err != nil {
+			if err := f.svc.End(context.Background(), f.th.ID, c.status, c.paused, ""); err != nil {
 				t.Fatal(err)
 			}
 			d := f.detail(t)
@@ -342,7 +342,7 @@ func TestEndRules(t *testing.T) {
 
 func TestEndWithoutOpenWorkIsNoop(t *testing.T) {
 	f := newFixture(t)
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false); err != nil {
+	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.svc.Observe(context.Background(), f.th.ID, Observation{Tool: "file.write"}); err != nil {
@@ -362,7 +362,7 @@ func TestFileChangeAfterPassReopens(t *testing.T) {
 	if u := Unresolved(f.detail(t)); len(u) != 2 {
 		t.Fatalf("unresolved after later edit = %v, want both criteria", u)
 	}
-	f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false)
+	f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, "")
 	if d := f.detail(t); d.Work.Status != protocol.WorkOpen {
 		t.Fatalf("status = %s, want open", d.Work.Status)
 	}
@@ -415,7 +415,7 @@ func TestReplanSupersedesDroppedCriteria(t *testing.T) {
 	if u := Unresolved(f.detail(t)); len(u) != 0 {
 		t.Fatalf("dropped criterion still blocks: %v", u)
 	}
-	f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false)
+	f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, "")
 	if d := f.detail(t); d.Work.Status != protocol.WorkCompleted {
 		t.Fatalf("status = %s", d.Work.Status)
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ import (
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tasks"
 	"github.com/shaktsin/umcode/internal/tools"
+	"github.com/shaktsin/umcode/internal/vault"
 	"github.com/shaktsin/umcode/internal/version"
 	"github.com/shaktsin/umcode/internal/visualqa"
 	"github.com/shaktsin/umcode/internal/work"
@@ -68,6 +70,7 @@ type Engine struct {
 	gate      *policy.Gate
 	started   time.Time
 	baseCtx   context.Context
+	retention work.Retention
 	cancelAll context.CancelFunc
 
 	mu           sync.Mutex
@@ -163,12 +166,17 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		Projects:  projects.New(o.Store, o.Config),
 		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs,
 		Bus: bus, Log: o.Logger,
-		Work: &work.Service{Store: o.Store, Log: o.Logger},
+		Work: &work.Service{Store: o.Store, Log: o.Logger,
+			Vault:    &vault.Vault{Dir: o.Config.Storage.VaultDir, MaxObjectBytes: o.Config.Storage.VaultMaxObjectBytes},
+			VaultDir: o.Config.Storage.VaultDir, ToolVersion: toolVersion},
+		retention: work.RetentionFromDays(o.Config.Storage.RetentionRawDays, o.Config.Storage.RetentionStaleDays,
+			o.Config.Storage.RetentionBlobDays, o.Config.Storage.RetentionRedactedDays),
 		gate: policy.New(), started: time.Now(), baseCtx: base, cancelAll: cancel,
 		activeTurns: map[string]*activeTurn{}, threadTurns: map[string]string{},
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
+	e.Work.StartGC(base, e.retention) // best-effort, background, never prompts
 	e.Creds.OnSignIn = func(r protocol.ChatGPTSignInResult) { e.Bus.PublishAdmin(protocol.NotifyChatGPTSignIn, r) }
 	e.Router = router.New(o.Store, e.Creds, cat, o.LLMs, o.Config, o.Logger)
 	e.Tasks = tasks.NewService(o.Store, o.Logger, e.runTask, func(t protocol.Task) {
@@ -365,13 +373,53 @@ func (e *Engine) ListWorks(ctx context.Context, threadID string) (protocol.WorkL
 	return protocol.WorkListResult{Works: works}, nil
 }
 
-// GetWork returns one work with its nodes, edges, evidence and attempts.
-func (e *Engine) GetWork(ctx context.Context, workID string) (protocol.WorkDetail, error) {
+// GetWork returns one work with its nodes, edges, evidence and attempts. With
+// activeOnly, evidence is limited to what is still true.
+func (e *Engine) GetWork(ctx context.Context, workID string, activeOnly bool) (protocol.WorkDetail, error) {
 	d, err := e.Store.GetWorkDetail(ctx, workID)
 	if errors.Is(err, store.ErrNotFound) {
 		return protocol.WorkDetail{}, protocol.Errorf(protocol.CodeInvalidParams, "work %s not found", workID)
 	}
+	if err == nil {
+		e.verifyVaultEvidence(ctx, &d)
+		if activeOnly {
+			d.Evidence = work.ActiveEvidence(d)
+		}
+	}
 	return d, err
+}
+
+// verifyVaultEvidence re-checks the vault objects behind evidence on read, so a
+// file deleted or corrupted since GC last ran is reported unavailable, never
+// available. A bad object is also marked missing in the index.
+func (e *Engine) verifyVaultEvidence(ctx context.Context, d *protocol.WorkDetail) {
+	if e.Work == nil || e.Work.Vault == nil {
+		return
+	}
+	ok := map[string]bool{}
+	for i := range d.Evidence {
+		ev := &d.Evidence[i]
+		if ev.VaultHash == "" || ev.Availability != protocol.AvailAvailable {
+			continue
+		}
+		good, seen := ok[ev.VaultHash]
+		if !seen {
+			_, err := e.Work.Vault.Get(ev.VaultHash)
+			good = err == nil
+			ok[ev.VaultHash] = good
+			if !good {
+				_ = e.Store.SetVaultObjectStatus(ctx, ev.VaultHash, "missing")
+			}
+		}
+		if !good {
+			ev.Availability = protocol.AvailUnavailable
+		}
+	}
+}
+
+// VaultStats reports what the vault holds and how much of it GC may reclaim now.
+func (e *Engine) VaultStats(ctx context.Context) (protocol.VaultStats, error) {
+	return work.Stats(ctx, e.Store, e.retention, time.Now().UTC())
 }
 
 // markPaused records that a turn stopped on a budget pause, which still ends
@@ -911,4 +959,23 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 		"If the user asks for work on files, ask them to open a project first.\n")
 	flush(layerNotice)
 	return layers
+}
+
+var (
+	toolVersionOnce  sync.Once
+	toolVersionValue string
+)
+
+// toolVersion identifies the toolchain a check ran with (the Go version, when
+// installed). It is read once per process with a short timeout and never asks
+// the user anything; "" means unknown.
+func toolVersion(ctx context.Context) string {
+	toolVersionOnce.Do(func() {
+		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(c, "go", "version").Output(); err == nil {
+			toolVersionValue = strings.TrimSpace(string(out))
+		}
+	})
+	return toolVersionValue
 }

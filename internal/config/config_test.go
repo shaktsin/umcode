@@ -65,3 +65,18 @@ func TestLegacyContextFileKeyIsIgnored(t *testing.T) {
 		t.Fatalf("agents = %+v", c.Agents)
 	}
 }
+
+func TestStorageVaultKeysOptional(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	cfg := filepath.Join(home, "config.yaml")
+	os.WriteFile(cfg, []byte("storage: {vault_max_object_bytes: 1024, retention_redacted_days: 3}\n"), 0o600)
+	c, err := Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := c.Storage
+	if s.VaultMaxObjectBytes != 1024 || s.RetentionRedactedDays != 3 || s.RetentionRawDays != 0 || s.VaultDir == "" {
+		t.Fatalf("storage = %+v", s)
+	}
+}

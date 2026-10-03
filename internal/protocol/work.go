@@ -96,6 +96,12 @@ type Evidence struct {
 	Confidence     float64    `json:"confidence"`
 	ObservedAt     time.Time  `json:"observedAt"`
 	StaleAt        *time.Time `json:"staleAt,omitempty"`
+	// VaultHash links the full output stored in the vault ("" when none was retained).
+	VaultHash      string `json:"vaultHash,omitempty"`
+	EnvFingerprint string `json:"envFingerprint,omitempty"`
+	// Availability is none (summary only), available, or unavailable (the vault
+	// object is missing or corrupt).
+	Availability string `json:"availability"`
 }
 
 // VerificationAttempt is one append-only run of a check.
@@ -111,13 +117,64 @@ type VerificationAttempt struct {
 	EvidenceID      string          `json:"evidenceId,omitempty"`
 	StartedAt       time.Time       `json:"startedAt"`
 	FinishedAt      time.Time       `json:"finishedAt"`
+	FingerprintID   string          `json:"fingerprintId,omitempty"`
 }
 
 // WorkDetail is a work with everything recorded for it.
 type WorkDetail struct {
-	Work     Work                  `json:"work"`
-	Nodes    []WorkNode            `json:"nodes"`
-	Edges    []WorkEdge            `json:"edges"`
-	Evidence []Evidence            `json:"evidence"`
-	Attempts []VerificationAttempt `json:"attempts"`
+	Work         Work                  `json:"work"`
+	Nodes        []WorkNode            `json:"nodes"`
+	Edges        []WorkEdge            `json:"edges"`
+	Evidence     []Evidence            `json:"evidence"`
+	Attempts     []VerificationAttempt `json:"attempts"`
+	Fingerprints []Fingerprint         `json:"fingerprints"`
+}
+
+// Evidence availability.
+const (
+	AvailNone        = "none"
+	AvailAvailable   = "available"
+	AvailUnavailable = "unavailable"
+)
+
+// Criterion node statuses added by the evidence lifecycle.
+const (
+	StatusStale      = "stale"
+	StatusSuperseded = "superseded"
+)
+
+// Fingerprint kinds.
+const (
+	FingerprintVerification = "verification"
+	FingerprintTurnEnd      = "turn_end"
+)
+
+// Fingerprint is the workspace state observed when an attempt was recorded or a turn ended.
+type Fingerprint struct {
+	ID      string    `json:"id"`
+	WorkID  string    `json:"workId"`
+	TurnID  string    `json:"turnId,omitempty"`
+	Kind    string    `json:"kind"`
+	Value   string    `json:"value"`
+	Paths   []string  `json:"paths"`
+	TakenAt time.Time `json:"takenAt"`
+}
+
+// VaultObjectRow is the index entry for a vault object.
+type VaultObjectRow struct {
+	Hash             string    `json:"hash"`
+	Class            string    `json:"class"`
+	Status           string    `json:"status"`
+	Size             int64     `json:"size"`
+	OriginalSize     int64     `json:"originalSize"`
+	Truncated        bool      `json:"truncated"`
+	CreatedAt        time.Time `json:"createdAt"`
+	LastReferencedAt time.Time `json:"lastReferencedAt"`
+}
+
+// VaultStats summarizes the vault for inspection.
+type VaultStats struct {
+	Objects       int   `json:"objects"`
+	Bytes         int64 `json:"bytes"`
+	EligibleBytes int64 `json:"eligibleBytes"`
 }
