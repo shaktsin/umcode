@@ -41,7 +41,7 @@
 **Interfaces:**
 - Consumes: `protocol.WorkDetail`, `protocol.Item`, `llm.Message`, `llm.EstimateTokens`.
 - Produces:
-  - `type Input struct { Detail protocol.WorkDetail; Items []protocol.Item; TurnID string; Window int; HistoryTokens int }`
+  - `type Input struct { Detail protocol.WorkDetail; Active []protocol.Evidence; Items []protocol.Item; TurnID string; Window int; HistoryTokens int }` — `Active` is the still-true evidence the engine passes in; nil means "treat every non-stale row as active", which keeps the package usable without the engine.
   - `type Drop struct { Class, Reason string; Count int }`
   - `type Report struct { Criteria, Evidence, TailMessages int; WorkPacketTokens, EvidencePacketTokens, TailTokens int; Drops []Drop; Declined string }`
   - `type Result struct { Messages []llm.Message; Report Report }`
@@ -159,9 +159,9 @@ git add internal/ctxcompiler && git commit -m "feat: render the work packet"
   - `func evidencePacket(d protocol.WorkDetail, active []protocol.Evidence) (text string, rows int, p2 []int)` — the `## Evidence` section. `p2` holds the indexes of lines that may be dropped first (passing-check lines).
   - `const maxToolErrors = 5`
 
-Active evidence is **not** recomputed here: the engine passes `work.ActiveEvidence(d)` in. `Input` gains `Active []protocol.Evidence`; when it is nil the compiler treats every non-stale evidence row as active, so the package stays usable without the engine.
+Active evidence is **not** recomputed here: the engine passes `work.ActiveEvidence(d)` in through `Input.Active` (Task 1). A nil `Active` means every non-stale row counts as active.
 
-Rendering: a failed check line is `- FAILED <sourceUri>: <summary> [full output: vault <hash[:8]>]`, with the bracket omitted when `VaultHash` is empty; a passing check line is `- ok <sourceUri>`; an unavailable row renders `- FAILED <sourceUri>: <summary> [full output not retained]`; tool errors render `- tool <sourceUri> failed: <summary>`, newest first, at most `maxToolErrors`.
+Rendering: a failed check line is `- FAILED <sourceUri>: <summary> [full output: vault <hash[:8]>]`, with the bracket omitted when `VaultHash` is empty; a passing check line is `- ok <sourceUri>`; an unavailable row renders `- FAILED <sourceUri>: <summary> [full output not retained]`; tool errors render `- tool <sourceUri> failed: <summary>`, newest first, at most `maxToolErrors`. Every rendered string passes through `vault.Redact`, since rows written before Phase 3 were stored unredacted.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -172,11 +172,12 @@ func TestMissingHashYieldsNoReference(t *testing.T)
 func TestUnavailableRowIsMarkedNotRetained(t *testing.T)
 func TestToolErrorsAreNewestFirstAndCapped(t *testing.T) // 7 rows in, 5 out, newest first
 func TestPassingLinesAreMarkedP2(t *testing.T)            // p2 indexes point at "ok " lines only
+func TestEvidencePacketRedactsOldSecrets(t *testing.T)    // summary "AWS_SECRET_ACCESS_KEY=abcdef1234567890" -> no "abcdef1234567890" in output
 ```
 
-- [ ] **Step 2: Run** `go test ./internal/ctxcompiler -run "Evidence|FailedCheck|MissingHash|Unavailable|ToolErrors|PassingLines" -count=1` — Expected: FAIL (undefined `evidencePacket`).
+- [ ] **Step 2: Run** `go test ./internal/ctxcompiler -run "Evidence|FailedCheck|MissingHash|Unavailable|ToolErrors|PassingLines|Redacts" -count=1` — Expected: FAIL (undefined `evidencePacket`).
 
-- [ ] **Step 3: Implement** `evidencePacket` and add `Active []protocol.Evidence` to `Input`.
+- [ ] **Step 3: Implement** `evidencePacket`.
 
 - [ ] **Step 4: Run** the same command — Expected: PASS.
 
@@ -288,7 +289,7 @@ git add internal/ctxcompiler && git commit -m "feat: compile packets and tail wi
   - `config.ModelsConfig` gains `ContextCompiler bool` (`yaml:"context_compiler"`), default false.
   - `(e *Engine) compileMessages(ctx context.Context, th protocol.Thread, turnID string, window, historyTokens int) ([]llm.Message, bool)` — returns false whenever the flag is off, no work is open, a store read fails, `Compile` declines, or the compiler panics. A panic is recovered here; every false path with a cause logs at debug and increments `e.compilerFailures`.
   - `Engine.compilerFailures atomic.Int64`.
-  - `RequestBreakdown` gains `WorkPacketTokens`, `EvidencePacketTokens int`, subtracted from `ConversationTokens` so `TotalTokens` is unchanged; `measureRequest` gains a `packets RequestPackets` parameter (`type RequestPackets struct{ Work, Evidence int }`), zero when the history path ran.
+  - `RequestBreakdown` gains `WorkPacketTokens`, `EvidencePacketTokens int`, subtracted from `ConversationTokens` so `TotalTokens` is unchanged; `measureRequest` gains a `packets RequestPackets` parameter (`type RequestPackets struct{ Work, Evidence int }`), zero when the history path ran. Its one existing caller in `runTurn` (the `context accounting` debug line) is updated in the same task.
 
 Wiring in `runTurn`: after `msgs, err := e.history(...)` succeeds, compute `historyTokens := estimateMessageTokens(msgs)`; if `compileMessages` returns true, replace `msgs` with its result. Inside the tool loop, before `req.Messages = msgs`, recompile the same way from the current store state, keeping the live tool-result messages of this turn appended after the compiled prefix. Automatic compaction, `trimToolResults` and the system prompt stay exactly as they are.
 
@@ -316,7 +317,7 @@ The panic hook is an unexported package variable in `internal/engine`, `compileH
 
 - [ ] **Step 2: Run** `go test ./internal/engine ./internal/config ./internal/server -run "Flag|Compile|Compiler|MidTurnEdit|Breakdown|ChatItemsUnchanged" -count=1` — Expected: FAIL.
 
-- [ ] **Step 3: Implement** the config flag, `compileMessages`, the two call sites in `runTurn`, the accounting fields, and a `GO_ENGINE.md` paragraph under the work-record section: what the compiler sends, that the flag is off by default, that stale criteria are shown as needing a re-run, that the full transcript stays stored and visible, and that a failure falls back silently.
+- [ ] **Step 3: Implement** the config flag, `compileMessages`, the two call sites in `runTurn`, the accounting fields and their caller, logging `ctxcompiler.Report` at debug beside the existing `context accounting` line, and a `GO_ENGINE.md` paragraph under the work-record section: what the compiler sends, that the flag is off by default, that stale criteria are shown as needing a re-run, that the full transcript stays stored and visible, and that a failure falls back silently.
 
 - [ ] **Step 4: Run** `go vet ./... && go test ./... -count=1` — Expected: PASS across all packages.
 
