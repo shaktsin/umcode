@@ -115,7 +115,7 @@ Rendering, exactly:
 Goal: <goal>
 Criteria:
 - <title> — <status> (`<command>`)
-- <title> — needs re-run, a change landed after it passed (`<command>`)
+- <title> — needs re-run, a change landed after it last succeeded (`<command>`)
 Unresolved:
 - <title>: <attempt summary>
 Changed files: a.go, b.go
