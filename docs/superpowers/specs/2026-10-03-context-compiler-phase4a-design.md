@@ -36,7 +36,7 @@ Phase 4 as a whole also covers retrieval, progressive tool loading and tool-resu
 Carried forward from Phase 3 as requirements, not preferences.
 
 - **No new approvals or prompts.** The compiler reads the database and the transcript; it never calls a tool or the approval gate.
-- **Nothing blocks a turn.** Compilation is in-process and bounded by the data it reads. An error, a failed sanity check or a panic is recovered, logged, counted in `work.Service.Failures`, and the call proceeds on the history path.
+- **Nothing blocks a turn.** Compilation is in-process and bounded by the data it reads. An error, a failed sanity check or a panic is recovered, logged, counted in the engine's own compiler-failure counter, and the call proceeds on the history path.
 - **No settings required.** The flag defaults to false and every other value is a constant.
 - **No new chat output.** No items, notifications or prompt text. The compiler's report goes to the developer log only.
 
@@ -84,7 +84,7 @@ A `stale` criterion is rendered as needing a re-run. It is never rendered as a p
 - Active evidence only, as `work.ActiveEvidence` defines it.
 - A failed check: its tail summary plus `[full output: vault <first 8 hex of hash>]` when a hash exists.
 - A passing check: one line, included only while active.
-- Failed-tool facts from the last two turns.
+- The five most recent failed-tool facts, newest first. Evidence rows carry no turn id, so recency is by `observed_at`.
 - Evidence whose vault object is unavailable: summary only, marked truncated.
 
 Text entering a packet is passed through `vault.Redact` again, so a row written before Phase 3's redaction cannot leak through a packet.
@@ -92,7 +92,7 @@ Text entering a packet is passed through `vault.Redact` again, so a row written 
 ## Interaction tail
 
 - The last 10 user and assistant message pairs, in order. `inbound_event` items count as user messages, as they do today.
-- Plus the question-and-answer pair the current request depends on: when the newest assistant message in the tail ends with a question, that message and the user message answering it are kept even if they fall outside the 10.
+- Plus the question-and-answer pair the current request depends on: when the last non-empty line of the newest assistant message in the tail ends with `?`, that message and the next user message after it are kept even if they fall outside the 10.
 - Earlier tool-call notes and file-change notes are dropped; the work packet carries those facts.
 - A compaction marker still wins: the tail starts at the summary and nothing before it is replayed.
 - The result starts with a user message and alternates roles, as providers require; consecutive same-role text merges as it does today.
@@ -107,7 +107,14 @@ Text entering a packet is passed through `vault.Redact` again, so a row written 
 - Over budget, the compiler drops P2 first, then P1 by age. P0 is never dropped.
 - Every drop is recorded in `Report` with its reason.
 
-Priority follows the parent spec: P0 is the goal, the criteria, the active task and unresolved failures; P1 is decisions and verified invariants; P2 is recent passing checks and concise history; P3 is not sent at all in this slice.
+Priority follows the parent spec, mapped onto what Phase 2 and Phase 3 actually record:
+
+- **P0:** the goal, the criteria and their statuses, unresolved failures. Never dropped.
+- **P1:** failed-tool facts and the vault references for failures.
+- **P2:** passing evidence lines and the older half of the tail.
+- **P3:** not sent at all in this slice.
+
+The parent spec's design decisions and memory candidates arrive in Phase 5, so P1 is thinner here than it will be later. Root `UMCODE.md` guidance already reaches the model through the system prompt from Phase 1, and the compiler does not duplicate it.
 
 ## Sanity checks and fallback
 
@@ -116,13 +123,14 @@ Priority follows the parent spec: P0 is the goal, the criteria, the active task 
 - the work has no goal;
 - a thread has an open work but no work packet could be built;
 - P0 alone exceeds the packet budget;
-- the compiled request is estimated larger than the history path's.
+- `HistoryTokens` is non-zero and the compiled messages are estimated larger.
 
 A panic inside the compiler is recovered by the engine, counted and logged, with the same fallback.
 
 ## Engine wiring
 
 - One attachment point in `runTurn`, where `msgs` is built. With the flag on and an open work present, the engine compiles; otherwise it calls `e.history(...)` as today.
+- The engine estimates the history path's size once per turn and passes it as `HistoryTokens`.
 - Packets are rebuilt from the database before every model call inside the turn's tool loop, so an edit made mid-turn reaches the next call as a stale criterion.
 - Automatic compaction and `trimToolResults` are unchanged. Compaction still protects the fallback path; `trimToolResults` still bounds the current turn's live tool results, which the compiler does not touch.
 
@@ -146,7 +154,7 @@ All new behavior follows TDD; each test is written and seen failing first.
 - A compaction marker truncates the tail to the summary.
 - Messages start with a user role and alternate.
 - Budget: over-budget packets drop P2 then P1 by age, never P0, and each drop is reported.
-- Sanity checks return false: no goal; P0 over budget; compiled request larger than the history path's.
+- Sanity checks return false: no goal; P0 over budget; compiled messages larger than `HistoryTokens`.
 - A pre-Phase-3 row holding a secret is redacted on its way into a packet.
 
 **Engine**
