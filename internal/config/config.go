@@ -103,6 +103,12 @@ type PolicyConfig struct {
 type StorageConfig struct {
 	DBPath   string `yaml:"db_path"`
 	VaultDir string `yaml:"vault_dir"`
+	// Optional vault limits; zero means the built-in default.
+	VaultMaxObjectBytes   int64 `yaml:"vault_max_object_bytes"`
+	RetentionRawDays      int   `yaml:"retention_raw_days"`
+	RetentionStaleDays    int   `yaml:"retention_stale_days"`
+	RetentionBlobDays     int   `yaml:"retention_blob_days"`
+	RetentionRedactedDays int   `yaml:"retention_redacted_days"`
 }
 
 type RuntimeConfig struct {
