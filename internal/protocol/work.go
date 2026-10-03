@@ -82,8 +82,8 @@ type WorkEdge struct {
 	ToNodeID   string `json:"toNodeId"`
 }
 
-// Evidence is an immutable observation. It holds a summary, hash and
-// provenance; raw output is not stored.
+// Evidence is an immutable observation. It holds a capped excerpt (the first
+// 2 KB) of the output, a hash and provenance; the full output is not stored.
 type Evidence struct {
 	ID             string     `json:"id"`
 	WorkID         string     `json:"workId"`
