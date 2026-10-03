@@ -5,6 +5,8 @@
 package ctxcompiler
 
 import (
+	"strings"
+
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
 )
@@ -100,12 +102,112 @@ func estimate(msgs []llm.Message) int {
 	return n
 }
 
-// Compile builds the request prefix. The second result is false when the input
-// cannot be trusted to produce a better request than the caller's history path;
-// Report.Declined then says why.
+// packetHeading introduces the compiled work state. It is a user message
+// because providers accept plain user text from any role sequence.
+const packetHeading = "Current work state"
+
+// Compile builds the request prefix: one message holding the work and evidence
+// packets, then the interaction tail. The caller appends the new user message.
+// The second result is false when the input cannot be trusted to produce a
+// better request than the caller's history path; Report.Declined then says why.
 func Compile(in Input) (Result, bool) {
 	if in.Detail.Work.Goal == "" {
 		return Result{Report: Report{Declined: "no goal"}}, false
 	}
-	return Result{Report: Report{Declined: "not implemented"}}, false
+	work, criteria := workPacket(in.Detail)
+	evidence, rows, p2 := evidencePacket(in.Detail, in.Active)
+
+	budget := packetBudget(in.Window)
+	var drops []Drop
+	if budget > 0 {
+		var dropped []Drop
+		evidence, rows, dropped = fitEvidence(evidence, rows, p2, budget-textTokens(work))
+		drops = append(drops, dropped...)
+		if textTokens(work) > budget {
+			return Result{Report: Report{Declined: "P0 over budget", Criteria: criteria, Drops: drops}}, false
+		}
+	}
+
+	head := packetHeading + "\n\n" + work
+	if evidence != "" {
+		head += "\n" + evidence
+	}
+	msgs := []llm.Message{llm.Text(llm.RoleUser, head)}
+	tailMsgs, tailDropped := tail(in.Items, in.TurnID, tailBudget(in.Window))
+	msgs = append(msgs, tailMsgs...)
+	if tailDropped > 0 {
+		drops = append(drops, Drop{Class: "tool and file-change notes", Reason: "carried by the work packet", Count: tailDropped})
+	}
+
+	rep := Report{
+		Criteria: criteria, Evidence: rows, TailMessages: len(tailMsgs),
+		WorkPacketTokens: textTokens(work), EvidencePacketTokens: textTokens(evidence),
+		TailTokens: estimate(tailMsgs), Drops: drops,
+	}
+	if in.HistoryTokens > 0 && estimate(msgs) >= in.HistoryTokens {
+		rep.Declined = "not smaller than history"
+		return Result{Report: rep}, false
+	}
+	return Result{Messages: msgs, Report: rep}, true
+}
+
+// textTokens estimates one packet's cost.
+func textTokens(s string) int { return int(llm.EstimateTokens(s)) }
+
+// fitEvidence trims the evidence packet to budget: passing lines (P2) go first,
+// then the oldest tool errors (P1). Failure lines are never dropped here; when
+// nothing is left to drop the packet goes over and the caller decides.
+func fitEvidence(text string, rows int, p2 []int, budget int) (string, int, []Drop) {
+	if text == "" || budget <= 0 || textTokens(text) <= budget {
+		return text, rows, nil
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	drop := map[int]bool{}
+	var drops []Drop
+
+	count := 0
+	for _, i := range p2 {
+		if i < len(lines) {
+			drop[i] = true
+			count++
+		}
+		if textTokens(render(lines, drop)) <= budget {
+			break
+		}
+	}
+	if count > 0 {
+		drops = append(drops, Drop{Class: "passing evidence", Reason: "packet budget", Count: count})
+	}
+	count = 0
+	for i := len(lines) - 1; i >= 0 && textTokens(render(lines, drop)) > budget; i-- {
+		if drop[i] || !strings.HasPrefix(lines[i], "- tool ") {
+			continue
+		}
+		drop[i] = true
+		count++
+	}
+	if count > 0 {
+		drops = append(drops, Drop{Class: "tool errors", Reason: "packet budget", Count: count})
+	}
+	return render(lines, drop), rows - len(drop), drops
+}
+
+// render rebuilds a packet without the dropped lines, and returns "" when only
+// the heading would remain.
+func render(lines []string, drop map[int]bool) string {
+	var kept []string
+	body := 0
+	for i, l := range lines {
+		if drop[i] {
+			continue
+		}
+		kept = append(kept, l)
+		if strings.HasPrefix(l, "- ") {
+			body++
+		}
+	}
+	if body == 0 {
+		return ""
+	}
+	return strings.Join(kept, "\n") + "\n"
 }
