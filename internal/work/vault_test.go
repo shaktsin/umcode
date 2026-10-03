@@ -3,6 +3,7 @@ package work
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,5 +279,98 @@ func TestNoApprovalOrBlocking(t *testing.T) {
 	}
 	if ctx.Err() != nil {
 		t.Fatal("End blocked on an unavailable fingerprint")
+	}
+}
+
+func TestSecretsInCommandsAndGoalNotPersisted(t *testing.T) {
+	f := newFixture(t)
+	f.begin(t, "deploy with API_TOKEN=goalsecret12345 please")
+	plan := `{"checks":[{"label":"x","command":"API_TOKEN=cmdsecret12345 npm test","reason":"r"}]}`
+	run := `{"results":[{"command":"API_TOKEN=cmdsecret12345 npm test","status":"passed","exit_code":0,"output":"ok"}]}`
+	f.observe(t, Observation{Tool: "verification.plan", Output: plan})
+	f.observe(t, Observation{Tool: "verification.run", Output: run})
+	d := f.detail(t)
+	blob, _ := json.Marshal(d)
+	if strings.Contains(string(blob), "cmdsecret12345") || strings.Contains(string(blob), "goalsecret12345") {
+		t.Fatalf("secret persisted: %s", blob)
+	}
+	if len(d.Attempts) != 1 || d.Attempts[0].CriterionNodeID == "" {
+		t.Fatalf("redacted command must still match its criterion: %+v", d.Attempts)
+	}
+}
+
+func TestTurnEndPathsAreCapped(t *testing.T) {
+	f := newFixture(t)
+	value := "v1"
+	var paths []string
+	for i := 0; i < 300; i++ {
+		paths = append(paths, fmt.Sprintf("f%d.go", i))
+	}
+	f.svc.Workspace = func(ctx context.Context, root string) (fingerprint.Workspace, bool) {
+		return fingerprint.Workspace{Value: value, Paths: paths}, true
+	}
+	f.begin(t, "g")
+	f.passAll(t)
+	value = "v2"
+	f.end(t)
+	n := 0
+	for _, e := range f.detail(t).Evidence {
+		if e.Kind == protocol.EvidenceFileChange {
+			n++
+		}
+	}
+	if n == 0 || n > maxWorkspacePaths+1 {
+		t.Fatalf("file_change rows = %d, want 1..%d", n, maxWorkspacePaths+1)
+	}
+}
+
+func TestSkippedVerificationFingerprintDoesNotInvalidate(t *testing.T) {
+	f := newFixture(t)
+	value := "turn1"
+	f.svc.Workspace = func(ctx context.Context, root string) (fingerprint.Workspace, bool) {
+		if value == "" {
+			return fingerprint.Workspace{}, false
+		}
+		return fingerprint.Workspace{Value: value}, true
+	}
+	f.begin(t, "g")
+	f.observe(t, Observation{Tool: "verification.plan", Output: planOut, Root: "/r"})
+	f.observe(t, Observation{Tool: "verification.run", Output: runOut("failed", "failed"), Root: "/r"})
+	f.end(t) // turn 1 ends with fingerprint "turn1"
+	value = ""
+	f.observe(t, Observation{Tool: "verification.run", Output: runOut("passed", "passed"), Root: "/r"}) // fingerprint skipped
+	value = "turn2"
+	f.end(t)
+	if d := f.detail(t); d.Work.Status != protocol.WorkCompleted {
+		t.Fatalf("status = %s: a pass whose fingerprint was skipped must not be invalidated by an older turn-end fingerprint", d.Work.Status)
+	}
+}
+
+func TestOneFingerprintPerObservation(t *testing.T) {
+	f := newFixture(t)
+	calls := 0
+	f.svc.Workspace = func(ctx context.Context, root string) (fingerprint.Workspace, bool) {
+		calls++
+		return fingerprint.Workspace{Value: "v"}, true
+	}
+	f.begin(t, "g")
+	f.observe(t, Observation{Tool: "verification.run", Output: runOut("passed", "passed"), Root: "/r"})
+	if calls != 1 {
+		t.Fatalf("workspace fingerprints for one verification.run = %d, want 1", calls)
+	}
+}
+
+func TestAttemptRefreshesExistingVaultObject(t *testing.T) {
+	f := newFixture(t)
+	f.withVault(t)
+	f.begin(t, "g")
+	run := `{"results":[{"command":"go test ./...","status":"passed","exit_code":0,"output":"identical output"}]}`
+	f.observe(t, Observation{Tool: "verification.run", Output: run, Root: "/r"})
+	rows, _ := f.st.ListVaultObjects(context.Background())
+	old := rows[0].LastReferencedAt
+	f.observe(t, Observation{Tool: "verification.run", Output: run, Root: "/r"})
+	rows, _ = f.st.ListVaultObjects(context.Background())
+	if len(rows) != 1 || !rows[0].LastReferencedAt.After(old) {
+		t.Fatalf("a deduplicated put must refresh last_referenced_at: %+v", rows)
 	}
 }

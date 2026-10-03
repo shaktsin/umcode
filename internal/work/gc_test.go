@@ -251,3 +251,17 @@ func TestRetentionDefaultsFromConfig(t *testing.T) {
 		t.Fatalf("explicit = %+v", got)
 	}
 }
+
+func TestGCRechecksBeforeDelete(t *testing.T) {
+	g := newGC(t)
+	h := g.object(t, "expired but refreshed meanwhile", 90)
+	gcBeforeDelete = func(hash string) {
+		// a new attempt deduplicated onto this object after GC took its snapshot
+		g.st.UpsertVaultObject(context.Background(), protocol.VaultObjectRow{Hash: hash, Class: "plain", Status: "available", Size: 1, LastReferencedAt: gcNow})
+	}
+	defer func() { gcBeforeDelete = nil }()
+	g.gc(t)
+	if !g.v.Has(h) {
+		t.Fatal("an object refreshed after GC's snapshot was deleted")
+	}
+}

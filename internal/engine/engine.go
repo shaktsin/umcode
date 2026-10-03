@@ -380,10 +380,41 @@ func (e *Engine) GetWork(ctx context.Context, workID string, activeOnly bool) (p
 	if errors.Is(err, store.ErrNotFound) {
 		return protocol.WorkDetail{}, protocol.Errorf(protocol.CodeInvalidParams, "work %s not found", workID)
 	}
-	if err == nil && activeOnly {
-		d.Evidence = work.ActiveEvidence(d)
+	if err == nil {
+		e.verifyVaultEvidence(ctx, &d)
+		if activeOnly {
+			d.Evidence = work.ActiveEvidence(d)
+		}
 	}
 	return d, err
+}
+
+// verifyVaultEvidence re-checks the vault objects behind evidence on read, so a
+// file deleted or corrupted since GC last ran is reported unavailable, never
+// available. A bad object is also marked missing in the index.
+func (e *Engine) verifyVaultEvidence(ctx context.Context, d *protocol.WorkDetail) {
+	if e.Work == nil || e.Work.Vault == nil {
+		return
+	}
+	ok := map[string]bool{}
+	for i := range d.Evidence {
+		ev := &d.Evidence[i]
+		if ev.VaultHash == "" || ev.Availability != protocol.AvailAvailable {
+			continue
+		}
+		good, seen := ok[ev.VaultHash]
+		if !seen {
+			_, err := e.Work.Vault.Get(ev.VaultHash)
+			good = err == nil
+			ok[ev.VaultHash] = good
+			if !good {
+				_ = e.Store.SetVaultObjectStatus(ctx, ev.VaultHash, "missing")
+			}
+		}
+		if !good {
+			ev.Availability = protocol.AvailUnavailable
+		}
+	}
 }
 
 // VaultStats reports what the vault holds and how much of it GC may reclaim now.

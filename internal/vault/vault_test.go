@@ -75,6 +75,18 @@ func TestRedactionTable(t *testing.T) {
 		{"bearer", "abc.def.ghi", "Authorization: Bearer abc.def.ghi"},
 		{"env token", "hunter2hunter2", "API_TOKEN=hunter2hunter2"},
 		{"password colon", "s3cretvalue", "password: s3cretvalue"},
+		{"json quoted key", "hunter2xx", `{"password": "hunter2xx", "n": 1}`},
+		{"json api_key", "abcd1234efgh", `{"api_key":"abcd1234efgh"}`},
+		{"url credentials", "s3cr3tpw", "postgres://admin:s3cr3tpw@db.example.com/app"},
+		{"curl -u", "hunter2yy", "curl -u admin:hunter2yy https://x"},
+		{"fine grained pat", "github_pat_11ABCDEFG0abcdefghijkl_abcdefghijklmnopqrstuvwxyz0123456789", "t github_pat_11ABCDEFG0abcdefghijkl_abcdefghijklmnopqrstuvwxyz0123456789"},
+		{"jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop", "tok eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop"},
+		{"google key", "AIzaSyA1234567890abcdefghijklmnopqrstuv", "k AIzaSyA1234567890abcdefghijklmnopqrstuv"},
+		{"bare authorization", "rawtokenvalue99", "Authorization: rawtokenvalue99"},
+		{"password flag", "hunter2zz", "mytool --password hunter2zz --verbose"},
+		{"pass suffix", "hunter2pp", "DB_PASS=hunter2pp"},
+		{"quoted password with spaces", "correct horse", `password: "correct horse battery"`},
+		{"quoted env with spaces", "my pass", `PGPASSWORD='my pass'`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -171,5 +183,12 @@ func TestWalkListsObjects(t *testing.T) {
 	empty := &Vault{Dir: filepath.Join(t.TempDir(), "nothing")}
 	if err := empty.Walk(func(string) error { t.Fatal("unexpected"); return nil }); err != nil {
 		t.Fatalf("walk of a missing vault dir = %v", err)
+	}
+}
+
+func TestRedactsTruncatedPrivateKeyToEnd(t *testing.T) {
+	out, changed := Redact([]byte("log\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B"))
+	if !changed || strings.Contains(string(out), "MIIEvQ") || !strings.HasPrefix(string(out), "log\n") {
+		t.Fatalf("out = %q", out)
 	}
 }

@@ -64,6 +64,10 @@ type GCReport struct {
 // after an object file is removed and before its index row is.
 var gcAfterFileDelete func() error
 
+// gcBeforeDelete is a test hook run after GC's snapshot and before it rechecks
+// an object for deletion.
+var gcBeforeDelete func(hash string)
+
 // RunGC reconciles the vault with its index and deletes expired, unreferenced
 // objects. It only touches vault files and index rows, never project files. It
 // is safe to interrupt: the next run finishes whatever was left.
@@ -147,6 +151,19 @@ func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, 
 			continue
 		}
 		if now.Sub(r.LastReferencedAt) <= ret.forObject(r) {
+			continue
+		}
+		if gcBeforeDelete != nil {
+			gcBeforeDelete(hash)
+		}
+		// Recheck against the live index: a new attempt may have refreshed or
+		// referenced this object since the snapshot was taken.
+		if cur, err := st.GetVaultObject(ctx, hash); err == nil && now.Sub(cur.LastReferencedAt) <= ret.forObject(cur) {
+			continue
+		}
+		if live, err := st.ReferencedVaultHashes(ctx); err != nil {
+			return rep, err
+		} else if live[hash] {
 			continue
 		}
 		if err := v.Delete(hash); err != nil {

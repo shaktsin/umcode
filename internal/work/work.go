@@ -48,6 +48,40 @@ type Observation struct {
 	Err    string          // non-empty when the tool failed or was denied
 	Risk   string          // "green", "yellow" or "red"
 	Root   string          // project root, "" without a project
+
+	fp *obsFingerprints // shared by the results of one observation
+}
+
+// redactText masks secrets in text that is persisted outside the vault.
+func redactText(s string) string {
+	b, _ := vault.Redact([]byte(s))
+	return string(b)
+}
+
+// maxWorkspacePaths bounds the file_change rows one turn-end change may add;
+// beyond it the change is recorded workspace-wide ("." ).
+const maxWorkspacePaths = 50
+
+// obsFingerprints caches the workspace and environment fingerprints so one
+// observation (which may hold several results) takes them once.
+type obsFingerprints struct {
+	done bool
+	ws   fingerprint.Workspace
+	ok   bool
+	env  string
+}
+
+func (s *Service) snapshot(ctx context.Context, o Observation) (fingerprint.Workspace, bool, string) {
+	f := o.fp
+	if f == nil {
+		f = &obsFingerprints{}
+	}
+	if !f.done {
+		f.ws, f.ok = s.workspace(ctx, o.Root)
+		f.env = fingerprint.Environment(ctx, o.Root, s.ToolVersion)
+		f.done = true
+	}
+	return f.ws, f.ok, f.env
 }
 
 func (s *Service) now() time.Time {
@@ -76,7 +110,7 @@ func (s *Service) begin(ctx context.Context, th protocol.Thread, text string) er
 	if _, ok, err := s.Store.OpenWorkForThread(ctx, th.ID); err != nil || ok {
 		return err
 	}
-	goal := capText(text, goalLimit)
+	goal := capText(redactText(text), goalLimit)
 	now := s.now()
 	w, err := s.Store.CreateWork(ctx, protocol.Work{ThreadID: th.ID, ProjectID: th.ProjectID, Goal: goal, CreatedAt: now})
 	if err != nil {
@@ -93,6 +127,7 @@ func (s *Service) Observe(ctx context.Context, threadID string, o Observation) e
 }
 
 func (s *Service) observe(ctx context.Context, threadID string, o Observation) error {
+	o.fp = &obsFingerprints{}
 	w, ok, err := s.Store.OpenWorkForThread(ctx, threadID)
 	if err != nil || !ok {
 		return err
@@ -137,7 +172,7 @@ func (s *Service) recordFailure(ctx context.Context, workID string, o Observatio
 	}
 	ev := protocol.Evidence{WorkID: workID, NodeID: n.ID, Kind: protocol.EvidenceToolError,
 		SourceURI: o.Tool, Summary: tailText(o.Err, summaryLimit), ObservedAt: now}
-	if obj, note := s.putVault(o.Err, now); obj != nil {
+	if obj, note := s.putVault(ctx, o.Err, now); obj != nil {
 		if err := s.Store.UpsertVaultObject(ctx, *obj); err == nil {
 			ev.VaultHash, ev.Availability = obj.Hash, protocol.AvailAvailable
 		} else {
@@ -238,6 +273,12 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 	}
 	goal, hasGoal := goalNode(d)
 	checks := parsePlan(o.Output)
+	for i := range checks {
+		checks[i].Command = redactText(checks[i].Command)
+		checks[i].Directory = redactText(checks[i].Directory)
+		checks[i].Reason = redactText(checks[i].Reason)
+		checks[i].Label = redactText(checks[i].Label)
+	}
 	if len(checks) > 0 {
 		// A new plan replaces the old one: criteria it no longer lists stop counting.
 		planned := map[string]bool{}
@@ -291,7 +332,7 @@ const notRetained = "\n[full output not retained]"
 
 // putVault stores text in the vault. It returns the index row, or a note for the
 // summary when a configured vault could not keep the text; failures are counted.
-func (s *Service) putVault(text string, at time.Time) (*protocol.VaultObjectRow, string) {
+func (s *Service) putVault(ctx context.Context, text string, at time.Time) (*protocol.VaultObjectRow, string) {
 	if s.Vault == nil || text == "" {
 		return nil, ""
 	}
@@ -300,8 +341,12 @@ func (s *Service) putVault(text string, at time.Time) (*protocol.VaultObjectRow,
 		s.count("vault put", err)
 		return nil, notRetained
 	}
-	return &protocol.VaultObjectRow{Hash: o.Hash, Class: o.Class, Status: "available", Size: o.Size,
-		OriginalSize: o.OriginalSize, Truncated: o.Truncated, CreatedAt: at, LastReferencedAt: at}, ""
+	row := protocol.VaultObjectRow{Hash: o.Hash, Class: o.Class, Status: "available", Size: o.Size,
+		OriginalSize: o.OriginalSize, Truncated: o.Truncated, CreatedAt: at, LastReferencedAt: at}
+	// Refresh the index row now so a concurrent GC pass sees the object as in use
+	// even when this put deduplicated onto an existing file.
+	s.count("vault index", s.Store.UpsertVaultObject(ctx, row))
+	return &row, ""
 }
 
 // workspace takes a fingerprint within its budget; false means "skip, invalidate nothing".
@@ -322,18 +367,21 @@ func (s *Service) workspace(ctx context.Context, root string) (fingerprint.Works
 // transaction.
 func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Observation, checkType, command, status string, exit *int, full string) error {
 	now := s.now()
+	command = redactText(command)
 	crit := criterionFor(d, command)
 	critID := ""
 	if crit != nil {
 		critID = crit.ID
 	}
-	obj, note := s.putVault(full, now)
+	obj, note := s.putVault(ctx, full, now)
 	summary := tailText(full, summaryLimit)
 	if note != "" {
 		summary = tailText(full, summaryLimit-len(note)) + note
 	}
 	ev := protocol.Evidence{WorkID: d.Work.ID, NodeID: critID, Kind: protocol.EvidenceVerificationOutput, SourceURI: command,
-		Summary: summary, ObservedAt: now, EnvFingerprint: fingerprint.Environment(ctx, o.Root, s.ToolVersion)}
+		Summary: summary, ObservedAt: now}
+	ws, wsOK, env := s.snapshot(ctx, o)
+	ev.EnvFingerprint = env
 	if obj != nil {
 		ev.VaultHash, ev.Availability = obj.Hash, protocol.AvailAvailable
 	}
@@ -346,8 +394,8 @@ func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Ob
 			Status: status, ExitCode: exit, StartedAt: now, FinishedAt: now},
 		Evidence: ev, Object: obj,
 	}
-	if w, ok := s.workspace(ctx, o.Root); ok {
-		in.Fingerprint = &protocol.Fingerprint{WorkID: d.Work.ID, Kind: protocol.FingerprintVerification, Value: w.Value, Paths: w.Paths, TakenAt: now}
+	if wsOK {
+		in.Fingerprint = &protocol.Fingerprint{WorkID: d.Work.ID, Kind: protocol.FingerprintVerification, Value: ws.Value, Paths: ws.Paths, TakenAt: now}
 	}
 	if crit != nil && status != protocol.AttemptNotRun {
 		in.Criterion = &store.CriterionUpdate{NodeID: crit.ID, Status: status, Revision: crit.Revision, At: now}
@@ -441,7 +489,15 @@ func (s *Service) turnEndFingerprint(ctx context.Context, d protocol.WorkDetail,
 			prev = &d.Fingerprints[i]
 		}
 	}
-	if prev != nil && prev.Value != ws.Value && len(d.Attempts) > 0 {
+	// A verification whose own fingerprint was skipped is newer than prev and
+	// cannot be judged against it, so nothing is invalidated.
+	skipped := false
+	for _, a := range d.Attempts {
+		if a.FingerprintID == "" && prev != nil && a.FinishedAt.After(prev.TakenAt) {
+			skipped = true
+		}
+	}
+	if prev != nil && prev.Value != ws.Value && len(d.Attempts) > 0 && !skipped {
 		seen := map[string]bool{}
 		var paths []string
 		for _, p := range append(append([]string{}, prev.Paths...), ws.Paths...) {
@@ -450,7 +506,7 @@ func (s *Service) turnEndFingerprint(ctx context.Context, d protocol.WorkDetail,
 				paths = append(paths, p)
 			}
 		}
-		if len(paths) == 0 {
+		if len(paths) == 0 || len(paths) > maxWorkspacePaths {
 			paths = []string{"."}
 		}
 		for _, p := range paths {

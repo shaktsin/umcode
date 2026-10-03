@@ -197,3 +197,18 @@ func TestGitDeletedAndBranchSwitchAreDetected(t *testing.T) {
 		t.Fatalf("deleted file diff = %v", got)
 	}
 }
+
+func TestSymlinkedRootIsFingerprinted(t *testing.T) {
+	real := t.TempDir()
+	write(t, filepath.Join(real, "a.txt"), "one")
+	link := filepath.Join(t.TempDir(), "proj")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	before := take(t, link)
+	write(t, filepath.Join(real, "a.txt"), "changed content")
+	after := take(t, link)
+	if before.Value == after.Value {
+		t.Fatal("an edit under a symlinked project root went undetected")
+	}
+}

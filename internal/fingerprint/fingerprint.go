@@ -52,6 +52,9 @@ func TakeWorkspace(ctx context.Context, root, vaultDir string) (Workspace, bool)
 	if ctx.Err() != nil {
 		return Workspace{}, false
 	}
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r // a symlinked project root must still be walked
+	}
 	var w Workspace
 	var err error
 	if head, ok := gitHead(ctx, root); ok {
@@ -89,6 +92,7 @@ func git(ctx context.Context, root string, args ...string) ([]byte, error) {
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	cmd.WaitDelay = 500 * time.Millisecond // do not outlive the context if a child keeps the pipe open
 	return cmd.Output()
 }
 
@@ -121,6 +125,9 @@ func gitWorkspace(ctx context.Context, root, vaultDir, head string) (Workspace, 
 		t := toks[i]
 		if len(t) < 4 {
 			continue
+		}
+		if ctx.Err() != nil {
+			return Workspace{}, ctx.Err()
 		}
 		xy, path := string(t[:2]), string(t[3:])
 		if strings.ContainsAny(xy, "RC") {
