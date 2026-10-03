@@ -224,7 +224,10 @@ func (s *Server) routes() map[string]handler {
 			return e.ListWorks(ctx, p.ThreadID)
 		}),
 		protocol.MethodWorkGet: bind(func(ctx context.Context, c *conn, p protocol.WorkGetParams) (any, error) {
-			return e.GetWork(ctx, p.WorkID)
+			return e.GetWork(ctx, p.WorkID, p.ActiveOnly)
+		}),
+		protocol.MethodVaultStats: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
+			return e.VaultStats(ctx)
 		}),
 		protocol.MethodApprovalRespond: bind(func(ctx context.Context, c *conn, p protocol.ApprovalRespondParams) (any, error) {
 			if !c.IsAdmin() {

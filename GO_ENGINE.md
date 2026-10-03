@@ -131,6 +131,14 @@ Plugin skills are namespaced as `<plugin>:<skill>`, and plugin MCP servers are n
 
 Each chat keeps a quiet record of what a request set out to do: a goal, the verification criteria the agent planned, the files it changed, failed tools, and each verification attempt with its evidence. A work spans turns until it is resolved: it closes when a turn completes (not paused) with no unresolved criterion, stays open after an interrupted, paused or failed turn, and is marked abandoned when the chat is archived. Recording is best-effort and never changes the chat, the prompt, or a tool result. Read it with `work/list` (`threadId`, newest first) and `work/get` (`workId`).
 
+### Evidence vault and staleness
+
+Full verification output and failed-tool errors are kept in a content-addressed vault under `storage.vault_dir` (`objects/<2 hex>/<sha256>`), with the last 2 KB kept on the evidence row. Secrets (private keys, `sk-`/`ghp_`/`AKIA`/`xox` tokens, `Authorization`/`Bearer` values, `KEY`/`TOKEN`/`SECRET`/`PASSWORD` assignments) are masked **before** hashing and writing, so they never reach disk. Objects over 8 MB are clipped head and tail. If the vault cannot be written, the attempt is still recorded with a summary and the turn is unaffected.
+
+A passing criterion goes `stale` when a file changes after it (including edits made through the shell, detected by a workspace fingerprint taken when an attempt is recorded and when the turn ends) or when the environment (OS, architecture, git HEAD, Go version) changes. A stale criterion keeps the work open. `work/get` accepts `activeOnly` to return only evidence that is still true, and each evidence entry reports `vaultHash`, `availability` (`none`, `available`, `unavailable`) and `envFingerprint`. `vault/stats` returns object count, bytes and bytes eligible for cleanup.
+
+Old objects are removed automatically at startup and daily, never while an open work or active evidence references them. Defaults (optional keys under `storage`): `retention_raw_days` 30, `retention_stale_days` 30, `retention_blob_days` 90 (objects of 1 MiB or more), `retention_redacted_days` 7, and `vault_max_object_bytes` 8388608. None of this asks for approval, shows a prompt or adds chat output; fingerprints and cleanup are engine-internal, time-bounded and only touch vault files, never project files.
+
 ## Usage and cost
 
 Every model request writes one row to `llm_usage`: key, provider, model, thread, turn, role (`chat`, `title`), input / cached / output / reasoning tokens, cost, latency and status. Cost uses the bundled price table (`internal/models/catalog.json`, list prices checked 2026-09-18) or your override (`umcode model price`). Models without a known price cost $0 and show `?`. When a provider reports no usage, tokens are estimated and flagged.

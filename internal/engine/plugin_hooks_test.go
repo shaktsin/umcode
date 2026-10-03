@@ -222,6 +222,7 @@ type engineTestTool struct {
 	output    string
 	err       error
 	forbidden bool
+	raw       string // handed to the engine's raw sink, like verification.run does
 	calls     atomic.Int32
 }
 
@@ -232,8 +233,11 @@ func (t *engineTestTool) Assess(json.RawMessage) (tools.Risk, string) { return t
 func (t *engineTestTool) Forbidden(json.RawMessage) (string, bool) {
 	return "built-in guard", t.forbidden
 }
-func (t *engineTestTool) Call(context.Context, json.RawMessage) (string, error) {
+func (t *engineTestTool) Call(ctx context.Context, _ json.RawMessage) (string, error) {
 	t.calls.Add(1)
+	if t.raw != "" {
+		tools.SetRaw(ctx, t.raw)
+	}
 	return t.output, t.err
 }
 

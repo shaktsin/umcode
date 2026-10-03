@@ -193,3 +193,28 @@ func (s *Service) StartGC(ctx context.Context, ret Retention) {
 		}
 	}()
 }
+
+// Stats summarizes the vault index: object count, bytes, and bytes GC could
+// reclaim right now (unreferenced and past retention).
+func Stats(ctx context.Context, st *store.Store, ret Retention, now time.Time) (protocol.VaultStats, error) {
+	rows, err := st.ListVaultObjects(ctx)
+	if err != nil {
+		return protocol.VaultStats{}, err
+	}
+	refs, err := st.ReferencedVaultHashes(ctx)
+	if err != nil {
+		return protocol.VaultStats{}, err
+	}
+	var out protocol.VaultStats
+	for _, r := range rows {
+		if r.Status == "missing" {
+			continue
+		}
+		out.Objects++
+		out.Bytes += r.Size
+		if !refs[r.Hash] && now.Sub(r.LastReferencedAt) > ret.forObject(r) {
+			out.EligibleBytes += r.Size
+		}
+	}
+	return out, nil
+}

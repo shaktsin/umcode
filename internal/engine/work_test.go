@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/shaktsin/umcode/internal/fingerprint"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
@@ -159,5 +160,44 @@ func TestEngineWithoutWorkServiceStillRuns(t *testing.T) {
 	e.finishTurn(context.Background(), th, turn, nil, func() {})
 	if _, err := e.UpdateThread(t.Context(), th.ID, map[string]any{"archived": true}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunToolPassesUnclippedResultToWork(t *testing.T) {
+	e, th, turn, st := workEngine(t)
+	runWorkTool(t, e, th, turn, &engineTestTool{name: "verification.plan", risk: tools.RiskGreen, output: testPlan})
+	runWorkTool(t, e, th, turn, &engineTestTool{name: "verification.run", risk: tools.RiskYellow,
+		output: `{"status":"passed","results":[{"label":"unit","comm…[output truncated]`, raw: testRunOK})
+	if d := openWorkDetail(t, st, th.ID); len(d.Attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1 recorded from the raw result", len(d.Attempts))
+	}
+}
+
+func TestFinishTurnPassesRootAndClosesStale(t *testing.T) {
+	e, th, turn, st := workEngine(t)
+	value := "ws1"
+	e.Work.Workspace = func(ctx context.Context, root string) (fingerprint.Workspace, bool) {
+		if root != "/proj" {
+			t.Errorf("root = %q", root)
+		}
+		return fingerprint.Workspace{Value: value, Paths: []string{"a.go"}}, true
+	}
+	ctx := tools.WithScope(t.Context(), &tools.Scope{Root: "/proj"})
+	run := func(tool *engineTestTool) {
+		e.Tools.Add(tool)
+		e.runTool(ctx, ctx, th, turn, llm.ToolCall{ID: "c-" + tool.name, Name: tools.ToWire(tool.name), Args: json.RawMessage(`{}`)}, &fakePluginSnapshot{})
+	}
+	run(&engineTestTool{name: "verification.plan", risk: tools.RiskGreen, output: testPlan})
+	run(&engineTestTool{name: "verification.run", risk: tools.RiskYellow, output: testRunOK})
+	value = "ws2" // the shell edited a file after the passing run
+	e.finishTurn(ctx, th, turn, nil, func() {})
+	d := openWorkDetail(t, st, th.ID)
+	if d.Work.Status != protocol.WorkOpen {
+		t.Fatalf("status = %s, want open", d.Work.Status)
+	}
+	for _, n := range d.Nodes {
+		if n.Kind == protocol.NodeCriterion && n.Status != protocol.StatusStale {
+			t.Fatalf("criterion status = %s, want stale", n.Status)
+		}
 	}
 }
