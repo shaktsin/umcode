@@ -140,7 +140,15 @@ func strictReportJSON(data []byte, target any, mandatory ...string) bool {
 
 func strictReportShape(data []byte, typ reflect.Type) bool {
 	if strings.TrimSpace(string(data)) == "null" {
-		return typ.Kind() == reflect.Slice
+		// The producer can represent absent collections as null. Pointers are
+		// nullable by schema; call-specific identity checks below still reject
+		// a null state or action when that result requires one.
+		switch typ.Kind() {
+		case reflect.Slice, reflect.Pointer:
+			return true
+		default:
+			return false
+		}
 	}
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()

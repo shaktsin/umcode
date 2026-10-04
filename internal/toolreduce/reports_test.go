@@ -197,3 +197,98 @@ func TestReportReducerDeclinesWhenMandatoryDataCannotFit(t *testing.T) {
 		t.Fatal("mandatory report data was dropped")
 	}
 }
+
+func TestReportReducerDeclinesNullScalarsAtEveryDepth(t *testing.T) {
+	visual := visualFixture(t)
+	computer := computerFixture(t)
+	cases := []struct {
+		name, tool, base string
+		mutate           func(map[string]any)
+	}{
+		{"visual snapshot boolean", "visual.inspect", visual, func(r map[string]any) { mutateSnapshot(t, r, func(s map[string]any) { s["horizontalOverflow"] = nil }) }},
+		{"visual snapshot URL", "visual.inspect", visual, func(r map[string]any) { mutateSnapshot(t, r, func(s map[string]any) { s["url"] = nil }) }},
+		{"visual viewport integer", "visual.inspect", visual, func(r map[string]any) {
+			mutateSnapshot(t, r, func(s map[string]any) { s["viewport"].(map[string]any)["width"] = nil })
+		}},
+		{"visual control index", "visual.inspect", visual, func(r map[string]any) {
+			mutateSnapshot(t, r, func(s map[string]any) { s["controls"].([]any)[0].(map[string]any)["i"] = nil })
+		}},
+		{"computer window geometry", "computer.act", computer, func(r map[string]any) { r["state"].(map[string]any)["window"].(map[string]any)["width"] = nil }},
+		{"computer control focused", "computer.act", computer, func(r map[string]any) {
+			r["state"].(map[string]any)["controls"].([]any)[2].(map[string]any)["focused"] = nil
+		}},
+		{"computer action result", "computer.act", computer, func(r map[string]any) { r["last_action"].(map[string]any)["result"] = nil }},
+		{"computer artifact byte count", "computer.act", computer, func(r map[string]any) { r["artifacts"].([]any)[0].(map[string]any)["bytes"] = nil }},
+		{"computer optional permission", "computer.act", computer, func(r map[string]any) { r["state"].(map[string]any)["permission"] = nil }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var raw map[string]any
+			if err := json.Unmarshal([]byte(tc.base), &raw); err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(raw)
+			b, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _, applied := Reduce(Input{Name: tc.tool, Output: string(b), Budget: 470})
+			if applied || got != string(b) {
+				t.Fatal("null scalar did not preserve canonical bytes")
+			}
+		})
+	}
+}
+
+func mutateSnapshot(t *testing.T, report map[string]any, mutate func(map[string]any)) {
+	t.Helper()
+	var snapshot map[string]any
+	if err := json.Unmarshal([]byte(report["snapshot"].(string)), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	mutate(snapshot)
+	b, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report["snapshot"] = string(b)
+}
+
+func TestReportReducerAcceptsNullOptionalPointer(t *testing.T) {
+	var report map[string]any
+	if err := json.Unmarshal([]byte(computerFixture(t)), &report); err != nil {
+		t.Fatal(err)
+	}
+	report["last_action"] = nil
+	b, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := reduceReport(Input{Name: "computer.inspect", Output: string(b), Budget: 470})
+	if !strings.Contains(c.text, "observation_id: computer-abc-9") {
+		t.Fatalf("nullable optional pointer declined: %#v", c)
+	}
+}
+
+func TestReportReducerDeclinesNullRequiredPointers(t *testing.T) {
+	for _, tc := range []struct{ name, tool, field string }{
+		{"action evidence", "computer.act", "last_action"},
+		{"inspection state", "computer.inspect", "state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var report map[string]any
+			if err := json.Unmarshal([]byte(computerFixture(t)), &report); err != nil {
+				t.Fatal(err)
+			}
+			report[tc.field] = nil
+			b, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _, applied := Reduce(Input{Name: tc.tool, Output: string(b), Budget: 470})
+			if applied || got != string(b) {
+				t.Fatal("required pointer was dropped")
+			}
+		})
+	}
+}
