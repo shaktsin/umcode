@@ -139,6 +139,9 @@ type ModelsConfig struct {
 	// ContextCompiler sends the recorded work state instead of replaying the
 	// transcript. Off by default; a failure falls back to the transcript.
 	ContextCompiler bool `yaml:"context_compiler"`
+	// ToolResultReducers compacts selected tool results only for model messages.
+	// Stored results and other observers retain the canonical output.
+	ToolResultReducers bool `yaml:"tool_result_reducers"`
 }
 
 // ExecutionLimits bound a whole agent turn independently from reasoning level.
