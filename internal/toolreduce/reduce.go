@@ -97,7 +97,6 @@ func acceptCandidate(in Input, strategy string, c candidate) (string, Report, bo
 		}
 	}
 	sent := int(llm.EstimateTokens(c.text))
-	report.SentTokens = sent
 	if sent >= report.OriginalTokens {
 		return decline("candidate_not_smaller")
 	}
@@ -107,6 +106,7 @@ func acceptCandidate(in Input, strategy string, c candidate) (string, Report, bo
 	if (report.OriginalTokens-sent)*100 < report.OriginalTokens*minimumSavingsPercent {
 		return decline("insufficient_savings")
 	}
+	report.SentTokens = sent
 	report.Omitted = c.omitted
 	return c.text, report, true
 }

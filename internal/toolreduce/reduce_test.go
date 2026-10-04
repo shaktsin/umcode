@@ -70,6 +70,9 @@ func TestAcceptCandidateRejectsEmptyInvalidLargerAndLowSavingText(t *testing.T) 
 			if applied || got != input.Output || report.Declined != tc.declined {
 				t.Fatalf("acceptCandidate() = (%q, %+v, %v), want pass-through declined %q", got, report, applied, tc.declined)
 			}
+			if report.SentTokens != report.OriginalTokens {
+				t.Fatalf("declined candidate reports SentTokens=%d, want original token count %d", report.SentTokens, report.OriginalTokens)
+			}
 		})
 	}
 }
@@ -79,6 +82,18 @@ func TestAcceptCandidateRequiresEveryMandatoryMarker(t *testing.T) {
 	got, report, applied := acceptCandidate(in, "shell", candidate{text: "summary " + strings.Repeat("y", 30), omitted: map[string]int{"lines": 4}, required: []string{"EXIT_CODE: 0", "stderr"}})
 	if applied || got != in.Output || report.Declined != "missing_required_marker" {
 		t.Fatalf("acceptCandidate() = (%q, %+v, %v), want missing marker decline and pass-through", got, report, applied)
+	}
+	if report.SentTokens != report.OriginalTokens {
+		t.Fatalf("declined candidate reports SentTokens=%d, want original token count %d", report.SentTokens, report.OriginalTokens)
+	}
+}
+
+func TestAcceptCandidateOverBudgetKeepsOriginalTokenCount(t *testing.T) {
+	in := Input{Name: "shell.run", Output: strings.Repeat("x", 80), Budget: 9}
+	c := candidate{text: strings.Repeat("y", 40)}
+	got, report, applied := acceptCandidate(in, "shell", c)
+	if applied || got != in.Output || report.Declined != "over_budget" || report.SentTokens != report.OriginalTokens {
+		t.Fatalf("acceptCandidate() = (%q, %+v, %v), want over-budget decline with original sent-token count", got, report, applied)
 	}
 }
 
