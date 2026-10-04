@@ -136,6 +136,9 @@ type ModelsConfig struct {
 	// Pools are ordered groups used for automatic cross-provider fallback.
 	Pools       []ModelPool `yaml:"pools"`
 	DefaultPool string      `yaml:"default_pool"`
+	// ContextCompiler sends the recorded work state instead of replaying the
+	// transcript. Off by default; a failure falls back to the transcript.
+	ContextCompiler bool `yaml:"context_compiler"`
 }
 
 // ExecutionLimits bound a whole agent turn independently from reasoning level.

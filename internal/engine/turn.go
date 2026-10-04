@@ -407,6 +407,24 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			log.Info("conversation context compacted automatically", "window", res.meta.ContextWindow)
 		}
 	}
+	// turnItems is this thread's transcript, read once: the compiler reuses it
+	// for every model call in the loop instead of re-reading it each time.
+	var turnItems []protocol.Item
+	if e.Cfg != nil && e.Cfg.Models.ContextCompiler {
+		if its, ierr := e.Store.ListItems(sctx, th.ID, 0); ierr == nil {
+			turnItems = its
+		} else {
+			log.Debug("context compiler: items failed", "err", ierr)
+		}
+	}
+	// historyTokens is the size of the transcript the compiler would replace,
+	// measured after automatic compaction has had its say so the comparison is
+	// against the history this turn would really send.
+	historyTokens := estimateMessageTokens(msgs)
+	// Everything from here on belongs to this turn: the new user message, the
+	// model's tool calls and their results. The compiler replaces what came
+	// before it, never this live suffix.
+	liveFrom := len(msgs)
 	msgs = append(msgs, user)
 
 	var specs []llm.ToolSpec
@@ -448,8 +466,15 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		if n := trimToolResults(msgs, tokens(req.System)+toolSpecTokens(specs), int(float64(res.meta.ContextWindow)*contextTrimFraction)); n > 0 {
 			log.Info("dropped old tool results to save context", "count", n)
 		}
+		// The work record is re-read for every call, so an edit made earlier in
+		// this turn reaches the model as a stale criterion rather than a pass.
+		packets := RequestPackets{}
 		req.Messages = msgs
-		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req))
+		if out, ok := e.compile(sctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems); ok {
+			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
+			packets = out.packets
+		}
+		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req, packets))
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
 			if reason := budget.stopReason(); reason != "" {
