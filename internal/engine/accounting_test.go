@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/llm"
+	"github.com/shaktsin/umcode/internal/toolreduce"
 )
 
 func fixtureRequest() ([]promptLayer, llm.Request) {
@@ -32,7 +33,7 @@ func fixtureRequest() ([]promptLayer, llm.Request) {
 
 func TestMeasureRequestSumsParts(t *testing.T) {
 	layers, req := fixtureRequest()
-	b := measureRequest(layers, req, RequestPackets{})
+	b := measureRequest(layers, req, RequestPackets{}, nil)
 	if b.Layers[layerCore] != 100 || b.Layers[layerProject] != 200 || b.SystemTokens != 300 {
 		t.Fatalf("layers = %+v system = %d", b.Layers, b.SystemTokens)
 	}
@@ -51,7 +52,7 @@ func TestMeasureRequestSumsParts(t *testing.T) {
 }
 
 func TestMeasureRequestEmpty(t *testing.T) {
-	b := measureRequest(nil, llm.Request{}, RequestPackets{})
+	b := measureRequest(nil, llm.Request{}, RequestPackets{}, nil)
 	if b.Layers == nil || len(b.Layers) != 0 || b.TotalTokens != 0 || b.ToolCount != 0 {
 		t.Fatalf("empty request = %+v", b)
 	}
@@ -61,7 +62,7 @@ func TestMeasureRequestEmpty(t *testing.T) {
 // the same request measures after optimization. Regenerate with UPDATE_GOLDEN=1.
 func TestRequestBaselineGolden(t *testing.T) {
 	layers, req := fixtureRequest()
-	got, err := json.MarshalIndent(measureRequest(layers, req, RequestPackets{}), "", "  ")
+	got, err := json.MarshalIndent(measureRequest(layers, req, RequestPackets{}, nil), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,5 +81,76 @@ func TestRequestBaselineGolden(t *testing.T) {
 	}
 	if string(got) != string(want) {
 		t.Fatalf("baseline drifted:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestMeasureRequestAttributesReducerSavingsByCallID(t *testing.T) {
+	req := llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleTool, ToolCallID: "reduced", Result: strings.Repeat("r", 400)},
+		{Role: llm.RoleTool, ToolCallID: "plain", Result: strings.Repeat("p", 800)},
+	}}
+	b := measureRequest(nil, req, RequestPackets{}, ToolReductions{
+		"reduced": {Strategy: "verification", OriginalTokens: 1000, SentTokens: 100},
+	})
+	if b.ToolResultTokens != 300 || b.ToolResultOriginalTokens != 1200 || b.ToolResultSavedTokens != 900 || b.ToolResultsReduced != 1 {
+		t.Fatalf("attribution = %+v", b)
+	}
+}
+
+func TestMeasureRequestSeparatesEmergencyTrimFromReducerSavings(t *testing.T) {
+	req := llm.Request{Messages: []llm.Message{{Role: llm.RoleTool, ToolCallID: "reduced", Result: "[tool result omitted to save context]"}}}
+	b := measureRequest(nil, req, RequestPackets{}, ToolReductions{
+		"reduced": {Strategy: "verification", OriginalTokens: 1000, SentTokens: 100},
+	})
+	if b.ToolResultTokens != tokens(req.Messages[0].Result) || b.ToolResultOriginalTokens != 1000 || b.ToolResultSavedTokens != 900 || b.ToolResultsReduced != 1 {
+		t.Fatalf("emergency trim attribution = %+v", b)
+	}
+}
+
+func TestMeasureRequestIgnoresReportsForAbsentToolMessages(t *testing.T) {
+	req := llm.Request{Messages: []llm.Message{{Role: llm.RoleTool, ToolCallID: "present", Result: strings.Repeat("p", 800)}}}
+	b := measureRequest(nil, req, RequestPackets{}, ToolReductions{
+		"absent": {Strategy: "verification", OriginalTokens: 1000, SentTokens: 100},
+	})
+	if b.ToolResultTokens != 200 || b.ToolResultOriginalTokens != 200 || b.ToolResultSavedTokens != 0 || b.ToolResultsReduced != 0 {
+		t.Fatalf("absent report attribution = %+v", b)
+	}
+}
+
+func TestMeasureRequestCountsUnchangedResultsWhenReducersEnabled(t *testing.T) {
+	req := llm.Request{Messages: []llm.Message{{Role: llm.RoleTool, ToolCallID: "plain", Result: strings.Repeat("p", 800)}}}
+	b := measureRequest(nil, req, RequestPackets{}, ToolReductions{})
+	if b.ToolResultTokens != 200 || b.ToolResultOriginalTokens != 200 || b.ToolResultSavedTokens != 0 || b.ToolResultsReduced != 0 {
+		t.Fatalf("unchanged result attribution = %+v", b)
+	}
+}
+
+func TestMeasureRequestHandlesMultipleReducedCallsWithoutCrossAttribution(t *testing.T) {
+	req := llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleTool, ToolCallID: "first", Result: strings.Repeat("a", 400)},
+		{Role: llm.RoleTool, ToolCallID: "second", Result: strings.Repeat("b", 200)},
+		{Role: llm.RoleAssistant, ToolCallID: "ghost", Parts: []llm.Part{{Text: "not a tool"}}},
+	}}
+	reductions := ToolReductions{
+		"first":  toolreduce.Report{Strategy: "verification", OriginalTokens: 800, SentTokens: 100},
+		"second": toolreduce.Report{Strategy: "shell", OriginalTokens: 500, SentTokens: 50},
+		"ghost":  toolreduce.Report{Strategy: "search", OriginalTokens: 900, SentTokens: 10},
+	}
+	b := measureRequest(nil, req, RequestPackets{}, reductions)
+	if b.ToolResultTokens != 150 || b.ToolResultOriginalTokens != 1300 || b.ToolResultSavedTokens != 1150 || b.ToolResultsReduced != 2 {
+		t.Fatalf("multiple reports = %+v", b)
+	}
+}
+
+func TestRequestBaselineGoldenStillOmitsZeroReducerFields(t *testing.T) {
+	layers, req := fixtureRequest()
+	b, err := json.Marshal(measureRequest(layers, req, RequestPackets{}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"toolResultOriginalTokens", "toolResultSavedTokens", "toolResultsReduced"} {
+		if strings.Contains(string(b), field) {
+			t.Fatalf("zero reducer field %s appeared: %s", field, b)
+		}
 	}
 }

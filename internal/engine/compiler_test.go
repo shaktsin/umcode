@@ -169,8 +169,8 @@ func TestMidTurnEditMakesCriterionStaleInNextCall(t *testing.T) {
 
 func TestBreakdownReportsPacketTokens(t *testing.T) {
 	req := llm.Request{Messages: []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("a", 4000))}}
-	plain := measureRequest(nil, req, RequestPackets{})
-	b := measureRequest(nil, req, RequestPackets{Work: 300, Evidence: 200})
+	plain := measureRequest(nil, req, RequestPackets{}, nil)
+	b := measureRequest(nil, req, RequestPackets{Work: 300, Evidence: 200}, nil)
 	if b.WorkPacketTokens != 300 || b.EvidencePacketTokens != 200 {
 		t.Fatalf("packet tokens = %+v", b)
 	}

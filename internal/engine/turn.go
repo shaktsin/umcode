@@ -446,6 +446,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	}
 
 	var turnErr error
+	var reductions ToolReductions
+	if e.Cfg != nil && e.Cfg.Models.ToolResultReducers {
+		reductions = make(ToolReductions)
+	}
 	instructionHint := ""
 	for {
 		if ctx.Err() != nil {
@@ -475,7 +479,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
 			packets = out.packets
 		}
-		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req, packets))
+		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req, packets, reductions))
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
 			if reason := budget.stopReason(); reason != "" {
@@ -497,6 +501,9 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		lastToolMsg := -1
 		for _, call := range out.calls {
 			toolResult := e.runTool(ctx, sctx, th, turn, call, snapshot)
+			if reductions != nil && toolResult.Reduction.Strategy != "" && toolResult.Reduction.OriginalTokens > toolResult.Reduction.SentTokens {
+				reductions[call.ID] = toolResult.Reduction
+			}
 			result, isErr := toolResult.Output, toolResult.IsError
 			hookContext = append(hookContext, toolResult.HookContext...)
 			if hint := instructionPathHint(call.Args); hint != "" {
