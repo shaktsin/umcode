@@ -111,7 +111,6 @@ func acceptCandidate(in Input, strategy string, c candidate) (string, Report, bo
 	return c.text, report, true
 }
 
-func reduceVerification(Input) candidate { return candidate{} }
 func reduceShell(Input) candidate        { return candidate{} }
 func reduceSearch(Input) candidate       { return candidate{} }
 func reduceReport(Input) candidate       { return candidate{} }
