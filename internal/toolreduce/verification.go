@@ -9,8 +9,6 @@ import (
 	"unicode/utf8"
 )
 
-const verificationTailBytes = 1024
-
 type verificationCheck struct {
 	Label      string `json:"label"`
 	Command    string `json:"command"`
@@ -85,7 +83,7 @@ func reduceCheckVerification(output string) candidate {
 	b.WriteString(payload.Status)
 	b.WriteByte('\n')
 	required = append(required, "verification: "+payload.Status)
-	omitted := 0
+	omitted, omittedChecks := 0, 0
 	for i, check := range payload.Results {
 		if !decodeOwnedObject(raw.Results[i], &check, "label", "command", "status", "duration_ms") ||
 			!validVerificationStatus(check.Status) || check.Label == "" || check.Command == "" || check.DurationMS < 0 {
@@ -100,6 +98,9 @@ func reduceCheckVerification(output string) candidate {
 		}
 		label := verificationStatusLabel(check.Status)
 		line := fmt.Sprintf("%s %s | command: %s | directory: %s | duration_ms: %d", label, check.Label, check.Command, displayDirectory(check.Directory), check.DurationMS)
+		if check.Status == "passed" && check.Reason != "" {
+			line += " | reason: " + check.Reason
+		}
 		b.WriteString(line)
 		b.WriteByte('\n')
 		if check.Status != "passed" {
@@ -114,11 +115,17 @@ func reduceCheckVerification(output string) candidate {
 				appendDetail(&b, "exit_code", strconv.Itoa(check.ExitCode), &required)
 			}
 			if check.Output != "" {
-				appendDetail(&b, "diagnostic tail", diagnosticTail(check.Output), &required)
+				appendDetail(&b, "output", check.Output, &required)
 			}
 		} else {
 			omitted += len(check.Output)
+			if check.Output != "" {
+				omittedChecks++
+			}
 		}
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "omitted: passing command output (%d bytes across %d check(s)); rerun verification.run with only the desired check for fresh output.\n", omitted, omittedChecks)
 	}
 	return candidate{text: b.String(), omitted: map[string]int{"passing_output_bytes": omitted}, required: required}
 }
@@ -157,7 +164,7 @@ func reduceBrowserVerification(output string) candidate {
 		appendDetail(&b, "exit_code", strconv.Itoa(payload.ExitCode), &required)
 	}
 	if payload.Status != "passed" && payload.Output != "" {
-		appendDetail(&b, "diagnostic tail", diagnosticTail(payload.Output), &required)
+		appendDetail(&b, "output", payload.Output, &required)
 	}
 	for _, diagnostic := range payload.Diagnostics {
 		if diagnostic == "" {
@@ -180,6 +187,9 @@ func reduceBrowserVerification(output string) candidate {
 	omitted := 0
 	if payload.Status == "passed" {
 		omitted = len(payload.Output)
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&b, "omitted: passing browser output (%d bytes); rerun browser.verify with the same command for fresh output.\n", omitted)
 	}
 	return candidate{text: b.String(), omitted: map[string]int{"passing_output_bytes": omitted}, required: required}
 }
@@ -284,15 +294,4 @@ func appendDetail(b *strings.Builder, label, value string, required *[]string) {
 	if value != "" {
 		*required = append(*required, value)
 	}
-}
-
-func diagnosticTail(output string) string {
-	if len(output) <= verificationTailBytes {
-		return output
-	}
-	start := len(output) - verificationTailBytes
-	for start < len(output) && !utf8.RuneStart(output[start]) {
-		start++
-	}
-	return output[start:]
 }

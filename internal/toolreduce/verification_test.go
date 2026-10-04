@@ -24,7 +24,8 @@ func TestVerificationReducerKeepsEveryVerdictAndFailureDetail(t *testing.T) {
 }
 
 func TestVerificationReducerCollapsesPassingOutput(t *testing.T) {
-	output := fmt.Sprintf(`{"status":"passed","results":[{"label":"unit","command":"go test ./...","directory":".","status":"passed","duration_ms":245,"output":%q}]}`, strings.Repeat("PASS package/example\n", 250))
+	passOutput := strings.Repeat("PASS package/example\n", 250)
+	output := fmt.Sprintf(`{"status":"passed","results":[{"label":"unit","command":"go test ./...","directory":".","status":"passed","duration_ms":245,"output":%q}]}`, passOutput)
 	got, _, applied := Reduce(Input{Name: "verification.run", Output: output, Budget: 100})
 	if !applied {
 		t.Fatalf("passing verification was not reduced: %s", got)
@@ -34,6 +35,11 @@ func TestVerificationReducerCollapsesPassingOutput(t *testing.T) {
 	}
 	if strings.Count(got, "PASS unit") != 1 {
 		t.Fatalf("passing check should have one line: %s", got)
+	}
+	for _, marker := range []string{"omitted: passing command output", fmt.Sprintf("%d bytes", len(passOutput)), "rerun verification.run", "go test ./..."} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("passing-output omission lacks %q: %s", marker, got)
+		}
 	}
 }
 
@@ -51,7 +57,8 @@ func TestVerificationReducerKeepsBlockedAndNotRunReasons(t *testing.T) {
 }
 
 func TestBrowserReducerKeepsDiagnosticsAndArtifactsOnPass(t *testing.T) {
-	output := fmt.Sprintf(`{"status":"passed","framework":"playwright","command":"npm run test:e2e","directory":"web","duration_ms":1430,"output":%q,"diagnostics":["console.error: recovered state","requestfailed: /api/retry"],"artifacts":[{"path":"test-results/flow/screenshot.png","kind":"screenshot","mime_type":"image/png","bytes":3072},{"path":"test-results/flow/trace.zip","kind":"trace","mime_type":"application/zip","bytes":4096}]}`, strings.Repeat("ordinary browser runner output\n", 250))
+	passOutput := strings.Repeat("ordinary browser runner output\n", 250)
+	output := fmt.Sprintf(`{"status":"passed","framework":"playwright","command":"npm run test:e2e","directory":"web","duration_ms":1430,"output":%q,"diagnostics":["console.error: recovered state","requestfailed: /api/retry"],"artifacts":[{"path":"test-results/flow/screenshot.png","kind":"screenshot","mime_type":"image/png","bytes":3072},{"path":"test-results/flow/trace.zip","kind":"trace","mime_type":"application/zip","bytes":4096}]}`, passOutput)
 	got, _, applied := Reduce(Input{Name: "browser.verify", Output: output, Budget: 200})
 	if !applied {
 		t.Fatalf("browser verification was not reduced: %s", got)
@@ -63,6 +70,39 @@ func TestBrowserReducerKeepsDiagnosticsAndArtifactsOnPass(t *testing.T) {
 	}
 	if strings.Contains(got, "ordinary browser runner output") {
 		t.Errorf("passing browser output was retained: %s", got)
+	}
+	for _, marker := range []string{"omitted: passing browser output", fmt.Sprintf("%d bytes", len(passOutput)), "rerun browser.verify", "npm run test:e2e"} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("browser-output omission lacks %q: %s", marker, got)
+		}
+	}
+}
+
+func TestVerificationReducerPreservesFullFailureOutputWhenItFits(t *testing.T) {
+	failureOutput := "EARLY_COMPILER_DIAGNOSTIC\n… [truncated 4096 bytes from the middle] …\n" + strings.Repeat("later diagnostic line\n", 58) + "FINAL_FAILURE_MARKER"
+	output := fmt.Sprintf(`{"status":"failed","results":[{"label":"typecheck","command":"npm run check","status":"passed","duration_ms":5,"output":%q},{"label":"unit","command":"go test ./...","status":"failed","exit_code":2,"duration_ms":8,"output":%q}]}`, strings.Repeat("passing output\n", 350), failureOutput)
+	got, _, applied := Reduce(Input{Name: "verification.run", Output: output, Budget: 600})
+	if !applied {
+		t.Fatalf("failure output that fits was not reduced: %s", got)
+	}
+	for _, marker := range []string{"EARLY_COMPILER_DIAGNOSTIC", "[truncated 4096 bytes from the middle]", "FINAL_FAILURE_MARKER"} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("available failure evidence %q was lost: %s", marker, got)
+		}
+	}
+}
+
+func TestBrowserReducerPreservesFullFailureOutputWhenItFits(t *testing.T) {
+	failureOutput := "EARLY_BROWSER_DIAGNOSTIC\n… [truncated 2048 bytes from the middle] …\n" + strings.Repeat(strings.Repeat("\\", 12)+"\n", 250) + "FINAL_BROWSER_FAILURE"
+	output := fmt.Sprintf(`{"status":"failed","framework":"playwright","command":"npm run e2e","exit_code":1,"duration_ms":9,"output":%q,"diagnostics":["console.error: broken widget"],"artifacts":[]}`, failureOutput)
+	got, report, applied := Reduce(Input{Name: "browser.verify", Output: output, Budget: 1000})
+	if !applied {
+		t.Fatalf("browser failure output that fits was not reduced: %+v / %s", report, got)
+	}
+	for _, marker := range []string{"EARLY_BROWSER_DIAGNOSTIC", "[truncated 2048 bytes from the middle]", "FINAL_BROWSER_FAILURE", "console.error: broken widget"} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("available browser failure evidence %q was lost: %s", marker, got)
+		}
 	}
 }
 
