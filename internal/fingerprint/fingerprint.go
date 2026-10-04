@@ -146,6 +146,9 @@ func manifestWorkspace(ctx context.Context, root, vaultDir string) (Workspace, e
 	vault := ""
 	if vaultDir != "" {
 		vault, _ = filepath.Abs(vaultDir)
+		if resolved, err := filepath.EvalSymlinks(vault); err == nil {
+			vault = resolved
+		}
 	}
 	stop := fmt.Errorf("manifest cap reached")
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
