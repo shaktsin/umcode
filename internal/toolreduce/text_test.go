@@ -76,6 +76,40 @@ func TestShellReducerFindsANSIFailureInCRLFOutput(t *testing.T) {
 	}
 }
 
+func TestShellReducerKeepsExtensionlessSourceDiagnostic(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("exit_code: 2\n--- stdout ---\n")
+	for i := 0; i < 80; i++ {
+		fmt.Fprintf(&b, "ordinary build progress %03d\n", i)
+	}
+	b.WriteString("Makefile:12: *** No rule to make target `build'\n")
+	for i := 80; i < 160; i++ {
+		fmt.Fprintf(&b, "ordinary build progress %03d\n", i)
+	}
+	b.WriteString("build stopped\n")
+	got, report, applied := Reduce(Input{Name: "shell.run", Output: b.String(), Budget: 120})
+	if !applied {
+		t.Fatalf("reduction declined: %+v", report)
+	}
+	if !strings.Contains(got, "Makefile:12: *** No rule to make target `build'") {
+		t.Fatalf("extensionless source diagnostic was omitted: %q", got)
+	}
+}
+
+func TestDiagnosticLineDoesNotTreatTimeAsSourceLocation(t *testing.T) {
+	for _, diagnostic := range []string{"build/rules/Makefile:12: No rule to make target", "scripts/build:20: missing target"} {
+		if !diagnosticLine(diagnostic) {
+			t.Errorf("missed extensionless path diagnostic %q", diagnostic)
+		}
+	}
+	if diagnosticLine("12:34: ordinary progress") {
+		t.Fatal("timestamp classified as source diagnostic")
+	}
+	if diagnosticLine("iteration:12: ordinary progress") {
+		t.Fatal("counter classified as source diagnostic")
+	}
+}
+
 func TestShellReducerKeepsUTF8ValidWithOneOversizedLine(t *testing.T) {
 	out := "exit_code: 0\n--- stdout ---\n" + strings.Repeat("中🙂", 600) + "\n"
 	got, _, applied := Reduce(Input{Name: "shell.run", Output: out, Budget: 100})

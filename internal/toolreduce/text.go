@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ansiColor        = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-	compilerLocation = regexp.MustCompile(`(?:^|[ /])[^ :]+\.[A-Za-z0-9]+:[0-9]+(?::[0-9]+)?:`)
+	ansiColor             = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	compilerLocation      = regexp.MustCompile(`(?:^|[ /])[^ :]+\.[A-Za-z0-9]+:[0-9]+(?::[0-9]+)?:`)
+	extensionlessLocation = regexp.MustCompile(`(?i)(?:^|[ \t])(?:(?:[A-Za-z0-9_.-]+/)+(?:[A-Za-z_][A-Za-z0-9_-]*)|(?:[A-Za-z0-9_.-]+/)*(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Justfile|BUILD|WORKSPACE|Rakefile|Gemfile)):[0-9]+(?::[0-9]+)?:`)
 )
 
 func reduceShell(in Input) candidate {
@@ -76,13 +77,14 @@ func reduceShell(in Input) candidate {
 }
 
 func diagnosticLine(line string) bool {
-	plain := strings.ToLower(ansiColor.ReplaceAllString(strings.TrimSuffix(line, "\r"), ""))
+	uncolored := ansiColor.ReplaceAllString(strings.TrimSuffix(line, "\r"), "")
+	plain := strings.ToLower(uncolored)
 	for _, signal := range []string{"error", "fail", "panic", "fatal", "denied", "blocked", "timeout", "timed out", "warning", "truncated", "dropped", "sandbox:", "policy:"} {
 		if strings.Contains(plain, signal) {
 			return true
 		}
 	}
-	return compilerLocation.MatchString(plain)
+	return compilerLocation.MatchString(uncolored) || extensionlessLocation.MatchString(uncolored)
 }
 
 func mandatoryTextLine(line string) bool {

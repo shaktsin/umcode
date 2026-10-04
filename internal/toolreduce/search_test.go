@@ -31,6 +31,23 @@ func TestFileSearchReducerRoundRobinsAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestFileSearchReducerRevisitsOversizedFirstGroupBeforeSecondFileHit(t *testing.T) {
+	out := "a.go:1: first short hit\n" +
+		"a.go:2: " + strings.Repeat("second-hit-detail", 8) + "\n" +
+		"b.go:1: " + strings.Repeat("oversized-first-hit", 50) + "\n" +
+		"b.go:2: second short hit\n\n4 match(es) in 2 file(s)"
+	got, report, applied := Reduce(Input{Name: "file.search", Output: out, Budget: 78})
+	if !applied {
+		t.Fatalf("reduction declined: %+v", report)
+	}
+	if !strings.Contains(got, "a.go:1: first short hit") || !strings.Contains(got, "b.go:2: second short hit") {
+		t.Fatalf("a representable file lost its first retained hit: %q", got)
+	}
+	if strings.Contains(got, "a.go:2:") {
+		t.Fatalf("second A hit was retained before representing B: %q", got)
+	}
+}
+
 func TestFileSearchReducerKeepsContextWithItsMatch(t *testing.T) {
 	got, report, applied := Reduce(Input{Name: "file.search", Output: fileSearchFixture(), Budget: 140})
 	if !applied {

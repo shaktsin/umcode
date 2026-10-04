@@ -147,8 +147,8 @@ func reduceFileSearch(in Input) candidate {
 	if err != nil || declaredMatches != total {
 		return candidate{}
 	}
-	// The tool returns one path at a time. Queue each path's groups and
-	// interleave queues so early large files do not hide later files.
+	// The tool returns one path at a time. Queue each path's groups so
+	// every representable file gets a retained hit before any second hit.
 	paths := make([]string, 0)
 	queues := map[string][]int{}
 	for i, group := range groups {
@@ -160,19 +160,6 @@ func reduceFileSearch(in Input) candidate {
 	if declaredFiles != len(paths) {
 		return candidate{}
 	}
-	var order []int
-	for round := 0; ; round++ {
-		more := false
-		for _, path := range paths {
-			if round < len(queues[path]) {
-				order = append(order, queues[path][round])
-				more = true
-			}
-		}
-		if !more {
-			break
-		}
-	}
 	budget := in.Budget
 	if budget <= 0 {
 		budget = defaultBudgetTokens
@@ -180,16 +167,14 @@ func reduceFileSearch(in Input) candidate {
 			budget = failureBudgetTokens
 		}
 	}
-	selected := make([]bool, len(groups))
+	var selected []int
 	render := func() candidate {
 		var b strings.Builder
 		kept := 0
-		for _, i := range order {
-			if selected[i] {
-				b.WriteString(strings.Join(groups[i].lines, "\n"))
-				b.WriteByte('\n')
-				kept += groups[i].hits
-			}
+		for _, i := range selected {
+			b.WriteString(strings.Join(groups[i].lines, "\n"))
+			b.WriteByte('\n')
+			kept += groups[i].hits
 		}
 		b.WriteByte('\n')
 		b.WriteString(summary)
@@ -204,24 +189,49 @@ func reduceFileSearch(in Input) candidate {
 		}
 		return candidate{text: b.String(), omitted: map[string]int{"matches": omitted}, required: []string{summary}}
 	}
-	for _, i := range order {
-		selected[i] = true
+	appendIfFits := func(i int) bool {
+		selected = append(selected, i)
 		if int(llm.EstimateTokens(render().text)) > budget {
-			selected[i] = false
+			selected = selected[:len(selected)-1]
+			return false
+		}
+		return true
+	}
+	// First pass may skip an oversized early group and use a later smaller
+	// group from the same file. The skipped prefix cannot be added afterward
+	// without reversing that file's retained match order.
+	next := map[string]int{}
+	for _, path := range paths {
+		for pos, i := range queues[path] {
+			if appendIfFits(i) {
+				next[path] = pos + 1
+				break
+			}
 		}
 	}
-	c := render()
-	kept := false
-	for _, chosen := range selected {
-		if chosen {
-			kept = true
+	for {
+		added := false
+		for _, path := range paths {
+			pos, represented := next[path]
+			if !represented {
+				continue
+			}
+			for ; pos < len(queues[path]); pos++ {
+				if appendIfFits(queues[path][pos]) {
+					next[path] = pos + 1
+					added = true
+					break
+				}
+			}
+		}
+		if !added {
 			break
 		}
 	}
-	if !kept || int(llm.EstimateTokens(c.text)) > budget {
+	if len(selected) == 0 {
 		return candidate{}
 	}
-	return c
+	return render()
 }
 
 type webSearchRecord struct {
