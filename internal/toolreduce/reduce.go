@@ -136,8 +136,6 @@ func shellNonzeroOrRunning(in Input) bool {
 	return err == nil && code != 0
 }
 
-func reduceReport(Input) candidate { return candidate{} }
-
 // cropUTF8 returns a prefix no longer than maxBytes without splitting a rune.
 func cropUTF8(s string, maxBytes int) string {
 	if maxBytes <= 0 {
