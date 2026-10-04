@@ -102,6 +102,28 @@ func TestIgnoresGitNodeModulesVault(t *testing.T) {
 	}
 }
 
+func TestIgnoresVaultWhenProjectRootIsSymlinked(t *testing.T) {
+	realRoot := t.TempDir()
+	linkedRoot := filepath.Join(t.TempDir(), "project")
+	if err := os.Symlink(realRoot, linkedRoot); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	vaultDir := filepath.Join(linkedRoot, "vault")
+	write(t, filepath.Join(linkedRoot, "keep.txt"), "k")
+	a, ok := TakeWorkspace(context.Background(), linkedRoot, vaultDir)
+	if !ok {
+		t.Fatal("take failed")
+	}
+	write(t, filepath.Join(vaultDir, "objects", "ab", "cd"), "blob")
+	b, ok := TakeWorkspace(context.Background(), linkedRoot, vaultDir)
+	if !ok {
+		t.Fatal("second take failed")
+	}
+	if a.Value != b.Value || len(Diff(a, b)) != 0 {
+		t.Fatalf("vault under symlinked root changed the fingerprint: %v", Diff(a, b))
+	}
+}
+
 func TestManifestCap(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < MaxManifestFiles+50; i++ {
