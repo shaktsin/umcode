@@ -4,6 +4,7 @@ package toolreduce
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -41,13 +42,7 @@ type candidate struct {
 // Unsupported tools and any candidate that fails a guard preserve the original
 // output byte-for-byte.
 func Reduce(in Input) (text string, report Report, applied bool) {
-	budget := in.Budget
-	if budget <= 0 {
-		budget = defaultBudgetTokens
-		if in.IsError {
-			budget = failureBudgetTokens
-		}
-	}
+	budget := effectiveBudget(in)
 	report.OriginalTokens = int(llm.EstimateTokens(in.Output))
 	report.SentTokens = report.OriginalTokens
 	if report.OriginalTokens <= budget {
@@ -74,13 +69,7 @@ func Reduce(in Input) (text string, report Report, applied bool) {
 
 func acceptCandidate(in Input, strategy string, c candidate) (string, Report, bool) {
 	report := Report{Strategy: strategy, OriginalTokens: int(llm.EstimateTokens(in.Output)), SentTokens: int(llm.EstimateTokens(in.Output))}
-	budget := in.Budget
-	if budget <= 0 {
-		budget = defaultBudgetTokens
-		if in.IsError {
-			budget = failureBudgetTokens
-		}
-	}
+	budget := effectiveBudget(in)
 	decline := func(reason string) (string, Report, bool) {
 		report.Declined = reason
 		return in.Output, report, false
@@ -111,9 +100,43 @@ func acceptCandidate(in Input, strategy string, c candidate) (string, Report, bo
 	return c.text, report, true
 }
 
-func reduceShell(Input) candidate        { return candidate{} }
-func reduceSearch(Input) candidate       { return candidate{} }
-func reduceReport(Input) candidate       { return candidate{} }
+func effectiveBudget(in Input) int {
+	if in.Budget > 0 {
+		return in.Budget
+	}
+	if in.IsError || shellNonzeroOrRunning(in) {
+		return failureBudgetTokens
+	}
+	return defaultBudgetTokens
+}
+
+func shellNonzeroOrRunning(in Input) bool {
+	if in.Name != "shell.run" && in.Name != "exec.start" && in.Name != "exec.write" && in.Name != "exec.stop" {
+		return false
+	}
+	lines := strings.SplitN(in.Output, "\n", 3)
+	if in.Name == "shell.run" {
+		if len(lines) < 2 || !strings.HasPrefix(lines[0], "exit_code: ") || strings.TrimSuffix(lines[1], "\r") != "--- stdout ---" {
+			return false
+		}
+		code, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(lines[0], "exit_code: ")))
+		return err == nil && code != 0
+	}
+	if len(lines) < 2 || !strings.HasPrefix(lines[0], "session_id: ") {
+		return false
+	}
+	state := strings.TrimSuffix(lines[1], "\r")
+	if strings.HasPrefix(state, "status: running (") {
+		return true
+	}
+	if !strings.HasPrefix(state, "status: exited (exit_code ") || !strings.HasSuffix(state, ")") {
+		return false
+	}
+	code, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(state, "status: exited (exit_code "), ")"))
+	return err == nil && code != 0
+}
+
+func reduceReport(Input) candidate { return candidate{} }
 
 // cropUTF8 returns a prefix no longer than maxBytes without splitting a rune.
 func cropUTF8(s string, maxBytes int) string {
