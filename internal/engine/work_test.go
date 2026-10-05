@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/fingerprint"
@@ -75,6 +76,37 @@ func TestRunToolObservedByWork(t *testing.T) {
 	d = openWorkDetail(t, st, th.ID)
 	if countKind(d, protocol.NodeFact) != 2 {
 		t.Fatalf("failed and denied tools should record two facts: %+v", d.Nodes)
+	}
+}
+
+func TestReducerDoesNotChangeWorkEvidenceOrVaultHash(t *testing.T) {
+	e, th, turn, st := workEngine(t)
+	e.Cfg.Models.ToolResultReducers = true
+	e.Work.Vault = &vault.Vault{Dir: t.TempDir()}
+	output := reducerVerificationOutput(t)
+	res := runWorkTool(t, e, th, turn, &engineTestTool{name: "verification.run", risk: tools.RiskGreen, output: output})
+	if res.Output != output || res.ModelOutput == output || strings.Contains(res.ModelOutput, passingReducerMarker) {
+		t.Fatalf("result separation failed: %+v", res.Reduction)
+	}
+	d := openWorkDetail(t, st, th.ID)
+	if len(d.Attempts) != 2 {
+		t.Fatalf("Work saw %d attempts, want both checks", len(d.Attempts))
+	}
+	var found bool
+	for _, ev := range d.Evidence {
+		if ev.VaultHash == "" {
+			continue
+		}
+		b, err := e.Work.Vault.Get(ev.VaultHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), passingReducerMarker) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("vault evidence lost canonical passing output")
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/shaktsin/umcode/internal/router"
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/toolreduce"
 	"github.com/shaktsin/umcode/internal/tools"
 	"github.com/shaktsin/umcode/internal/work"
 )
@@ -445,6 +446,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	}
 
 	var turnErr error
+	var reductions ToolReductions
+	if e.Cfg != nil && e.Cfg.Models.ToolResultReducers {
+		reductions = make(ToolReductions)
+	}
+	toolOccurrences := make(map[string]int)
 	instructionHint := ""
 	for {
 		if ctx.Err() != nil {
@@ -474,7 +480,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
 			packets = out.packets
 		}
-		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req, packets))
+		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req, packets, reductions))
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
 			if reason := budget.stopReason(); reason != "" {
@@ -501,7 +507,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			if hint := instructionPathHint(call.Args); hint != "" {
 				instructionHint = hint
 			}
-			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: result, IsError: isErr})
+			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: toolResult.ModelOutput, IsError: isErr})
+			key := nextToolReductionKey(toolOccurrences, call.ID)
+			if reductions != nil && toolResult.Reduction.Strategy != "" && toolResult.Reduction.OriginalTokens > toolResult.Reduction.SentTokens {
+				reductions[key] = toolResult.Reduction
+			}
 			lastToolMsg = len(msgs) - 1
 			toolName := tools.FromWire(call.Name)
 			if !isErr && res.meta.Images && (strings.HasPrefix(toolName, "visual.") || strings.HasPrefix(toolName, "computer.")) {
@@ -892,6 +902,8 @@ type turnTool struct {
 
 type toolRunResult struct {
 	Output      string
+	ModelOutput string
+	Reduction   toolreduce.Report
 	IsError     bool
 	HookContext []string
 }
@@ -972,7 +984,8 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	}
 	invocation := hooks.Invocation{ProjectID: th.ProjectID, ThreadID: th.ID, TurnID: turn.ID, ToolName: name, ToolArgs: call.Args}
 	result := func(output string, isError bool, contextValues ...string) toolRunResult {
-		return toolRunResult{Output: output, IsError: isError, HookContext: contextValues}
+		model, reduction := e.reduceToolResult(name, call.Args, output, isError)
+		return toolRunResult{Output: output, ModelOutput: model, Reduction: reduction, IsError: isError, HookContext: contextValues}
 	}
 	riskLevel := ""
 	var sink *tools.RawSink // the tool's unclipped result, when it provides one

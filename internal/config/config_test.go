@@ -102,3 +102,29 @@ func TestContextCompilerFlagDefaultsFalse(t *testing.T) {
 		t.Fatal("models.context_compiler: true must enable it")
 	}
 }
+
+func TestToolResultReducersFlagDefaultsFalse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	cfg := filepath.Join(home, "config.yaml")
+	if err := os.WriteFile(cfg, []byte("models: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Models.ToolResultReducers {
+		t.Fatal("tool result reducers must be off unless configured")
+	}
+	if err := os.WriteFile(cfg, []byte("models: {tool_result_reducers: true}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Models.ToolResultReducers {
+		t.Fatal("models.tool_result_reducers: true must enable it")
+	}
+}

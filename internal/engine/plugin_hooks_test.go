@@ -90,6 +90,34 @@ func TestAfterToolAndFailureHooksObserveFinalOutcome(t *testing.T) {
 	}
 }
 
+func TestReducerDoesNotChangeHookOutput(t *testing.T) {
+	e, th, turn, _ := pluginHookEngine(t)
+	e.Cfg.Models.ToolResultReducers = true
+	output := reducerVerificationOutput(t)
+	capture := filepath.Join(t.TempDir(), "hook-envelope.json")
+	tool := &engineTestTool{name: "verification.run", risk: tools.RiskGreen, output: output}
+	snapshot := &fakePluginSnapshot{tool: tool, hookSet: captureHookSet(t, hooks.AfterToolUse, capture)}
+	res := e.runTool(t.Context(), t.Context(), th, turn, llm.ToolCall{ID: "reduce-hook", Name: tools.ToWire(tool.Name()), Args: json.RawMessage(`{}`)}, snapshot)
+	if res.ModelOutput == output || strings.Contains(res.ModelOutput, passingReducerMarker) {
+		t.Fatalf("reduction did not apply: %+v", res.Reduction)
+	}
+	b, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Tool struct {
+			Output string `json:"output"`
+		} `json:"tool"`
+	}
+	if err := json.Unmarshal(b, &captured); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(output, captured.Tool.Output) || !strings.Contains(captured.Tool.Output, passingReducerMarker) {
+		t.Fatal("hook received reduced output")
+	}
+}
+
 func TestPluginHookCannotBypassToolPolicy(t *testing.T) {
 	t.Run("built-in guard runs first", func(t *testing.T) {
 		e, th, turn, _ := pluginHookEngine(t)
