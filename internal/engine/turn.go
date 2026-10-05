@@ -450,6 +450,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	if e.Cfg != nil && e.Cfg.Models.ToolResultReducers {
 		reductions = make(ToolReductions)
 	}
+	toolOccurrences := make(map[string]int)
 	instructionHint := ""
 	for {
 		if ctx.Err() != nil {
@@ -501,15 +502,16 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		lastToolMsg := -1
 		for _, call := range out.calls {
 			toolResult := e.runTool(ctx, sctx, th, turn, call, snapshot)
-			if reductions != nil && toolResult.Reduction.Strategy != "" && toolResult.Reduction.OriginalTokens > toolResult.Reduction.SentTokens {
-				reductions[call.ID] = toolResult.Reduction
-			}
 			result, isErr := toolResult.Output, toolResult.IsError
 			hookContext = append(hookContext, toolResult.HookContext...)
 			if hint := instructionPathHint(call.Args); hint != "" {
 				instructionHint = hint
 			}
 			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: toolResult.ModelOutput, IsError: isErr})
+			key := nextToolReductionKey(toolOccurrences, call.ID)
+			if reductions != nil && toolResult.Reduction.Strategy != "" && toolResult.Reduction.OriginalTokens > toolResult.Reduction.SentTokens {
+				reductions[key] = toolResult.Reduction
+			}
 			lastToolMsg = len(msgs) - 1
 			toolName := tools.FromWire(call.Name)
 			if !isErr && res.meta.Images && (strings.HasPrefix(toolName, "visual.") || strings.HasPrefix(toolName, "computer.")) {

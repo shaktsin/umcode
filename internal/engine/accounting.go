@@ -5,7 +5,19 @@ import (
 	"github.com/shaktsin/umcode/internal/toolreduce"
 )
 
-type ToolReductions map[string]toolreduce.Report
+// A provider may reuse a call ID in later model requests in the same turn.
+// The ordinal identifies the exact tool message that received a reduction.
+type toolReductionKey struct {
+	CallID     string
+	Occurrence int
+}
+
+type ToolReductions map[toolReductionKey]toolreduce.Report
+
+func nextToolReductionKey(occurrences map[string]int, callID string) toolReductionKey {
+	occurrences[callID]++
+	return toolReductionKey{CallID: callID, Occurrence: occurrences[callID]}
+}
 
 // RequestBreakdown estimates where one model request's input tokens go. It is
 // diagnostic only: nothing in it changes what is sent to the model.
@@ -35,7 +47,7 @@ type RequestBreakdown struct {
 // estimator as context trimming. layers are the parts of req.System.
 func measureRequest(layers []promptLayer, req llm.Request, packets RequestPackets, reductions ToolReductions) RequestBreakdown {
 	b := RequestBreakdown{Layers: map[string]int{}, ToolCount: len(req.Tools)}
-	seen := make(map[string]bool)
+	occurrences := make(map[string]int)
 	toolOriginal := 0
 	for _, l := range layers {
 		n := tokens(l.Text)
@@ -45,14 +57,14 @@ func measureRequest(layers []promptLayer, req llm.Request, packets RequestPacket
 	b.ToolSpecTokens = toolSpecTokens(req.Tools)
 	for _, m := range req.Messages {
 		if m.Role == llm.RoleTool {
+			key := nextToolReductionKey(occurrences, m.ToolCallID)
 			sent := tokens(m.Result)
 			b.ToolResultTokens += sent
 			toolOriginal += sent
-			if report, ok := reductions[m.ToolCallID]; ok && !seen[m.ToolCallID] && report.Strategy != "" && report.OriginalTokens > report.SentTokens {
+			if report, ok := reductions[key]; ok && report.Strategy != "" && report.OriginalTokens > report.SentTokens {
 				toolOriginal += report.OriginalTokens - sent
 				b.ToolResultSavedTokens += report.OriginalTokens - report.SentTokens
 				b.ToolResultsReduced++
-				seen[m.ToolCallID] = true
 			}
 		}
 	}
