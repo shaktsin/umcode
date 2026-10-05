@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
+
+var producerClippingNotice = regexp.MustCompile(`… \[truncated [0-9]+ bytes from the middle\] …`)
 
 type verificationCheck struct {
 	Label      string `json:"label"`
@@ -118,8 +121,9 @@ func reduceCheckVerification(output string) candidate {
 				appendDetail(&b, "output", check.Output, &required)
 			}
 		} else {
-			omitted += len(check.Output)
-			if check.Output != "" {
+			omittedBytes := omitPassingOutput(&b, check.Output, &required)
+			omitted += omittedBytes
+			if omittedBytes > 0 {
 				omittedChecks++
 			}
 		}
@@ -127,7 +131,7 @@ func reduceCheckVerification(output string) candidate {
 	if omitted > 0 {
 		fmt.Fprintf(&b, "omitted: passing command output (%d bytes across %d check(s)); rerun verification.run with only the desired check for fresh output.\n", omitted, omittedChecks)
 	}
-	return candidate{text: b.String(), omitted: map[string]int{"passing_output_bytes": omitted}, required: required}
+	return candidate{text: b.String(), omitted: map[string]int{"passing_output_bytes": omitted}, required: required, failure: payload.Status != "passed"}
 }
 
 func reduceBrowserVerification(output string) candidate {
@@ -186,12 +190,23 @@ func reduceBrowserVerification(output string) candidate {
 	}
 	omitted := 0
 	if payload.Status == "passed" {
-		omitted = len(payload.Output)
+		omitted = omitPassingOutput(&b, payload.Output, &required)
 	}
 	if omitted > 0 {
 		fmt.Fprintf(&b, "omitted: passing browser output (%d bytes); rerun browser.verify with the same command for fresh output.\n", omitted)
 	}
-	return candidate{text: b.String(), omitted: map[string]int{"passing_output_bytes": omitted}, required: required}
+	return candidate{text: b.String(), omitted: map[string]int{"passing_output_bytes": omitted}, required: required, failure: payload.Status != "passed"}
+}
+
+// Keep producer clipping notices attached to the check/result they describe.
+// Only the remaining passing detail contributes to this reducer's omissions.
+func omitPassingOutput(b *strings.Builder, output string, required *[]string) int {
+	omitted := len(output)
+	for _, notice := range producerClippingNotice.FindAllString(output, -1) {
+		appendDetail(b, "output", notice, required)
+		omitted -= len(notice)
+	}
+	return omitted
 }
 
 func decodeOwnedObject(data []byte, target any, mandatory ...string) bool {
@@ -205,7 +220,11 @@ func decodeOwnedObject(data []byte, target any, mandatory ...string) bool {
 	}
 	for key, value := range fields {
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			return false
+			// The browser producer assigns nil slices when collection finds no
+			// diagnostics or artifacts. Scalars and other owned fields stay strict.
+			if _, browser := target.(*browserPayload); !browser || (key != "diagnostics" && key != "artifacts") {
+				return false
+			}
 		}
 		if _, exists := known[key]; !exists && !emptyUnknownValue(value) {
 			return false

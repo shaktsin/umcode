@@ -36,6 +36,7 @@ type candidate struct {
 	text     string
 	omitted  map[string]int
 	required []string
+	failure  bool // set only after an owned structured payload is fully validated
 }
 
 // Reduce returns a conservative model-facing result and an accounting report.
@@ -70,6 +71,9 @@ func Reduce(in Input) (text string, report Report, applied bool) {
 func acceptCandidate(in Input, strategy string, c candidate) (string, Report, bool) {
 	report := Report{Strategy: strategy, OriginalTokens: int(llm.EstimateTokens(in.Output)), SentTokens: int(llm.EstimateTokens(in.Output))}
 	budget := effectiveBudget(in)
+	if in.Budget <= 0 && c.failure {
+		budget = failureBudgetTokens
+	}
 	decline := func(reason string) (string, Report, bool) {
 		report.Declined = reason
 		return in.Output, report, false

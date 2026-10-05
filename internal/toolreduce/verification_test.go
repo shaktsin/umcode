@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/shaktsin/umcode/internal/llm"
 )
 
 func TestVerificationReducerKeepsEveryVerdictAndFailureDetail(t *testing.T) {
@@ -123,12 +125,12 @@ func TestVerificationReducerDeclinesMalformedOrUnknownSchema(t *testing.T) {
 	}
 }
 
-func TestVerificationReducerDeclinesInconsistentVerdictsAndNullBrowserCollections(t *testing.T) {
+func TestVerificationReducerDeclinesInconsistentVerdictsAndNullScalars(t *testing.T) {
 	longOutput := strings.Repeat("ordinary passing output\n", 200)
 	tests := []struct{ name, tool, output string }{
 		{"inconsistent_verdict", "verification.run", fmt.Sprintf(`{"status":"passed","results":[{"label":"unit","command":"go test","status":"failed","exit_code":2,"duration_ms":1,"output":%q}]}`, longOutput)},
-		{"null_diagnostics", "browser.verify", fmt.Sprintf(`{"status":"passed","framework":"playwright","command":"npm run e2e","output":%q,"diagnostics":null,"artifacts":[]}`, longOutput)},
-		{"null_artifacts", "browser.verify", fmt.Sprintf(`{"status":"passed","framework":"playwright","command":"npm run e2e","output":%q,"diagnostics":[],"artifacts":null}`, longOutput)},
+		{"null_command", "browser.verify", fmt.Sprintf(`{"status":"passed","framework":"playwright","command":null,"output":%q,"diagnostics":[],"artifacts":[]}`, longOutput)},
+		{"null_duration", "browser.verify", fmt.Sprintf(`{"status":"passed","duration_ms":null,"output":%q,"diagnostics":[],"artifacts":[]}`, longOutput)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,6 +139,73 @@ func TestVerificationReducerDeclinesInconsistentVerdictsAndNullBrowserCollection
 				t.Fatalf("Reduce() = (%q, %v), want byte-identical fallback", got, applied)
 			}
 		})
+	}
+}
+
+func TestBrowserReducerAcceptsProducerNullCollections(t *testing.T) {
+	for _, collections := range []string{`"diagnostics":null,"artifacts":[]`, `"diagnostics":[],"artifacts":null`, `"diagnostics":null,"artifacts":null`} {
+		output := fmt.Sprintf(`{"status":"passed","framework":"playwright","command":"npm run e2e","duration_ms":12,"output":%q,%s}`, strings.Repeat("browser passed\n", 1000), collections)
+		got, report, applied := Reduce(Input{Name: "browser.verify", Output: output})
+		if !applied || !strings.Contains(got, "browser verification: passed") || !strings.Contains(got, "rerun browser.verify") {
+			t.Fatalf("producer null collections declined: %+v", report)
+		}
+	}
+}
+
+func TestVerificationReducerPreservesPassingClippingNoticesPerCheck(t *testing.T) {
+	first := "… [truncated 8192 bytes from the middle] …"
+	second := "… [truncated 4096 bytes from the middle] …"
+	passing := strings.Repeat("ordinary passing output\n", 500)
+	output := fmt.Sprintf(`{"status":"passed","results":[{"label":"first","command":"go test ./first","status":"passed","duration_ms":1,"output":%q},{"label":"second","command":"go test ./second","status":"passed","duration_ms":2,"output":%q}]}`, passing+first+"\n"+second, passing+first)
+	got, report, applied := Reduce(Input{Name: "verification.run", Output: output})
+	if !applied {
+		t.Fatalf("reduction declined: %+v", report)
+	}
+	checks := strings.Split(got, "PASS second")
+	if len(checks) != 2 || !strings.Contains(checks[0], first) || !strings.Contains(checks[0], second) || !strings.Contains(checks[1], first) || strings.Count(got, first) != 2 {
+		t.Fatalf("clipping notices lost their checks: %s", got)
+	}
+	if !strings.Contains(got, "omitted: passing command output") || !strings.Contains(got, "across 2 check(s)") || !strings.Contains(got, "rerun verification.run") {
+		t.Fatalf("missing reducer omission notice: %s", got)
+	}
+	wantOmitted := len(passing)*2 + 1
+	if report.Omitted["passing_output_bytes"] != wantOmitted {
+		t.Fatalf("omission count includes retained markers: %+v, want %d", report, wantOmitted)
+	}
+}
+
+func TestBrowserReducerPreservesPassingClippingNotices(t *testing.T) {
+	marker := "… [truncated 16384 bytes from the middle] …"
+	passing := strings.Repeat("ordinary browser output\n", 500)
+	output := fmt.Sprintf(`{"status":"passed","command":"npm run e2e","output":%q,"diagnostics":[],"artifacts":[]}`, passing+marker)
+	got, report, applied := Reduce(Input{Name: "browser.verify", Output: output})
+	if !applied || !strings.Contains(got, marker) || !strings.Contains(got, "omitted: passing browser output") || !strings.Contains(got, "rerun browser.verify") || report.Omitted["passing_output_bytes"] != len(passing) {
+		t.Fatalf("clipping or omission notice lost: %+v / %s", report, got)
+	}
+}
+
+func TestVerificationReducerUsesValidatedFailureBudget(t *testing.T) {
+	// Backslashes model escaped diagnostic output; decoding saves enough tokens
+	// while every byte of mandatory evidence remains between 2k and 4k tokens.
+	evidence := "FAILURE_EVIDENCE\n" + strings.Repeat("\\", 10000)
+	for _, status := range []string{"failed", "blocked", "not_run"} {
+		for _, tool := range []string{"verification.run", "browser.verify"} {
+			t.Run(tool+"/"+status, func(t *testing.T) {
+				output := fmt.Sprintf(`{"status":%q,"results":[{"label":"unit","command":"go test","status":%q,"exit_code":1,"duration_ms":2,"error":"runner unavailable","output":%q}]}`, status, status, evidence)
+				if tool == "browser.verify" {
+					output = fmt.Sprintf(`{"status":%q,"command":"npm run e2e","exit_code":1,"reason":"runner unavailable","output":%q,"diagnostics":[],"artifacts":[]}`, status, evidence)
+				}
+				got, report, applied := Reduce(Input{Name: tool, Output: output})
+				if !applied || !strings.Contains(got, evidence) || llm.EstimateTokens(got) <= 2000 || llm.EstimateTokens(got) > 4000 {
+					t.Fatalf("validated failure did not use larger budget: %+v", report)
+				}
+				for _, malformed := range []string{strings.TrimSuffix(output, "}"), strings.TrimSuffix(output, "}") + `,"unknown_evidence":"retain"}`} {
+					if got, _, applied := Reduce(Input{Name: tool, Output: malformed}); applied || got != malformed {
+						t.Fatal("malformed/unknown failure was changed")
+					}
+				}
+			})
+		}
 	}
 }
 

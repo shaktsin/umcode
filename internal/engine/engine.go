@@ -76,6 +76,7 @@ type Engine struct {
 
 	compilerFailures    atomic.Int64 // context-compiler errors, declines and panics
 	toolReducerFailures atomic.Int64 // recovered tool-result reducer panics
+	reduceHook          func()       // instance-local panic test seam; set before use
 
 	mu           sync.Mutex
 	activeTurns  map[string]*activeTurn // by turn id

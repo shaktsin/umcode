@@ -6,9 +6,6 @@ import (
 	"github.com/shaktsin/umcode/internal/toolreduce"
 )
 
-// reduceHook is a test seam immediately before Reduce, used to prove panic fallback.
-var reduceHook func()
-
 // reduceToolResult returns a model-facing projection. The caller keeps output
 // for storage, observation, hooks, and repeat detection.
 func (e *Engine) reduceToolResult(name string, args json.RawMessage, output string, isError bool) (model string, report toolreduce.Report) {
@@ -25,16 +22,22 @@ func (e *Engine) reduceToolResult(name string, args json.RawMessage, output stri
 			model, report = output, toolreduce.Report{}
 		}
 	}()
-	if reduceHook != nil {
-		reduceHook()
+	if e.reduceHook != nil {
+		e.reduceHook()
 	}
 	projected, reduction, applied := toolreduce.Reduce(toolreduce.Input{Name: name, Args: args, Output: output, IsError: isError})
 	if !applied {
+		if e.Log != nil && reduction.Declined != "" {
+			e.Log.Debug("tool result reduction declined", "tool", name, "strategy", reduction.Strategy,
+				"original_tokens", reduction.OriginalTokens, "sent_tokens", reduction.SentTokens,
+				"decline_reason", reduction.Declined)
+		}
 		return output, reduction
 	}
 	if e.Log != nil {
 		e.Log.Debug("tool result reduced", "tool", name, "strategy", reduction.Strategy,
-			"original_tokens", reduction.OriginalTokens, "sent_tokens", reduction.SentTokens)
+			"original_tokens", reduction.OriginalTokens, "sent_tokens", reduction.SentTokens,
+			"omitted", reduction.Omitted)
 	}
 	return projected, reduction
 }

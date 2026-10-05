@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -71,16 +72,53 @@ func TestReducerPanicFallsBackCountsAndCompletes(t *testing.T) {
 	output := reducerVerificationOutput(t)
 	var logs bytes.Buffer
 	e.Log = slog.New(slog.NewTextHandler(&logs, nil))
-	reduceHook = func() { panic("boom") }
-	t.Cleanup(func() { reduceHook = nil })
+	e.reduceHook = func() { panic("boom") }
+	other := &Engine{Cfg: e.Cfg}
+	if model, _ := other.reduceToolResult("verification.run", nil, output, false); model == output || other.toolReducerFailures.Load() != 0 {
+		t.Fatal("panic injection leaked into a separate engine")
+	}
 	tool := &engineTestTool{name: "verification.run", risk: tools.RiskGreen, output: output}
 	e.Tools.Add(tool)
 	res := e.runTool(t.Context(), t.Context(), th, turn, llm.ToolCall{ID: "panic", Name: tools.ToWire(tool.Name()), Args: json.RawMessage(`{}`)}, &fakePluginSnapshot{})
 	if res.IsError || res.Output != output || res.ModelOutput != output || e.toolReducerFailures.Load() != 1 {
 		t.Fatalf("panic escaped or changed result: %+v failures=%d", res, e.toolReducerFailures.Load())
 	}
-	if strings.Contains(logs.String(), passingReducerMarker) || strings.Contains(logs.String(), failingReducerMarker) {
+	if strings.Contains(logs.String(), passingReducerMarker) || strings.Contains(logs.String(), failingReducerMarker) || strings.Contains(logs.String(), "boom") {
 		t.Fatalf("result text leaked into logs: %s", logs.String())
+	}
+}
+
+func TestReducerLogsSafeMetadataForAppliedAndDeclined(t *testing.T) {
+	for _, malformed := range []bool{false, true} {
+		t.Run(fmt.Sprint(malformed), func(t *testing.T) {
+			var logs bytes.Buffer
+			e := &Engine{Cfg: &config.Config{}, Log: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+			e.Cfg.Models.ToolResultReducers = true
+			output := reducerVerificationOutput(t)
+			if malformed {
+				output = strings.TrimSuffix(output, "}")
+			}
+			_, report := e.reduceToolResult("verification.run", json.RawMessage(`{"secret":"ARGUMENT_SECRET"}`), output, false)
+			var entry map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+				t.Fatalf("missing structured reducer debug entry: %v", err)
+			}
+			if entry["tool"] != "verification.run" || entry["strategy"] != "verification" || entry["original_tokens"] != float64(report.OriginalTokens) || entry["sent_tokens"] != float64(report.SentTokens) {
+				t.Fatalf("missing token/strategy metadata: %v", entry)
+			}
+			if malformed {
+				if entry["decline_reason"] != "empty_candidate" {
+					t.Fatalf("missing decline reason: %v", entry)
+				}
+			} else if counts, ok := entry["omitted"].(map[string]any); !ok || counts["passing_output_bytes"] != float64(len(strings.Repeat(passingReducerMarker+"\n", 1200))) {
+				t.Fatalf("missing omission counts: %v", entry)
+			}
+			for _, secret := range []string{passingReducerMarker, failingReducerMarker, "ARGUMENT_SECRET"} {
+				if strings.Contains(logs.String(), secret) {
+					t.Fatalf("reducer logs leaked %q", secret)
+				}
+			}
+		})
 	}
 }
 

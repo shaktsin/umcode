@@ -12,7 +12,7 @@ import (
 
 var (
 	ansiColor             = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-	compilerLocation      = regexp.MustCompile(`(?:^|[ /])[^ :]+\.[A-Za-z0-9]+:[0-9]+(?::[0-9]+)?:`)
+	compilerLocation      = regexp.MustCompile(`(?:^|[ /\t])[^ :\t]+\.[A-Za-z0-9]+:[0-9]+(?::[0-9]+)?(?::|\s|$)`)
 	extensionlessLocation = regexp.MustCompile(`(?i)(?:^|[ \t])(?:(?:[A-Za-z0-9_.-]+/)+(?:[A-Za-z_][A-Za-z0-9_-]*)|(?:[A-Za-z0-9_.-]+/)*(?:Makefile|GNUmakefile|Dockerfile|Containerfile|Justfile|BUILD|WORKSPACE|Rakefile|Gemfile)):[0-9]+(?::[0-9]+)?:`)
 )
 

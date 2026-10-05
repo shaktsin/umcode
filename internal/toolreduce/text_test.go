@@ -7,6 +7,24 @@ import (
 	"unicode/utf8"
 )
 
+func TestShellReducerKeepsMidOutputGoStackFrames(t *testing.T) {
+	frames := "\t/repo/main.go:42 +0x27\n\t/repo/worker.go:73\n\t/repo/worker.go:74\t+0x28\n"
+	var progress strings.Builder
+	for i := 0; i < 700; i++ {
+		fmt.Fprintf(&progress, "ordinary progress %d\n", i)
+	}
+	output := "exit_code: 2\n--- stdout ---\n" + progress.String() + frames + progress.String() + "--- stderr ---\nfinished\n"
+	got, report, applied := Reduce(Input{Name: "shell.run", Output: output, Budget: 300})
+	if !applied || !strings.Contains(got, frames) {
+		t.Fatalf("mid-output stack frames lost: %+v / %s", report, got)
+	}
+	for _, line := range []string{"12:34:56", "processed:42 entries"} {
+		if diagnosticLine(line) {
+			t.Errorf("counter/timestamp misclassified: %q", line)
+		}
+	}
+}
+
 func shellFixture() string {
 	var b strings.Builder
 	b.WriteString("exit_code: 1\n--- stdout ---\ncommand: go test ./...\nworking_directory: /repo\n")
