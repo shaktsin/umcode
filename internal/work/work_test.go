@@ -190,6 +190,19 @@ func TestDesignedWorkflowServiceCompletion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, e := range graph.Evidence {
+		e.WorkID = d.Work.ID
+		if _, err := f.st.AddEvidence(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, n := range graph.Nodes {
+		for _, id := range n.EvidenceIDs {
+			if _, err := f.st.DB.ExecContext(context.Background(), `INSERT INTO work_node_evidence (work_id,node_id,evidence_id) VALUES (?,?,?)`, d.Work.ID, n.ID, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	a := graph.Attempts[0]
 	a.WorkID = d.Work.ID
 	if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
@@ -200,6 +213,64 @@ func TestDesignedWorkflowServiceCompletion(t *testing.T) {
 	}
 	if got := f.detail(t).Work.Status; got != "completed" {
 		t.Fatalf("satisfied graph=%s", got)
+	}
+}
+
+// Catches End closing an enabled Designed work using persisted stale decision support.
+func TestDesignedWorkflowServiceCompletionKeepsStaleSolutionOpen(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(map[bool]string{true: "on", false: "off"}[enabled], func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = enabled
+			d := f.begin(t, "Design a minimal change")
+			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, "designed"); err != nil {
+				t.Fatal(err)
+			}
+			graph := readinessFixture()
+			graph.Nodes[0].Status = "completed"
+			stale := time.Unix(3, 0)
+			graph.Evidence[0].StaleAt = &stale
+			for _, n := range graph.Nodes {
+				n.WorkID = d.Work.ID
+				if _, err := f.st.AddWorkNode(context.Background(), n); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, e := range graph.Edges {
+				e.WorkID = d.Work.ID
+				if err := f.st.AddWorkEdge(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, e := range graph.Evidence {
+				e.WorkID = d.Work.ID
+				if _, err := f.st.AddEvidence(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, n := range graph.Nodes {
+				for _, id := range n.EvidenceIDs {
+					if _, err := f.st.DB.ExecContext(context.Background(), `INSERT INTO work_node_evidence (work_id,node_id,evidence_id) VALUES (?,?,?)`, d.Work.ID, n.ID, id); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			a := graph.Attempts[0]
+			a.WorkID = d.Work.ID
+			if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+				t.Fatal(err)
+			}
+			want := "completed"
+			if enabled {
+				want = "open"
+			}
+			if got := f.detail(t).Work.Status; got != want {
+				t.Fatalf("status=%s want %s", got, want)
+			}
+		})
 	}
 }
 

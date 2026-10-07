@@ -20,17 +20,20 @@ func MaxDepth(a, b string) string {
 // InitialDepth recognizes explicit design requests without a model call.
 func InitialDepth(userText string) string {
 	text := strings.TrimSpace(strings.ToLower(userText))
+	if explanatoryRequest.MatchString(text) {
+		return protocol.DepthDirect
+	}
 	if explicitDesignRequest.MatchString(text) {
 		return protocol.DepthDesigned
 	}
-	if !explanatoryRequest.MatchString(text) && mutationIntent.MatchString(text) && highRiskScope.MatchString(text) {
+	if mutationIntent.MatchString(text) && highRiskScope.MatchString(text) {
 		return protocol.DepthDesigned
 	}
 	return protocol.DepthDirect
 }
 
 var explicitDesignRequest = regexp.MustCompile(`^(?:(?:please|can you|could you|help me)\s+)?(?:design|redesign|architect)\b|\b(?:architectural|architecture|design)\s+(?:decision|plan)\b|\b(?:propose|choose|decide|create|build)\b.*\b(?:architecture|architectural)\b`)
-var explanatoryRequest = regexp.MustCompile(`^(?:what|why|how|explain|describe|is|are|does|tell me about)\b`)
+var explanatoryRequest = regexp.MustCompile(`^(?:(?:please|can you|could you|would you|help me)\s+)*(?:what|why|how|explain|describe|is|are|does|tell me about)\b`)
 var mutationIntent = regexp.MustCompile(`\b(?:change|add|update|modify|remove|delete|migrate|implement|replace|introduce|design|architect)\b`)
 var highRiskScope = regexp.MustCompile(`\b(?:public api|protocol|schema|file[- ]formats?|database migration|database compatibility|migration|auth|authentication|authorization|security|secrets?|trust[-_ ]boundary|billing|payments?|money movement|destructive|irreversible|recovery)\b`)
 

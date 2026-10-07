@@ -798,6 +798,10 @@ func CompletionBlockers(d protocol.WorkDetail) []string {
 		}
 	}
 	out = append(out, Unresolved(filtered)...)
+	evidence := map[string]protocol.Evidence{}
+	for _, e := range ActiveEvidence(d) {
+		evidence[e.ID] = e
+	}
 	solution, tasks := false, false
 	for _, n := range d.Nodes {
 		if !active(n) {
@@ -805,10 +809,11 @@ func CompletionBlockers(d protocol.WorkDetail) []string {
 		}
 		switch n.Kind {
 		case protocol.NodeDecision:
-			if _, ok := selectedOption(d, n); ok && n.Status == protocol.StatusApproved {
+			supported := n.Status == protocol.StatusApproved && solutionSupported(d, n, evidence)
+			if supported {
 				solution = true
 			}
-			if required(n) && n.Status != protocol.StatusApproved {
+			if required(n) && !supported {
 				out = append(out, n.Title)
 			}
 		case protocol.NodeTask:

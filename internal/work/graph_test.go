@@ -71,6 +71,52 @@ func TestWorkflowDepthClassification(t *testing.T) {
 	}
 }
 
+// Catches topic phrases and polite explanatory wrappers being mistaken for implementation intent.
+func TestWorkflowDepthExplanatoryIntentPrecedesDesignTopics(t *testing.T) {
+	for _, text := range []string{"What is an architecture decision?", "Explain the design plan", "How do I choose an architecture?", "Can you explain how to implement billing?", "Could you describe the public API?", "Please explain the architecture decision"} {
+		if got := InitialDepth(text); got != "direct" {
+			t.Errorf("InitialDepth(%q)=%s want direct", text, got)
+		}
+	}
+	for _, text := range []string{"Can you design a replacement cache?", "Please implement billing", "Could you update the public API?"} {
+		if got := InitialDepth(text); got != "designed" {
+			t.Errorf("InitialDepth(%q)=%s want designed", text, got)
+		}
+	}
+}
+
+// Catches approved selections completing work after their inspection/criterion support is invalidated.
+func TestCompletionBlockersRequiresActiveSolutionSupport(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*protocol.WorkDetail)
+	}{
+		{"explicitly stale evidence", func(d *protocol.WorkDetail) { stale := time.Unix(3, 0); d.Evidence[0].StaleAt = &stale }},
+		{"rerun obsolete evidence", func(d *protocol.WorkDetail) {
+			d.Evidence = append(d.Evidence, protocol.Evidence{ID: "evd_latest", WorkID: "wrk_test"})
+			d.Attempts = []protocol.VerificationAttempt{{ID: "old", CriterionNodeID: "criterion", Status: "passed", EvidenceID: "evd_test", StartedAt: time.Unix(1, 0), FinishedAt: time.Unix(1, 0)}, {ID: "latest", CriterionNodeID: "criterion", Status: "passed", EvidenceID: "evd_latest", StartedAt: time.Unix(2, 0), FinishedAt: time.Unix(2, 0)}}
+		}},
+		{"superseded supporting criterion", func(d *protocol.WorkDetail) { d.Nodes[4].Status = "superseded" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := readinessFixture()
+			d.Nodes[0].Status = "completed"
+			tc.mutate(&d)
+			if got := CompletionBlockers(d); len(got) == 0 {
+				t.Fatal("completed without active solution support")
+			}
+		})
+	}
+	// A separate supported solution must not excuse another required decision's missing support.
+	d := readinessFixture()
+	d.Nodes[0].Status = "completed"
+	d.Nodes = append(d.Nodes, protocol.WorkNode{ID: "unsupported", WorkID: "wrk_test", Kind: "decision", Title: "Required unsupported choice", Status: "approved", Content: json.RawMessage(`{"required":true}`)})
+	d.Edges = append(d.Edges, protocol.WorkEdge{WorkID: "wrk_test", FromNodeID: "unsupported", Relation: "selects", ToNodeID: "opt"}, protocol.WorkEdge{WorkID: "wrk_test", FromNodeID: "criterion", Relation: "verifies", ToNodeID: "unsupported"})
+	if got := CompletionBlockers(d); len(got) == 0 {
+		t.Fatal("unsupported required decision hidden by supported solution")
+	}
+}
+
 // Catches resolving an unknown with evidence invalidated by a later verification run.
 func TestPrepareUpdateUnknownResolutionNeedsActiveEvidence(t *testing.T) {
 	d, r := graphFixture()
