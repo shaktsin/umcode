@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { Brain, AlertTriangle, Inbox, FilePlus2, FilePen, FileX2, Copy, Check } from '@lucide/svelte';
+  import { Brain, Inbox, FilePlus2, FilePen, FileX2, Copy, Check } from '@lucide/svelte';
   import type { Item, FileChangeData } from '$lib/types';
   import { app } from '$lib/stores/app.svelte';
   import { renderMarkdown } from '$lib/markdown';
   import { type ThreadView } from '$lib/stores/chat.svelte';
   import { inspector } from '$lib/stores/inspector.svelte';
   import ToolCall from './ToolCall.svelte';
+  import ChatError from './ChatError.svelte';
 
   let { item, highlight = false, view }: { item: Item; highlight?: boolean; view?: ThreadView } = $props();
   let showThinking = $state(false);
@@ -96,9 +97,7 @@
       <Inbox class="w-3.5 h-3.5 mt-0.5 shrink-0" /><span class="whitespace-pre-wrap">{item.text}</span>
     </div>
   {:else if item.kind === 'error'}
-    <div class="flex gap-2 text-sm text-rust bg-rust-soft border border-rust/30 rounded-lg px-3 py-2 selectable">
-      <AlertTriangle class="w-4 h-4 mt-0.5 shrink-0" /><span class="whitespace-pre-wrap">{item.text}</span>
-    </div>
+    <ChatError text={item.text || ''} />
   {:else if item.text}
     <div class="text-xs text-muted whitespace-pre-wrap">{item.text}</div>
   {/if}
