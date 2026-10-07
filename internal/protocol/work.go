@@ -174,10 +174,18 @@ type PreparedWorkUpdate struct {
 	ExpectedRevision int                    `json:"-"`
 	WorkflowDepth    string                 `json:"-"`
 	Creates          []WorkNode             `json:"-"`
+	NodeChecks       []WorkNodeCheck        `json:"-"`
 	Transitions      []WorkNodeTransition   `json:"-"`
 	Edges            []WorkEdge             `json:"-"`
 	EvidenceLinks    []WorkNodeEvidenceLink `json:"-"`
 	Gates            []WorkflowGate         `json:"-"`
+}
+
+// WorkNodeCheck preserves optimistic predicates even for evidence-only updates.
+type WorkNodeCheck struct {
+	ID               string `json:"-"`
+	ExpectedRevision int    `json:"-"`
+	ExpectedStatus   string `json:"-"`
 }
 
 // WorkNodeTransition carries the predicates needed for a conditional update.

@@ -27,10 +27,11 @@ var fingerprintBudget = 2 * time.Second
 // Service records and evaluates works. All methods find the thread's open work
 // themselves; with none open, Observe and End do nothing.
 type Service struct {
-	Store    *store.Store
-	Log      *slog.Logger
-	Now      func() time.Time // defaults to time.Now().UTC()
-	Failures atomic.Int64     // best-effort recording errors
+	DesignedWorkflow bool // deterministic graph semantics; false preserves legacy behavior
+	Store            *store.Store
+	Log              *slog.Logger
+	Now              func() time.Time // defaults to time.Now().UTC()
+	Failures         atomic.Int64     // best-effort recording errors
 
 	Vault       *vault.Vault                 // full outputs; nil disables the vault
 	VaultDir    string                       // excluded from workspace fingerprints
@@ -107,12 +108,22 @@ func (s *Service) Begin(ctx context.Context, th protocol.Thread, text string) er
 }
 
 func (s *Service) begin(ctx context.Context, th protocol.Thread, text string) error {
-	if _, ok, err := s.Store.OpenWorkForThread(ctx, th.ID); err != nil || ok {
+	if w, ok, err := s.Store.OpenWorkForThread(ctx, th.ID); err != nil || ok {
+		if err == nil && ok && s.DesignedWorkflow {
+			depth := MaxDepth(w.WorkflowDepth, InitialDepth(text))
+			if depth != w.WorkflowDepth {
+				return s.Store.SetWorkDepth(ctx, w.ID, depth)
+			}
+		}
 		return err
 	}
 	goal := capText(redactText(text), goalLimit)
 	now := s.now()
-	w, err := s.Store.CreateWork(ctx, protocol.Work{ThreadID: th.ID, ProjectID: th.ProjectID, Goal: goal, CreatedAt: now})
+	depth := ""
+	if s.DesignedWorkflow {
+		depth = InitialDepth(text)
+	}
+	w, err := s.Store.CreateWork(ctx, protocol.Work{ThreadID: th.ID, ProjectID: th.ProjectID, Goal: goal, CreatedAt: now, WorkflowDepth: depth})
 	if err != nil {
 		return err
 	}
@@ -132,7 +143,18 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 	if err != nil || !ok {
 		return err
 	}
-	if (o.Err == "" || isVerificationTool(o.Tool)) && EscalatesToGuided(o.Tool, o.Risk) && w.WorkflowDepth != protocol.DepthGuided {
+	if s.DesignedWorkflow {
+		d, err := s.Store.GetWorkDetail(ctx, w.ID)
+		if err != nil {
+			return err
+		}
+		depth := ObservedDepth(w.WorkflowDepth, d, o)
+		if depth != w.WorkflowDepth {
+			if err := s.Store.SetWorkDepth(ctx, w.ID, depth); err != nil {
+				return err
+			}
+		}
+	} else if (o.Err == "" || isVerificationTool(o.Tool)) && EscalatesToGuided(o.Tool, o.Risk) && w.WorkflowDepth != protocol.DepthGuided {
 		if err := s.Store.SetWorkDepth(ctx, w.ID, protocol.DepthGuided); err != nil {
 			return err
 		}
@@ -468,7 +490,11 @@ func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused b
 	if d, err = s.Store.GetWorkDetail(ctx, w.ID); err != nil {
 		return err
 	}
-	if len(Unresolved(d)) > 0 {
+	blockers := Unresolved(d)
+	if s.DesignedWorkflow && d.Work.WorkflowDepth != protocol.DepthDirect {
+		blockers = CompletionBlockers(d)
+	}
+	if len(blockers) > 0 {
 		return nil
 	}
 	return s.Store.CloseWork(ctx, w.ID, protocol.WorkCompleted, s.now())

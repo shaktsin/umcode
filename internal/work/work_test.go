@@ -117,6 +117,92 @@ func TestBeginNoProjectThread(t *testing.T) {
 	}
 }
 
+// Catches feature-off classification changes and feature-on missed design escalation on continued work.
+func TestDesignedWorkflowServiceClassification(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "off", true: "on"}[enabled], func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = enabled
+			d := f.begin(t, "Design a replacement cache")
+			want := "direct"
+			if enabled {
+				want = "designed"
+			}
+			if d.Work.WorkflowDepth != want {
+				t.Fatalf("begin depth=%s want %s", d.Work.WorkflowDepth, want)
+			}
+			f.observe(t, Observation{Tool: "file.write", Args: json.RawMessage(`{"path":"internal/protocol/work.go"}`)})
+			want = "guided"
+			if enabled {
+				want = "designed"
+			}
+			if got := f.detail(t).Work.WorkflowDepth; got != want {
+				t.Fatalf("observe depth=%s want %s", got, want)
+			}
+		})
+	}
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	f.begin(t, "What does this do?")
+	if got := f.begin(t, "Design the architecture").Work.WorkflowDepth; got != "designed" {
+		t.Fatalf("continued depth=%s", got)
+	}
+}
+
+// Catches enabled completion closing Guided work without semantic obligations, or breaking Direct/feature-off completion.
+func TestDesignedWorkflowServiceCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name, depth string
+		enabled     bool
+		want        string
+	}{
+		{"off guided", "guided", false, "completed"}, {"on direct", "direct", true, "completed"}, {"on guided", "guided", true, "open"}, {"on designed", "designed", true, "open"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = tc.enabled
+			d := f.begin(t, "Question")
+			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, tc.depth); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.detail(t).Work.Status; got != tc.want {
+				t.Fatalf("status=%s want %s", got, tc.want)
+			}
+		})
+	}
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	d := f.begin(t, "Design a minimal change")
+	graph := readinessFixture()
+	graph.Nodes[0].Status = "completed"
+	for _, n := range graph.Nodes {
+		n.WorkID = d.Work.ID
+		if _, err := f.st.AddWorkNode(context.Background(), n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range graph.Edges {
+		e.WorkID = d.Work.ID
+		if err := f.st.AddWorkEdge(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := graph.Attempts[0]
+	a.WorkID = d.Work.ID
+	if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.detail(t).Work.Status; got != "completed" {
+		t.Fatalf("satisfied graph=%s", got)
+	}
+}
+
 func TestBeginCapsGoal(t *testing.T) {
 	f := newFixture(t)
 	d := f.begin(t, strings.Repeat("x", 10000))
