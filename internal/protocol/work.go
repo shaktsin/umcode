@@ -12,21 +12,54 @@ const (
 	WorkAbandoned = "abandoned"
 )
 
-// Workflow depths. "designed" is reserved for a later phase.
+// Workflow depths.
 const (
-	DepthDirect = "direct"
-	DepthGuided = "guided"
+	DepthDirect   = "direct"
+	DepthGuided   = "guided"
+	DepthDesigned = "designed"
 )
 
 // Work node kinds and edge relations recorded by the engine.
 const (
-	NodeGoal      = "goal"
-	NodeCriterion = "criterion"
-	NodeArtifact  = "artifact"
-	NodeFact      = "fact"
+	NodeGoal            = "goal"
+	NodeCriterion       = "criterion"
+	NodeArtifact        = "artifact"
+	NodeFact            = "fact"
+	NodeRequirement     = "requirement"
+	NodeNonGoal         = "non_goal"
+	NodeOption          = "option"
+	NodeDecision        = "decision"
+	NodeTask            = "task"
+	NodeUnknown         = "unknown"
+	NodeMemoryCandidate = "memory_candidate"
 
-	RelRequires = "requires"
-	RelServes   = "serves"
+	RelRequires     = "requires"
+	RelServes       = "serves"
+	RelDependsOn    = "depends_on"
+	RelSupports     = "supports"
+	RelContradicts  = "contradicts"
+	RelSelects      = "selects"
+	RelImplements   = "implements"
+	RelVerifies     = "verifies"
+	RelCandidateFor = "candidate_for"
+)
+
+// Semantic node lifecycle statuses. Stale and superseded are defined below.
+const (
+	StatusProposed     = "proposed"
+	StatusApproved     = "approved"
+	StatusRejected     = "rejected"
+	StatusPending      = "pending"
+	StatusReady        = "ready"
+	StatusInProgress   = "in_progress"
+	StatusCompleted    = "completed"
+	StatusFailed       = "failed"
+	StatusBlocked      = "blocked"
+	StatusOpen         = "open"
+	StatusResolved     = "resolved"
+	StatusAcceptedRisk = "accepted_risk"
+	StatusPromoted     = "promoted"
+	StatusConflicted   = "conflicted"
 )
 
 // Verification attempt statuses.
@@ -53,11 +86,12 @@ type Work struct {
 	Status        string     `json:"status"`
 	WorkflowDepth string     `json:"workflowDepth"`
 	Goal          string     `json:"goal"`
+	Revision      int        `json:"revision"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	CompletedAt   *time.Time `json:"completedAt,omitempty"`
 }
 
-// WorkNode is a goal, criterion, artifact or fact in a work's graph.
+// WorkNode is a semantic node in a work's graph.
 type WorkNode struct {
 	ID           string          `json:"id"`
 	WorkID       string          `json:"workId"`
@@ -67,6 +101,7 @@ type WorkNode struct {
 	Status       string          `json:"status"`
 	Confidence   float64         `json:"confidence"`
 	Revision     int             `json:"revision"`
+	EvidenceIDs  []string        `json:"evidenceIds,omitempty"`
 	ValidFrom    time.Time       `json:"validFrom"`
 	ValidUntil   *time.Time      `json:"validUntil,omitempty"`
 	SupersededBy string          `json:"supersededBy,omitempty"`
@@ -80,6 +115,83 @@ type WorkEdge struct {
 	FromNodeID string `json:"fromNodeId"`
 	Relation   string `json:"relation"`
 	ToNodeID   string `json:"toNodeId"`
+}
+
+// WorkUpdateRequest is one bounded semantic batch; graph validation enforces
+// node, edge, text and rationale limits before persistence.
+type WorkUpdateRequest struct {
+	WorkID           string           `json:"work_id"`
+	ExpectedRevision int              `json:"expected_revision"`
+	WorkflowDepth    string           `json:"workflow_depth,omitempty"`
+	Nodes            []WorkNodeChange `json:"nodes,omitempty"`
+	Edges            []WorkEdgeChange `json:"edges,omitempty"`
+	Rationale        string           `json:"rationale,omitempty"`
+}
+
+// WorkNodeChange either creates a node using Ref, Kind, Title and Content, or
+// transitions an existing ID using a revision and from/to status predicates.
+type WorkNodeChange struct {
+	Ref              string          `json:"ref,omitempty"`
+	ID               string          `json:"id,omitempty"`
+	Kind             string          `json:"kind,omitempty"`
+	Title            string          `json:"title,omitempty"`
+	Content          json.RawMessage `json:"content,omitempty"`
+	ExpectedRevision int             `json:"expected_revision,omitempty"`
+	FromStatus       string          `json:"from_status,omitempty"`
+	ToStatus         string          `json:"to_status,omitempty"`
+	EvidenceIDs      []string        `json:"evidence_ids,omitempty"`
+}
+
+// WorkEdgeChange permits persisted IDs or batch-local refs at either endpoint.
+type WorkEdgeChange struct {
+	From     string `json:"from"`
+	Relation string `json:"relation"`
+	To       string `json:"to"`
+}
+
+// WorkUpdateResult contains only counts and the new work revision.
+type WorkUpdateResult struct {
+	Revision     int `json:"revision"`
+	Created      int `json:"created"`
+	Transitioned int `json:"transitioned"`
+	Linked       int `json:"linked"`
+}
+
+// WorkflowGate is engine-only approval metadata, never tool output.
+type WorkflowGate struct {
+	WorkID       string `json:"-"`
+	NodeID       string `json:"-"`
+	NodeRevision int    `json:"-"`
+	Kind         string `json:"-"`
+	Reason       string `json:"-"`
+	Summary      string `json:"-"`
+}
+
+// PreparedWorkUpdate is a data-only persistence contract. internal/work
+// resolves and validates changes; internal/store consumes them transactionally.
+type PreparedWorkUpdate struct {
+	WorkID           string                 `json:"-"`
+	ExpectedRevision int                    `json:"-"`
+	WorkflowDepth    string                 `json:"-"`
+	Creates          []WorkNode             `json:"-"`
+	Transitions      []WorkNodeTransition   `json:"-"`
+	Edges            []WorkEdge             `json:"-"`
+	EvidenceLinks    []WorkNodeEvidenceLink `json:"-"`
+	Gates            []WorkflowGate         `json:"-"`
+}
+
+// WorkNodeTransition carries the predicates needed for a conditional update.
+type WorkNodeTransition struct {
+	ID               string `json:"-"`
+	ExpectedRevision int    `json:"-"`
+	FromStatus       string `json:"-"`
+	ToStatus         string `json:"-"`
+}
+
+// WorkNodeEvidenceLink references evidence without copying its contents.
+type WorkNodeEvidenceLink struct {
+	NodeID     string `json:"-"`
+	EvidenceID string `json:"-"`
 }
 
 // Evidence is an immutable observation. It holds a capped excerpt (the first

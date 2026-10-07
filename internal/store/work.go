@@ -17,13 +17,13 @@ func nullTimePtr(t *time.Time) any {
 	return FormatTime(*t)
 }
 
-const workCols = `id, thread_id, project_id, kind, status, workflow_depth, goal, created_at, completed_at`
+const workCols = `id, thread_id, project_id, kind, status, workflow_depth, goal, created_at, completed_at, revision`
 
 func scanWork(sc interface{ Scan(...any) error }) (protocol.Work, error) {
 	var w protocol.Work
 	var project, completed sql.NullString
 	var created string
-	if err := sc.Scan(&w.ID, &w.ThreadID, &project, &w.Kind, &w.Status, &w.WorkflowDepth, &w.Goal, &created, &completed); err != nil {
+	if err := sc.Scan(&w.ID, &w.ThreadID, &project, &w.Kind, &w.Status, &w.WorkflowDepth, &w.Goal, &created, &completed, &w.Revision); err != nil {
 		return w, err
 	}
 	w.ProjectID = project.String
@@ -49,9 +49,12 @@ func (s *Store) CreateWork(ctx context.Context, w protocol.Work) (protocol.Work,
 	if w.CreatedAt.IsZero() {
 		w.CreatedAt = time.Now().UTC()
 	}
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO works (`+workCols+`) VALUES (?,?,?,?,?,?,?,?,?)`,
+	if w.Revision == 0 {
+		w.Revision = 1
+	}
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO works (`+workCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		w.ID, w.ThreadID, nullIfEmpty(w.ProjectID), w.Kind, w.Status, w.WorkflowDepth, w.Goal,
-		FormatTime(w.CreatedAt), nullTimePtr(w.CompletedAt))
+		FormatTime(w.CreatedAt), nullTimePtr(w.CompletedAt), w.Revision)
 	return w, err
 }
 
@@ -226,6 +229,31 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 		n.ValidFrom, n.ValidUntil = ParseTime(validFrom), nullTime(validUntil)
 		n.CreatedAt, n.UpdatedAt = ParseTime(created), ParseTime(updated)
 		d.Nodes = append(d.Nodes, n)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return d, err
+	}
+	rows.Close()
+
+	rows, err = s.DB.QueryContext(ctx, `SELECT node_id, evidence_id FROM work_node_evidence
+		WHERE work_id = ? ORDER BY node_id, evidence_id`, workID)
+	if err != nil {
+		return d, err
+	}
+	nodeIndex := make(map[string]int, len(d.Nodes))
+	for i := range d.Nodes {
+		nodeIndex[d.Nodes[i].ID] = i
+	}
+	for rows.Next() {
+		var nodeID, evidenceID string
+		if err := rows.Scan(&nodeID, &evidenceID); err != nil {
+			rows.Close()
+			return d, err
+		}
+		if i, ok := nodeIndex[nodeID]; ok {
+			d.Nodes[i].EvidenceIDs = append(d.Nodes[i].EvidenceIDs, evidenceID)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

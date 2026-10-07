@@ -128,3 +128,32 @@ func TestToolResultReducersFlagDefaultsFalse(t *testing.T) {
 		t.Fatal("models.tool_result_reducers: true must enable it")
 	}
 }
+
+func TestDesignedWorkflowFlagDefaultsFalse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	cfg := filepath.Join(home, "config.yaml")
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"omitted", "llm: {provider: anthropic}\n", false},
+		{"empty_models", "models: {}\n", false},
+		{"explicit_false", "models: {designed_workflow: false}\n", false},
+		{"enabled", "models: {designed_workflow: true}\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(cfg, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Models.DesignedWorkflow != tc.want {
+				t.Fatalf("designed workflow = %v, want %v", c.Models.DesignedWorkflow, tc.want)
+			}
+		})
+	}
+}

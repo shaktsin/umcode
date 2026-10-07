@@ -343,10 +343,13 @@ func (s *Store) UsageGrouped(ctx context.Context, p protocol.UsageSummaryParams)
 
 // CreateApproval inserts a pending approval.
 func (s *Store) CreateApproval(ctx context.Context, a protocol.Approval) error {
+	if a.Kind == "" {
+		a.Kind = "tool"
+	}
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO approvals (id, thread_id, turn_id, item_id, tool, args_json, risk,
-		reason, action_summary, status, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		reason, action_summary, status, created_at, expires_at, kind, work_id, node_id, node_revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.ID, a.ThreadID, a.TurnID, a.ItemID, a.Tool, string(a.Args), a.Risk, a.Reason, a.ActionSummary,
-		a.Status, FormatTime(a.CreatedAt), FormatTime(a.ExpiresAt))
+		a.Status, FormatTime(a.CreatedAt), FormatTime(a.ExpiresAt), a.Kind, a.WorkID, a.NodeID, a.NodeRevision)
 	return err
 }
 
@@ -367,7 +370,7 @@ func (s *Store) DecideApproval(ctx context.Context, id, status, by string) error
 // ListApprovals returns approvals with the given status ("" = all), newest first.
 func (s *Store) ListApprovals(ctx context.Context, status string) ([]protocol.Approval, error) {
 	q := `SELECT id, thread_id, turn_id, item_id, tool, args_json, risk, reason, action_summary, status,
-		decided_by, created_at, expires_at, decided_at FROM approvals`
+		decided_by, created_at, expires_at, decided_at, kind, work_id, node_id, node_revision FROM approvals`
 	var args []any
 	if status != "" {
 		q += ` WHERE status = ?`
@@ -384,7 +387,7 @@ func (s *Store) ListApprovals(ctx context.Context, status string) ([]protocol.Ap
 		var args, created, expires string
 		var decided sql.NullString
 		if err := rows.Scan(&a.ID, &a.ThreadID, &a.TurnID, &a.ItemID, &a.Tool, &args, &a.Risk, &a.Reason,
-			&a.ActionSummary, &a.Status, &a.DecidedBy, &created, &expires, &decided); err != nil {
+			&a.ActionSummary, &a.Status, &a.DecidedBy, &created, &expires, &decided, &a.Kind, &a.WorkID, &a.NodeID, &a.NodeRevision); err != nil {
 			return nil, err
 		}
 		a.Args = json.RawMessage(args)

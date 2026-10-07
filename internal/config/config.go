@@ -142,6 +142,9 @@ type ModelsConfig struct {
 	// ToolResultReducers compacts selected tool results only for model messages.
 	// Stored results and other observers retain the canonical output.
 	ToolResultReducers bool `yaml:"tool_result_reducers"`
+	// DesignedWorkflow enables semantic updates and deterministic workflow gates.
+	// Off by default while the Designed workflow is being introduced.
+	DesignedWorkflow bool `yaml:"designed_workflow"`
 }
 
 // ExecutionLimits bound a whole agent turn independently from reasoning level.
