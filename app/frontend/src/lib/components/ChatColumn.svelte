@@ -8,6 +8,7 @@
   import { dialog } from '$lib/stores/dialog.svelte';
   import { usageLine, fmtUsd } from '$lib/format';
   import ItemView from './ItemView.svelte';
+  import ChatError from './ChatError.svelte';
   import ToolCall from './ToolCall.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import ComputerUseView from './ComputerUseView.svelte';
@@ -365,8 +366,10 @@
                 <span>{currentActivity(g)}…</span>
               </div>
             {:else if g.turn}
-              <div class="flex items-center gap-2 text-[11px] text-faint">
-                {#if g.turn.status === 'failed'}<span class="text-rust selectable">Failed: {g.turn.error}</span>{/if}
+              {#if g.turn.status === 'failed' && !g.items.some((item) => item.kind === 'error')}
+                <ChatError text={g.turn.error || ''} />
+              {/if}
+              <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint [overflow-wrap:anywhere]">
                 {#if g.turn.status === 'interrupted'}<span class="text-amber-warm">Stopped</span>{/if}
                 <span>{modelLabel(g.turn)}</span>
                 {#if switchNote(g.turn)}
