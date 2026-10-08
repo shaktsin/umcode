@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/shaktsin/umcode/internal/protocol"
 )
 
 // Risk tiers.
@@ -44,6 +46,18 @@ type Tool interface {
 	// Assess returns the risk of a specific call and a one-line human summary.
 	Assess(args json.RawMessage) (Risk, string)
 	Call(ctx context.Context, args json.RawMessage) (string, error)
+}
+
+// WorkUpdater applies a semantic batch without coupling tools to its service.
+type WorkUpdater interface {
+	Update(context.Context, string, protocol.WorkUpdateRequest) (protocol.WorkUpdateResult, []protocol.WorkflowGate, error)
+}
+
+// WorkflowUpdateTool returns approval metadata only to the engine. Call's JSON
+// result contains the revision and counts, never gates or graph contents.
+type WorkflowUpdateTool interface {
+	Tool
+	Apply(context.Context, json.RawMessage) (protocol.WorkUpdateResult, []protocol.WorkflowGate, error)
 }
 
 // ContextAssessor lets tools whose metadata is scoped to a turn (for example

@@ -140,10 +140,16 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	visuals := visualqa.NewManager(base)
 	computers := computeruse.NewManager(base)
 	execs := tools.NewExecManager()
+	workService := &work.Service{Store: o.Store, Log: o.Logger, DesignedWorkflow: o.Config.Models.DesignedWorkflow,
+		Vault:    &vault.Vault{Dir: o.Config.Storage.VaultDir, MaxObjectBytes: o.Config.Storage.VaultMaxObjectBytes},
+		VaultDir: o.Config.Storage.VaultDir, ToolVersion: toolVersion}
 	ws := tools.NewWorkspaces(o.Config)
 	reg := tools.NewRegistry()
 	sk := skills.NewRegistry(o.Config)
 	tools.RegisterBuiltins(reg, o.Config, ws, sk.EnvFor, tools.BuiltinServices{Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs})
+	if o.Config.Models.DesignedWorkflow {
+		reg.Add(tools.NewWorkUpdate(workService))
+	}
 	sk.Register(reg)
 
 	mcpm := mcp.NewManager(o.Config.MCPServers, o.Logger)
@@ -171,9 +177,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		Projects:  projects.New(o.Store, o.Config),
 		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs,
 		Bus: bus, Log: o.Logger,
-		Work: &work.Service{Store: o.Store, Log: o.Logger,
-			Vault:    &vault.Vault{Dir: o.Config.Storage.VaultDir, MaxObjectBytes: o.Config.Storage.VaultMaxObjectBytes},
-			VaultDir: o.Config.Storage.VaultDir, ToolVersion: toolVersion},
+		Work: workService,
 		retention: work.RetentionFromDays(o.Config.Storage.RetentionRawDays, o.Config.Storage.RetentionStaleDays,
 			o.Config.Storage.RetentionBlobDays, o.Config.Storage.RetentionRedactedDays),
 		gate: policy.New(), started: time.Now(), baseCtx: base, cancelAll: cancel,
@@ -877,6 +881,7 @@ func validateSelection(s protocol.ModelSelection) error {
 const (
 	layerCore         = "core"
 	layerClock        = "clock"
+	layerWorkflow     = "workflow"
 	layerSkills       = "skills"
 	layerPlugin       = "plugin"
 	layerProject      = "project"
@@ -927,6 +932,10 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 	flush(layerCore)
 	b.WriteString(fmt.Sprintf("Current time: %s (%s).\n", time.Now().Format(time.RFC1123), tasks.ZoneName(time.Local)))
 	flush(layerClock)
+	if e.Cfg.Models.DesignedWorkflow {
+		b.WriteString("\nWorkflow: Direct work should call work.update only when semantic structure or classification changes. Before Guided or Designed implementation, record the first sufficient solution rung, linked criteria and evidence, the current task, and blocking unknowns. Keep updates compact; the engine derives readiness and enforces gates.\n")
+		flush(layerWorkflow)
+	}
 	if cat := e.Skills.CatalogContext(ctx); cat != "" {
 		b.WriteString("\n" + cat)
 		if sk, ok := e.Skills.MatchContext(ctx, userText); ok && userText != "" {
