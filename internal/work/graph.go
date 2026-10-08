@@ -430,10 +430,11 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 					already = true
 				}
 			}
-			if !already {
-				n.EvidenceIDs = append(append([]string(nil), n.EvidenceIDs...), id)
-				p.EvidenceLinks = append(p.EvidenceLinks, protocol.WorkNodeEvidenceLink{NodeID: n.ID, EvidenceID: id})
+			if already {
+				return protocol.PreparedWorkUpdate{}, invalid("nodes.evidence_ids", "duplicate")
 			}
+			n.EvidenceIDs = append(append([]string(nil), n.EvidenceIDs...), id)
+			p.EvidenceLinks = append(p.EvidenceLinks, protocol.WorkNodeEvidenceLink{NodeID: n.ID, EvidenceID: id})
 		}
 		d.Nodes[nodes[n.ID]] = n
 		if i, ok := createIndex[n.ID]; ok {
@@ -489,7 +490,7 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 		}
 		edge := protocol.WorkEdge{WorkID: req.WorkID, FromNodeID: from, Relation: e.Relation, ToNodeID: to}
 		if seenEdges[edge] {
-			continue
+			return protocol.PreparedWorkUpdate{}, invalid("edges", "duplicate")
 		}
 		if err := validateEdge(d.Nodes[nodes[from]], e.Relation, d.Nodes[nodes[to]]); err != nil {
 			return protocol.PreparedWorkUpdate{}, err
@@ -645,9 +646,7 @@ func validateCandidate(d protocol.WorkDetail, n protocol.WorkNode, ev map[string
 	if strings.TrimSpace(c.SemanticKey) == "" || strings.TrimSpace(c.Text) == "" || c.Scope == "" || path.IsAbs(c.Scope) || path.Clean(c.Scope) == ".." || strings.HasPrefix(path.Clean(c.Scope), "../") {
 		return invalid("nodes.candidate", "invalid")
 	}
-	var content any
-	_ = json.Unmarshal(n.Content, &content)
-	if containsSecret(content) || containsSecret(n.Title) {
+	if containsSecret(n.Content) || containsSecret(n.Title) {
 		return invalid("nodes.candidate.text", "invalid")
 	}
 	nodes := graphNodes(d)
@@ -666,14 +665,45 @@ func validateCandidate(d protocol.WorkDetail, n protocol.WorkNode, ev map[string
 	return nil
 }
 
+// credentialField retains the vault's credential-name rules for JSON fields.
+// semantic_key is the declared graph identifier, not credential material.
+func credentialField(key string) bool {
+	if key == "semantic_key" {
+		return false
+	}
+	_, assignment := vault.Redact([]byte(key + "=credential-probe"))
+	_, header := vault.Redact([]byte(key + ": credential-probe"))
+	return assignment || header
+}
+
 func containsSecret(value any) bool {
 	switch v := value.(type) {
+	case json.RawMessage:
+		var content any
+		if json.Unmarshal(v, &content) != nil {
+			return false
+		}
+		if containsSecret(content) {
+			return true
+		}
+		// Maps retain credential names but overwrite duplicate values. Inspect
+		// raw tokens too, so an earlier secret cannot be hidden by a later key.
+		decoder := json.NewDecoder(bytes.NewReader(v))
+		for {
+			token, err := decoder.Token()
+			if err != nil {
+				return false
+			}
+			if text, ok := token.(string); ok && containsSecret(text) {
+				return true
+			}
+		}
 	case string:
 		_, changed := vault.Redact([]byte(v))
 		return changed
 	case map[string]any:
-		for _, item := range v {
-			if containsSecret(item) {
+		for key, item := range v {
+			if credentialField(key) || containsSecret(key) || containsSecret(item) {
 				return true
 			}
 		}

@@ -290,6 +290,63 @@ func graphFixture() (protocol.WorkDetail, protocol.WorkUpdateRequest) {
 	return d, req
 }
 
+// Catches candidate credentials expressed as JSON fields rather than inline assignments.
+func TestPrepareUpdateRejectsCredentialFields(t *testing.T) {
+	for _, extra := range []string{
+		`"API_TOKEN":"ordinarysecret12345"`,
+		`"nested":{"password":"ordinarysecret12345"}`,
+		`"nested":[{"Authorization":"ordinarysecret12345"}]`,
+		`"nested":{"API_TOKEN":["ordinarysecret12345"]}`,
+		`"nested":{"text":"sk-123456789012345678901234567890","text":"ordinary"}`,
+	} {
+		d, req := graphFixture()
+		req.Nodes[6].Content = json.RawMessage(`{"category":"command","semantic_key":"test-command","text":"go test","scope":".",` + extra + `}`)
+		_, err := PrepareUpdate(d, req, time.Time{})
+		var validation *ValidationError
+		if !errors.As(err, &validation) || validation.Code != "invalid" {
+			t.Fatalf("accepted credential field %s: %v", extra, err)
+		}
+	}
+	// The declared semantic identifier is ordinary graph metadata, not a credential.
+	d, req := graphFixture()
+	if _, err := PrepareUpdate(d, req, time.Time{}); err != nil {
+		t.Fatalf("ordinary semantic key rejected: %v", err)
+	}
+}
+
+// Catches relationships silently skipped while a batch still advances revision.
+func TestPrepareUpdateRejectsDuplicateRelationships(t *testing.T) {
+	for _, mode := range []string{"request edge", "persisted edge", "request evidence", "persisted evidence"} {
+		t.Run(mode, func(t *testing.T) {
+			d, req := graphFixture()
+			switch mode {
+			case "request edge":
+				req.Edges = append(req.Edges, req.Edges[0])
+			case "persisted edge":
+				d.Edges = append(d.Edges, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: "artifact", Relation: "serves", ToNodeID: "goal"})
+			case "request evidence":
+				req.Nodes[3].EvidenceIDs = []string{"evd_test", "evd_test"}
+			case "persisted evidence":
+				req.Nodes[3].ToStatus = "proposed"
+				d.Nodes = append(d.Nodes, protocol.WorkNode{ID: "waiting", WorkID: d.Work.ID, Kind: "task", Title: "waiting", Status: "pending", Revision: 1, Content: json.RawMessage(`{"required":true}`), EvidenceIDs: []string{"evd_test"}})
+				req.Nodes = append(req.Nodes, protocol.WorkNodeChange{ID: "waiting", ExpectedRevision: 1, FromStatus: "pending", ToStatus: "ready", EvidenceIDs: []string{"evd_test"}})
+			}
+			beforeDetail, _ := json.Marshal(d)
+			beforeRequest, _ := json.Marshal(req)
+			_, err := PrepareUpdate(d, req, time.Time{})
+			var validation *ValidationError
+			if !errors.As(err, &validation) || validation.Code != "duplicate" {
+				t.Fatalf("err=%v", err)
+			}
+			afterDetail, _ := json.Marshal(d)
+			afterRequest, _ := json.Marshal(req)
+			if string(beforeDetail) != string(afterDetail) || string(beforeRequest) != string(afterRequest) {
+				t.Fatal("rejection mutated graph/request")
+			}
+		})
+	}
+}
+
 // Catches unresolved local references, dropped evidence links, and trusted requested readiness.
 func TestPrepareUpdateResolvesAtomicDelta(t *testing.T) {
 	d, req := graphFixture()

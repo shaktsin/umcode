@@ -316,6 +316,116 @@ func TestServiceUpdateRejectedDiagnostics(t *testing.T) {
 	}
 }
 
+// Catches loss of JSON field context, unsafe encoding of masks, and changed
+// numeric semantics while sanitizing nested credentials outside candidates.
+func TestServiceUpdateRedactsCredentialFields(t *testing.T) {
+	f := newFixture(t)
+	d := f.begin(t, "objective")
+	req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "ordinary", Content: json.RawMessage(`{"required":true,"count":9007199254740993,"nested":[{"API_TOKEN":"ordinarysecret12345","password":"quoted\"secret\\value","Authorization":"plainauth12345"}],"outer":{"API_TOKEN":["arraysecret12345",{"piece":"objectsecret12345"}]}}`)}}}
+	before, _ := json.Marshal(req)
+	if _, _, err := f.svc.Update(context.Background(), f.th.ID, req); err != nil {
+		t.Fatal(err)
+	}
+	got := kinds(f.detail(t), "requirement")[0]
+	var content map[string]any
+	if err := json.Unmarshal(got.Content, &content); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !strings.Contains(string(got.Content), "9007199254740993") {
+		t.Fatalf("rounded number: %s", got.Content)
+	}
+	for _, secret := range []string{"ordinarysecret12345", "quoted", "plainauth12345", "arraysecret12345", "objectsecret12345"} {
+		if strings.Contains(string(got.Content), secret) {
+			t.Fatalf("credential persisted: %s", got.Content)
+		}
+	}
+	if !strings.Contains(string(got.Content), "[REDACTED]") {
+		t.Fatal("credential fields were not masked")
+	}
+	after, _ := json.Marshal(req)
+	if !bytes.Equal(before, after) {
+		t.Fatal("redaction mutated caller request")
+	}
+}
+
+// Catches credential keys being sanitized into apparently safe candidates.
+func TestServiceUpdateRejectsCandidateCredentialFields(t *testing.T) {
+	for _, credential := range []string{`"API_TOKEN":"ordinarysecret12345"`, `"nested":[{"password":"ordinarysecret12345"}]`, `"nested":{"API_TOKEN":["ordinarysecret12345"]}`, `"nested":{"text":"sk-123456789012345678901234567890","text":"ordinary"}`} {
+		f := newFixture(t)
+		d := f.begin(t, "objective")
+		ctx := context.Background()
+		ev, err := f.st.AddEvidence(ctx, protocol.Evidence{WorkID: d.Work.ID, Kind: "file_change"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fact, err := f.st.AddWorkNode(ctx, protocol.WorkNode{WorkID: d.Work.ID, Kind: "fact", Title: "source", Status: "active"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "memory_candidate", Title: "ordinary", Content: json.RawMessage(`{"category":"command","semantic_key":"test-command","text":"go test","scope":".",` + credential + `}`), EvidenceIDs: []string{ev.ID}}}, Edges: []protocol.WorkEdgeChange{{From: "r", Relation: "candidate_for", To: fact.ID}}}
+		before := f.detail(t)
+		beforeReq, _ := json.Marshal(req)
+		_, _, err = f.svc.Update(ctx, f.th.ID, req)
+		var validation *ValidationError
+		if !errors.As(err, &validation) || validation.Code != "invalid" {
+			t.Fatalf("credential candidate accepted: %v", err)
+		}
+		if !reflect.DeepEqual(before, f.detail(t)) {
+			t.Fatal("candidate rejection changed graph/revision")
+		}
+		afterReq, _ := json.Marshal(req)
+		if !bytes.Equal(beforeReq, afterReq) {
+			t.Fatal("candidate rejection mutated caller request")
+		}
+	}
+}
+
+// Catches preparation deduplicating a relationship and committing other changes.
+func TestServiceUpdateRejectsDuplicateRelationships(t *testing.T) {
+	for _, mode := range []string{"request edge", "persisted edge", "request evidence", "persisted evidence"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			d := f.begin(t, "objective")
+			ctx := context.Background()
+			ev, err := f.st.AddEvidence(ctx, protocol.Evidence{WorkID: d.Work.ID, Kind: "file_change"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waiting, err := f.st.AddWorkNode(ctx, protocol.WorkNode{WorkID: d.Work.ID, Kind: "task", Title: "waiting", Status: "pending", Content: json.RawMessage(`{"required":true}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "ordinary"}}}
+			edge := protocol.WorkEdgeChange{From: waiting.ID, Relation: "serves", To: d.Nodes[0].ID}
+			switch mode {
+			case "request edge":
+				req.Edges = []protocol.WorkEdgeChange{edge, edge}
+			case "persisted edge":
+				if err := f.st.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: edge.From, Relation: edge.Relation, ToNodeID: edge.To}); err != nil {
+					t.Fatal(err)
+				}
+				req.Edges = []protocol.WorkEdgeChange{edge}
+			case "request evidence":
+				req.Nodes[0].EvidenceIDs = []string{ev.ID, ev.ID}
+			case "persisted evidence":
+				if _, err := f.st.DB.ExecContext(ctx, `INSERT INTO work_node_evidence (work_id, node_id, evidence_id) VALUES (?,?,?)`, d.Work.ID, waiting.ID, ev.ID); err != nil {
+					t.Fatal(err)
+				}
+				req.Nodes = append(req.Nodes, protocol.WorkNodeChange{ID: waiting.ID, ExpectedRevision: 1, FromStatus: "pending", ToStatus: "ready", EvidenceIDs: []string{ev.ID}})
+			}
+			before := f.detail(t)
+			_, _, err = f.svc.Update(ctx, f.th.ID, req)
+			var validation *ValidationError
+			if !errors.As(err, &validation) || validation.Code != "duplicate" {
+				t.Fatalf("err=%v", err)
+			}
+			if !reflect.DeepEqual(before, f.detail(t)) {
+				t.Fatal("duplicate rejection changed graph/revision")
+			}
+		})
+	}
+}
+
 type fixture struct {
 	svc *Service
 	st  *store.Store

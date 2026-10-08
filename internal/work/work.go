@@ -96,9 +96,7 @@ func (s *Service) Update(ctx context.Context, threadID string, req protocol.Work
 		// Reject secret candidates before redaction can mask the signal used by
 		// candidate validation. Other semantic prose is safely redacted.
 		if node.Kind == protocol.NodeMemoryCandidate {
-			var content any
-			_ = json.Unmarshal(node.Content, &content)
-			if containsSecret(node.Title) || containsSecret(content) {
+			if containsSecret(node.Title) || containsSecret(node.Content) {
 				return result, nil, invalid("nodes.candidate.text", "invalid")
 			}
 		}
@@ -140,14 +138,14 @@ func updateInputBounds(req protocol.WorkUpdateRequest) error {
 	return nil
 }
 
-// redactNodeContent walks JSON tokens, redacting string values while preserving
-// duplicate object keys for semantic rejection and exact numeric values.
+// redactNodeContent walks JSON tokens with credential-field context, preserving
+// duplicate object keys for semantic rejection and exact noncredential numbers.
 func redactNodeContent(raw json.RawMessage) (json.RawMessage, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var out bytes.Buffer
-	var value func() error
-	value = func() error {
+	var value func(bool) error
+	value = func(credential bool) error {
 		token, err := decoder.Token()
 		if err != nil {
 			return err
@@ -163,6 +161,7 @@ func redactNodeContent(raw json.RawMessage) (json.RawMessage, error) {
 					out.WriteByte(',')
 				}
 				first = false
+				childCredential := credential
 				if delim == '{' {
 					key, err := decoder.Token()
 					if err != nil {
@@ -172,11 +171,12 @@ func redactNodeContent(raw json.RawMessage) (json.RawMessage, error) {
 					if !ok {
 						return errors.New("invalid JSON key")
 					}
-					encoded, _ := json.Marshal(text)
+					childCredential = credential || credentialField(text) || containsSecret(text)
+					encoded, _ := json.Marshal(redactText(text))
 					out.Write(encoded)
 					out.WriteByte(':')
 				}
-				if err := value(); err != nil {
+				if err := value(childCredential); err != nil {
 					return err
 				}
 			}
@@ -194,7 +194,9 @@ func redactNodeContent(raw json.RawMessage) (json.RawMessage, error) {
 			out.WriteByte(byte(want))
 			return nil
 		}
-		if text, ok := token.(string); ok {
+		if credential && token != nil {
+			token = "[REDACTED]"
+		} else if text, ok := token.(string); ok {
 			token = redactText(text)
 		}
 		encoded, err := json.Marshal(token)
@@ -204,7 +206,7 @@ func redactNodeContent(raw json.RawMessage) (json.RawMessage, error) {
 		out.Write(encoded)
 		return nil
 	}
-	if err := value(); err != nil {
+	if err := value(false); err != nil {
 		return nil, err
 	}
 	if _, err := decoder.Token(); err != io.EOF {
