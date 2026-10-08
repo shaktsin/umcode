@@ -1,21 +1,320 @@
 package work
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 )
+
+// Catches two callers successfully committing the same expected revision.
+func TestServiceUpdateConcurrentWinner(t *testing.T) {
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	d := f.begin(t, "ship it")
+	f.svc.Now = func() time.Time { return time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC) }
+	req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "correct"}}}
+	start := make(chan struct{})
+	out := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { <-start; _, _, err := f.svc.Update(context.Background(), f.th.ID, req); out <- err }()
+	}
+	close(start)
+	success, conflicts := 0, 0
+	for i := 0; i < 2; i++ {
+		err := <-out
+		var validation *ValidationError
+		if err == nil {
+			success++
+		} else if errors.Is(err, store.ErrWorkUpdateConflict) || errors.As(err, &validation) && validation.Code == "stale" {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if success != 1 || conflicts != 1 {
+		t.Fatalf("success=%d conflicts=%d", success, conflicts)
+	}
+	got := f.detail(t)
+	if got.Work.Revision != 2 || len(kinds(got, "requirement")) != 1 {
+		t.Fatalf("detail=%+v", got)
+	}
+}
+
+// Catches foreign, closed, superseded-open, or absent calling-thread works.
+func TestServiceUpdateRequiresCurrentOpenWork(t *testing.T) {
+	for _, mode := range []string{"foreign thread", "closed", "older open", "no open"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			d := f.begin(t, "objective")
+			ctx := context.Background()
+			threadID := f.th.ID
+			switch mode {
+			case "foreign thread", "no open":
+				th, err := f.st.CreateThread(ctx, protocol.Thread{Title: "other"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				threadID = th.ID
+				if mode == "foreign thread" {
+					if _, err := f.st.CreateWork(ctx, protocol.Work{ThreadID: th.ID}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "closed":
+				if err := f.st.CloseWork(ctx, d.Work.ID, "completed", time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			case "older open":
+				if _, err := f.st.CreateWork(ctx, protocol.Work{ThreadID: f.th.ID, CreatedAt: d.Work.CreatedAt.Add(time.Second)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _ := f.st.GetWorkDetail(ctx, d.Work.ID)
+			_, _, err := f.svc.Update(ctx, threadID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "correct"}}})
+			if err == nil {
+				t.Fatal("accepted non-active work")
+			}
+			after, _ := f.st.GetWorkDetail(ctx, d.Work.ID)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("rejected request changed work")
+			}
+		})
+	}
+}
+
+// Catches leaked rationale, nested secrets, redaction changing semantic numbers,
+// or mutating the caller's slices/raw content while sanitizing its request.
+func TestServiceUpdateRedactsRationale(t *testing.T) {
+	f := newFixture(t)
+	d := f.begin(t, "objective")
+	var logs bytes.Buffer
+	f.svc.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Rationale: "private-rationale API_TOKEN=rationalesecret12345", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "API_TOKEN=titlesecret12345", Content: json.RawMessage(`{"required":true,"count":9007199254740993,"nested":[{"text":"API_TOKEN=contentsecret12345"}],"url":"https://user:password12345@host/"}`)}}}
+	before, _ := json.Marshal(req)
+	result, _, err := f.svc.Update(context.Background(), f.th.ID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Created != 1 || result.Revision != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+	after, _ := json.Marshal(req)
+	if !bytes.Equal(before, after) {
+		t.Fatal("caller request mutated")
+	}
+	got := kinds(f.detail(t), "requirement")[0]
+	if got.Title != "API_TOKEN=[REDACTED]" || !strings.Contains(string(got.Content), "[REDACTED]") || !strings.Contains(string(got.Content), "9007199254740993") {
+		t.Fatalf("redaction=%s %s", got.Title, got.Content)
+	}
+	var audits string
+	if err := f.st.DB.QueryRow(`SELECT COALESCE(group_concat(details_json), '') FROM audit_log`).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := json.Marshal(f.detail(t))
+	all := string(stored) + logs.String() + audits
+	for _, forbidden := range []string{"private-rationale", "rationalesecret12345", "titlesecret12345", "contentsecret12345", "password12345"} {
+		if strings.Contains(all, forbidden) {
+			t.Fatalf("leaked %s", forbidden)
+		}
+	}
+}
+
+// Catches sanitization laundering secret candidates or duplicate semantic keys.
+func TestServiceUpdateRejectsSecretCandidatesAndDuplicateContent(t *testing.T) {
+	for _, tc := range []struct{ name, kind, title, content string }{
+		{"candidate title", "memory_candidate", "API_TOKEN=titlesecret12345", `{"category":"command","semantic_key":"test","text":"go test","scope":"."}`},
+		{"candidate content", "memory_candidate", "test", `{"category":"command","semantic_key":"test","text":"go test","scope":".","extra":{"text":"API_TOKEN=secretvalue12345"}}`},
+		{"duplicate keys", "requirement", "test", `{"required":false,"required":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			d := f.begin(t, "objective")
+			ev, err := f.st.AddEvidence(context.Background(), protocol.Evidence{WorkID: d.Work.ID, Kind: "file_change"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fact, err := f.st.AddWorkNode(context.Background(), protocol.WorkNode{WorkID: d.Work.ID, Kind: "fact", Title: "source", Status: "active"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: tc.kind, Title: tc.title, Content: json.RawMessage(tc.content), EvidenceIDs: []string{ev.ID}}}, Edges: []protocol.WorkEdgeChange{{From: "r", Relation: "candidate_for", To: fact.ID}}}
+			before, _ := json.Marshal(req)
+			_, _, err = f.svc.Update(context.Background(), f.th.ID, req)
+			var validation *ValidationError
+			if !errors.As(err, &validation) || validation.Code != "invalid" {
+				t.Fatalf("err=%v", err)
+			}
+			after, _ := json.Marshal(req)
+			if !bytes.Equal(before, after) || f.detail(t).Work.Revision != 1 {
+				t.Fatal("rejection mutated request/work")
+			}
+		})
+	}
+}
+
+// Catches non-atomic depth escalation by concurrent legacy observations.
+func TestServiceUpdateDepthConcurrentEscalation(t *testing.T) {
+	f := newFixture(t)
+	d := f.begin(t, "objective")
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, "designed"); err != nil {
+				t.Error(err)
+			}
+			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, "guided"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	got := f.detail(t).Work
+	if got.WorkflowDepth != "designed" || got.Revision != 2 {
+		t.Fatalf("work=%+v", got)
+	}
+}
+
+// Catches redaction shrinking oversized original requests below semantic bounds.
+func TestServiceUpdateRetainsOriginalBounds(t *testing.T) {
+	for _, field := range []string{"title", "content"} {
+		t.Run(field, func(t *testing.T) {
+			f := newFixture(t)
+			d := f.begin(t, "objective")
+			node := protocol.WorkNodeChange{Ref: "r", Kind: "requirement", Title: "ok"}
+			if field == "title" {
+				node.Title = "API_TOKEN=" + strings.Repeat("a", MaxNodeTitleBytes)
+			} else {
+				node.Content = json.RawMessage(`{"text":"API_TOKEN=` + strings.Repeat("a", MaxNodeContentBytes) + `"}`)
+			}
+			_, _, err := f.svc.Update(context.Background(), f.th.ID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{node}})
+			var validation *ValidationError
+			if !errors.As(err, &validation) || validation.Code != "limit" {
+				t.Fatalf("err=%v", err)
+			}
+			if f.detail(t).Work.Revision != 1 {
+				t.Fatal("oversized batch persisted")
+			}
+		})
+	}
+}
+
+// Catches dropped derived transitions, incorrect reference counts, or gate
+// metadata leaking into the compact result instead of its separate return.
+func TestServiceUpdateDerivedReadinessAndGates(t *testing.T) {
+	for _, gated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ready", true: "gate"}[gated], func(t *testing.T) {
+			f := newFixture(t)
+			ctx := context.Background()
+			d, req := graphFixture()
+			d.Work.ThreadID = f.th.ID
+			if _, err := f.st.CreateWork(ctx, d.Work); err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range d.Nodes {
+				if _, err := f.st.AddWorkNode(ctx, n); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, ev := range d.Evidence {
+				if _, err := f.st.AddEvidence(ctx, ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, node := range d.Nodes {
+				for _, evidenceID := range node.EvidenceIDs {
+					if _, err := f.st.DB.ExecContext(ctx, `INSERT INTO work_node_evidence (work_id, node_id, evidence_id) VALUES (?,?,?)`, d.Work.ID, node.ID, evidenceID); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			waiting, err := f.st.AddWorkNode(ctx, protocol.WorkNode{ID: "waiting", WorkID: d.Work.ID, Kind: "task", Title: "waiting", Status: "pending", Revision: 3, Content: json.RawMessage(`{"required":true}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.st.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: "criterion", Relation: "verifies", ToNodeID: waiting.ID}); err != nil {
+				t.Fatal(err)
+			}
+			if gated {
+				req.Nodes[3].Content = json.RawMessage(`{"required":true,"gate_kind":"security"}`)
+				req.Nodes[3].ToStatus = "proposed"
+			}
+			result, gates, err := f.svc.Update(ctx, f.th.ID, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTransitions := 1
+			wantStatus := "ready"
+			if gated {
+				wantTransitions = 0
+				wantStatus = "pending"
+			}
+			if result != (protocol.WorkUpdateResult{Revision: 5, Created: 7, Transitioned: wantTransitions, Linked: 12}) {
+				t.Fatalf("result=%+v", result)
+			}
+			got := f.detail(t)
+			for _, node := range got.Nodes {
+				if node.ID == "waiting" && (node.Status != wantStatus || node.Revision != 3+wantTransitions) {
+					t.Fatalf("waiting=%+v", node)
+				}
+			}
+			if !gated && len(gates) != 0 || gated && (len(gates) != 1 || gates[0].Kind != "security" || gates[0].NodeID == "" || gates[0].NodeRevision != 1) {
+				t.Fatalf("gates=%+v", gates)
+			}
+			blob, _ := json.Marshal(result)
+			if strings.Contains(string(blob), "security") || strings.Contains(string(blob), "summary") {
+				t.Fatalf("gate in result=%s", blob)
+			}
+		})
+	}
+}
+
+// Catches rejecting requests while still leaking secret-shaped IDs or raw
+// storage errors through diagnostic metadata.
+func TestServiceUpdateRejectedDiagnostics(t *testing.T) {
+	f := newFixture(t)
+	d := f.begin(t, "objective")
+	var logs bytes.Buffer
+	f.svc.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	secret := "sk-123456789012345678901234567890"
+	_, _, err := f.svc.Update(context.Background(), f.th.ID, protocol.WorkUpdateRequest{WorkID: secret, ExpectedRevision: 1, Rationale: "private-rationale"})
+	if err == nil {
+		t.Fatal("accepted foreign ID")
+	}
+	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), "private-rationale") {
+		t.Fatal("rejection leaked request text")
+	}
+	logs.Reset()
+	if _, err := f.st.DB.Exec(`CREATE TRIGGER reject_node BEFORE INSERT ON work_nodes BEGIN SELECT RAISE(ABORT, 'private-storage-error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = f.svc.Update(context.Background(), f.th.ID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "correct"}}, Rationale: "private-rationale"})
+	if err == nil {
+		t.Fatal("storage failure missing")
+	}
+	if strings.Contains(logs.String(), "private-storage-error") || strings.Contains(logs.String(), "private-rationale") {
+		t.Fatal("storage rejection leaked prose")
+	}
+	if f.detail(t).Work.Revision != 1 {
+		t.Fatal("storage rejection persisted work revision")
+	}
+}
 
 type fixture struct {
 	svc *Service

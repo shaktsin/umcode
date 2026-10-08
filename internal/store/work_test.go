@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +14,289 @@ import (
 
 	"github.com/shaktsin/umcode/internal/protocol"
 )
+
+// Catches partial batches, repeated work revisions, and dropped reference links.
+func TestApplyWorkUpdateCommitsOneRevision(t *testing.T) {
+	st, w, n, ev, p := updateFixture(t)
+	result, err := st.ApplyWorkUpdate(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != (protocol.WorkUpdateResult{Revision: 2, Created: 1, Transitioned: 1, Linked: 2}) {
+		t.Fatalf("result=%+v", result)
+	}
+	d, err := st.GetWorkDetail(context.Background(), w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Work.Revision != 2 || d.Work.WorkflowDepth != "designed" || len(d.Nodes) != 2 || len(d.Edges) != 1 {
+		t.Fatalf("detail=%+v", d)
+	}
+	for _, node := range d.Nodes {
+		if node.ID == n.ID && (node.Status != "resolved" || node.Revision != 2) || node.ID == "wnd_created" && !reflect.DeepEqual(node.EvidenceIDs, []string{ev.ID}) {
+			t.Fatalf("nodes=%+v", d.Nodes)
+		}
+	}
+}
+
+func updateFixture(t *testing.T) (*Store, protocol.Work, protocol.WorkNode, protocol.Evidence, protocol.PreparedWorkUpdate) {
+	t.Helper()
+	ctx := context.Background()
+	st, th := workFixture(t)
+	w, err := st.CreateWork(ctx, protocol.Work{ThreadID: th.ID, WorkflowDepth: "guided"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := st.AddWorkNode(ctx, protocol.WorkNode{WorkID: w.ID, Kind: "unknown", Title: "unknown", Status: "open"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := st.AddEvidence(ctx, protocol.Evidence{WorkID: w.ID, Kind: "file_change"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	p := protocol.PreparedWorkUpdate{WorkID: w.ID, ExpectedRevision: 1, WorkflowDepth: "designed",
+		Creates:       []protocol.WorkNode{{ID: "wnd_created", WorkID: w.ID, Kind: "task", Title: "task", Status: "ready", Revision: 1, Confidence: 1, ValidFrom: at, CreatedAt: at, UpdatedAt: at}},
+		NodeChecks:    []protocol.WorkNodeCheck{{ID: n.ID, ExpectedRevision: 1, ExpectedStatus: "open"}},
+		Transitions:   []protocol.WorkNodeTransition{{ID: n.ID, ExpectedRevision: 1, FromStatus: "open", ToStatus: "resolved"}},
+		Edges:         []protocol.WorkEdge{{WorkID: w.ID, FromNodeID: "wnd_created", Relation: "depends_on", ToNodeID: n.ID}},
+		EvidenceLinks: []protocol.WorkNodeEvidenceLink{{NodeID: "wnd_created", EvidenceID: ev.ID}}}
+	return st, w, n, ev, p
+}
+
+// Catches writes before stale work or node checks and incomplete rollback.
+func TestApplyWorkUpdateStaleRevisionRollsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Store, protocol.WorkNode, *protocol.PreparedWorkUpdate)
+	}{
+		{"work revision", func(st *Store, n protocol.WorkNode, p *protocol.PreparedWorkUpdate) { p.ExpectedRevision = 2 }},
+		{"node revision", func(st *Store, n protocol.WorkNode, p *protocol.PreparedWorkUpdate) {
+			p.NodeChecks[0].ExpectedRevision = 2
+		}},
+		{"node status", func(st *Store, n protocol.WorkNode, p *protocol.PreparedWorkUpdate) {
+			p.NodeChecks[0].ExpectedStatus = "resolved"
+		}},
+		{"transition revision", func(st *Store, n protocol.WorkNode, p *protocol.PreparedWorkUpdate) {
+			p.Transitions[0].ExpectedRevision = 2
+		}},
+		{"transition status", func(st *Store, n protocol.WorkNode, p *protocol.PreparedWorkUpdate) {
+			p.Transitions[0].FromStatus = "resolved"
+		}},
+		{"evidence only", func(st *Store, n protocol.WorkNode, p *protocol.PreparedWorkUpdate) {
+			p.Transitions = nil
+			p.NodeChecks[0].ExpectedRevision = 2
+			p.EvidenceLinks[0].NodeID = n.ID
+		}},
+		{"implicit derived", func(st *Store, n protocol.WorkNode, p *protocol.PreparedWorkUpdate) {
+			if err := st.UpdateWorkNode(context.Background(), n.ID, "pending", 1, n.UpdatedAt); err != nil {
+				t.Fatal(err)
+			}
+			p.NodeChecks[0].ExpectedRevision = 2
+			p.NodeChecks[0].ExpectedStatus = "pending"
+			p.Transitions[0].FromStatus = "pending"
+			p.Transitions[0].ToStatus = "ready"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, w, n, _, p := updateFixture(t)
+			tc.mutate(st, n, &p)
+			before, _ := st.GetWorkDetail(context.Background(), w.ID)
+			got, err := st.ApplyWorkUpdate(context.Background(), p)
+			if !errors.Is(err, ErrWorkUpdateConflict) || got != (protocol.WorkUpdateResult{}) {
+				t.Fatalf("result=%+v err=%v", got, err)
+			}
+			after, _ := st.GetWorkDetail(context.Background(), w.ID)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("changed on conflict: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+}
+
+// A trigger fails the last insert after creates, transitions, and an edge.
+func TestApplyWorkUpdateConstraintFailureRollsBack(t *testing.T) {
+	st, w, _, _, p := updateFixture(t)
+	_, err := st.DB.Exec(`CREATE TRIGGER reject_link BEFORE INSERT ON work_node_evidence BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := st.GetWorkDetail(context.Background(), w.ID)
+	got, err := st.ApplyWorkUpdate(context.Background(), p)
+	if err == nil || got != (protocol.WorkUpdateResult{}) {
+		t.Fatalf("result=%+v err=%v", got, err)
+	}
+	after, _ := st.GetWorkDetail(context.Background(), w.ID)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("batch did not roll back: %+v", after)
+	}
+}
+
+// Catches trusting prepared cross-work references; SQL edges have no endpoint FK.
+func TestApplyWorkUpdateRejectsForeignRowsInsideTransaction(t *testing.T) {
+	for _, kind := range []string{"create", "check", "transition", "edge work", "edge endpoint", "evidence", "link node", "missing node", "missing evidence", "closed work", "depth downgrade"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			st, w, _, _, p := updateFixture(t)
+			foreign, err := st.CreateWork(ctx, protocol.Work{ThreadID: w.ThreadID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, err := st.AddWorkNode(ctx, protocol.WorkNode{WorkID: foreign.ID, Kind: "unknown", Status: "open"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev, err := st.AddEvidence(ctx, protocol.Evidence{WorkID: foreign.ID, Kind: "file_change"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "create":
+				p.Creates[0].WorkID = foreign.ID
+			case "check":
+				p.NodeChecks[0].ID = n.ID
+			case "transition":
+				p.Transitions[0].ID = n.ID
+			case "edge work":
+				p.Edges[0].WorkID = foreign.ID
+			case "edge endpoint":
+				p.Edges[0].ToNodeID = n.ID
+			case "evidence":
+				p.EvidenceLinks[0].EvidenceID = ev.ID
+			case "link node":
+				p.EvidenceLinks[0].NodeID = n.ID
+			case "missing node":
+				p.Edges[0].ToNodeID = "missing"
+			case "missing evidence":
+				p.EvidenceLinks[0].EvidenceID = "missing"
+			case "closed work":
+				if err := st.CloseWork(ctx, w.ID, "completed", time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			case "depth downgrade":
+				p.WorkflowDepth = "direct"
+			}
+			before, _ := st.GetWorkDetail(ctx, w.ID)
+			foreignBefore, _ := st.GetWorkDetail(ctx, foreign.ID)
+			if _, err := st.ApplyWorkUpdate(ctx, p); err == nil {
+				t.Fatal("accepted foreign or invalid rows")
+			}
+			after, _ := st.GetWorkDetail(ctx, w.ID)
+			foreignAfter, _ := st.GetWorkDetail(ctx, foreign.ID)
+			if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(foreignBefore, foreignAfter) {
+				t.Fatal("rejected batch changed rows")
+			}
+		})
+	}
+}
+
+// Catches depth downgrades and revisions incrementing on repeats/no-ops.
+func TestSetWorkDepthMonotonicRevision(t *testing.T) {
+	ctx := context.Background()
+	st, th := workFixture(t)
+	w, err := st.CreateWork(ctx, protocol.Work{ThreadID: th.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		depth, want string
+		rev         int
+	}{
+		{"direct", "direct", 1}, {"guided", "guided", 2}, {"guided", "guided", 2}, {"direct", "guided", 2},
+		{"designed", "designed", 3}, {"guided", "designed", 3}, {"designed", "designed", 3},
+	} {
+		if err := st.SetWorkDepth(ctx, w.ID, tc.depth); err != nil {
+			t.Fatal(err)
+		}
+		d, err := st.GetWorkDetail(ctx, w.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Work.WorkflowDepth != tc.want || d.Work.Revision != tc.rev {
+			t.Fatalf("after %s: depth=%s revision=%d", tc.depth, d.Work.WorkflowDepth, d.Work.Revision)
+		}
+	}
+}
+
+// Catches deferred read-to-write upgrade races across independent connections.
+func TestApplyWorkUpdateConcurrentWinner(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "work.db")
+	first, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { first.Close() })
+	second, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { second.Close() })
+	th, err := first.CreateThread(ctx, protocol.Thread{Title: "concurrent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := first.CreateWork(ctx, protocol.Work{ThreadID: th.ID, WorkflowDepth: "guided"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	out := make(chan error, 2)
+	for _, st := range []*Store{first, second} {
+		go func(st *Store) {
+			<-start
+			_, err := st.ApplyWorkUpdate(ctx, protocol.PreparedWorkUpdate{WorkID: w.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Creates: []protocol.WorkNode{{ID: "same", WorkID: w.ID, Kind: "requirement", Status: "active", Revision: 1}}})
+			out <- err
+		}(st)
+	}
+	close(start)
+	success, conflicts := 0, 0
+	for i := 0; i < 2; i++ {
+		err := <-out
+		if err == nil {
+			success++
+		} else if errors.Is(err, ErrWorkUpdateConflict) {
+			conflicts++
+		} else {
+			t.Fatalf("err=%v", err)
+		}
+	}
+	if success != 1 || conflicts != 1 {
+		t.Fatalf("success=%d conflicts=%d", success, conflicts)
+	}
+	d, err := first.GetWorkDetail(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Work.Revision != 2 || len(d.Nodes) != 1 {
+		t.Fatalf("detail=%+v", d)
+	}
+}
+
+// Catches starting any write before all ownership and revision checks finish.
+func TestApplyWorkUpdateValidatesBeforeWriting(t *testing.T) {
+	st, _, _, _, p := updateFixture(t)
+	p.NodeChecks = append(p.NodeChecks, protocol.WorkNodeCheck{ID: "missing", ExpectedRevision: 1, ExpectedStatus: "open"})
+	_, err := st.DB.Exec(`CREATE TRIGGER forbid_work_write BEFORE UPDATE ON works BEGIN SELECT RAISE(ABORT, 'write before validation'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApplyWorkUpdate(context.Background(), p); !errors.Is(err, ErrWorkUpdateConflict) {
+		t.Fatalf("wrote before validating: %v", err)
+	}
+}
+
+// Catches losing a concrete conflict type for callers classifying SQL CAS failures.
+func TestApplyWorkUpdateConflictType(t *testing.T) {
+	st, _, _, _, p := updateFixture(t)
+	p.ExpectedRevision = 2
+	_, err := st.ApplyWorkUpdate(context.Background(), p)
+	var conflict *WorkUpdateConflictError
+	if !errors.Is(err, ErrWorkUpdateConflict) || !errors.As(err, &conflict) {
+		t.Fatalf("untyped conflict: %v", err)
+	}
+}
 
 func workFixture(t *testing.T) (*Store, protocol.Thread) {
 	t.Helper()

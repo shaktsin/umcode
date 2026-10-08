@@ -4,10 +4,13 @@
 package work
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,6 +41,176 @@ type Service struct {
 	ToolVersion func(context.Context) string // identity of the toolchain, optional
 	// Workspace takes a workspace fingerprint; nil uses fingerprint.TakeWorkspace.
 	Workspace func(ctx context.Context, root string) (fingerprint.Workspace, bool)
+}
+
+// Update prepares and applies a semantic batch for the calling thread's current
+// open work. Rationale is transient; diagnostics contain compact metadata only.
+func (s *Service) Update(ctx context.Context, threadID string, req protocol.WorkUpdateRequest) (result protocol.WorkUpdateResult, gates []protocol.WorkflowGate, err error) {
+	defer func() {
+		if err == nil {
+			if s.Log != nil {
+				s.Log.Info("work graph updated", "work_id", req.WorkID, "revision", result.Revision, "created", result.Created, "transitioned", result.Transitioned, "linked", result.Linked)
+			}
+			return
+		}
+		s.Failures.Add(1)
+		if s.Log != nil {
+			class := "storage"
+			var validation *ValidationError
+			if errors.As(err, &validation) {
+				class = validation.Code
+			} else if errors.Is(err, store.ErrWorkUpdateConflict) {
+				class = "stale"
+			}
+			// Malformed request IDs may themselves contain secrets.
+			args := []any{"revision", req.ExpectedRevision, "rejection", class}
+			if validID(req.WorkID) && !containsSecret(req.WorkID) {
+				args = append(args, "work_id", req.WorkID)
+			}
+			s.Log.Warn("work graph update rejected", args...)
+		}
+	}()
+	w, ok, err := s.Store.OpenWorkForThread(ctx, threadID)
+	if err != nil {
+		return result, nil, err
+	}
+	if !ok || w.ID != req.WorkID {
+		return result, nil, invalid("work_id", "inactive")
+	}
+	detail, err := s.Store.GetWorkDetail(ctx, w.ID)
+	if err != nil {
+		return result, nil, err
+	}
+	// Enforce bounds on the original bytes as well as the sanitized projection.
+	// A long secret must not become a valid oversized request by being masked.
+	if err := updateInputBounds(req); err != nil {
+		return result, nil, err
+	}
+	// Copy slices and raw content so redaction never modifies caller-owned data.
+	clean := req
+	clean.Nodes = append([]protocol.WorkNodeChange(nil), req.Nodes...)
+	clean.Edges = append([]protocol.WorkEdgeChange(nil), req.Edges...)
+	for i, node := range req.Nodes {
+		clean.Nodes[i].Content = append(json.RawMessage(nil), node.Content...)
+		clean.Nodes[i].EvidenceIDs = append([]string(nil), node.EvidenceIDs...)
+		// Reject secret candidates before redaction can mask the signal used by
+		// candidate validation. Other semantic prose is safely redacted.
+		if node.Kind == protocol.NodeMemoryCandidate {
+			var content any
+			_ = json.Unmarshal(node.Content, &content)
+			if containsSecret(node.Title) || containsSecret(content) {
+				return result, nil, invalid("nodes.candidate.text", "invalid")
+			}
+		}
+		clean.Nodes[i].Title = redactText(node.Title)
+		if len(node.Content) != 0 {
+			clean.Nodes[i].Content, err = redactNodeContent(node.Content)
+			if err != nil {
+				return result, nil, invalid("nodes.content", "invalid")
+			}
+		}
+	}
+	prepared, err := PrepareUpdate(detail, clean, s.now())
+	if err != nil {
+		return result, nil, err
+	}
+	result, err = s.Store.ApplyWorkUpdate(ctx, prepared)
+	if err != nil {
+		return result, nil, err
+	}
+	return result, prepared.Gates, nil
+}
+
+func updateInputBounds(req protocol.WorkUpdateRequest) error {
+	if len(req.Nodes) > MaxNodeChanges || len(req.Edges) > MaxEdgeChanges || len(req.Rationale) > MaxRationaleBytes {
+		return invalid("request", "limit")
+	}
+	for _, node := range req.Nodes {
+		if len(node.Ref) > MaxClientRefBytes || len(node.Title) > MaxNodeTitleBytes || len(node.Content) > MaxNodeContentBytes || len(node.EvidenceIDs) > MaxNodeEvidenceIDs {
+			return invalid("nodes", "limit")
+		}
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return invalid("request", "invalid")
+	}
+	if len(raw) > MaxWorkUpdateBytes {
+		return invalid("request", "limit")
+	}
+	return nil
+}
+
+// redactNodeContent walks JSON tokens, redacting string values while preserving
+// duplicate object keys for semantic rejection and exact numeric values.
+func redactNodeContent(raw json.RawMessage) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var out bytes.Buffer
+	var value func() error
+	value = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delim, ok := token.(json.Delim); ok {
+			if delim != '{' && delim != '[' {
+				return errors.New("invalid JSON value")
+			}
+			out.WriteByte(byte(delim))
+			first := true
+			for decoder.More() {
+				if !first {
+					out.WriteByte(',')
+				}
+				first = false
+				if delim == '{' {
+					key, err := decoder.Token()
+					if err != nil {
+						return err
+					}
+					text, ok := key.(string)
+					if !ok {
+						return errors.New("invalid JSON key")
+					}
+					encoded, _ := json.Marshal(text)
+					out.Write(encoded)
+					out.WriteByte(':')
+				}
+				if err := value(); err != nil {
+					return err
+				}
+			}
+			close, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			want := json.Delim(']')
+			if delim == '{' {
+				want = '}'
+			}
+			if close != want {
+				return errors.New("invalid JSON delimiter")
+			}
+			out.WriteByte(byte(want))
+			return nil
+		}
+		if text, ok := token.(string); ok {
+			token = redactText(text)
+		}
+		encoded, err := json.Marshal(token)
+		if err != nil {
+			return err
+		}
+		out.Write(encoded)
+		return nil
+	}
+	if err := value(); err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, errors.New("trailing JSON content")
+	}
+	return out.Bytes(), nil
 }
 
 // Observation is one finished tool call as seen by the engine.
