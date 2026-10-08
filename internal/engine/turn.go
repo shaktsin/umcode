@@ -1104,6 +1104,15 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	var output string
 	workflowDenied := false
 	if updater, ok := tool.(tools.WorkflowUpdateTool); ok && e.Cfg.Models.DesignedWorkflow {
+		// Internal graph updates need thread identity, independently of project
+		// attachment. Keep this scope local so other tools retain their existing
+		// no-project filesystem behavior.
+		scope := &tools.Scope{ThreadID: th.ID}
+		if existing := tools.ScopeFrom(toolCtx); existing != nil {
+			*scope = *existing
+			scope.ThreadID = th.ID
+		}
+		toolCtx = tools.WithScope(toolCtx, scope)
 		var update protocol.WorkUpdateResult
 		var gates []protocol.WorkflowGate
 		update, gates, err = updater.Apply(toolCtx, call.Args)

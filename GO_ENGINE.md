@@ -131,6 +131,31 @@ Plugin skills are namespaced as `<plugin>:<skill>`, and plugin MCP servers are n
 
 Each chat keeps a quiet record of what a request set out to do: a goal, the verification criteria the agent planned, the files it changed, failed tools, and each verification attempt with its evidence. A work spans turns until it is resolved: it closes when a turn completes (not paused) with no unresolved criterion, stays open after an interrupted, paused or failed turn, and is marked abandoned when the chat is archived. Recording is best-effort and never changes the chat, the prompt, or a tool result. Read it with `work/list` (`threadId`, newest first) and `work/get` (`workId`).
 
+### Designed workflow (opt-in, Phase 5a)
+
+Set `models.designed_workflow: true` to enable the semantic work graph, conditional workflow instructions, and the `work.update` built-in. The flag defaults to false: the existing tool list, prompts, work lifecycle, and request accounting retain their prior behavior. This works in general-purpose chats as well as project chats; an internal graph update needs a thread, not a project or filesystem. It adds no model call.
+
+Workflow depth escalates deterministically and never decreases: Direct for ordinary questions and discovery, Guided after coding/verification or assessed-risk tool activity, and Designed for actionable public-contract or persisted-schema changes, migration/compatibility, security/trust, billing/money, destructive/recovery work, or an explicit validated graph update. Explanatory questions about these topics remain Direct. Classification uses local rules and recorded structure, not a model judgment.
+
+Before Guided or Designed implementation, `work.update` records the first sufficient solution rung, with an acceptance-criterion link and supporting inspected evidence:
+
+1. The change does not need to exist.
+2. The repository already contains the capability.
+3. The standard library satisfies it.
+4. The native platform satisfies it.
+5. An already-installed dependency satisfies it.
+6. Minimum new code is required.
+
+The tool creates bounded batches of requirements, non-goals, options, decisions, tasks, unknowns, and memory candidates; it references existing engine-owned criteria and evidence. It uses work/node revision and status predicates, validates the whole projected graph before an atomic commit, and returns only the new revision and counts. The engine derives task readiness from the selected approved solution, applicable criteria, dependencies, required decisions, and blocking unknowns. It checks graph structure and evidence references; it does not evaluate whether a prose rationale is persuasive. Guided selections can be recorded as approved without a workflow approval when no gate applies. Completion requires a supported approved solution, a task graph, completed required tasks, approved required decisions, resolved or explicitly accepted blocking unknowns, and fresh required verification passes.
+
+Required proposed decisions with gate kinds `public_contract`, `persisted_schema`, `security`, `destructive`, `billing`, `architecture_choice`, or `accepted_risk` require human workflow approval. Explicit acceptance of a blocking unknown as `accepted_risk` also requires approval; merely opening the unknown does not request it. Each workflow approval identifies one exact work, node, and node revision and cannot be remembered, even if the client requests remembering. Approval or denial commits the node outcome, dependent task states, and work revision together before execution continues. A denied decision is not re-prompted; mutation stays `workflow not ready` until a replacement solution is approved and any required implementation task is runnable. After restart, a proposed required decision stays proposed, orphaned approvals expire, and the next mutation obtains a fresh node-specific approval before executing.
+
+Designed mutation fails closed before tool hooks, safety policy, and tool execution. While gates or readiness block mutation, the exact discovery allowance is `file.read`, `file.list`, `file.search`, `web.search`, `web.fetch`, `verification.plan`, `computer.list`, `computer.inspect`, `visual.inspect`, and `work.update`; these tools still enforce their own project and safety restrictions. Unknown plugin/MCP tools are blocked because their side effects are not established. Opening the workflow gate does not bypass ordinary tool approval or safety policy.
+
+With the independent `models.context_compiler: true` flag, eligible compact requests project active semantic state. P0 carries workflow depth/revision, required decisions and unresolved gates, current tasks/dependencies, blocking unknowns, criteria and completion obligations. P1 carries selected solution options/rungs, applicable requirements, and supporting evidence identities/URIs. Rejected and superseded obligations, opaque node content, evidence bodies, and memory-candidate text are omitted. P1 is dropped before P0; P0 stays intact or compilation declines to the transcript fallback. Short threads can also fall back when a packet would not save tokens. Request diagnostics report `p0PacketTokens`, `p1PacketTokens`, `workPacketTokens`, `evidencePacketTokens`, plus `workUpdateSpecTokens`, `workUpdateCallTokens`, and `workUpdateResultTokens`; these are attribution fields within existing totals, not additional charged tokens.
+
+Phase 5a does not implement automatic curated memory: there is no `project_memories` store, memory merge/auto-promotion, automatic promotion into `UMCODE.md`, or generated user-project graph file. A validated memory candidate remains internal graph data. Existing user-directed project-instruction editing remains available through normal file tools.
+
 ### Evidence vault and staleness
 
 Full verification output and failed-tool errors are kept in a content-addressed vault under `storage.vault_dir` (`objects/<2 hex>/<sha256>`), with the last 2 KB kept on the evidence row. Secrets (private keys, `sk-`/`ghp_`/`AKIA`/`xox` tokens, `Authorization`/`Bearer` values, `KEY`/`TOKEN`/`SECRET`/`PASSWORD` assignments) are masked **before** hashing and writing, so they never reach disk. Objects over 8 MB are clipped head and tail. If the vault cannot be written, the attempt is still recorded with a summary and the turn is unaffected.
