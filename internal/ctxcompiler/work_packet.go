@@ -105,6 +105,34 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 			included[n.ID] = true
 		}
 	}
+	// Discover applicability before rendering. Requirements can depend on other
+	// requirements, so a single identity-ordered pass cannot establish membership.
+	supporting, applicable := map[string]bool{}, map[string]bool{}
+	for id := range included {
+		applicable[id] = true
+	}
+	for id := range selected {
+		supporting[id], applicable[id] = true, true
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, n := range nodes {
+			if !live(n) || n.Kind != protocol.NodeRequirement || supporting[n.ID] {
+				continue
+			}
+			linked, applies := false, required(n)
+			for _, edge := range edges {
+				if edge.FromNodeID == n.ID || edge.ToNodeID == n.ID {
+					linked = true
+					applies = applies || applicable[edge.FromNodeID] || applicable[edge.ToNodeID]
+				}
+			}
+			if applies || !linked {
+				supporting[n.ID], applicable[n.ID], changed = true, true, true
+			}
+		}
+	}
+	latest := latestAttempts(d)
 	var p0, p1 strings.Builder
 	fmt.Fprintf(&p0, "## Work\nGoal: %s\nWorkflow: depth=%s revision=%d\n", redact(d.Work.Goal), d.Work.WorkflowDepth, d.Work.Revision)
 	var completion []string
@@ -114,8 +142,15 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 		}
 		m := meta[n.ID]
 		status := n.Status
-		if n.Kind == protocol.NodeCriterion && (stale[n.ID] || status == protocol.StatusStale) {
-			status = "needs re-run"
+		if n.Kind == protocol.NodeCriterion {
+			// not_run deliberately leaves the persisted node status unchanged;
+			// the latest attempt still governs criterion satisfaction.
+			if a, ok := latest[n.ID]; ok {
+				status = a.Status
+			}
+			if (status == protocol.AttemptPassed || status == protocol.StatusStale) && (stale[n.ID] || n.Status == protocol.StatusStale) {
+				status = "needs re-run"
+			}
 		}
 		if required(n) && (n.Kind == protocol.NodeCriterion || n.Kind == protocol.NodeTask || n.Kind == protocol.NodeDecision) {
 			completion = append(completion, n.ID+"="+status)
@@ -135,19 +170,7 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 			}
 			p0.WriteByte('\n')
 		}
-		applicable := n.Kind == protocol.NodeRequirement && required(n)
-		if n.Kind == protocol.NodeRequirement && !applicable {
-			linked := false
-			for _, e := range edges {
-				if e.FromNodeID == n.ID || e.ToNodeID == n.ID {
-					linked = true
-					applicable = applicable || included[e.FromNodeID] || included[e.ToNodeID] || selected[e.FromNodeID] || selected[e.ToNodeID]
-				}
-			}
-			applicable = applicable || !linked
-		}
-		if selected[n.ID] || applicable {
-			included[n.ID] = true
+		if supporting[n.ID] {
 			fmt.Fprintf(&p1, "- %s %s: %s", n.ID, n.Kind, redact(n.Title))
 			if selected[n.ID] {
 				fmt.Fprintf(&p1, " rung=%d", m.Rung)
@@ -155,6 +178,9 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 			p1.WriteByte('\n')
 			p.supporting++
 		}
+	}
+	for id := range supporting {
+		included[id] = true
 	}
 	for _, e := range edges {
 		from, to := byID[e.FromNodeID], byID[e.ToNodeID]
@@ -202,9 +228,15 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 			}
 		}
 	}
-	for _, a := range d.Attempts {
+	for _, a := range latest {
 		if included[a.CriterionNodeID] && a.EvidenceID != "" {
 			refs[a.EvidenceID] = true
+		}
+	}
+	older := map[string]bool{}
+	for _, a := range d.Attempts {
+		if a.CriterionNodeID != "" && a.EvidenceID != "" && latest[a.CriterionNodeID].ID != a.ID {
+			older[a.EvidenceID] = true
 		}
 	}
 	allowed := map[string]protocol.Evidence{}
@@ -212,7 +244,7 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 		activeEvidence = d.Evidence
 	}
 	for _, e := range activeEvidence {
-		if e.StaleAt == nil {
+		if e.StaleAt == nil && !older[e.ID] {
 			allowed[e.ID] = e
 			if evidenceNodes[e.NodeID] {
 				refs[e.ID] = true

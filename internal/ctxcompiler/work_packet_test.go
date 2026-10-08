@@ -122,6 +122,88 @@ func TestDesignedSupportingFactsCarryReferencesOnly(t *testing.T) {
 	}
 }
 
+func TestDesignedCriterionLatestNotRunClearsSatisfiedState(t *testing.T) {
+	passed, passEvidence := attempt("e-criterion", protocol.AttemptPassed, "OLD_SUCCESS_BODY", base)
+	passEvidence.SourceURI = "vault://old-success"
+	notRun, currentEvidence := attempt("e-criterion", protocol.AttemptNotRun, "CURRENT_NOT_RUN_BODY", base.Add(time.Minute))
+	currentEvidence.SourceURI = "vault://current-not-run"
+	for _, suppliedActive := range []bool{false, true} {
+		t.Run(map[bool]string{false: "inferred_evidence", true: "supplied_evidence"}[suppliedActive], func(t *testing.T) {
+			d := designedDetail()
+			d.Attempts = []protocol.VerificationAttempt{notRun, passed} // timestamp beats slice order
+			d.Evidence = append(d.Evidence, passEvidence, currentEvidence)
+			for i := range d.Nodes {
+				if d.Nodes[i].ID == "e-criterion" {
+					d.Nodes[i].EvidenceIDs = []string{passEvidence.ID}
+				}
+			}
+			in := designedInput(d)
+			if suppliedActive {
+				in.Active = d.Evidence
+			}
+			res, ok := Compile(in)
+			if !ok {
+				t.Fatalf("declined: %+v", res.Report)
+			}
+			text := res.Messages[0].JoinedText()
+			if !strings.Contains(text, "e-criterion criterion revision=2 status=not_run") || !strings.Contains(text, "e-criterion=not_run") {
+				t.Errorf("latest not_run did not replace satisfied P0 criterion/completion state: %s", text)
+			}
+			for _, absent := range []string{"e-criterion=passed", "vault://old-success", passEvidence.ID, "OLD_SUCCESS_BODY", "CURRENT_NOT_RUN_BODY"} {
+				if strings.Contains(text, absent) {
+					t.Errorf("obsolete support or evidence body leaked: %q", absent)
+				}
+			}
+			if !strings.Contains(text, currentEvidence.ID) {
+				t.Errorf("current not_run evidence reference missing: %s", text)
+			}
+			if d.Nodes[5].Status != protocol.AttemptPassed {
+				t.Fatal("projection changed the persisted status")
+			}
+		})
+	}
+}
+
+func TestDesignedRequirementApplicabilityReachesFixedPoint(t *testing.T) {
+	for _, ids := range [][2]string{{"a-requirement", "z-requirement"}, {"z-requirement", "a-requirement"}} {
+		t.Run(ids[0], func(t *testing.T) {
+			d := protocol.WorkDetail{Work: protocol.Work{Goal: "ship", WorkflowDepth: protocol.DepthDesigned}, Nodes: []protocol.WorkNode{
+				{ID: ids[0], Kind: protocol.NodeRequirement, Title: "transitive invariant", Status: protocol.StatusProposed, Content: json.RawMessage(`{"required":false}`)},
+				{ID: ids[1], Kind: protocol.NodeRequirement, Title: "task invariant", Status: protocol.StatusProposed, Content: json.RawMessage(`{"required":false}`)},
+				{ID: "task", Kind: protocol.NodeTask, Title: "active task", Status: protocol.StatusInProgress},
+				{ID: "unrelated", Kind: protocol.NodeRequirement, Title: "UNRELATED_INVARIANT", Status: protocol.StatusProposed, Content: json.RawMessage(`{"required":false}`)},
+				{ID: "rejected", Kind: protocol.NodeOption, Status: protocol.StatusRejected},
+			}, Edges: []protocol.WorkEdge{
+				{FromNodeID: ids[0], Relation: protocol.RelRequires, ToNodeID: ids[1]},
+				{FromNodeID: "task", Relation: protocol.RelRequires, ToNodeID: ids[1]},
+				{FromNodeID: "rejected", Relation: protocol.RelServes, ToNodeID: "unrelated"},
+			}}
+			res, ok := Compile(designedInput(d))
+			if !ok {
+				t.Fatalf("declined: %+v", res.Report)
+			}
+			text := res.Messages[0].JoinedText()
+			for _, want := range []string{"transitive invariant", "task invariant"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("applicable requirement missing %q: %s", want, text)
+				}
+			}
+			if strings.Contains(text, "UNRELATED_INVARIANT") {
+				t.Error("unrelated requirement became applicable")
+			}
+			if strings.Index(text, "- a-requirement requirement:") > strings.Index(text, "- z-requirement requirement:") {
+				t.Error("applicability output not sorted by identity")
+			}
+			d.Nodes[0], d.Nodes[1] = d.Nodes[1], d.Nodes[0]
+			d.Edges[0], d.Edges[1] = d.Edges[1], d.Edges[0]
+			again, ok := Compile(designedInput(d))
+			if !ok || again.Messages[0].JoinedText() != text {
+				t.Error("applicability depends on insertion order")
+			}
+		})
+	}
+}
+
 func attempt(critID, status, summary string, at time.Time) (protocol.VerificationAttempt, protocol.Evidence) {
 	ev := protocol.Evidence{ID: "e-" + critID + status, NodeID: critID, Kind: protocol.EvidenceVerificationOutput,
 		Summary: summary, ObservedAt: at}
