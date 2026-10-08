@@ -380,9 +380,18 @@ func (s *Store) ListWorks(ctx context.Context, threadID string) ([]protocol.Work
 
 // GetWorkDetail loads a work with its nodes, edges, evidence and attempts.
 func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.WorkDetail, error) {
+	return getWorkDetail(ctx, s.DB, workID)
+}
+
+type workQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func getWorkDetail(ctx context.Context, q workQuerier, workID string) (protocol.WorkDetail, error) {
 	d := protocol.WorkDetail{Nodes: []protocol.WorkNode{}, Edges: []protocol.WorkEdge{},
 		Evidence: []protocol.Evidence{}, Attempts: []protocol.VerificationAttempt{}, Fingerprints: []protocol.Fingerprint{}}
-	w, err := scanWork(s.DB.QueryRowContext(ctx, `SELECT `+workCols+` FROM works WHERE id = ?`, workID))
+	w, err := scanWork(q.QueryRowContext(ctx, `SELECT `+workCols+` FROM works WHERE id = ?`, workID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, ErrNotFound
 	}
@@ -391,7 +400,7 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 	}
 	d.Work = w
 
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, work_id, kind, title, content_json, status, confidence, revision, valid_from,
+	rows, err := q.QueryContext(ctx, `SELECT id, work_id, kind, title, content_json, status, confidence, revision, valid_from,
 		valid_until, superseded_by, created_at, updated_at FROM work_nodes WHERE work_id = ? ORDER BY created_at, rowid`, workID)
 	if err != nil {
 		return d, err
@@ -418,7 +427,7 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 	}
 	rows.Close()
 
-	rows, err = s.DB.QueryContext(ctx, `SELECT node_id, evidence_id FROM work_node_evidence
+	rows, err = q.QueryContext(ctx, `SELECT node_id, evidence_id FROM work_node_evidence
 		WHERE work_id = ? ORDER BY node_id, evidence_id`, workID)
 	if err != nil {
 		return d, err
@@ -443,7 +452,7 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 	}
 	rows.Close()
 
-	rows, err = s.DB.QueryContext(ctx, `SELECT work_id, from_node_id, relation, to_node_id FROM work_edges WHERE work_id = ? ORDER BY rowid`, workID)
+	rows, err = q.QueryContext(ctx, `SELECT work_id, from_node_id, relation, to_node_id FROM work_edges WHERE work_id = ? ORDER BY rowid`, workID)
 	if err != nil {
 		return d, err
 	}
@@ -461,7 +470,7 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 	}
 	rows.Close()
 
-	rows, err = s.DB.QueryContext(ctx, `SELECT e.id, e.work_id, e.node_id, e.kind, e.source_uri, e.source_revision, e.content_hash,
+	rows, err = q.QueryContext(ctx, `SELECT e.id, e.work_id, e.node_id, e.kind, e.source_uri, e.source_revision, e.content_hash,
 		e.summary, e.confidence, e.observed_at, e.stale_at, e.vault_hash, e.env_fingerprint,
 		CASE WHEN e.vault_hash = '' THEN e.availability WHEN v.status = 'available' THEN 'available' ELSE 'unavailable' END
 		FROM evidence e LEFT JOIN vault_objects v ON v.hash = e.vault_hash
@@ -487,7 +496,7 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 	}
 	rows.Close()
 
-	rows, err = s.DB.QueryContext(ctx, `SELECT id, work_id, criterion_node_id, check_type, command, environment_json, status,
+	rows, err = q.QueryContext(ctx, `SELECT id, work_id, criterion_node_id, check_type, command, environment_json, status,
 		exit_code, evidence_id, started_at, finished_at, fingerprint_id FROM verification_attempts WHERE work_id = ? ORDER BY started_at, rowid`, workID)
 	if err != nil {
 		return d, err
@@ -518,7 +527,7 @@ func (s *Store) GetWorkDetail(ctx context.Context, workID string) (protocol.Work
 	}
 	rows.Close()
 
-	rows, err = s.DB.QueryContext(ctx, `SELECT id, work_id, turn_id, kind, value, paths_json, taken_at FROM work_fingerprints
+	rows, err = q.QueryContext(ctx, `SELECT id, work_id, turn_id, kind, value, paths_json, taken_at FROM work_fingerprints
 		WHERE work_id = ? ORDER BY taken_at, rowid`, workID)
 	if err != nil {
 		return d, err

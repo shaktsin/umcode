@@ -987,6 +987,10 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		model, reduction := e.reduceToolResult(name, call.Args, output, isError)
 		return toolRunResult{Output: output, ModelOutput: model, Reduction: reduction, IsError: isError, HookContext: contextValues}
 	}
+	workflow, gateErr := e.workflowDetail(sctx, th.ID, name)
+	if gateErr != nil {
+		return result(gateErr.Error(), true)
+	}
 	riskLevel := ""
 	var sink *tools.RawSink // the tool's unclipped result, when it provides one
 	observe := func(event hooks.Event, output, toolError string, priorContext []string) toolRunResult {
@@ -1010,6 +1014,11 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return result("internal error: "+err.Error(), true)
 	}
 	it.Tool = &protocol.ToolCallData{CallID: call.ID, Name: name, Args: call.Args}
+	if err := e.recoverWorkflowGate(ctx, sctx, turn, it, name, workflow); err != nil {
+		it.Status, it.Tool.Error = protocol.ItemDenied, err.Error()
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return result(err.Error(), true)
+	}
 	if !ok {
 		it.Status, it.Tool.Error = protocol.ItemFailed, "unknown tool "+name
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
@@ -1092,11 +1101,27 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		toolCtx = tools.WithScope(ctx, &streamScope)
 	}
 	toolCtx, sink = tools.WithRawSink(toolCtx)
-	output, err := tool.Call(toolCtx, call.Args)
+	var output string
+	workflowDenied := false
+	if updater, ok := tool.(tools.WorkflowUpdateTool); ok && e.Cfg.Models.DesignedWorkflow {
+		var update protocol.WorkUpdateResult
+		var gates []protocol.WorkflowGate
+		update, gates, err = updater.Apply(toolCtx, call.Args)
+		if err == nil {
+			output, workflowDenied, err = e.finishWorkflowUpdate(ctx, sctx, turn, it, update, gates)
+		}
+	} else {
+		output, err = tool.Call(toolCtx, call.Args)
+	}
 	if err != nil {
 		it.Status, it.Tool.Error = protocol.ItemFailed, err.Error()
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 		return observe(hooks.ToolUseFailed, "Error: "+err.Error(), err.Error(), before.Context)
+	}
+	if workflowDenied {
+		it.Status, it.Tool.Output = protocol.ItemDenied, output
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return result(output, true, before.Context...)
 	}
 	it.Status, it.Tool.Output = protocol.ItemCompleted, output
 	_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)

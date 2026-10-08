@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/workflowgraph"
 )
 
 // ---- credentials ----
@@ -341,6 +342,122 @@ func (s *Store) UsageGrouped(ctx context.Context, p protocol.UsageSummaryParams)
 
 // ---- approvals ----
 
+// DecideWorkflowApproval commits the approval, its exact node outcome and task
+// readiness under one writer lock and one work revision. Expiry changes only
+// the approval row, including when the graph identity has since become stale.
+func (s *Store) DecideWorkflowApproval(ctx context.Context, id, status, by string) (int, error) {
+	if status != "approved" && status != "denied" && status != "expired" {
+		return 0, ErrWorkUpdateConflict
+	}
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var workID, nodeID, threadID string
+	var revision int
+	err = tx.QueryRowContext(ctx, `SELECT work_id,node_id,node_revision,thread_id FROM approvals WHERE id=? AND kind='workflow' AND status='pending'`, id).Scan(&workID, &nodeID, &revision, &threadID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	d, err := getWorkDetail(ctx, tx, workID)
+	if err != nil {
+		return 0, err
+	}
+	if status != "expired" && (d.Work.ThreadID != threadID || d.Work.Status != protocol.WorkOpen) {
+		return 0, ErrWorkUpdateConflict
+	}
+	index := -1
+	for i, n := range d.Nodes {
+		if n.ID == nodeID {
+			index = i
+			break
+		}
+	}
+	if status != "expired" && index < 0 {
+		return 0, ErrWorkUpdateConflict
+	}
+	var n protocol.WorkNode
+	if index >= 0 {
+		n = d.Nodes[index]
+	}
+	var content struct {
+		Required bool   `json:"required"`
+		GateKind string `json:"gate_kind"`
+		Blocking bool   `json:"blocking"`
+	}
+	if status != "expired" && len(n.Content) > 0 && json.Unmarshal(n.Content, &content) != nil {
+		return 0, ErrWorkUpdateConflict
+	}
+	decision := n.Kind == protocol.NodeDecision && n.Status == protocol.StatusProposed && content.Required && workflowgraph.ValidGate(content.GateKind)
+	unknown := n.Kind == protocol.NodeUnknown && n.Status == protocol.StatusOpen && content.Blocking
+	if status != "expired" && (n.WorkID != workID || n.Revision != revision || n.ValidUntil != nil || n.SupersededBy != "" || (!decision && !unknown)) {
+		return 0, ErrWorkUpdateConflict
+	}
+	finalRevision := d.Work.Revision
+	if status != "expired" {
+		originalNodes := append([]protocol.WorkNode(nil), d.Nodes...)
+		outcome := protocol.StatusRejected
+		if unknown {
+			outcome = protocol.StatusOpen
+		}
+		if status == "approved" {
+			outcome = protocol.StatusApproved
+			if unknown {
+				outcome = protocol.StatusAcceptedRisk
+			}
+		}
+		d.Nodes[index].Status = outcome
+		res, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status=?,revision=revision+1,updated_at=? WHERE id=? AND work_id=? AND revision=? AND status=?`, outcome, Now(), nodeID, workID, revision, n.Status)
+		if err != nil {
+			return 0, err
+		}
+		if err = requireWorkUpdateRow(res); err != nil {
+			return 0, err
+		}
+		statuses := workflowgraph.DeriveApprovalTaskStatuses(d, unknown && status == "denied")
+		for _, node := range originalNodes {
+			if node.Kind != protocol.NodeTask {
+				continue
+			}
+			to := statuses[node.ID]
+			old := node.Status
+			if to == old {
+				continue
+			}
+			res, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status=?,revision=revision+1,updated_at=? WHERE id=? AND work_id=? AND revision=? AND status=?`, to, Now(), node.ID, workID, node.Revision, old)
+			if err != nil {
+				return 0, err
+			}
+			if err = requireWorkUpdateRow(res); err != nil {
+				return 0, err
+			}
+		}
+		res, err = tx.ExecContext(ctx, `UPDATE works SET revision=revision+1 WHERE id=? AND revision=? AND status='open'`, workID, d.Work.Revision)
+		if err != nil {
+			return 0, err
+		}
+		if err = requireWorkUpdateRow(res); err != nil {
+			return 0, err
+		}
+		finalRevision++
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE approvals SET status=?,decided_by=?,decided_at=? WHERE id=? AND kind='workflow' AND status='pending'`, status, by, Now(), id)
+	if err != nil {
+		return 0, err
+	}
+	if err = requireWorkUpdateRow(res); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return finalRevision, nil
+}
+
 // CreateApproval inserts a pending approval.
 func (s *Store) CreateApproval(ctx context.Context, a protocol.Approval) error {
 	if a.Kind == "" {
@@ -365,6 +482,35 @@ func (s *Store) DecideApproval(ctx context.Context, id, status, by string) error
 		return ErrNotFound
 	}
 	return nil
+}
+
+// GetApproval loads one exact approval identity, without the history page cap.
+func (s *Store) GetApproval(ctx context.Context, id string) (protocol.Approval, error) {
+	var a protocol.Approval
+	var args, created, expires string
+	var decided sql.NullString
+	err := s.DB.QueryRowContext(ctx, `SELECT id,thread_id,turn_id,item_id,tool,args_json,risk,reason,action_summary,status,decided_by,created_at,expires_at,decided_at,kind,work_id,node_id,node_revision FROM approvals WHERE id=?`, id).Scan(&a.ID, &a.ThreadID, &a.TurnID, &a.ItemID, &a.Tool, &args, &a.Risk, &a.Reason, &a.ActionSummary, &a.Status, &a.DecidedBy, &created, &expires, &decided, &a.Kind, &a.WorkID, &a.NodeID, &a.NodeRevision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	a.Args = json.RawMessage(args)
+	a.CreatedAt, a.ExpiresAt, a.DecidedAt = ParseTime(created), ParseTime(expires), nullTime(decided)
+	return a, err
+}
+
+// PendingWorkflowApproval finds a pending transport for one exact gate; stale
+// revisions and unrelated approvals cannot suppress a recovery request.
+func (s *Store) PendingWorkflowApproval(ctx context.Context, workID, nodeID string, revision int) (protocol.Approval, bool, error) {
+	var id string
+	err := s.DB.QueryRowContext(ctx, `SELECT id FROM approvals WHERE kind='workflow' AND status='pending' AND work_id=? AND node_id=? AND node_revision=? ORDER BY created_at DESC,rowid DESC LIMIT 1`, workID, nodeID, revision).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return protocol.Approval{}, false, nil
+	}
+	if err != nil {
+		return protocol.Approval{}, false, err
+	}
+	a, err := s.GetApproval(ctx, id)
+	return a, err == nil, err
 }
 
 // ListApprovals returns approvals with the given status ("" = all), newest first.

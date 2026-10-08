@@ -14,6 +14,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/vault"
+	"github.com/shaktsin/umcode/internal/workflowgraph"
 )
 
 // Graph batch bounds are byte limits, shared by validation and tool schemas.
@@ -75,11 +76,7 @@ var graphID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]*$`)
 
 func validID(id string) bool { return len(id) > 0 && len(id) <= 128 && graphID.MatchString(id) }
 func validGate(kind string) bool {
-	switch kind {
-	case GatePublicContract, GatePersistedSchema, GateSecurity, GateDestructive, GateBilling, GateArchitectureChoice, GateAcceptedRisk:
-		return true
-	}
-	return false
+	return workflowgraph.ValidGate(kind)
 }
 func active(n protocol.WorkNode) bool {
 	return n.Status != protocol.StatusRejected && n.Status != protocol.StatusSuperseded && n.ValidUntil == nil && n.SupersededBy == ""
@@ -393,12 +390,17 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 			if c.ExpectedRevision <= 0 || c.ExpectedRevision != n.Revision || c.FromStatus == "" || c.FromStatus != n.Status {
 				return protocol.PreparedWorkUpdate{}, invalid("nodes.expected_revision", "stale")
 			}
-			if err := validateTransition(n, c.ToStatus); err != nil {
+			riskIntent := n.Kind == protocol.NodeUnknown && n.Status == protocol.StatusOpen && c.ToStatus == protocol.StatusAcceptedRisk && active(n) && blocking(n)
+			if err := validateTransition(n, c.ToStatus); err != nil && !riskIntent {
 				return protocol.PreparedWorkUpdate{}, err
 			}
 			p.NodeChecks = append(p.NodeChecks, protocol.WorkNodeCheck{ID: n.ID, ExpectedRevision: n.Revision, ExpectedStatus: n.Status})
 			// A requested ready state is derived after projecting the entire batch.
 			to := c.ToStatus
+			if riskIntent {
+				to = n.Status
+				p.Gates = append(p.Gates, protocol.WorkflowGate{WorkID: req.WorkID, NodeID: n.ID, NodeRevision: n.Revision, Kind: GateAcceptedRisk, Reason: GateAcceptedRisk, Summary: n.Title})
+			}
 			if n.Kind == protocol.NodeTask && to == protocol.StatusReady {
 				to = n.Status
 			}
@@ -561,7 +563,7 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 			d.Nodes[i].Revision++
 		}
 	}
-	p.Gates = PendingWorkflowGates(d)
+	p.Gates = append(p.Gates, PendingWorkflowGates(d)...)
 	return p, nil
 }
 
@@ -751,55 +753,31 @@ func dependencyCycle(d protocol.WorkDetail) bool {
 
 // DeriveTaskStatuses never reopens started/terminal tasks. Lost readiness blocks.
 func DeriveTaskStatuses(d protocol.WorkDetail) map[string]string {
-	out := map[string]string{}
-	nodes := graphNodes(d)
-	riskOpen := false
-	solution := false
+	return workflowgraph.DeriveTaskStatuses(d)
+}
+
+// MutationReady enforces the Designed solution and runnable implementation
+// obligations independently of whether an approval is still proposed.
+func MutationReady(d protocol.WorkDetail) bool {
+	solution, requiredTask, runnable := false, false, false
 	for _, n := range d.Nodes {
-		if n.Kind == protocol.NodeDecision && active(n) && n.Status == protocol.StatusApproved {
+		if !active(n) {
+			continue
+		}
+		if n.Kind == protocol.NodeUnknown && blocking(n) && n.Status != protocol.StatusResolved && n.Status != protocol.StatusAcceptedRisk {
+			return false
+		}
+		if n.Kind == protocol.NodeDecision && n.Status == protocol.StatusApproved {
 			if _, ok := selectedOption(d, n); ok {
 				solution = true
 			}
 		}
-	}
-	for _, n := range d.Nodes {
-		if n.Kind == protocol.NodeUnknown && active(n) && blocking(n) && n.Status != protocol.StatusResolved && n.Status != protocol.StatusAcceptedRisk {
-			riskOpen = true
+		if n.Kind == protocol.NodeTask && required(n) {
+			requiredTask = true
+			runnable = runnable || n.Status == protocol.StatusReady || n.Status == protocol.StatusInProgress
 		}
 	}
-	for _, n := range d.Nodes {
-		if n.Kind != protocol.NodeTask {
-			continue
-		}
-		status := n.Status
-		if status != protocol.StatusPending && status != protocol.StatusReady {
-			out[n.ID] = status
-			continue
-		}
-		ready := !riskOpen && (!required(n) || solution && hasCriterion(d, n.ID))
-		for _, e := range d.Edges {
-			if e.FromNodeID != n.ID {
-				continue
-			}
-			dep, ok := nodes[e.ToNodeID]
-			switch e.Relation {
-			case protocol.RelDependsOn:
-				ready = ready && ok && dep.Kind == protocol.NodeTask && dep.Status == protocol.StatusCompleted
-			case protocol.RelImplements:
-				if dep.Kind == protocol.NodeDecision && required(dep) {
-					_, selected := selectedOption(d, dep)
-					ready = ready && active(dep) && dep.Status == protocol.StatusApproved && selected
-				}
-			}
-		}
-		if ready {
-			status = protocol.StatusReady
-		} else if status == protocol.StatusReady {
-			status = protocol.StatusBlocked
-		}
-		out[n.ID] = status
-	}
-	return out
+	return solution && (!requiredTask || runnable)
 }
 
 // PendingWorkflowGates returns only unresolved, active required decisions.

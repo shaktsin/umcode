@@ -12,6 +12,36 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
+// An acceptance intent checks the original unknown identity but cannot grant
+// acceptance inside the graph batch before a human responds.
+func TestPrepareUpdateAcceptedRiskApprovalIntent(t *testing.T) {
+	for _, mode := range []string{"valid", "stale", "nonblocking"} {
+		t.Run(mode, func(t *testing.T) {
+			d := protocol.WorkDetail{Work: protocol.Work{ID: "wrk_risk", Revision: 1, Status: "open", WorkflowDepth: "designed"}, Nodes: []protocol.WorkNode{{ID: "wnd_risk", WorkID: "wrk_risk", Kind: "unknown", Status: "open", Revision: 2, Content: json.RawMessage(`{"blocking":true}`)}}}
+			r := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, Nodes: []protocol.WorkNodeChange{{ID: "wnd_risk", ExpectedRevision: 2, FromStatus: "open", ToStatus: "accepted_risk"}}}
+			if mode == "stale" {
+				r.Nodes[0].ExpectedRevision = 1
+			}
+			if mode == "nonblocking" {
+				d.Nodes[0].Content = json.RawMessage(`{"blocking":false}`)
+			}
+			p, err := PrepareUpdate(d, r, time.Now())
+			if mode != "valid" {
+				if err == nil {
+					t.Fatal("invalid intent accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(p.Transitions) != 0 || len(p.Gates) != 1 || p.Gates[0].Kind != "accepted_risk" || p.Gates[0].NodeRevision != 2 || len(p.NodeChecks) != 1 {
+				t.Fatalf("intent=%+v", p)
+			}
+		})
+	}
+}
+
 // Catches classifiers that escalate ordinary questions or miss explicit design requests.
 func TestWorkflowDepthClassification(t *testing.T) {
 	for _, tc := range []struct{ text, want string }{

@@ -2,8 +2,28 @@ package engine
 
 import (
 	"encoding/json"
+	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/store"
 	"testing"
+	"time"
 )
+
+func TestToolApprovalStillRemembersExactDecision(t *testing.T) {
+	e, th, turn, st := pluginHookEngine(t)
+	a := protocol.Approval{ID: store.NewID("apr"), ThreadID: th.ID, TurnID: turn.ID, Tool: "shell.run", Args: json.RawMessage(`{"command":"npm test"}`), Status: "pending", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+	if err := st.CreateApproval(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RespondApproval(t.Context(), a.ID, true, true, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.RememberedThreadDecision(t.Context(), th.ID, "shell.run", "npm test"); got != "allow" {
+		t.Fatalf("tool decision=%q", got)
+	}
+	if got := st.RememberedThreadDecision(t.Context(), th.ID, "shell.run", "npm deploy"); got != "" {
+		t.Fatalf("tool signature generalized: %q", got)
+	}
+}
 
 func TestApprovalSignatureKeepsShellCommandsExact(t *testing.T) {
 	first := ApprovalSignature("shell.run", json.RawMessage(`{"command":"npm run build"}`))

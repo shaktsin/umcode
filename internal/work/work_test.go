@@ -55,6 +55,29 @@ func TestServiceUpdateConcurrentWinner(t *testing.T) {
 	}
 }
 
+func TestServiceUpdateAcceptedRiskIntentLeavesUnknownOpen(t *testing.T) {
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	d := f.begin(t, "implement billing")
+	n, err := f.st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: d.Work.ID, Kind: "unknown", Status: "open", Content: json.RawMessage(`{"blocking":true}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, gates, err := f.svc.Update(t.Context(), f.th.ID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: d.Work.Revision, Nodes: []protocol.WorkNodeChange{{ID: n.ID, ExpectedRevision: 1, FromStatus: "open", ToStatus: "accepted_risk"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Revision != 2 || r.Transitioned != 0 || len(gates) != 1 || gates[0].NodeRevision != 1 {
+		t.Fatalf("result=%+v gates=%+v", r, gates)
+	}
+	got := f.detail(t)
+	for _, node := range got.Nodes {
+		if node.ID == n.ID && (node.Status != "open" || node.Revision != 1) {
+			t.Fatalf("accepted without review: %+v", node)
+		}
+	}
+}
+
 // Catches foreign, closed, superseded-open, or absent calling-thread works.
 func TestServiceUpdateRequiresCurrentOpenWork(t *testing.T) {
 	for _, mode := range []string{"foreign thread", "closed", "older open", "no open"} {
