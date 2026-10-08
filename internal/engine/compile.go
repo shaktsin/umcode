@@ -66,7 +66,8 @@ func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string,
 	// only written back at turn end. The environment rule is left to that
 	// write-back: running git for every model call would cost a turn latency.
 	res, good := ctxcompiler.Compile(ctxcompiler.Input{Detail: d, Stale: work.Staleness(d, ""),
-		Active: work.ActiveEvidence(d), Items: items, TurnID: turnID, Window: window, HistoryTokens: historyTokens})
+		DesignedWorkflow: e.Cfg.Models.DesignedWorkflow,
+		Active:           work.ActiveEvidence(d), Items: items, TurnID: turnID, Window: window, HistoryTokens: historyTokens})
 	if !good {
 		e.compilerFailures.Add(1)
 		e.Log.Debug("context compiler declined", "thread", th.ID, "reason", res.Report.Declined)
@@ -74,5 +75,5 @@ func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string,
 	}
 	e.Log.Debug("context compiled", "thread", th.ID, "report", res.Report)
 	return compileOutcome{msgs: res.Messages,
-		packets: RequestPackets{Work: res.Report.WorkPacketTokens, Evidence: res.Report.EvidencePacketTokens}}, true
+		packets: RequestPackets{Work: res.Report.WorkPacketTokens, Evidence: res.Report.EvidencePacketTokens, P0: res.Report.P0Tokens, P1: res.Report.P1Tokens}}, true
 }

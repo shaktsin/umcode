@@ -2,11 +2,13 @@ package ctxcompiler
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/vault"
+	"github.com/shaktsin/umcode/internal/workflowgraph"
 )
 
 // redact masks secrets on their way into a packet. Rows written before the
@@ -14,6 +16,229 @@ import (
 func redact(s string) string {
 	out, _ := vault.Redact([]byte(s))
 	return string(out)
+}
+
+type graphPacket struct {
+	p0, p1, evidence           string
+	criteria, supporting, rows int
+}
+
+// designedPacket projects only live semantic state. Content is deliberately
+// read through a small typed vocabulary; opaque prose and evidence bodies are
+// never copied. Identity ordering makes timestamps and transcript order inert.
+func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence []protocol.Evidence) (graphPacket, error) {
+	var p graphPacket
+	nodes := append([]protocol.WorkNode(nil), d.Nodes...)
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	edges := append([]protocol.WorkEdge(nil), d.Edges...)
+	sort.Slice(edges, func(i, j int) bool {
+		a, b := edges[i], edges[j]
+		if a.FromNodeID != b.FromNodeID {
+			return a.FromNodeID < b.FromNodeID
+		}
+		if a.Relation != b.Relation {
+			return a.Relation < b.Relation
+		}
+		return a.ToNodeID < b.ToNodeID
+	})
+	type metadata struct {
+		Required *bool  `json:"required"`
+		Blocking bool   `json:"blocking"`
+		Gate     string `json:"gate_kind"`
+		Rung     int    `json:"solution_rung"`
+		Command  string `json:"command"`
+	}
+	byID := map[string]protocol.WorkNode{}
+	meta := map[string]metadata{}
+	live := func(n protocol.WorkNode) bool {
+		return n.Status != protocol.StatusRejected && n.Status != protocol.StatusSuperseded && n.ValidUntil == nil && n.SupersededBy == ""
+	}
+	for _, n := range nodes {
+		if n.ID == "" {
+			return p, fmt.Errorf("missing node identity")
+		}
+		if _, exists := byID[n.ID]; exists {
+			return p, fmt.Errorf("duplicate node identity")
+		}
+		byID[n.ID] = n
+		if !live(n) || n.Kind == protocol.NodeMemoryCandidate {
+			continue
+		}
+		var m metadata
+		if len(n.Content) > 0 && (string(n.Content) == "null" || json.Unmarshal(n.Content, &m) != nil) {
+			return p, fmt.Errorf("invalid node content")
+		}
+		meta[n.ID] = m
+	}
+	for _, e := range edges {
+		if _, ok := byID[e.FromNodeID]; !ok {
+			return p, fmt.Errorf("missing edge source")
+		}
+		if _, ok := byID[e.ToNodeID]; !ok {
+			return p, fmt.Errorf("missing edge target")
+		}
+	}
+	required := func(n protocol.WorkNode) bool {
+		if r := meta[n.ID].Required; r != nil {
+			return *r
+		}
+		return n.Kind == protocol.NodeCriterion
+	}
+	included, selected := map[string]bool{}, map[string]bool{}
+	for _, n := range nodes {
+		if !live(n) {
+			continue
+		}
+		if n.Kind == protocol.NodeDecision && (n.Status == protocol.StatusApproved || n.Status == protocol.StatusProposed && required(n) && workflowgraph.ValidGate(meta[n.ID].Gate)) {
+			included[n.ID] = true
+			for _, e := range edges {
+				if e.FromNodeID == n.ID && e.Relation == protocol.RelSelects {
+					opt := byID[e.ToNodeID]
+					if opt.Kind != protocol.NodeOption || !live(opt) || meta[opt.ID].Rung < 1 || meta[opt.ID].Rung > 6 {
+						return p, fmt.Errorf("invalid selected option")
+					}
+					selected[opt.ID] = true
+				}
+			}
+		}
+		if n.Kind == protocol.NodeTask && n.Status != protocol.StatusCompleted || n.Kind == protocol.NodeCriterion || n.Kind == protocol.NodeUnknown && meta[n.ID].Blocking && n.Status != protocol.StatusResolved {
+			included[n.ID] = true
+		}
+	}
+	var p0, p1 strings.Builder
+	fmt.Fprintf(&p0, "## Work\nGoal: %s\nWorkflow: depth=%s revision=%d\n", redact(d.Work.Goal), d.Work.WorkflowDepth, d.Work.Revision)
+	var completion []string
+	for _, n := range nodes {
+		if !live(n) {
+			continue
+		}
+		m := meta[n.ID]
+		status := n.Status
+		if n.Kind == protocol.NodeCriterion && (stale[n.ID] || status == protocol.StatusStale) {
+			status = "needs re-run"
+		}
+		if required(n) && (n.Kind == protocol.NodeCriterion || n.Kind == protocol.NodeTask || n.Kind == protocol.NodeDecision) {
+			completion = append(completion, n.ID+"="+status)
+		}
+		if included[n.ID] {
+			fmt.Fprintf(&p0, "- %s %s revision=%d status=%s required=%t: %s", n.ID, n.Kind, n.Revision, status, required(n), redact(n.Title))
+			switch n.Kind {
+			case protocol.NodeDecision:
+				if n.Status == protocol.StatusProposed {
+					fmt.Fprintf(&p0, " gate=%s unresolved", m.Gate)
+				}
+			case protocol.NodeUnknown:
+				p0.WriteString(" blocking=true")
+			case protocol.NodeCriterion:
+				p.criteria++
+				fmt.Fprintf(&p0, " (`%s`)", redact(m.Command))
+			}
+			p0.WriteByte('\n')
+		}
+		applicable := n.Kind == protocol.NodeRequirement && required(n)
+		if n.Kind == protocol.NodeRequirement && !applicable {
+			linked := false
+			for _, e := range edges {
+				if e.FromNodeID == n.ID || e.ToNodeID == n.ID {
+					linked = true
+					applicable = applicable || included[e.FromNodeID] || included[e.ToNodeID] || selected[e.FromNodeID] || selected[e.ToNodeID]
+				}
+			}
+			applicable = applicable || !linked
+		}
+		if selected[n.ID] || applicable {
+			included[n.ID] = true
+			fmt.Fprintf(&p1, "- %s %s: %s", n.ID, n.Kind, redact(n.Title))
+			if selected[n.ID] {
+				fmt.Fprintf(&p1, " rung=%d", m.Rung)
+			}
+			p1.WriteByte('\n')
+			p.supporting++
+		}
+	}
+	for _, e := range edges {
+		from, to := byID[e.FromNodeID], byID[e.ToNodeID]
+		if !included[from.ID] || !live(to) {
+			continue
+		}
+		keep := e.Relation == protocol.RelDependsOn && from.Kind == protocol.NodeTask && to.Kind == protocol.NodeTask && to.Status != protocol.StatusCompleted || e.Relation == protocol.RelSelects && from.Kind == protocol.NodeDecision || e.Relation == protocol.RelImplements && from.Kind == protocol.NodeTask || e.Relation == protocol.RelVerifies && from.Kind == protocol.NodeCriterion
+		if keep {
+			fmt.Fprintf(&p0, "- %s %s %s\n", e.FromNodeID, e.Relation, e.ToNodeID)
+		}
+	}
+	p0.WriteString("Completion: all required criteria need fresh passes; all required tasks must be completed; required decisions need approved selected solutions with active supporting evidence; blocking unknowns must be resolved or explicitly accepted_risk.")
+	if d.Work.WorkflowDepth != protocol.DepthDirect {
+		p0.WriteString(" An approved supported solution and a task graph are required.")
+	}
+	if len(completion) > 0 {
+		p0.WriteString(" State: " + strings.Join(completion, ", "))
+	}
+	p0.WriteByte('\n')
+	p.p0 = p0.String()
+	if p1.Len() > 0 {
+		p.p1 = "Supporting graph (P1):\n" + p1.String()
+	}
+	refs := map[string]bool{}
+	// Supports edges may attach a fact's evidence to a projected decision.
+	// Follow provenance without carrying supporting fact or memory prose.
+	evidenceNodes := map[string]bool{}
+	for id := range included {
+		evidenceNodes[id] = true
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, edge := range edges {
+			source := byID[edge.FromNodeID]
+			if edge.Relation == protocol.RelSupports && evidenceNodes[edge.ToNodeID] && !evidenceNodes[source.ID] && live(source) && source.Kind != protocol.NodeMemoryCandidate {
+				evidenceNodes[source.ID] = true
+				changed = true
+			}
+		}
+	}
+	for _, n := range nodes {
+		if evidenceNodes[n.ID] {
+			for _, id := range n.EvidenceIDs {
+				refs[id] = true
+			}
+		}
+	}
+	for _, a := range d.Attempts {
+		if included[a.CriterionNodeID] && a.EvidenceID != "" {
+			refs[a.EvidenceID] = true
+		}
+	}
+	allowed := map[string]protocol.Evidence{}
+	if activeEvidence == nil {
+		activeEvidence = d.Evidence
+	}
+	for _, e := range activeEvidence {
+		if e.StaleAt == nil {
+			allowed[e.ID] = e
+			if evidenceNodes[e.NodeID] {
+				refs[e.ID] = true
+			}
+		}
+	}
+	ids := make([]string, 0, len(refs))
+	for id := range refs {
+		if _, ok := allowed[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	var evidence strings.Builder
+	for _, id := range ids {
+		fmt.Fprintf(&evidence, "- %s", id)
+		if uri := allowed[id].SourceURI; uri != "" {
+			fmt.Fprintf(&evidence, " uri=%s", redact(uri))
+		}
+		evidence.WriteByte('\n')
+	}
+	p.rows = len(ids)
+	if p.rows > 0 {
+		p.evidence = "Evidence references (P1):\n" + evidence.String()
+	}
+	return p, nil
 }
 
 // criterionCommand reads the planned command stored on a criterion node.

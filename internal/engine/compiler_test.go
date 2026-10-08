@@ -3,6 +3,8 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,81 @@ import (
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
 )
+
+func TestDesignedCompilerRestartReconstructsSQLitePacket(t *testing.T) {
+	e, th, turn, st := compilerEngine(t, true)
+	// The shared engine fixture uses :memory:. Snapshot it into a real SQLite
+	// file before exercising persistence across connection lifetimes.
+	path := filepath.Join(t.TempDir(), "restart.db")
+	if _, err := st.DB.ExecContext(t.Context(), `VACUUM INTO ?`, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	st, err = store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	e.Store, e.Work.Store = st, st
+	e.Cfg.Models.DesignedWorkflow = true
+	d := openWorkDetail(t, st, th.ID)
+	if _, err := st.DB.ExecContext(t.Context(), `UPDATE works SET workflow_depth='designed', revision=7 WHERE id=?`, d.Work.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []protocol.WorkNode{
+		{ID: "d-gate", Kind: "decision", Title: "contract review", Status: "proposed", Content: json.RawMessage(`{"required":true,"gate_kind":"public_contract"}`)},
+		{ID: "t-active", Kind: "task", Title: "implement parser", Status: "pending", Content: json.RawMessage(`{"required":true}`)},
+	} {
+		n.WorkID = d.Work.ID
+		if _, err := st.AddWorkNode(t.Context(), n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := openWorkDetail(t, st, th.ID)
+	msgs, ok := compiled(t, e, th, turn)
+	if !ok || !strings.Contains(joined(msgs), "d-gate") || !strings.Contains(joined(msgs), "revision=7") {
+		t.Fatalf("engine did not wire Designed projection: %s", joined(msgs))
+	}
+	if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err == nil || err.Error() != "workflow approval pending" {
+		t.Fatalf("compiler weakened gate: %v", err)
+	}
+	after := openWorkDetail(t, st, th.ID)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("compilation changed canonical graph")
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(t.Context(), st.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	e.Store = reopened
+	e.Work.Store = reopened
+	again, ok := compiled(t, e, th, turn)
+	if !ok || joined(msgs) != joined(again) {
+		t.Fatalf("restart reconstructed a different packet (ok=%t): before=%q after=%q", ok, joined(msgs), joined(again))
+	}
+	items, err := reopened.ListItems(t.Context(), th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.compile(t.Context(), th, turn.ID, 100, 100000, items); ok {
+		t.Fatal("P0 budget refusal must select canonical history")
+	}
+	if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err == nil || err.Error() != "workflow approval pending" {
+		t.Fatalf("budget refusal weakened gate: %v", err)
+	}
+	e.Cfg.Models.DesignedWorkflow = false
+	legacy, ok := compiled(t, e, th, turn)
+	if !ok || strings.Contains(joined(legacy), "d-gate") {
+		t.Fatalf("Designed flag off changed legacy projection: %s", joined(legacy))
+	}
+}
 
 // compilerEngine is a work engine whose thread has a goal, one planned
 // criterion and a transcript of two earlier exchanges.
