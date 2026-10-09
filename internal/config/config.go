@@ -23,6 +23,7 @@ type Config struct {
 	Storage StorageConfig `yaml:"storage"`
 	Runtime RuntimeConfig `yaml:"runtime"`
 	Models  ModelsConfig  `yaml:"models"`
+	Memory  MemoryConfig  `yaml:"memory"`
 
 	// SkillDirs are extra directories scanned for skills (each subfolder with a SKILL.md).
 	SkillDirs []string `yaml:"skill_dirs"`
@@ -35,6 +36,12 @@ type Config struct {
 	Path string `yaml:"-"`
 	// Home is the resolved UMCode home directory.
 	Home string `yaml:"-"`
+}
+
+// MemoryConfig bounds automatic curated project memory promotion.
+type MemoryConfig struct {
+	AutoPromote     bool `yaml:"auto_promote"`
+	TargetFileBytes int  `yaml:"target_file_bytes"`
 }
 
 type LLMConfig struct {
@@ -293,6 +300,7 @@ func Default(home string) *Config {
 			SocketPath:   filepath.Join(home, "run", "engine.sock"),
 		},
 		Policy: PolicyConfig{ApprovalTimeoutMinutes: 30},
+		Memory: MemoryConfig{TargetFileBytes: 4096},
 		Models: ModelsConfig{DefaultComplexity: "auto", ExecutionLimits: ExecutionLimits{
 			MaxDurationMinutes: 120, MaxTokens: 1_000_000, MaxCostUSD: 10, MaxToolRounds: 200,
 		}},
@@ -349,6 +357,9 @@ func (c *Config) finalize() {
 
 // Validate checks values the engine depends on.
 func (c *Config) Validate() error {
+	if c.Memory.TargetFileBytes < 1024 || c.Memory.TargetFileBytes > 32768 {
+		return fmt.Errorf("memory.target_file_bytes must be 1024–32768")
+	}
 	switch c.Models.DefaultComplexity {
 	case "auto", "quick", "standard", "deep":
 	default:

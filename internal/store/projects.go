@@ -175,6 +175,8 @@ func (s *Store) DeleteProject(ctx context.Context, id string) error {
 		`UPDATE threads SET project_id = '' WHERE project_id = ?`,
 		`DELETE FROM project_approvals WHERE project_id = ?`,
 		`DELETE FROM file_changes WHERE project_id = ?`,
+		`DELETE FROM memory_promotion_ops WHERE project_id = ?`,
+		`DELETE FROM project_memories WHERE project_id = ?`,
 		`DELETE FROM project_plugins WHERE project_id = ?`,
 		`DELETE FROM projects WHERE id = ?`,
 	} {
@@ -190,30 +192,37 @@ func (s *Store) DeleteProject(ctx context.Context, id string) error {
 // FileChange is one recorded edit, with the previous content when it was small
 // enough to keep for an undo.
 type FileChange struct {
-	ID         int64
-	ProjectID  string
-	ThreadID   string
-	TurnID     string
-	ItemID     string
-	Path       string
-	Action     string
-	Before     *string
-	AfterHash  string
-	Additions  int
-	Deletions  int
-	Revertable bool
-	CreatedAt  time.Time
+	ID            int64
+	ProjectID     string
+	ThreadID      string
+	TurnID        string
+	ItemID        string
+	Path          string
+	Action        string
+	Before        *string
+	AfterHash     string
+	Additions     int
+	Deletions     int
+	Revertable    bool
+	CreatedAt     time.Time
+	PromotionOpID string
 }
 
 // RecordFileChange stores one edit.
 func (s *Store) RecordFileChange(ctx context.Context, c FileChange) (int64, error) {
 	res, err := s.DB.ExecContext(ctx, `INSERT INTO file_changes
-		(project_id, thread_id, turn_id, item_id, path, action, before_blob, after_hash, additions, deletions, revertable, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(project_id, thread_id, turn_id, item_id, path, action, before_blob, after_hash, additions, deletions, revertable, created_at, promotion_op_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(promotion_op_id) WHERE promotion_op_id IS NOT NULL AND promotion_op_id <> '' DO NOTHING`,
 		c.ProjectID, c.ThreadID, c.TurnID, c.ItemID, c.Path, c.Action, c.Before, c.AfterHash,
-		c.Additions, c.Deletions, b2i(c.Revertable), FormatTime(time.Now().UTC()))
+		c.Additions, c.Deletions, b2i(c.Revertable), FormatTime(time.Now().UTC()), c.PromotionOpID)
 	if err != nil {
 		return 0, err
+	}
+	if c.PromotionOpID != "" {
+		var id int64
+		err := s.DB.QueryRowContext(ctx, `SELECT id FROM file_changes WHERE promotion_op_id = ?`, c.PromotionOpID).Scan(&id)
+		return id, err
 	}
 	return res.LastInsertId()
 }
@@ -239,7 +248,7 @@ func (s *Store) ListFileChanges(ctx context.Context, projectID, turnID, path str
 		args = append(args, path)
 	}
 	q := `SELECT id, project_id, thread_id, turn_id, item_id, path, action, before_blob,
-		additions, deletions, revertable, created_at FROM file_changes`
+		additions, deletions, revertable, created_at, COALESCE(promotion_op_id, '') FROM file_changes`
 	if len(where) > 0 {
 		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
@@ -257,7 +266,7 @@ func (s *Store) ListFileChanges(ctx context.Context, projectID, turnID, path str
 		var revertable int
 		var created string
 		if err := rows.Scan(&c.ID, &c.ProjectID, &c.ThreadID, &c.TurnID, &c.ItemID, &c.Path, &c.Action,
-			&before, &c.Additions, &c.Deletions, &revertable, &created); err != nil {
+			&before, &c.Additions, &c.Deletions, &revertable, &created, &c.PromotionOpID); err != nil {
 			return nil, err
 		}
 		if before.Valid {

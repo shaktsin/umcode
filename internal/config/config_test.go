@@ -1,10 +1,54 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestMemoryConfigDefaultsDisabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	c := Default(home)
+	if c.Memory.AutoPromote || c.Memory.TargetFileBytes != 4096 {
+		t.Fatalf("default memory = %+v", c.Memory)
+	}
+	path := filepath.Join(home, "config.yaml")
+	for _, contents := range []string{"models: {}\n", "memory: {}\n", "memory: {auto_promote: true}\n"} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Memory.TargetFileBytes != 4096 || c.Memory.AutoPromote != (contents == "memory: {auto_promote: true}\n") {
+			t.Fatalf("loaded memory = %+v for %q", c.Memory, contents)
+		}
+	}
+}
+
+func TestMemoryConfigValidation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	path := filepath.Join(home, "config.yaml")
+	for _, size := range []int{1024, 32768, 0, -1, 1023, 32769} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(fmt.Sprintf("memory: {auto_promote: true, target_file_bytes: %d}\n", size)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			c, err := Load(path)
+			valid := size == 1024 || size == 32768
+			if (err == nil) != valid {
+				t.Fatalf("size=%d err=%v", size, err)
+			}
+			if valid && (c.Memory.TargetFileBytes != size || !c.Memory.AutoPromote || c.Models.DesignedWorkflow) {
+				t.Fatalf("config = %+v", c)
+			}
+		})
+	}
+}
 
 func TestLoadPythonConfig(t *testing.T) {
 	home := t.TempDir()
