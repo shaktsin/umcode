@@ -3,6 +3,8 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,124 @@ import (
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
 )
+
+func TestDesignedCompilerRestartReconstructsSQLitePacket(t *testing.T) {
+	e, th, turn, st := compilerEngine(t, true)
+	// The shared engine fixture uses :memory:. Snapshot it into a real SQLite
+	// file before exercising persistence across connection lifetimes.
+	path := filepath.Join(t.TempDir(), "restart.db")
+	if _, err := st.DB.ExecContext(t.Context(), `VACUUM INTO ?`, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	st, err = store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	e.Store, e.Work.Store = st, st
+	e.Cfg.Models.DesignedWorkflow = true
+	d := openWorkDetail(t, st, th.ID)
+	if _, err := st.DB.ExecContext(t.Context(), `UPDATE works SET workflow_depth='designed', revision=7 WHERE id=?`, d.Work.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []protocol.WorkNode{
+		{ID: "d-gate", Kind: "decision", Title: "contract review", Status: "proposed", Content: json.RawMessage(`{"required":true,"gate_kind":"public_contract"}`)},
+		{ID: "t-active", Kind: "task", Title: "implement parser", Status: "pending", Content: json.RawMessage(`{"required":true}`)},
+	} {
+		n.WorkID = d.Work.ID
+		if _, err := st.AddWorkNode(t.Context(), n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := openWorkDetail(t, st, th.ID)
+	msgs, ok := compiled(t, e, th, turn)
+	if !ok || !strings.Contains(joined(msgs), "d-gate") || !strings.Contains(joined(msgs), "revision=7") {
+		t.Fatalf("engine did not wire Designed projection: %s", joined(msgs))
+	}
+	if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err == nil || err.Error() != "workflow approval pending" {
+		t.Fatalf("compiler weakened gate: %v", err)
+	}
+	after := openWorkDetail(t, st, th.ID)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("compilation changed canonical graph")
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(t.Context(), st.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	e.Store = reopened
+	e.Work.Store = reopened
+	again, ok := compiled(t, e, th, turn)
+	if !ok || joined(msgs) != joined(again) {
+		t.Fatalf("restart reconstructed a different packet (ok=%t): before=%q after=%q", ok, joined(msgs), joined(again))
+	}
+	items, err := reopened.ListItems(t.Context(), th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.compile(t.Context(), th, turn.ID, 100, 100000, items); ok {
+		t.Fatal("P0 budget refusal must select canonical history")
+	}
+	if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err == nil || err.Error() != "workflow approval pending" {
+		t.Fatalf("budget refusal weakened gate: %v", err)
+	}
+	e.Cfg.Models.DesignedWorkflow = false
+	legacy, ok := compiled(t, e, th, turn)
+	if !ok || strings.Contains(joined(legacy), "d-gate") {
+		t.Fatalf("Designed flag off changed legacy projection: %s", joined(legacy))
+	}
+}
+
+func TestWorkflowIdentityContextBoundedAndAccounted(t *testing.T) {
+	e, th, turn, st := compilerEngine(t, true)
+	e.Cfg.Models.DesignedWorkflow = true
+	d := openWorkDetail(t, st, th.ID)
+	for _, kind := range []string{"artifact", "fact"} {
+		if _, err := st.AddWorkNode(t.Context(), protocol.WorkNode{ID: "wnd_" + kind, WorkID: d.Work.ID, Kind: kind, Title: "private endpoint prose", Status: "active"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	layer, err := e.workflowIdentityLayer(t.Context(), th.ID)
+	if err != nil || !strings.Contains(layer.Text, d.Work.ID) {
+		t.Fatalf("identity=%+v err=%v", layer, err)
+	}
+	for _, id := range []string{d.Nodes[0].ID, "wnd_artifact", "wnd_fact"} {
+		if !strings.Contains(layer.Text, id) {
+			t.Fatalf("edge endpoint identity missing: %s", id)
+		}
+	}
+	if strings.Contains(layer.Text, "private endpoint prose") {
+		t.Fatal("identity context copied semantic text")
+	}
+	if _, ok := compiled(t, e, th, turn); !ok {
+		t.Fatal("expected successful compiler")
+	}
+	b := measureRequest([]promptLayer{layer}, llm.Request{System: layer.Text}, RequestPackets{}, nil)
+	if b.Layers["workflow_identities"] <= 0 || b.TotalTokens != b.Layers["workflow_identities"] {
+		t.Fatalf("unaccounted identities: %+v", b)
+	}
+	for i := 0; i < 700; i++ {
+		_, err := st.AddWorkNode(t.Context(), protocol.WorkNode{ID: fmt.Sprintf("wnd_%0120d", i), WorkID: d.Work.ID, Kind: "requirement", Title: "not projected", Status: "active"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.workflowIdentityLayer(t.Context(), th.ID); err == nil {
+		t.Fatal("oversized identity context must fail closed")
+	}
+	e.Cfg.Models.DesignedWorkflow = false
+	if got, err := e.workflowIdentityLayer(t.Context(), th.ID); err != nil || got.Text != "" {
+		t.Fatalf("flag off changed request: %+v %v", got, err)
+	}
+}
 
 // compilerEngine is a work engine whose thread has a goal, one planned
 // criterion and a transcript of two earlier exchanges.

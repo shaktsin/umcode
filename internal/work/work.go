@@ -4,10 +4,13 @@
 package work
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -27,16 +30,189 @@ var fingerprintBudget = 2 * time.Second
 // Service records and evaluates works. All methods find the thread's open work
 // themselves; with none open, Observe and End do nothing.
 type Service struct {
-	Store    *store.Store
-	Log      *slog.Logger
-	Now      func() time.Time // defaults to time.Now().UTC()
-	Failures atomic.Int64     // best-effort recording errors
+	DesignedWorkflow bool // deterministic graph semantics; false preserves legacy behavior
+	Store            *store.Store
+	Log              *slog.Logger
+	Now              func() time.Time // defaults to time.Now().UTC()
+	Failures         atomic.Int64     // best-effort recording errors
 
 	Vault       *vault.Vault                 // full outputs; nil disables the vault
 	VaultDir    string                       // excluded from workspace fingerprints
 	ToolVersion func(context.Context) string // identity of the toolchain, optional
 	// Workspace takes a workspace fingerprint; nil uses fingerprint.TakeWorkspace.
 	Workspace func(ctx context.Context, root string) (fingerprint.Workspace, bool)
+}
+
+// Update prepares and applies a semantic batch for the calling thread's current
+// open work. Rationale is transient; diagnostics contain compact metadata only.
+func (s *Service) Update(ctx context.Context, threadID string, req protocol.WorkUpdateRequest) (result protocol.WorkUpdateResult, gates []protocol.WorkflowGate, err error) {
+	defer func() {
+		if err == nil {
+			if s.Log != nil {
+				s.Log.Info("work graph updated", "work_id", req.WorkID, "revision", result.Revision, "created", result.Created, "transitioned", result.Transitioned, "linked", result.Linked)
+			}
+			return
+		}
+		s.Failures.Add(1)
+		if s.Log != nil {
+			class := "storage"
+			var validation *ValidationError
+			if errors.As(err, &validation) {
+				class = validation.Code
+			} else if errors.Is(err, store.ErrWorkUpdateConflict) {
+				class = "stale"
+			}
+			// Malformed request IDs may themselves contain secrets.
+			args := []any{"revision", req.ExpectedRevision, "rejection", class}
+			if validID(req.WorkID) && !containsSecret(req.WorkID) {
+				args = append(args, "work_id", req.WorkID)
+			}
+			s.Log.Warn("work graph update rejected", args...)
+		}
+	}()
+	w, ok, err := s.Store.OpenWorkForThread(ctx, threadID)
+	if err != nil {
+		return result, nil, err
+	}
+	if !ok || w.ID != req.WorkID {
+		return result, nil, invalid("work_id", "inactive")
+	}
+	detail, err := s.Store.GetWorkDetail(ctx, w.ID)
+	if err != nil {
+		return result, nil, err
+	}
+	// Enforce bounds on the original bytes as well as the sanitized projection.
+	// A long secret must not become a valid oversized request by being masked.
+	if err := updateInputBounds(req); err != nil {
+		return result, nil, err
+	}
+	// Copy slices and raw content so redaction never modifies caller-owned data.
+	clean := req
+	clean.Nodes = append([]protocol.WorkNodeChange(nil), req.Nodes...)
+	clean.Edges = append([]protocol.WorkEdgeChange(nil), req.Edges...)
+	for i, node := range req.Nodes {
+		clean.Nodes[i].Content = append(json.RawMessage(nil), node.Content...)
+		clean.Nodes[i].EvidenceIDs = append([]string(nil), node.EvidenceIDs...)
+		// Reject secret candidates before redaction can mask the signal used by
+		// candidate validation. Other semantic prose is safely redacted.
+		if node.Kind == protocol.NodeMemoryCandidate {
+			if containsSecret(node.Title) || containsSecret(node.Content) {
+				return result, nil, invalid("nodes.candidate.text", "invalid")
+			}
+		}
+		clean.Nodes[i].Title = redactText(node.Title)
+		if len(node.Content) != 0 {
+			clean.Nodes[i].Content, err = redactNodeContent(node.Content)
+			if err != nil {
+				return result, nil, invalid("nodes.content", "invalid")
+			}
+		}
+	}
+	prepared, err := PrepareUpdate(detail, clean, s.now())
+	if err != nil {
+		return result, nil, err
+	}
+	result, err = s.Store.ApplyWorkUpdate(ctx, prepared)
+	if err != nil {
+		return result, nil, err
+	}
+	return result, prepared.Gates, nil
+}
+
+func updateInputBounds(req protocol.WorkUpdateRequest) error {
+	if len(req.Nodes) > MaxNodeChanges || len(req.Edges) > MaxEdgeChanges || len(req.Rationale) > MaxRationaleBytes {
+		return invalid("request", "limit")
+	}
+	for _, node := range req.Nodes {
+		if len(node.Ref) > MaxClientRefBytes || len(node.Title) > MaxNodeTitleBytes || len(node.Content) > MaxNodeContentBytes || len(node.EvidenceIDs) > MaxNodeEvidenceIDs {
+			return invalid("nodes", "limit")
+		}
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return invalid("request", "invalid")
+	}
+	if len(raw) > MaxWorkUpdateBytes {
+		return invalid("request", "limit")
+	}
+	return nil
+}
+
+// redactNodeContent walks JSON tokens with credential-field context, preserving
+// duplicate object keys for semantic rejection and exact noncredential numbers.
+func redactNodeContent(raw json.RawMessage) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var out bytes.Buffer
+	var value func(bool) error
+	value = func(credential bool) error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delim, ok := token.(json.Delim); ok {
+			if delim != '{' && delim != '[' {
+				return errors.New("invalid JSON value")
+			}
+			out.WriteByte(byte(delim))
+			first := true
+			for decoder.More() {
+				if !first {
+					out.WriteByte(',')
+				}
+				first = false
+				childCredential := credential
+				if delim == '{' {
+					key, err := decoder.Token()
+					if err != nil {
+						return err
+					}
+					text, ok := key.(string)
+					if !ok {
+						return errors.New("invalid JSON key")
+					}
+					childCredential = credential || credentialField(text) || containsSecret(text)
+					encoded, _ := json.Marshal(redactText(text))
+					out.Write(encoded)
+					out.WriteByte(':')
+				}
+				if err := value(childCredential); err != nil {
+					return err
+				}
+			}
+			close, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			want := json.Delim(']')
+			if delim == '{' {
+				want = '}'
+			}
+			if close != want {
+				return errors.New("invalid JSON delimiter")
+			}
+			out.WriteByte(byte(want))
+			return nil
+		}
+		if credential && token != nil {
+			token = "[REDACTED]"
+		} else if text, ok := token.(string); ok {
+			token = redactText(text)
+		}
+		encoded, err := json.Marshal(token)
+		if err != nil {
+			return err
+		}
+		out.Write(encoded)
+		return nil
+	}
+	if err := value(false); err != nil {
+		return nil, err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, errors.New("trailing JSON content")
+	}
+	return out.Bytes(), nil
 }
 
 // Observation is one finished tool call as seen by the engine.
@@ -107,12 +283,22 @@ func (s *Service) Begin(ctx context.Context, th protocol.Thread, text string) er
 }
 
 func (s *Service) begin(ctx context.Context, th protocol.Thread, text string) error {
-	if _, ok, err := s.Store.OpenWorkForThread(ctx, th.ID); err != nil || ok {
+	if w, ok, err := s.Store.OpenWorkForThread(ctx, th.ID); err != nil || ok {
+		if err == nil && ok && s.DesignedWorkflow {
+			depth := MaxDepth(w.WorkflowDepth, InitialDepth(text))
+			if depth != w.WorkflowDepth {
+				return s.Store.SetWorkDepth(ctx, w.ID, depth)
+			}
+		}
 		return err
 	}
 	goal := capText(redactText(text), goalLimit)
 	now := s.now()
-	w, err := s.Store.CreateWork(ctx, protocol.Work{ThreadID: th.ID, ProjectID: th.ProjectID, Goal: goal, CreatedAt: now})
+	depth := ""
+	if s.DesignedWorkflow {
+		depth = InitialDepth(text)
+	}
+	w, err := s.Store.CreateWork(ctx, protocol.Work{ThreadID: th.ID, ProjectID: th.ProjectID, Goal: goal, CreatedAt: now, WorkflowDepth: depth})
 	if err != nil {
 		return err
 	}
@@ -132,13 +318,34 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 	if err != nil || !ok {
 		return err
 	}
-	if (o.Err == "" || isVerificationTool(o.Tool)) && EscalatesToGuided(o.Tool, o.Risk) && w.WorkflowDepth != protocol.DepthGuided {
+	if s.DesignedWorkflow {
+		d, err := s.Store.GetWorkDetail(ctx, w.ID)
+		if err != nil {
+			return err
+		}
+		depth := ObservedDepth(w.WorkflowDepth, d, o)
+		if depth != w.WorkflowDepth {
+			if err := s.Store.SetWorkDepth(ctx, w.ID, depth); err != nil {
+				return err
+			}
+		}
+	} else if (o.Err == "" || isVerificationTool(o.Tool)) && EscalatesToGuided(o.Tool, o.Risk) && w.WorkflowDepth != protocol.DepthGuided {
 		if err := s.Store.SetWorkDepth(ctx, w.ID, protocol.DepthGuided); err != nil {
 			return err
 		}
 	}
 	if o.Err != "" {
 		return s.recordFailure(ctx, w.ID, o)
+	}
+	if s.DesignedWorkflow && discoveryTool(o.Tool) {
+		// Only engine-observed successful calls can create discovery provenance.
+		// No semantic-client assertions are accepted as observations.
+		body := redactText(o.structured())
+		hash := sha256.Sum256([]byte(body))
+		argsHash := sha256.Sum256(o.Args)
+		if _, err := s.Store.AddEvidence(ctx, protocol.Evidence{WorkID: w.ID, Kind: protocol.EvidenceDiscovery, SourceURI: o.Tool, SourceRevision: hex.EncodeToString(argsHash[:]), ContentHash: hex.EncodeToString(hash[:]), Summary: capText(body, summaryLimit), ObservedAt: s.now()}); err != nil {
+			return err
+		}
 	}
 	switch o.Tool {
 	case "file.write", "file.edit", "verification.plan", "verification.run", "browser.verify":
@@ -160,6 +367,14 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 		return s.recordBrowser(ctx, d, o)
 	}
 	return nil
+}
+
+func discoveryTool(name string) bool {
+	switch name {
+	case "file.read", "file.list", "file.search", "web.search", "web.fetch", "verification.plan", "computer.list", "computer.inspect", "visual.inspect":
+		return true
+	}
+	return false
 }
 
 func (s *Service) recordFailure(ctx context.Context, workID string, o Observation) error {
@@ -468,7 +683,11 @@ func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused b
 	if d, err = s.Store.GetWorkDetail(ctx, w.ID); err != nil {
 		return err
 	}
-	if len(Unresolved(d)) > 0 {
+	blockers := Unresolved(d)
+	if s.DesignedWorkflow && d.Work.WorkflowDepth != protocol.DepthDirect {
+		blockers = CompletionBlockers(d)
+	}
+	if len(blockers) > 0 {
 		return nil
 	}
 	return s.Store.CloseWork(ctx, w.ID, protocol.WorkCompleted, s.now())

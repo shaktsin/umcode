@@ -466,6 +466,14 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			break
 		}
 		layers := e.systemPromptLayers(sctx, p.Text, proj, instructionHint, hookContext)
+		identity, identityErr := e.workflowIdentityLayer(sctx, th.ID)
+		if identityErr != nil {
+			turnErr = identityErr
+			break
+		}
+		if identity.Text != "" {
+			layers = append(layers, identity)
+		}
 		req.System = joinLayers(layers)
 		// Old tool output is the first thing to go when the request nears the
 		// window; the newest results stay.
@@ -987,6 +995,21 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		model, reduction := e.reduceToolResult(name, call.Args, output, isError)
 		return toolRunResult{Output: output, ModelOutput: model, Reduction: reduction, IsError: isError, HookContext: contextValues}
 	}
+	var assessedRisk tools.Risk
+	var assessedSummary string
+	if e.Cfg.Models.DesignedWorkflow && ok && !workflowDiscoveryTool(name) {
+		assessedRisk, assessedSummary = tool.Assess(call.Args)
+		if assessor, ok := tool.(tools.ContextAssessor); ok {
+			assessedRisk, assessedSummary = assessor.AssessContext(ctx, call.Args)
+		}
+		if err := e.escalateProspectiveWorkflow(sctx, th.ID, work.Observation{Tool: name, Args: call.Args, Risk: string(assessedRisk), Root: scopeRoot(ctx)}); err != nil {
+			return result(err.Error(), true)
+		}
+	}
+	workflow, gateErr := e.workflowDetail(sctx, th.ID, name)
+	if gateErr != nil {
+		return result(gateErr.Error(), true)
+	}
 	riskLevel := ""
 	var sink *tools.RawSink // the tool's unclipped result, when it provides one
 	observe := func(event hooks.Event, output, toolError string, priorContext []string) toolRunResult {
@@ -1010,6 +1033,11 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return result("internal error: "+err.Error(), true)
 	}
 	it.Tool = &protocol.ToolCallData{CallID: call.ID, Name: name, Args: call.Args}
+	if err := e.recoverWorkflowGate(ctx, sctx, turn, it, name, workflow); err != nil {
+		it.Status, it.Tool.Error = protocol.ItemDenied, err.Error()
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return result(err.Error(), true)
+	}
 	if !ok {
 		it.Status, it.Tool.Error = protocol.ItemFailed, "unknown tool "+name
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
@@ -1023,9 +1051,12 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, nil)
 		}
 	}
-	risk, summary := tool.Assess(call.Args)
-	if assessor, ok := tool.(tools.ContextAssessor); ok {
-		risk, summary = assessor.AssessContext(ctx, call.Args)
+	risk, summary := assessedRisk, assessedSummary
+	if risk == "" {
+		risk, summary = tool.Assess(call.Args)
+		if assessor, ok := tool.(tools.ContextAssessor); ok {
+			risk, summary = assessor.AssessContext(ctx, call.Args)
+		}
 	}
 	it.Tool.Risk = string(risk)
 	riskLevel = string(risk)
@@ -1092,11 +1123,42 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		toolCtx = tools.WithScope(ctx, &streamScope)
 	}
 	toolCtx, sink = tools.WithRawSink(toolCtx)
-	output, err := tool.Call(toolCtx, call.Args)
+	var output string
+	workflowDenied := false
+	if updater, ok := tool.(tools.WorkflowUpdateTool); ok && e.Cfg.Models.DesignedWorkflow {
+		// Internal graph updates need thread identity, independently of project
+		// attachment. Keep this scope local so other tools retain their existing
+		// no-project filesystem behavior.
+		scope := &tools.Scope{ThreadID: th.ID}
+		if existing := tools.ScopeFrom(toolCtx); existing != nil {
+			*scope = *existing
+			scope.ThreadID = th.ID
+		}
+		toolCtx = tools.WithScope(toolCtx, scope)
+		var update protocol.WorkUpdateResult
+		var gates []protocol.WorkflowGate
+		update, gates, err = updater.Apply(toolCtx, call.Args)
+		if err == nil {
+			output, workflowDenied, err = e.finishWorkflowUpdate(ctx, sctx, turn, it, update, gates)
+		}
+	} else {
+		// Only the workflow-aware projectless planner needs thread identity.
+		// Keep ordinary tools on nil scope so configured-workspace routing and
+		// project-required capability checks retain their existing behavior.
+		if e.Cfg.Models.DesignedWorkflow && name == "verification.plan" && tools.ScopeFrom(toolCtx) == nil {
+			toolCtx = tools.WithScope(toolCtx, &tools.Scope{ThreadID: th.ID})
+		}
+		output, err = tool.Call(toolCtx, call.Args)
+	}
 	if err != nil {
 		it.Status, it.Tool.Error = protocol.ItemFailed, err.Error()
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 		return observe(hooks.ToolUseFailed, "Error: "+err.Error(), err.Error(), before.Context)
+	}
+	if workflowDenied {
+		it.Status, it.Tool.Output = protocol.ItemDenied, output
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return result(output, true, before.Context...)
 	}
 	it.Status, it.Tool.Output = protocol.ItemCompleted, output
 	_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)

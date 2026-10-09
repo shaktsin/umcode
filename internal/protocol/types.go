@@ -156,6 +156,10 @@ func (u *UsageTotals) Add(o UsageTotals) {
 // Approval is a pending or decided request to run a risky action.
 type Approval struct {
 	ID            string          `json:"id"`
+	Kind          string          `json:"kind"`
+	WorkID        string          `json:"workId,omitempty"`
+	NodeID        string          `json:"nodeId,omitempty"`
+	NodeRevision  int             `json:"nodeRevision,omitempty"`
 	ThreadID      string          `json:"threadId"`
 	ProjectID     string          `json:"projectId,omitempty"`
 	TurnID        string          `json:"turnId"`

@@ -103,3 +103,36 @@ func TestSystemPromptLayerOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemPromptWorkflowLayerConditional(t *testing.T) {
+	e, _, _, _ := pluginHookEngine(t)
+	e.Projects = projects.New(e.Store, e.Cfg)
+	for _, proj := range []*protocol.Project{nil, {ID: "p", Name: "demo", Root: t.TempDir()}} {
+		e.Cfg.Models.DesignedWorkflow = false
+		before := e.systemPromptLayers(t.Context(), "hi", proj, "", nil)
+		e.Cfg.Models.DesignedWorkflow = true
+		after := e.systemPromptLayers(t.Context(), "hi", proj, "", nil)
+		var without []promptLayer
+		var workflow string
+		for _, layer := range after {
+			if layer.Name == "workflow" {
+				workflow = layer.Text
+			} else {
+				without = append(without, layer)
+			}
+		}
+		if len(after) != len(before)+1 || len(workflow) == 0 {
+			t.Fatalf("workflow layer missing: %+v", after)
+		}
+		for i, layer := range before {
+			if layer.Name != without[i].Name || clockLine.ReplaceAllString(layer.Text, "Current time: <t>\n") != clockLine.ReplaceAllString(without[i].Text, "Current time: <t>\n") {
+				t.Fatalf("existing layer changed: %s", layer.Name)
+			}
+		}
+		for _, term := range []string{"Direct", "work.update", "semantic", "classification", "Guided", "Designed", "first sufficient solution rung", "criteria", "evidence", "current task", "blocking unknowns", "engine", "readiness", "gates"} {
+			if !strings.Contains(workflow, term) {
+				t.Errorf("workflow instructions missing %q", term)
+			}
+		}
+	}
+}

@@ -3,12 +3,235 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 )
+
+// Catches approvals finalized independently of their graph outcome, stale
+// identities accepted, and partial commits after a database failure.
+func TestDecideWorkflowApproval(t *testing.T) {
+	for _, tc := range []struct{ name, status, kind, initial, want string }{
+		{"approve", "approved", "decision", "proposed", "approved"},
+		{"deny", "denied", "decision", "proposed", "rejected"},
+		{"accept risk", "approved", "unknown", "open", "accepted_risk"},
+		{"deny risk", "denied", "unknown", "open", "open"},
+		{"timeout", "expired", "decision", "proposed", "proposed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, w, n, a := workflowApprovalFixture(t, tc.kind, tc.initial)
+			rev, err := st.DecideWorkflowApproval(t.Context(), a.ID, tc.status, "user")
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := st.GetWorkDetail(t.Context(), w.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRevision := 2
+			wantNodeRevision := 2
+			if tc.status == "expired" {
+				wantRevision = 1
+				wantNodeRevision = 1
+			}
+			if rev != wantRevision || d.Work.Revision != wantRevision || d.Nodes[0].Status != tc.want || d.Nodes[0].Revision != wantNodeRevision {
+				t.Fatalf("rev=%d graph=%+v nodes=%+v", rev, d.Work, d.Nodes)
+			}
+			if _, err := st.DecideWorkflowApproval(t.Context(), a.ID, tc.status, "again"); err == nil {
+				t.Fatal("duplicate succeeded")
+			}
+			_ = n
+		})
+	}
+	for _, mode := range []string{"stale", "foreign thread", "rollback"} {
+		t.Run(mode, func(t *testing.T) {
+			st, w, n, a := workflowApprovalFixture(t, "decision", "proposed")
+			if mode == "stale" {
+				if _, err := st.DB.Exec(`UPDATE work_nodes SET revision=2 WHERE id=?`, n.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "foreign thread" {
+				if _, err := st.DB.Exec(`UPDATE approvals SET thread_id='other' WHERE id=?`, a.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "rollback" {
+				mustExec(t, st.DB, `CREATE TRIGGER approval_crash BEFORE UPDATE ON approvals BEGIN SELECT RAISE(ABORT,'injected'); END`)
+			}
+			if _, err := st.DecideWorkflowApproval(t.Context(), a.ID, "approved", "user"); err == nil {
+				t.Fatal("invalid outcome committed")
+			}
+			d, _ := st.GetWorkDetail(t.Context(), w.ID)
+			approvals, _ := st.ListApprovals(t.Context(), "")
+			if d.Work.Revision != 1 || d.Nodes[0].Status != "proposed" || approvals[0].Status != "pending" {
+				t.Fatalf("partial outcome: %+v %+v", d, approvals)
+			}
+		})
+	}
+}
+
+func workflowApprovalFixture(t *testing.T, kind, status string) (*Store, protocol.Work, protocol.WorkNode, protocol.Approval) {
+	t.Helper()
+	st, th := workFixture(t)
+	w, err := st.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID, WorkflowDepth: "designed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := json.RawMessage(`{"required":true,"gate_kind":"security"}`)
+	if kind == "unknown" {
+		content = json.RawMessage(`{"blocking":true}`)
+	}
+	n, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: kind, Status: status, Title: "gate", Content: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := protocol.Approval{ID: NewID("apr"), Kind: "workflow", ThreadID: th.ID, WorkID: w.ID, NodeID: n.ID, NodeRevision: 1, Status: "pending", Args: json.RawMessage(`{}`), CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+	if err := st.CreateApproval(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	return st, w, n, a
+}
+
+func TestDecideWorkflowApprovalVerifiesOnlyLinkedAcceptance(t *testing.T) {
+	for _, status := range []string{"approved", "denied", "expired"} {
+		t.Run(status, func(t *testing.T) {
+			st, w, n, a := workflowApprovalFixture(t, "decision", "proposed")
+			for _, id := range []string{"linked", "unrelated", "executable"} {
+				command := "workflow:approval"
+				if id == "executable" {
+					command = "go test ./..."
+				}
+				content, _ := json.Marshal(map[string]string{"command": command})
+				if _, err := st.AddWorkNode(t.Context(), protocol.WorkNode{ID: id, WorkID: w.ID, Kind: "criterion", Status: "pending", Content: content}); err != nil {
+					t.Fatal(err)
+				}
+				if id != "unrelated" {
+					if err := st.AddWorkEdge(t.Context(), protocol.WorkEdge{WorkID: w.ID, FromNodeID: id, ToNodeID: n.ID, Relation: "verifies"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := st.DecideWorkflowApproval(t.Context(), a.ID, status, "user"); err != nil {
+				t.Fatal(err)
+			}
+			d, err := st.GetWorkDetail(t.Context(), w.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range d.Nodes {
+				if node.Kind != "criterion" {
+					continue
+				}
+				want := "pending"
+				if status == "approved" && node.ID == "linked" {
+					want = "passed"
+				}
+				if node.Status != want {
+					t.Fatalf("criterion %s=%s want %s", node.ID, node.Status, want)
+				}
+			}
+			if status == "approved" {
+				if len(d.Attempts) != 1 || d.Attempts[0].CriterionNodeID != "linked" || d.Attempts[0].Status != "passed" || len(d.Evidence) != 1 || d.Evidence[0].SourceURI != "approval://"+a.ID || d.Evidence[0].SourceRevision != n.ID+":1" {
+					t.Fatalf("exact approval provenance missing: %+v", d)
+				}
+			} else if len(d.Attempts) != 0 || len(d.Evidence) != 0 {
+				t.Fatal("nonapproval forged acceptance")
+			}
+		})
+	}
+}
+
+func TestDecideWorkflowApprovalDerivesDependentsAtomically(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		t.Run(map[bool]string{true: "approve", false: "deny"}[approve], func(t *testing.T) {
+			st, w, n, a := workflowApprovalFixture(t, "decision", "proposed")
+			opt, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: "option", Status: "active", Content: json.RawMessage(`{"solution_rung":1}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: "task", Status: "pending"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, edge := range []protocol.WorkEdge{{WorkID: w.ID, FromNodeID: n.ID, Relation: "selects", ToNodeID: opt.ID}, {WorkID: w.ID, FromNodeID: task.ID, Relation: "implements", ToNodeID: n.ID}} {
+				if err := st.AddWorkEdge(t.Context(), edge); err != nil {
+					t.Fatal(err)
+				}
+			}
+			status, want := "denied", "blocked"
+			if approve {
+				status, want = "approved", "ready"
+			}
+			if _, err := st.DecideWorkflowApproval(t.Context(), a.ID, status, "user"); err != nil {
+				t.Fatal(err)
+			}
+			d, _ := st.GetWorkDetail(t.Context(), w.ID)
+			for _, node := range d.Nodes {
+				if node.ID == task.ID && (node.Status != want || node.Revision != 2) {
+					t.Fatalf("dependent=%+v", node)
+				}
+			}
+			if d.Work.Revision != 2 {
+				t.Fatalf("revision=%d", d.Work.Revision)
+			}
+		})
+	}
+}
+
+func TestDecideWorkflowApprovalRiskDependentsAndStaleExpiry(t *testing.T) {
+	for _, status := range []string{"approved", "denied", "expired"} {
+		t.Run(status, func(t *testing.T) {
+			st, w, n, a := workflowApprovalFixture(t, "unknown", "open")
+			task, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: "task", Status: "pending"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status == "expired" {
+				if err := st.UpdateWorkNode(t.Context(), n.ID, "open", 2, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rev, err := st.DecideWorkflowApproval(t.Context(), a.ID, status, "user")
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, _ := st.GetWorkDetail(t.Context(), w.ID)
+			want := "ready"
+			if status == "denied" {
+				want = "blocked"
+			}
+			if status == "expired" {
+				want = "pending"
+			}
+			for _, node := range d.Nodes {
+				if node.ID == task.ID && node.Status != want {
+					t.Fatalf("dependent=%+v", node)
+				}
+			}
+			if status == "expired" && (rev != 1 || d.Work.Revision != 1) {
+				t.Fatalf("expiry mutated work: %+v", d.Work)
+			}
+		})
+	}
+}
+
+func TestDecideWorkflowApprovalDirectProposedIdentity(t *testing.T) {
+	for _, content := range []string{`{}`, `{"required":false,"gate_kind":"security"}`, `{"required":true,"gate_kind":"forged"}`} {
+		t.Run(content, func(t *testing.T) {
+			st, _, n, a := workflowApprovalFixture(t, "decision", "proposed")
+			if _, err := st.DB.Exec(`UPDATE work_nodes SET content_json=? WHERE id=?`, content, n.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.DecideWorkflowApproval(t.Context(), a.ID, "approved", "user"); err == nil {
+				t.Fatal("forged approval identity accepted")
+			}
+		})
+	}
+}
 
 func TestLegacyBackfill(t *testing.T) {
 	ctx := context.Background()

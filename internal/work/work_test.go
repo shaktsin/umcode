@@ -1,21 +1,480 @@
 package work
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 )
+
+func TestSuccessfulDiscoveryOwnsCompactEvidence(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		f := newFixture(t)
+		f.svc.DesignedWorkflow = enabled
+		f.begin(t, "inspect facts")
+		if err := f.svc.Observe(t.Context(), f.th.ID, Observation{Tool: "file.read", Args: json.RawMessage(`{"path":"facts.txt"}`), Output: "Inspected fact\napi_key=never-persist"}); err != nil {
+			t.Fatal(err)
+		}
+		d := f.detail(t)
+		if !enabled {
+			if len(d.Evidence) != 0 {
+				t.Fatal("flag-off drift")
+			}
+			continue
+		}
+		if len(d.Evidence) != 1 || d.Evidence[0].Kind != "discovery" || d.Evidence[0].SourceURI != "file.read" || strings.Contains(d.Evidence[0].Summary, "never-persist") {
+			t.Fatalf("discovery provenance=%+v", d.Evidence)
+		}
+		for _, kind := range []string{"fact", "criterion"} {
+			_, _, err := f.svc.Update(t.Context(), f.th.ID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: d.Work.Revision, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "forged", Kind: kind, Title: "forged observation", ToStatus: "passed"}}})
+			if err == nil {
+				t.Fatalf("semantic client forged %s", kind)
+			}
+		}
+	}
+}
+
+// Catches two callers successfully committing the same expected revision.
+func TestServiceUpdateConcurrentWinner(t *testing.T) {
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	d := f.begin(t, "ship it")
+	f.svc.Now = func() time.Time { return time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC) }
+	req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "correct"}}}
+	start := make(chan struct{})
+	out := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { <-start; _, _, err := f.svc.Update(context.Background(), f.th.ID, req); out <- err }()
+	}
+	close(start)
+	success, conflicts := 0, 0
+	for i := 0; i < 2; i++ {
+		err := <-out
+		var validation *ValidationError
+		if err == nil {
+			success++
+		} else if errors.Is(err, store.ErrWorkUpdateConflict) || errors.As(err, &validation) && validation.Code == "stale" {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if success != 1 || conflicts != 1 {
+		t.Fatalf("success=%d conflicts=%d", success, conflicts)
+	}
+	got := f.detail(t)
+	if got.Work.Revision != 2 || len(kinds(got, "requirement")) != 1 {
+		t.Fatalf("detail=%+v", got)
+	}
+}
+
+func TestServiceUpdateAcceptedRiskIntentLeavesUnknownOpen(t *testing.T) {
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	d := f.begin(t, "implement billing")
+	n, err := f.st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: d.Work.ID, Kind: "unknown", Status: "open", Content: json.RawMessage(`{"blocking":true}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, gates, err := f.svc.Update(t.Context(), f.th.ID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: d.Work.Revision, Nodes: []protocol.WorkNodeChange{{ID: n.ID, ExpectedRevision: 1, FromStatus: "open", ToStatus: "accepted_risk"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Revision != 2 || r.Transitioned != 0 || len(gates) != 1 || gates[0].NodeRevision != 1 {
+		t.Fatalf("result=%+v gates=%+v", r, gates)
+	}
+	got := f.detail(t)
+	for _, node := range got.Nodes {
+		if node.ID == n.ID && (node.Status != "open" || node.Revision != 1) {
+			t.Fatalf("accepted without review: %+v", node)
+		}
+	}
+}
+
+// Catches foreign, closed, superseded-open, or absent calling-thread works.
+func TestServiceUpdateRequiresCurrentOpenWork(t *testing.T) {
+	for _, mode := range []string{"foreign thread", "closed", "older open", "no open"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			d := f.begin(t, "objective")
+			ctx := context.Background()
+			threadID := f.th.ID
+			switch mode {
+			case "foreign thread", "no open":
+				th, err := f.st.CreateThread(ctx, protocol.Thread{Title: "other"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				threadID = th.ID
+				if mode == "foreign thread" {
+					if _, err := f.st.CreateWork(ctx, protocol.Work{ThreadID: th.ID}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "closed":
+				if err := f.st.CloseWork(ctx, d.Work.ID, "completed", time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			case "older open":
+				if _, err := f.st.CreateWork(ctx, protocol.Work{ThreadID: f.th.ID, CreatedAt: d.Work.CreatedAt.Add(time.Second)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _ := f.st.GetWorkDetail(ctx, d.Work.ID)
+			_, _, err := f.svc.Update(ctx, threadID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "correct"}}})
+			if err == nil {
+				t.Fatal("accepted non-active work")
+			}
+			after, _ := f.st.GetWorkDetail(ctx, d.Work.ID)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("rejected request changed work")
+			}
+		})
+	}
+}
+
+// Catches leaked rationale, nested secrets, redaction changing semantic numbers,
+// or mutating the caller's slices/raw content while sanitizing its request.
+func TestServiceUpdateRedactsRationale(t *testing.T) {
+	f := newFixture(t)
+	d := f.begin(t, "objective")
+	var logs bytes.Buffer
+	f.svc.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Rationale: "private-rationale API_TOKEN=rationalesecret12345", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "API_TOKEN=titlesecret12345", Content: json.RawMessage(`{"required":true,"count":9007199254740993,"nested":[{"text":"API_TOKEN=contentsecret12345"}],"url":"https://user:password12345@host/"}`)}}}
+	before, _ := json.Marshal(req)
+	result, _, err := f.svc.Update(context.Background(), f.th.ID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Created != 1 || result.Revision != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+	after, _ := json.Marshal(req)
+	if !bytes.Equal(before, after) {
+		t.Fatal("caller request mutated")
+	}
+	got := kinds(f.detail(t), "requirement")[0]
+	if got.Title != "API_TOKEN=[REDACTED]" || !strings.Contains(string(got.Content), "[REDACTED]") || !strings.Contains(string(got.Content), "9007199254740993") {
+		t.Fatalf("redaction=%s %s", got.Title, got.Content)
+	}
+	var audits string
+	if err := f.st.DB.QueryRow(`SELECT COALESCE(group_concat(details_json), '') FROM audit_log`).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := json.Marshal(f.detail(t))
+	all := string(stored) + logs.String() + audits
+	for _, forbidden := range []string{"private-rationale", "rationalesecret12345", "titlesecret12345", "contentsecret12345", "password12345"} {
+		if strings.Contains(all, forbidden) {
+			t.Fatalf("leaked %s", forbidden)
+		}
+	}
+}
+
+// Catches sanitization laundering secret candidates or duplicate semantic keys.
+func TestServiceUpdateRejectsSecretCandidatesAndDuplicateContent(t *testing.T) {
+	for _, tc := range []struct{ name, kind, title, content string }{
+		{"candidate title", "memory_candidate", "API_TOKEN=titlesecret12345", `{"category":"command","semantic_key":"test","text":"go test","scope":"."}`},
+		{"candidate content", "memory_candidate", "test", `{"category":"command","semantic_key":"test","text":"go test","scope":".","extra":{"text":"API_TOKEN=secretvalue12345"}}`},
+		{"duplicate keys", "requirement", "test", `{"required":false,"required":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			d := f.begin(t, "objective")
+			ev, err := f.st.AddEvidence(context.Background(), protocol.Evidence{WorkID: d.Work.ID, Kind: "file_change"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fact, err := f.st.AddWorkNode(context.Background(), protocol.WorkNode{WorkID: d.Work.ID, Kind: "fact", Title: "source", Status: "active"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: tc.kind, Title: tc.title, Content: json.RawMessage(tc.content), EvidenceIDs: []string{ev.ID}}}, Edges: []protocol.WorkEdgeChange{{From: "r", Relation: "candidate_for", To: fact.ID}}}
+			before, _ := json.Marshal(req)
+			_, _, err = f.svc.Update(context.Background(), f.th.ID, req)
+			var validation *ValidationError
+			if !errors.As(err, &validation) || validation.Code != "invalid" {
+				t.Fatalf("err=%v", err)
+			}
+			after, _ := json.Marshal(req)
+			if !bytes.Equal(before, after) || f.detail(t).Work.Revision != 1 {
+				t.Fatal("rejection mutated request/work")
+			}
+		})
+	}
+}
+
+// Catches non-atomic depth escalation by concurrent legacy observations.
+func TestServiceUpdateDepthConcurrentEscalation(t *testing.T) {
+	f := newFixture(t)
+	d := f.begin(t, "objective")
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, "designed"); err != nil {
+				t.Error(err)
+			}
+			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, "guided"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	got := f.detail(t).Work
+	if got.WorkflowDepth != "designed" || got.Revision != 2 {
+		t.Fatalf("work=%+v", got)
+	}
+}
+
+// Catches redaction shrinking oversized original requests below semantic bounds.
+func TestServiceUpdateRetainsOriginalBounds(t *testing.T) {
+	for _, field := range []string{"title", "content"} {
+		t.Run(field, func(t *testing.T) {
+			f := newFixture(t)
+			d := f.begin(t, "objective")
+			node := protocol.WorkNodeChange{Ref: "r", Kind: "requirement", Title: "ok"}
+			if field == "title" {
+				node.Title = "API_TOKEN=" + strings.Repeat("a", MaxNodeTitleBytes)
+			} else {
+				node.Content = json.RawMessage(`{"text":"API_TOKEN=` + strings.Repeat("a", MaxNodeContentBytes) + `"}`)
+			}
+			_, _, err := f.svc.Update(context.Background(), f.th.ID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{node}})
+			var validation *ValidationError
+			if !errors.As(err, &validation) || validation.Code != "limit" {
+				t.Fatalf("err=%v", err)
+			}
+			if f.detail(t).Work.Revision != 1 {
+				t.Fatal("oversized batch persisted")
+			}
+		})
+	}
+}
+
+// Catches dropped derived transitions, incorrect reference counts, or gate
+// metadata leaking into the compact result instead of its separate return.
+func TestServiceUpdateDerivedReadinessAndGates(t *testing.T) {
+	for _, gated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ready", true: "gate"}[gated], func(t *testing.T) {
+			f := newFixture(t)
+			ctx := context.Background()
+			d, req := graphFixture()
+			d.Work.ThreadID = f.th.ID
+			if _, err := f.st.CreateWork(ctx, d.Work); err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range d.Nodes {
+				if _, err := f.st.AddWorkNode(ctx, n); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, ev := range d.Evidence {
+				if _, err := f.st.AddEvidence(ctx, ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, node := range d.Nodes {
+				for _, evidenceID := range node.EvidenceIDs {
+					if _, err := f.st.DB.ExecContext(ctx, `INSERT INTO work_node_evidence (work_id, node_id, evidence_id) VALUES (?,?,?)`, d.Work.ID, node.ID, evidenceID); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			waiting, err := f.st.AddWorkNode(ctx, protocol.WorkNode{ID: "waiting", WorkID: d.Work.ID, Kind: "task", Title: "waiting", Status: "pending", Revision: 3, Content: json.RawMessage(`{"required":true}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.st.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: "criterion", Relation: "verifies", ToNodeID: waiting.ID}); err != nil {
+				t.Fatal(err)
+			}
+			if gated {
+				req.Nodes[3].Content = json.RawMessage(`{"required":true,"gate_kind":"security"}`)
+				req.Nodes[3].ToStatus = "proposed"
+			}
+			result, gates, err := f.svc.Update(ctx, f.th.ID, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTransitions := 1
+			wantStatus := "ready"
+			if gated {
+				wantTransitions = 0
+				wantStatus = "pending"
+			}
+			if result != (protocol.WorkUpdateResult{Revision: 5, Created: 7, Transitioned: wantTransitions, Linked: 12}) {
+				t.Fatalf("result=%+v", result)
+			}
+			got := f.detail(t)
+			for _, node := range got.Nodes {
+				if node.ID == "waiting" && (node.Status != wantStatus || node.Revision != 3+wantTransitions) {
+					t.Fatalf("waiting=%+v", node)
+				}
+			}
+			if !gated && len(gates) != 0 || gated && (len(gates) != 1 || gates[0].Kind != "security" || gates[0].NodeID == "" || gates[0].NodeRevision != 1) {
+				t.Fatalf("gates=%+v", gates)
+			}
+			blob, _ := json.Marshal(result)
+			if strings.Contains(string(blob), "security") || strings.Contains(string(blob), "summary") {
+				t.Fatalf("gate in result=%s", blob)
+			}
+		})
+	}
+}
+
+// Catches rejecting requests while still leaking secret-shaped IDs or raw
+// storage errors through diagnostic metadata.
+func TestServiceUpdateRejectedDiagnostics(t *testing.T) {
+	f := newFixture(t)
+	d := f.begin(t, "objective")
+	var logs bytes.Buffer
+	f.svc.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	secret := "sk-123456789012345678901234567890"
+	_, _, err := f.svc.Update(context.Background(), f.th.ID, protocol.WorkUpdateRequest{WorkID: secret, ExpectedRevision: 1, Rationale: "private-rationale"})
+	if err == nil {
+		t.Fatal("accepted foreign ID")
+	}
+	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), "private-rationale") {
+		t.Fatal("rejection leaked request text")
+	}
+	logs.Reset()
+	if _, err := f.st.DB.Exec(`CREATE TRIGGER reject_node BEFORE INSERT ON work_nodes BEGIN SELECT RAISE(ABORT, 'private-storage-error'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = f.svc.Update(context.Background(), f.th.ID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "correct"}}, Rationale: "private-rationale"})
+	if err == nil {
+		t.Fatal("storage failure missing")
+	}
+	if strings.Contains(logs.String(), "private-storage-error") || strings.Contains(logs.String(), "private-rationale") {
+		t.Fatal("storage rejection leaked prose")
+	}
+	if f.detail(t).Work.Revision != 1 {
+		t.Fatal("storage rejection persisted work revision")
+	}
+}
+
+// Catches loss of JSON field context, unsafe encoding of masks, and changed
+// numeric semantics while sanitizing nested credentials outside candidates.
+func TestServiceUpdateRedactsCredentialFields(t *testing.T) {
+	f := newFixture(t)
+	d := f.begin(t, "objective")
+	req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "ordinary", Content: json.RawMessage(`{"required":true,"count":9007199254740993,"nested":[{"API_TOKEN":"ordinarysecret12345","password":"quoted\"secret\\value","Authorization":"plainauth12345"}],"outer":{"API_TOKEN":["arraysecret12345",{"piece":"objectsecret12345"}]}}`)}}}
+	before, _ := json.Marshal(req)
+	if _, _, err := f.svc.Update(context.Background(), f.th.ID, req); err != nil {
+		t.Fatal(err)
+	}
+	got := kinds(f.detail(t), "requirement")[0]
+	var content map[string]any
+	if err := json.Unmarshal(got.Content, &content); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !strings.Contains(string(got.Content), "9007199254740993") {
+		t.Fatalf("rounded number: %s", got.Content)
+	}
+	for _, secret := range []string{"ordinarysecret12345", "quoted", "plainauth12345", "arraysecret12345", "objectsecret12345"} {
+		if strings.Contains(string(got.Content), secret) {
+			t.Fatalf("credential persisted: %s", got.Content)
+		}
+	}
+	if !strings.Contains(string(got.Content), "[REDACTED]") {
+		t.Fatal("credential fields were not masked")
+	}
+	after, _ := json.Marshal(req)
+	if !bytes.Equal(before, after) {
+		t.Fatal("redaction mutated caller request")
+	}
+}
+
+// Catches credential keys being sanitized into apparently safe candidates.
+func TestServiceUpdateRejectsCandidateCredentialFields(t *testing.T) {
+	for _, credential := range []string{`"API_TOKEN":"ordinarysecret12345"`, `"nested":[{"password":"ordinarysecret12345"}]`, `"nested":{"API_TOKEN":["ordinarysecret12345"]}`, `"nested":{"text":"sk-123456789012345678901234567890","text":"ordinary"}`} {
+		f := newFixture(t)
+		d := f.begin(t, "objective")
+		ctx := context.Background()
+		ev, err := f.st.AddEvidence(ctx, protocol.Evidence{WorkID: d.Work.ID, Kind: "file_change"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fact, err := f.st.AddWorkNode(ctx, protocol.WorkNode{WorkID: d.Work.ID, Kind: "fact", Title: "source", Status: "active"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "memory_candidate", Title: "ordinary", Content: json.RawMessage(`{"category":"command","semantic_key":"test-command","text":"go test","scope":".",` + credential + `}`), EvidenceIDs: []string{ev.ID}}}, Edges: []protocol.WorkEdgeChange{{From: "r", Relation: "candidate_for", To: fact.ID}}}
+		before := f.detail(t)
+		beforeReq, _ := json.Marshal(req)
+		_, _, err = f.svc.Update(ctx, f.th.ID, req)
+		var validation *ValidationError
+		if !errors.As(err, &validation) || validation.Code != "invalid" {
+			t.Fatalf("credential candidate accepted: %v", err)
+		}
+		if !reflect.DeepEqual(before, f.detail(t)) {
+			t.Fatal("candidate rejection changed graph/revision")
+		}
+		afterReq, _ := json.Marshal(req)
+		if !bytes.Equal(beforeReq, afterReq) {
+			t.Fatal("candidate rejection mutated caller request")
+		}
+	}
+}
+
+// Catches preparation deduplicating a relationship and committing other changes.
+func TestServiceUpdateRejectsDuplicateRelationships(t *testing.T) {
+	for _, mode := range []string{"request edge", "persisted edge", "request evidence", "persisted evidence"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			d := f.begin(t, "objective")
+			ctx := context.Background()
+			ev, err := f.st.AddEvidence(ctx, protocol.Evidence{WorkID: d.Work.ID, Kind: "file_change"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waiting, err := f.st.AddWorkNode(ctx, protocol.WorkNode{WorkID: d.Work.ID, Kind: "task", Title: "waiting", Status: "pending", Content: json.RawMessage(`{"required":true}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: 1, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "r", Kind: "requirement", Title: "ordinary"}}}
+			edge := protocol.WorkEdgeChange{From: waiting.ID, Relation: "serves", To: d.Nodes[0].ID}
+			switch mode {
+			case "request edge":
+				req.Edges = []protocol.WorkEdgeChange{edge, edge}
+			case "persisted edge":
+				if err := f.st.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: edge.From, Relation: edge.Relation, ToNodeID: edge.To}); err != nil {
+					t.Fatal(err)
+				}
+				req.Edges = []protocol.WorkEdgeChange{edge}
+			case "request evidence":
+				req.Nodes[0].EvidenceIDs = []string{ev.ID, ev.ID}
+			case "persisted evidence":
+				if _, err := f.st.DB.ExecContext(ctx, `INSERT INTO work_node_evidence (work_id, node_id, evidence_id) VALUES (?,?,?)`, d.Work.ID, waiting.ID, ev.ID); err != nil {
+					t.Fatal(err)
+				}
+				req.Nodes = append(req.Nodes, protocol.WorkNodeChange{ID: waiting.ID, ExpectedRevision: 1, FromStatus: "pending", ToStatus: "ready", EvidenceIDs: []string{ev.ID}})
+			}
+			before := f.detail(t)
+			_, _, err = f.svc.Update(ctx, f.th.ID, req)
+			var validation *ValidationError
+			if !errors.As(err, &validation) || validation.Code != "duplicate" {
+				t.Fatalf("err=%v", err)
+			}
+			if !reflect.DeepEqual(before, f.detail(t)) {
+				t.Fatal("duplicate rejection changed graph/revision")
+			}
+		})
+	}
+}
 
 type fixture struct {
 	svc *Service
@@ -114,6 +573,163 @@ func TestBeginNoProjectThread(t *testing.T) {
 	f := newFixture(t)
 	if d := f.begin(t, "hello"); d.Work.ProjectID != "" {
 		t.Fatalf("project id = %q", d.Work.ProjectID)
+	}
+}
+
+// Catches feature-off classification changes and feature-on missed design escalation on continued work.
+func TestDesignedWorkflowServiceClassification(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "off", true: "on"}[enabled], func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = enabled
+			d := f.begin(t, "Design a replacement cache")
+			want := "direct"
+			if enabled {
+				want = "designed"
+			}
+			if d.Work.WorkflowDepth != want {
+				t.Fatalf("begin depth=%s want %s", d.Work.WorkflowDepth, want)
+			}
+			f.observe(t, Observation{Tool: "file.write", Args: json.RawMessage(`{"path":"internal/protocol/work.go"}`)})
+			want = "guided"
+			if enabled {
+				want = "designed"
+			}
+			if got := f.detail(t).Work.WorkflowDepth; got != want {
+				t.Fatalf("observe depth=%s want %s", got, want)
+			}
+		})
+	}
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	f.begin(t, "What does this do?")
+	if got := f.begin(t, "Design the architecture").Work.WorkflowDepth; got != "designed" {
+		t.Fatalf("continued depth=%s", got)
+	}
+}
+
+// Catches enabled completion closing Guided work without semantic obligations, or breaking Direct/feature-off completion.
+func TestDesignedWorkflowServiceCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name, depth string
+		enabled     bool
+		want        string
+	}{
+		{"off guided", "guided", false, "completed"}, {"on direct", "direct", true, "completed"}, {"on guided", "guided", true, "open"}, {"on designed", "designed", true, "open"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = tc.enabled
+			d := f.begin(t, "Question")
+			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, tc.depth); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.detail(t).Work.Status; got != tc.want {
+				t.Fatalf("status=%s want %s", got, tc.want)
+			}
+		})
+	}
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	d := f.begin(t, "Design a minimal change")
+	graph := readinessFixture()
+	graph.Nodes[0].Status = "completed"
+	for _, n := range graph.Nodes {
+		n.WorkID = d.Work.ID
+		if _, err := f.st.AddWorkNode(context.Background(), n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range graph.Edges {
+		e.WorkID = d.Work.ID
+		if err := f.st.AddWorkEdge(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range graph.Evidence {
+		e.WorkID = d.Work.ID
+		if _, err := f.st.AddEvidence(context.Background(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, n := range graph.Nodes {
+		for _, id := range n.EvidenceIDs {
+			if _, err := f.st.DB.ExecContext(context.Background(), `INSERT INTO work_node_evidence (work_id,node_id,evidence_id) VALUES (?,?,?)`, d.Work.ID, n.ID, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a := graph.Attempts[0]
+	a.WorkID = d.Work.ID
+	if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.detail(t).Work.Status; got != "completed" {
+		t.Fatalf("satisfied graph=%s", got)
+	}
+}
+
+// Catches End closing an enabled Designed work using persisted stale decision support.
+func TestDesignedWorkflowServiceCompletionKeepsStaleSolutionOpen(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(map[bool]string{true: "on", false: "off"}[enabled], func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = enabled
+			d := f.begin(t, "Design a minimal change")
+			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, "designed"); err != nil {
+				t.Fatal(err)
+			}
+			graph := readinessFixture()
+			graph.Nodes[0].Status = "completed"
+			stale := time.Unix(3, 0)
+			graph.Evidence[0].StaleAt = &stale
+			for _, n := range graph.Nodes {
+				n.WorkID = d.Work.ID
+				if _, err := f.st.AddWorkNode(context.Background(), n); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, e := range graph.Edges {
+				e.WorkID = d.Work.ID
+				if err := f.st.AddWorkEdge(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, e := range graph.Evidence {
+				e.WorkID = d.Work.ID
+				if _, err := f.st.AddEvidence(context.Background(), e); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, n := range graph.Nodes {
+				for _, id := range n.EvidenceIDs {
+					if _, err := f.st.DB.ExecContext(context.Background(), `INSERT INTO work_node_evidence (work_id,node_id,evidence_id) VALUES (?,?,?)`, d.Work.ID, n.ID, id); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			a := graph.Attempts[0]
+			a.WorkID = d.Work.ID
+			if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+				t.Fatal(err)
+			}
+			want := "completed"
+			if enabled {
+				want = "open"
+			}
+			if got := f.detail(t).Work.Status; got != want {
+				t.Fatalf("status=%s want %s", got, want)
+			}
+		})
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
+	"github.com/shaktsin/umcode/internal/workflowgraph"
 )
 
 // ErrApprovalExpired is returned when nobody answered in time.
@@ -52,6 +53,12 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 			return false, nil
 		}
 	}
+	return e.persistAndWaitApproval(ctx, sctx, a, timeout, "approval.request")
+}
+
+// persistAndWaitApproval is shared transport; workflow decisions never consult
+// remembered tool decisions and commit their graph before this waiter wakes.
+func (e *Engine) persistAndWaitApproval(ctx, sctx context.Context, a protocol.Approval, timeout time.Duration, auditEvent string) (bool, error) {
 	if err := e.Store.CreateApproval(sctx, a); err != nil {
 		return false, err
 	}
@@ -68,7 +75,11 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 	// Admin clients get the request; clients following the thread see it too.
 	ev := protocol.ApprovalEvent{Approval: a}
 	e.Bus.PublishAdmin(protocol.NotifyApprovalRequest, ev)
-	_ = e.Store.Audit(sctx, "approval.request", map[string]any{"id": a.ID, "tool": tool, "risk": risk, "summary": summary, "args": json.RawMessage(args)})
+	if a.Kind == "workflow" {
+		_ = e.Store.Audit(sctx, auditEvent, workflowApprovalAudit(a, "pending"))
+	} else {
+		_ = e.Store.Audit(sctx, auditEvent, map[string]any{"id": a.ID, "tool": a.Tool, "risk": a.Risk, "summary": a.ActionSummary, "args": a.Args})
+	}
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -76,7 +87,7 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 	case ok := <-ch:
 		return ok, nil
 	case <-timer.C:
-		if err := e.Store.DecideApproval(sctx, a.ID, "expired", "timeout"); err == nil {
+		if err := e.expireApproval(sctx, a, "timeout"); err == nil {
 			a.Status = "expired"
 			e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: a})
 			return false, ErrApprovalExpired
@@ -86,15 +97,34 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 		case ok := <-ch:
 			return ok, nil
 		default:
+			if ok, decided := e.persistedApprovalOutcome(sctx, a.ID); decided {
+				return ok, nil
+			}
 			return false, ErrApprovalExpired
 		}
 	case <-ctx.Done():
-		if err := e.Store.DecideApproval(sctx, a.ID, "expired", "turn interrupted"); err == nil {
+		if err := e.expireApproval(sctx, a, "turn interrupted"); err == nil {
 			a.Status = "expired"
 			e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: a})
+		} else if ok, decided := e.persistedApprovalOutcome(sctx, a.ID); decided {
+			return ok, nil
 		}
 		return false, ctx.Err()
 	}
+}
+
+func (e *Engine) persistedApprovalOutcome(ctx context.Context, id string) (bool, bool) {
+	a, err := e.Store.GetApproval(ctx, id)
+	if err != nil {
+		return false, false
+	}
+	switch a.Status {
+	case "approved":
+		return true, true
+	case "denied":
+		return false, true
+	}
+	return false, false
 }
 
 // RespondApproval records a decision. The first answer wins; later answers
@@ -104,8 +134,18 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 	if approve {
 		status = "approved"
 	}
-	if err := e.Store.DecideApproval(ctx, id, status, clientID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+	a, err := e.Store.GetApproval(ctx, id)
+	if err != nil {
+		return protocol.Approval{}, protocol.Errorf(protocol.CodeConflict, "approval %s does not exist", id)
+	}
+	if a.Kind == "workflow" {
+		_, err = e.Store.DecideWorkflowApproval(ctx, id, status, clientID)
+		remember = false
+	} else {
+		err = e.Store.DecideApproval(ctx, id, status, clientID)
+	}
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrWorkUpdateConflict) {
 			return protocol.Approval{}, protocol.Errorf(protocol.CodeConflict, "approval %s was already decided or does not exist", id)
 		}
 		return protocol.Approval{}, err
@@ -116,14 +156,7 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 	if ch != nil {
 		ch <- approve
 	}
-	var decided protocol.Approval
-	if list, err := e.Store.ListApprovals(ctx, ""); err == nil {
-		for _, a := range list {
-			if a.ID == id {
-				decided = a
-			}
-		}
-	}
+	decided, _ := e.Store.GetApproval(ctx, id)
 	if remember && decided.ID != "" && !isComputerUseTool(decided.Tool) {
 		if _, err := e.Store.GetThread(ctx, decided.ThreadID); err == nil {
 			decision := "deny"
@@ -135,12 +168,35 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 			}
 		}
 	}
-	_ = e.Store.Audit(ctx, "approval.decide", map[string]any{"id": id, "status": status, "by": clientID, "remember": remember})
+	if a.Kind == "workflow" {
+		_ = e.Store.Audit(ctx, "workflow.approval.decide", workflowApprovalAudit(a, status))
+	} else {
+		_ = e.Store.Audit(ctx, "approval.decide", map[string]any{"id": id, "status": status, "by": clientID, "remember": remember})
+	}
 	e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: decided})
 	if decided.ID == "" {
 		return decided, fmt.Errorf("approval %s not found after decision", id)
 	}
 	return decided, nil
+}
+
+func (e *Engine) expireApproval(ctx context.Context, a protocol.Approval, by string) error {
+	if a.Kind == "workflow" {
+		_, err := e.Store.DecideWorkflowApproval(ctx, a.ID, "expired", by)
+		if err == nil {
+			_ = e.Store.Audit(ctx, "workflow.approval.expire", workflowApprovalAudit(a, "expired"))
+		}
+		return err
+	}
+	return e.Store.DecideApproval(ctx, a.ID, "expired", by)
+}
+
+func workflowApprovalAudit(a protocol.Approval, status string) map[string]any {
+	gate := a.Reason
+	if !workflowgraph.ValidGate(gate) {
+		gate = "unknown"
+	}
+	return map[string]any{"id": a.ID, "work_id": a.WorkID, "node_id": a.NodeID, "node_revision": a.NodeRevision, "gate_kind": gate, "status": status}
 }
 
 // isComputerUseTool reports whether tool is one of the computer.* tools,

@@ -30,6 +30,8 @@ const (
 
 // Input is everything Compile needs. The caller reads it from its store.
 type Input struct {
+	// DesignedWorkflow enables the persisted semantic graph projection.
+	DesignedWorkflow bool
 	// Detail is the thread's open work. A zero value means there is nothing to
 	// compile and Compile declines.
 	Detail protocol.WorkDetail
@@ -66,6 +68,8 @@ type Report struct {
 	WorkPacketTokens     int    `json:"workPacketTokens"`
 	EvidencePacketTokens int    `json:"evidencePacketTokens"`
 	TailTokens           int    `json:"tailTokens"`
+	P0Tokens             int    `json:"p0Tokens,omitempty"`
+	P1Tokens             int    `json:"p1Tokens,omitempty"`
 	Drops                []Drop `json:"drops,omitempty"`
 	// Declined names why compilation was refused, and is empty on success.
 	Declined string `json:"declined,omitempty"`
@@ -130,11 +134,33 @@ func Compile(in Input) (Result, bool) {
 	if in.Detail.Work.Goal == "" {
 		return Result{Report: Report{Declined: "no goal"}}, false
 	}
-	work, criteria := workPacket(in.Detail, in.Stale)
-	evidence, rows, p2 := evidencePacket(in.Detail, in.Active, in.Stale)
+	var work, evidence string
+	var criteria, rows int
+	var p2 []int
+	p0Tokens, p1Tokens := 0, 0
+	var drops []Drop
+	if in.DesignedWorkflow {
+		p, err := designedPacket(in.Detail, in.Stale, in.Active)
+		if err != nil {
+			return Result{Report: Report{Declined: "invalid designed projection"}}, false
+		}
+		p0Tokens = textTokens(p.p0)
+		budget := packetBudget(in.Window)
+		if in.Window > 0 && p0Tokens > budget {
+			return Result{Report: Report{Declined: "P0 over budget", Criteria: p.criteria, P0Tokens: p0Tokens}}, false
+		}
+		if budget > 0 && textTokens(p.p0+p.p1)+textTokens(p.evidence) > budget {
+			drops = append(drops, Drop{Class: "designed P1", Reason: "packet budget", Count: p.supporting + p.rows})
+			p.p1, p.evidence, p.rows = "", "", 0
+		}
+		work, criteria, evidence, rows, p2 = p.p0+p.p1, p.criteria, p.evidence, p.rows, nil
+		p1Tokens = textTokens(work) - p0Tokens + textTokens(evidence)
+	} else {
+		work, criteria = workPacket(in.Detail, in.Stale)
+		evidence, rows, p2 = evidencePacket(in.Detail, in.Active, in.Stale)
+	}
 
 	budget := packetBudget(in.Window)
-	var drops []Drop
 	if budget > 0 {
 		if textTokens(work) > budget {
 			return Result{Report: Report{Declined: "P0 over budget", Criteria: criteria}}, false
@@ -167,6 +193,7 @@ func Compile(in Input) (Result, bool) {
 		Criteria: criteria, Evidence: rows, TailMessages: len(tailMsgs),
 		WorkPacketTokens: textTokens(work), EvidencePacketTokens: textTokens(evidence),
 		TailTokens: estimate(tailMsgs), Drops: drops,
+		P0Tokens: p0Tokens, P1Tokens: p1Tokens,
 	}
 	if in.HistoryTokens > 0 && estimate(msgs) >= in.HistoryTokens {
 		rep.Declined = "not smaller than history"

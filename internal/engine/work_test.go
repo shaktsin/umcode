@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/fingerprint"
 	"github.com/shaktsin/umcode/internal/llm"
@@ -17,6 +19,215 @@ import (
 	"github.com/shaktsin/umcode/internal/vault"
 	"github.com/shaktsin/umcode/internal/work"
 )
+
+type countedWorkUpdater struct {
+	svc   *work.Service
+	calls atomic.Int32
+}
+
+func TestWorkUpdateAcceptedRiskRequestsAtomicOutcome(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		t.Run(map[bool]string{true: "approve", false: "deny"}[approve], func(t *testing.T) {
+			e, th, turn, st := pluginHookEngine(t)
+			e.Cfg.Models.DesignedWorkflow = true
+			w, err := st.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID, WorkflowDepth: "designed"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: "unknown", Status: "open", Title: "risk", Content: json.RawMessage(`{"blocking":true}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := &countedWorkUpdater{svc: &work.Service{Store: st, DesignedWorkflow: true}}
+			e.Tools.Add(tools.NewWorkUpdate(u))
+			args, _ := json.Marshal(protocol.WorkUpdateRequest{WorkID: w.ID, ExpectedRevision: 1, Nodes: []protocol.WorkNodeChange{{ID: n.ID, ExpectedRevision: 1, FromStatus: "open", ToStatus: "accepted_risk"}}})
+			ctx := tools.WithScope(t.Context(), &tools.Scope{ThreadID: th.ID})
+			done := make(chan toolRunResult, 1)
+			go func() {
+				done <- e.runTool(ctx, t.Context(), th, turn, llm.ToolCall{ID: "risk", Name: tools.ToWire("work.update"), Args: args}, &fakePluginSnapshot{})
+			}()
+			a := waitWorkflowApproval(t, e, st, map[string]bool{})
+			d, _ := st.GetWorkDetail(t.Context(), w.ID)
+			if d.Work.Revision != 2 || d.Nodes[0].Status != "open" || a.NodeRevision != 1 {
+				t.Fatalf("premature acceptance: %+v %+v", d, a)
+			}
+			if _, err := e.RespondApproval(t.Context(), a.ID, approve, true, "user"); err != nil {
+				t.Fatal(err)
+			}
+			out := <-done
+			var result protocol.WorkUpdateResult
+			if err := json.Unmarshal([]byte(out.Output), &result); err != nil {
+				t.Fatal(err)
+			}
+			if u.calls.Load() != 1 || result.Revision != 3 || result.Transitioned != 0 || out.IsError == approve {
+				t.Fatalf("result=%+v output=%+v", result, out)
+			}
+			d, _ = st.GetWorkDetail(t.Context(), w.ID)
+			want := "open"
+			if approve {
+				want = "accepted_risk"
+			}
+			if d.Nodes[0].Status != want || d.Nodes[0].Revision != 2 {
+				t.Fatalf("outcome=%+v", d)
+			}
+		})
+	}
+}
+
+func TestWorkUpdateReplacementAfterRejectionRestoresMutation(t *testing.T) {
+	e, th, turn, st, g := workflowEngine(t)
+	a := protocol.Approval{ID: store.NewID("apr"), Kind: "workflow", ThreadID: th.ID, WorkID: g.WorkID, NodeID: g.NodeID, NodeRevision: 1, Status: "pending", Args: json.RawMessage(`{}`), CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+	if err := st.CreateApproval(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RespondApproval(t.Context(), a.ID, false, false, "user"); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := st.GetWorkDetail(t.Context(), g.WorkID)
+	opt := d.Nodes[1]
+	criterion, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: g.WorkID, Kind: "criterion", Status: "passed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := st.AddEvidence(t.Context(), protocol.Evidence{WorkID: g.WorkID, Kind: "file_change"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := &countedWorkUpdater{svc: &work.Service{Store: st, DesignedWorkflow: true}}
+	e.Tools.Add(tools.NewWorkUpdate(u))
+	req := protocol.WorkUpdateRequest{WorkID: g.WorkID, ExpectedRevision: 2, Nodes: []protocol.WorkNodeChange{
+		{Ref: "replacement", Kind: "decision", Title: "replacement solution", Content: json.RawMessage(`{"required":true,"gate_kind":"security"}`), EvidenceIDs: []string{ev.ID}},
+		{Ref: "task", Kind: "task", Title: "implement", Content: json.RawMessage(`{"required":true}`)},
+	}, Edges: []protocol.WorkEdgeChange{{From: "replacement", Relation: "selects", To: opt.ID}, {From: criterion.ID, Relation: "verifies", To: "replacement"}, {From: criterion.ID, Relation: "verifies", To: "task"}, {From: "task", Relation: "implements", To: "replacement"}}}
+	args, _ := json.Marshal(req)
+	ctx := tools.WithScope(t.Context(), &tools.Scope{ThreadID: th.ID})
+	done := make(chan toolRunResult, 1)
+	go func() {
+		done <- e.runTool(ctx, t.Context(), th, turn, llm.ToolCall{ID: "replace", Name: tools.ToWire("work.update"), Args: args}, &fakePluginSnapshot{})
+	}()
+	fresh := waitWorkflowApproval(t, e, st, map[string]bool{})
+	if fresh.NodeID == g.NodeID {
+		t.Fatal("rejected decision re-prompted")
+	}
+	if _, err := e.RespondApproval(t.Context(), fresh.ID, true, false, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-done; out.IsError {
+		t.Fatal(out.Output)
+	}
+	tool := &engineTestTool{name: "file.write", risk: tools.RiskGreen, output: "ran"}
+	out := runWorkTool(t, e, th, turn, tool)
+	if out.IsError || tool.calls.Load() != 1 || u.calls.Load() != 1 {
+		t.Fatalf("replacement failed to open mutation: %+v", out)
+	}
+	d, _ = st.GetWorkDetail(t.Context(), g.WorkID)
+	if d.Work.Revision != 4 {
+		t.Fatalf("revision=%d", d.Work.Revision)
+	}
+	for _, n := range d.Nodes {
+		if n.Kind == "task" && n.Status != "ready" {
+			t.Fatalf("task=%+v", n)
+		}
+	}
+}
+
+func (u *countedWorkUpdater) Update(ctx context.Context, thread string, req protocol.WorkUpdateRequest) (protocol.WorkUpdateResult, []protocol.WorkflowGate, error) {
+	u.calls.Add(1)
+	return u.svc.Update(ctx, thread, req)
+}
+
+// Catches work.update using Call (discarding gates), applying twice, stopping
+// after the first denial, leaking approval prose, and returning an old revision.
+func TestWorkUpdateAppliesOnceAndRequestsEveryGate(t *testing.T) {
+	for _, mode := range []string{"approved", "first denied", "expired"} {
+		t.Run(mode, func(t *testing.T) {
+			e, th, turn, st := pluginHookEngine(t)
+			e.Cfg.Models.DesignedWorkflow = true
+			w, err := st.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID, WorkflowDepth: "designed"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			opt, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: "option", Status: "active", Content: json.RawMessage(`{"solution_rung":1}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			criterion, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: "criterion", Status: "passed"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev, err := st.AddEvidence(t.Context(), protocol.Evidence{WorkID: w.ID, Kind: "file_change", Summary: "inspection evidence"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := &countedWorkUpdater{svc: &work.Service{Store: st, DesignedWorkflow: true}}
+			e.Tools.Add(tools.NewWorkUpdate(u))
+			req := protocol.WorkUpdateRequest{WorkID: w.ID, ExpectedRevision: 1, Rationale: "private rationale", Nodes: []protocol.WorkNodeChange{
+				{Ref: "first", Kind: "decision", Title: "private first gate", Content: json.RawMessage(`{"required":true,"gate_kind":"security"}`)},
+				{Ref: "second", Kind: "decision", Title: "private second gate", Content: json.RawMessage(`{"required":true,"gate_kind":"billing"}`)},
+			}}
+			for i := range req.Nodes {
+				req.Nodes[i].EvidenceIDs = []string{ev.ID}
+			}
+			req.Edges = []protocol.WorkEdgeChange{{From: "first", Relation: "selects", To: opt.ID}, {From: "second", Relation: "selects", To: opt.ID}, {From: criterion.ID, Relation: "verifies", To: "first"}, {From: criterion.ID, Relation: "verifies", To: "second"}}
+			args, _ := json.Marshal(req)
+			ctx := tools.WithScope(t.Context(), &tools.Scope{ThreadID: th.ID})
+			if mode == "expired" {
+				e.Cfg.Policy.ApprovalTimeoutMinutes = 0
+			}
+			done := make(chan toolRunResult, 1)
+			go func() {
+				done <- e.runTool(ctx, t.Context(), th, turn, llm.ToolCall{ID: "update", Name: tools.ToWire("work.update"), Args: args}, &fakePluginSnapshot{})
+			}()
+			seen := map[string]bool{}
+			if mode != "expired" {
+				for i := 0; i < 2; i++ {
+					a := waitWorkflowApproval(t, e, st, seen)
+					seen[a.ID] = true
+					approve := mode != "first denied" || i != 0
+					if _, err := e.RespondApproval(t.Context(), a.ID, approve, true, "user"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			out := <-done
+			if u.calls.Load() != 1 || strings.Contains(out.Output, "private") {
+				t.Fatalf("calls=%d result=%+v", u.calls.Load(), out)
+			}
+			var result struct {
+				Revision, Created, Transitioned, Linked int
+				Gates                                   []struct {
+					Status string `json:"status"`
+					NodeID string `json:"node_id"`
+				}
+			}
+			if err := json.Unmarshal([]byte(out.Output), &result); err != nil {
+				t.Fatalf("output=%s error=%v", out.Output, err)
+			}
+			wantRevision := 4
+			if mode == "expired" {
+				wantRevision = 2
+			}
+			if result.Revision != wantRevision || result.Created != 2 || result.Transitioned != 0 || result.Linked != 6 {
+				t.Fatalf("result=%+v", result)
+			}
+			if mode == "approved" {
+				if out.IsError || len(result.Gates) != 0 {
+					t.Fatalf("approved=%+v", out)
+				}
+			} else if !out.IsError || len(result.Gates) == 0 {
+				t.Fatalf("denied/expired=%+v", out)
+			}
+			all, _ := st.ListApprovals(t.Context(), "")
+			if len(all) != 2 {
+				t.Fatalf("gates requested=%d", len(all))
+			}
+			d, _ := st.GetWorkDetail(t.Context(), w.ID)
+			if d.Work.Revision != wantRevision || len(d.Nodes) != 4 {
+				t.Fatalf("graph=%+v", d)
+			}
+		})
+	}
+}
 
 const (
 	testPlan   = `{"checks":[{"label":"unit","command":"go test ./..."}]}`

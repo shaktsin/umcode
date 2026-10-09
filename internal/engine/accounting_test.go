@@ -31,6 +31,34 @@ func fixtureRequest() ([]promptLayer, llm.Request) {
 	return layers, req
 }
 
+func TestMeasureRequestWorkUpdateAttribution(t *testing.T) {
+	req := llm.Request{Tools: []llm.ToolSpec{{Name: "work__update", Description: "12345678", Schema: json.RawMessage(`{}`)}}, Messages: []llm.Message{
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "same", Name: "work__update", Args: json.RawMessage(`{"x":12}`)}}},
+		{Role: llm.RoleTool, ToolCallID: "same", Result: "12345678"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "same", Name: "file__read", Args: json.RawMessage(`{}`)}}},
+		{Role: llm.RoleTool, ToolCallID: "same", ToolName: "work__update", Result: strings.Repeat("x", 100)},
+		{Role: llm.RoleTool, ToolCallID: "orphan", ToolName: "work__update", Result: strings.Repeat("x", 100)},
+	}}
+	b := measureRequest(nil, req, RequestPackets{}, nil)
+	data, _ := json.Marshal(b)
+	var fields map[string]any
+	_ = json.Unmarshal(data, &fields)
+	for name, want := range map[string]float64{"workUpdateSpecTokens": 6, "workUpdateCallTokens": 5, "workUpdateResultTokens": 2} {
+		if fields[name] != want {
+			t.Errorf("%s=%v, want %v", name, fields[name], want)
+		}
+	}
+	if b.TotalTokens != b.ToolSpecTokens+b.ConversationTokens+b.ToolResultTokens {
+		t.Fatal("attribution double counted total")
+	}
+	req.Tools = nil // work.update is not exposed when Designed workflow is off.
+	plain := measureRequest(nil, req, RequestPackets{}, nil)
+	data, _ = json.Marshal(plain)
+	if strings.Contains(string(data), "workUpdate") {
+		t.Fatalf("disabled/absent tool attributed: %s", data)
+	}
+}
+
 func TestMeasureRequestSumsParts(t *testing.T) {
 	layers, req := fixtureRequest()
 	b := measureRequest(layers, req, RequestPackets{}, nil)
