@@ -285,6 +285,41 @@ func TestWorkflowGateBeforeHooksPolicyAndCall(t *testing.T) {
 	}
 }
 
+func TestWorkflowProspectiveEscalationBeforeFirstMutation(t *testing.T) {
+	for _, depth := range []string{"direct", "guided"} {
+		for _, path := range []string{"internal/protocol/types.go", "schema.json", "db/migrations/001.sql", "security/auth.go"} {
+			t.Run(depth+"/"+path, func(t *testing.T) {
+				e, th, turn, st := pluginHookEngine(t)
+				e.Cfg.Models.DesignedWorkflow = true
+				e.Cfg.Policy.ApprovalTimeoutMinutes = 0
+				w, err := st.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID, WorkflowDepth: depth})
+				if err != nil {
+					t.Fatal(err)
+				}
+				marker := filepath.Join(t.TempDir(), "hook")
+				tool := &engineTestTool{name: "file.write", risk: tools.RiskRed, output: "mutation"}
+				snapshot := &fakePluginSnapshot{tool: tool, hookSet: captureHookSet(t, hooks.BeforeToolUse, marker)}
+				args, _ := json.Marshal(map[string]string{"path": path, "content": "first write"})
+				out := e.runTool(t.Context(), t.Context(), th, turn, llm.ToolCall{ID: "first", Name: "file__write", Args: args}, snapshot)
+				d, err := st.GetWorkDetail(t.Context(), w.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if d.Work.WorkflowDepth != "designed" || d.Work.Revision != 2 || !out.IsError || out.Output != "workflow not ready" || tool.calls.Load() != 0 {
+					t.Fatalf("first risky mutation escaped: depth=%s revision=%d out=%+v calls=%d", d.Work.WorkflowDepth, d.Work.Revision, out, tool.calls.Load())
+				}
+				if _, err := os.Stat(marker); !os.IsNotExist(err) {
+					t.Fatalf("hook ran before escalation: %v", err)
+				}
+				approvals, _ := st.ListApprovals(t.Context(), "")
+				if len(approvals) != 0 {
+					t.Fatal("ordinary approval ran before graph readiness")
+				}
+			})
+		}
+	}
+}
+
 func TestWorkflowGateReadFailureAndFeatureOff(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		t.Run(map[bool]string{true: "fail closed", false: "off skips lookup"}[enabled], func(t *testing.T) {

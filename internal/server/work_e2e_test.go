@@ -689,3 +689,26 @@ func TestGuidedWorkflowProjectlessPlanDoesNotImplyApproval(t *testing.T) {
 		t.Fatalf("planning invented approval or verification: %+v", d)
 	}
 }
+
+func TestDesignedWorkflowProspectivePathBlocksFirstWrite(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled_%t", enabled), func(t *testing.T) {
+			h := newHarness(t, func(c *config.Config) { c.Models.DesignedWorkflow = enabled })
+			h.addKey("claude", "workflow", "sk-1")
+			th := startWorkThread(h)
+			h.fake.push(toolReply("file__write", `{"path":"schema.json","content":"{}"}`), textReply("Stopped."))
+			runWorkTurn(h, th, "make the edit")
+			_, err := os.Stat(filepath.Join(h.ws, "schema.json"))
+			if enabled {
+				if !os.IsNotExist(err) {
+					t.Fatalf("first risky write executed: %v", err)
+				}
+				if d := workflowDetail(h, th.ID); d.Work.WorkflowDepth != "designed" || d.Work.Status != "open" {
+					t.Fatalf("escalation not persisted: %+v", d.Work)
+				}
+			} else if err != nil {
+				t.Fatalf("flag-off mutation changed: %v", err)
+			}
+		})
+	}
+}

@@ -1001,6 +1001,17 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		model, reduction := e.reduceToolResult(name, call.Args, output, isError)
 		return toolRunResult{Output: output, ModelOutput: model, Reduction: reduction, IsError: isError, HookContext: contextValues}
 	}
+	var assessedRisk tools.Risk
+	var assessedSummary string
+	if e.Cfg.Models.DesignedWorkflow && ok && !workflowDiscoveryTool(name) {
+		assessedRisk, assessedSummary = tool.Assess(call.Args)
+		if assessor, ok := tool.(tools.ContextAssessor); ok {
+			assessedRisk, assessedSummary = assessor.AssessContext(ctx, call.Args)
+		}
+		if err := e.escalateProspectiveWorkflow(sctx, th.ID, work.Observation{Tool: name, Args: call.Args, Risk: string(assessedRisk), Root: scopeRoot(ctx)}); err != nil {
+			return result(err.Error(), true)
+		}
+	}
 	workflow, gateErr := e.workflowDetail(sctx, th.ID, name)
 	if gateErr != nil {
 		return result(gateErr.Error(), true)
@@ -1046,9 +1057,12 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, nil)
 		}
 	}
-	risk, summary := tool.Assess(call.Args)
-	if assessor, ok := tool.(tools.ContextAssessor); ok {
-		risk, summary = assessor.AssessContext(ctx, call.Args)
+	risk, summary := assessedRisk, assessedSummary
+	if risk == "" {
+		risk, summary = tool.Assess(call.Args)
+		if assessor, ok := tool.(tools.ContextAssessor); ok {
+			risk, summary = assessor.AssessContext(ctx, call.Args)
+		}
 	}
 	it.Tool.Risk = string(risk)
 	riskLevel = string(risk)
