@@ -135,7 +135,7 @@ Each chat keeps a quiet record of what a request set out to do: a goal, the veri
 
 Set `models.designed_workflow: true` to enable the semantic work graph, conditional workflow instructions, and the `work.update` built-in. The flag defaults to false: the existing tool list, prompts, work lifecycle, and request accounting retain their prior behavior. This works in general-purpose chats as well as project chats; an internal graph update needs a thread, not a project or filesystem. It adds no model call.
 
-Workflow depth escalates deterministically and never decreases: Direct for ordinary questions and discovery, Guided after coding/verification or assessed-risk tool activity, and Designed for actionable public-contract or persisted-schema changes, migration/compatibility, security/trust, billing/money, destructive/recovery work, or an explicit validated graph update. Explanatory questions about these topics remain Direct. Classification uses local rules and recorded structure, not a model judgment.
+Workflow depth escalates deterministically and never decreases: Direct for ordinary questions and discovery, Guided after coding/verification or assessed-risk tool activity, and Designed for actionable public-contract or persisted-schema changes, migration/compatibility, security/trust, billing/money, destructive/recovery work, or an explicit validated graph update requesting Designed depth. Explanatory questions about these topics remain Direct. Classification uses local rules and recorded structure, not a model judgment.
 
 Before Guided or Designed implementation, `work.update` records the first sufficient solution rung, with an acceptance-criterion link and supporting inspected evidence:
 
