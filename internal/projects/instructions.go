@@ -167,6 +167,9 @@ func guardedInstructionPath(candidate string, allowMissing bool) (string, os.Fil
 	if !filepath.IsAbs(candidate) || forbiddenInstructionPath(candidate) {
 		return "", nil, fmt.Errorf("instruction path forbidden")
 	}
+	// Initial roots and hints follow Resolve's lexical cleaning. Link
+	// destinations below remain raw so every forbidden hop is checked first.
+	candidate = filepath.Clean(candidate)
 	volume := filepath.VolumeName(candidate)
 	current := volume + string(filepath.Separator)
 	pending := strings.Split(filepath.ToSlash(strings.TrimPrefix(candidate, volume)), "/")
@@ -237,6 +240,9 @@ func checkedInstructionPath(root, candidate string, allowMissing bool) (string, 
 	if forbiddenInstructionPath(candidate) {
 		return "", nil, fmt.Errorf("instruction path forbidden")
 	}
+	// Resolve lexically cleans its input before following links. Guard that same
+	// spelling, including for absolute hints, after checking raw forbidden names.
+	candidate = filepath.Clean(candidate)
 	abs := candidate
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(root, abs)

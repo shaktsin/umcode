@@ -538,6 +538,61 @@ func TestInstructionInventoryCompositionPreservesSafeAliasAncestors(t *testing.T
 	}
 }
 
+func TestInstructionInventoryCompositionAbsoluteHintParentAlias(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"deep/leaf", "deep/pick", "safe"} {
+		if err := os.MkdirAll(filepath.Join(root, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "safe/UMCODE.md"), []byte("forbidden alias guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for source, destination := range map[string]string{"alias": "deep/leaf", "pick": "AGENTS.md", "AGENTS.md": "safe"} {
+		if err := os.Symlink(destination, filepath.Join(root, source)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Keep the raw absolute spelling: filepath.Join would erase alias/.. before
+	// the production boundary receives it. The guard and Resolve must both
+	// inspect pick, rather than guarding deep/pick and later following pick.
+	hint := root + "/alias/../pick"
+	t.Run("checked path", func(t *testing.T) {
+		if got, _, err := checkedInstructionPath(root, hint, true); got != "" || err == nil || !strings.Contains(err.Error(), "instruction path forbidden") {
+			t.Fatalf("unchecked lexical reinterpretation: %q, %v", got, err)
+		}
+	})
+	t.Run("composition", func(t *testing.T) {
+		svc, _, _ := newService(t)
+		got, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "absolute-parent-alias"}, hint)
+		if got != "" || len(sources) != 0 {
+			t.Fatalf("unchecked absolute hint composed: %q, %+v", got, sources)
+		}
+	})
+}
+
+func TestInstructionInventoryRootParentAliasUsesResolveSemantics(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "deep/leaf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "deep/nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"UMCODE.md", "deep/nested/UMCODE.md"} {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte("guidance"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("deep/leaf", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstructionInventory(root+"/alias/..", nil)
+	if err != nil || !reflect.DeepEqual(got, []string{"UMCODE.md", "deep/nested/UMCODE.md"}) {
+		t.Fatalf("root traversal disagrees with Resolve: %v, %v", got, err)
+	}
+}
+
 func TestInstructionInventoryCompositionContainment(t *testing.T) {
 	for _, nested := range []bool{false, true} {
 		t.Run(fmt.Sprint(nested), func(t *testing.T) {
