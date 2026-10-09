@@ -392,6 +392,152 @@ func TestInstructionInventoryContainedSymlink(t *testing.T) {
 	}
 }
 
+// A final-path-only check misses forbidden names that disappear through an
+// additional symlink or through '..'. Missing forbidden destinations must be
+// rejected as forbidden before any lookup can report them unavailable.
+func TestInstructionInventoryForbiddenSymlinkHops(t *testing.T) {
+	for _, kind := range []string{"direct missing", "chained file", "intermediate directory", "unclean destination"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			makeForbiddenInstructionAlias(t, root, "UMCODE.md", kind)
+			got, err := InstructionInventory(root, nil)
+			if len(got) != 0 || err == nil || !strings.Contains(err.Error(), "instruction path forbidden") {
+				t.Fatalf("forbidden instruction hop = %v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestInstructionInventoryForbiddenScopeHops(t *testing.T) {
+	for _, kind := range []string{"direct missing", "chained file", "intermediate directory", "unclean destination"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			makeForbiddenInstructionAlias(t, root, "alias", kind)
+			got, err := InstructionInventory(root, []string{"alias"})
+			if len(got) != 0 || err == nil || !strings.Contains(err.Error(), "instruction path forbidden") {
+				t.Fatalf("forbidden scope hop = %v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestInstructionInventoryCompositionForbiddenHops(t *testing.T) {
+	for _, kind := range []string{"direct missing", "chained file", "intermediate directory", "unclean destination"} {
+		t.Run(kind, func(t *testing.T) {
+			svc, _, _ := newService(t)
+			root := t.TempDir()
+			makeForbiddenInstructionAlias(t, root, "UMCODE.md", kind)
+			got, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "foreign-hops"}, "")
+			if got != "" || len(sources) != 0 {
+				t.Fatalf("forbidden instruction hop composed: %q, %+v", got, sources)
+			}
+		})
+	}
+}
+
+func makeForbiddenInstructionAlias(t *testing.T, root, name, kind string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, "guidance.txt"), []byte("foreign hop guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	destination := "AGENTS.md"
+	switch kind {
+	case "chained file":
+		if err := os.Symlink("guidance.txt", filepath.Join(root, "AGENTS.md")); err != nil {
+			t.Fatal(err)
+		}
+	case "intermediate directory":
+		if err := os.Mkdir(filepath.Join(root, "safe"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "safe/guidance.txt"), []byte("foreign hop guidance"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("safe", filepath.Join(root, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		destination = "CLAUDE.md/guidance.txt"
+	case "unclean destination":
+		if err := os.Mkdir(filepath.Join(root, "AGENT.md"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		destination = "AGENT.md/../guidance.txt"
+	}
+	if err := os.Symlink(destination, filepath.Join(root, name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstructionInventorySafeSymlinkHops(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "safe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "safe/guidance.txt"), []byte("safe chained guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("safe", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "alias/guidance.txt"), filepath.Join(root, "middle")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("middle", filepath.Join(root, "UMCODE.md")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstructionInventory(root, []string{"middle"})
+	if err != nil || !reflect.DeepEqual(got, []string{"UMCODE.md"}) {
+		t.Fatalf("safe chained inventory = %v, %v", got, err)
+	}
+	svc, _, _ := newService(t)
+	composed, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "safe-hops"}, "alias")
+	if !strings.Contains(composed, "safe chained guidance") || len(sources) != 1 {
+		t.Fatalf("safe chain composition = %q, %+v", composed, sources)
+	}
+}
+
+func TestInstructionInventoryCompositionMissingHopCannotResume(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "safe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("safe", filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("AGENTS.md", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing/../alias", filepath.Join(root, "hint")); err != nil {
+		t.Fatal(err)
+	}
+	// A missing component cannot be cleaned away and resume traversal through
+	// an unchecked alias. This is the allow-missing boundary used by composition.
+	if got, _, err := checkedInstructionPath(root, "hint", true); err == nil || got != "" {
+		t.Fatalf("missing hop resumed: %q, %v", got, err)
+	}
+}
+
+func TestInstructionInventoryCompositionPreservesSafeAliasAncestors(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "deep/web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "deep/UMCODE.md"), []byte("physical ancestor"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "deep/web/UMCODE.md"), []byte("alias guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("deep/web", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	svc, _, _ := newService(t)
+	got, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "alias-ancestors"}, "alias/missing.go")
+	if !strings.Contains(got, "alias guidance") || strings.Contains(got, "physical ancestor") || len(sources) != 1 || sources[0].Path != filepath.Join(root, "alias/UMCODE.md") {
+		t.Fatalf("safe alias ancestors changed: %q, %+v", got, sources)
+	}
+}
+
 func TestInstructionInventoryCompositionContainment(t *testing.T) {
 	for _, nested := range []bool{false, true} {
 		t.Run(fmt.Sprint(nested), func(t *testing.T) {
