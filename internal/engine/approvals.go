@@ -11,6 +11,7 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
+	"github.com/shaktsin/umcode/internal/workflowgraph"
 )
 
 // ErrApprovalExpired is returned when nobody answered in time.
@@ -74,7 +75,11 @@ func (e *Engine) persistAndWaitApproval(ctx, sctx context.Context, a protocol.Ap
 	// Admin clients get the request; clients following the thread see it too.
 	ev := protocol.ApprovalEvent{Approval: a}
 	e.Bus.PublishAdmin(protocol.NotifyApprovalRequest, ev)
-	_ = e.Store.Audit(sctx, auditEvent, map[string]any{"id": a.ID, "tool": a.Tool, "risk": a.Risk, "summary": a.ActionSummary, "args": a.Args})
+	if a.Kind == "workflow" {
+		_ = e.Store.Audit(sctx, auditEvent, workflowApprovalAudit(a, "pending"))
+	} else {
+		_ = e.Store.Audit(sctx, auditEvent, map[string]any{"id": a.ID, "tool": a.Tool, "risk": a.Risk, "summary": a.ActionSummary, "args": a.Args})
+	}
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -163,11 +168,11 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 			}
 		}
 	}
-	event := "approval.decide"
 	if a.Kind == "workflow" {
-		event = "workflow.approval.decide"
+		_ = e.Store.Audit(ctx, "workflow.approval.decide", workflowApprovalAudit(a, status))
+	} else {
+		_ = e.Store.Audit(ctx, "approval.decide", map[string]any{"id": id, "status": status, "by": clientID, "remember": remember})
 	}
-	_ = e.Store.Audit(ctx, event, map[string]any{"id": id, "status": status, "by": clientID, "remember": remember})
 	e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: decided})
 	if decided.ID == "" {
 		return decided, fmt.Errorf("approval %s not found after decision", id)
@@ -178,9 +183,20 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 func (e *Engine) expireApproval(ctx context.Context, a protocol.Approval, by string) error {
 	if a.Kind == "workflow" {
 		_, err := e.Store.DecideWorkflowApproval(ctx, a.ID, "expired", by)
+		if err == nil {
+			_ = e.Store.Audit(ctx, "workflow.approval.expire", workflowApprovalAudit(a, "expired"))
+		}
 		return err
 	}
 	return e.Store.DecideApproval(ctx, a.ID, "expired", by)
+}
+
+func workflowApprovalAudit(a protocol.Approval, status string) map[string]any {
+	gate := a.Reason
+	if !workflowgraph.ValidGate(gate) {
+		gate = "unknown"
+	}
+	return map[string]any{"id": a.ID, "work_id": a.WorkID, "node_id": a.NodeID, "node_revision": a.NodeRevision, "gate_kind": gate, "status": status}
 }
 
 // isComputerUseTool reports whether tool is one of the computer.* tools,

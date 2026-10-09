@@ -1,12 +1,30 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 	"testing"
 	"time"
 )
+
+func TestOrdinaryToolApprovalAuditRetainsExistingDetails(t *testing.T) {
+	e, th, turn, st := pluginHookEngine(t)
+	a := protocol.Approval{ID: store.NewID("apr"), ThreadID: th.ID, TurnID: turn.ID, Tool: "shell.run", Args: json.RawMessage(`{"command":"npm test"}`), Risk: "yellow", ActionSummary: "ordinary tool summary", Status: "pending", CreatedAt: time.Now(), ExpiresAt: time.Now()}
+	_, _ = e.persistAndWaitApproval(t.Context(), context.Background(), a, 0, "approval.request")
+	var raw string
+	if err := st.DB.QueryRow(`SELECT details_json FROM audit_log WHERE event_type='approval.request'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var details map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &details); err != nil {
+		t.Fatal(err)
+	}
+	if len(details) != 5 || string(details["summary"]) != `"ordinary tool summary"` || string(details["args"]) != `{"command":"npm test"}` || string(details["risk"]) != `"yellow"` {
+		t.Fatalf("ordinary audit changed: %s", raw)
+	}
+}
 
 func TestToolApprovalStillRemembersExactDecision(t *testing.T) {
 	e, th, turn, st := pluginHookEngine(t)

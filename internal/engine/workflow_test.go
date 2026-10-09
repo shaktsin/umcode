@@ -188,6 +188,40 @@ func TestWorkflowApproval(t *testing.T) {
 			if audits != 1 {
 				t.Fatalf("audits=%d", audits)
 			}
+			rows, err := st.DB.Query(`SELECT details_json FROM audit_log WHERE event_type LIKE 'workflow.approval.%'`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			auditCount := 0
+			for rows.Next() {
+				var raw string
+				if err := rows.Scan(&raw); err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(raw, g.Summary) || strings.Contains(raw, "private") {
+					t.Fatalf("workflow audit leaked semantic content: %s", raw)
+				}
+				var details map[string]any
+				if err := json.Unmarshal([]byte(raw), &details); err != nil {
+					t.Fatal(err)
+				}
+				allowed := map[string]bool{"id": true, "work_id": true, "node_id": true, "node_revision": true, "gate_kind": true, "status": true}
+				for key := range details {
+					if !allowed[key] {
+						t.Fatalf("nonmetadata workflow audit field %s: %s", key, raw)
+					}
+				}
+				if details["work_id"] != g.WorkID || details["node_id"] != g.NodeID || details["node_revision"] != float64(g.NodeRevision) || details["gate_kind"] != g.Kind || details["status"] == nil {
+					t.Fatalf("workflow audit missing exact identity/outcome: %s", raw)
+				}
+				auditCount++
+			}
+			if err := rows.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if auditCount != 2 {
+				t.Fatalf("request/outcome audit count=%d", auditCount)
+			}
 			if mode == "deny" {
 				if _, err := e.RespondApproval(t.Context(), a.ID, true, false, "again"); err == nil {
 					t.Fatal("duplicate approval accepted")
