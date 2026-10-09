@@ -94,9 +94,22 @@ func TestWorkflowIdentityContextBoundedAndAccounted(t *testing.T) {
 	e, th, turn, st := compilerEngine(t, true)
 	e.Cfg.Models.DesignedWorkflow = true
 	d := openWorkDetail(t, st, th.ID)
+	for _, kind := range []string{"artifact", "fact"} {
+		if _, err := st.AddWorkNode(t.Context(), protocol.WorkNode{ID: "wnd_" + kind, WorkID: d.Work.ID, Kind: kind, Title: "private endpoint prose", Status: "active"}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	layer, err := e.workflowIdentityLayer(t.Context(), th.ID)
 	if err != nil || !strings.Contains(layer.Text, d.Work.ID) {
 		t.Fatalf("identity=%+v err=%v", layer, err)
+	}
+	for _, id := range []string{d.Nodes[0].ID, "wnd_artifact", "wnd_fact"} {
+		if !strings.Contains(layer.Text, id) {
+			t.Fatalf("edge endpoint identity missing: %s", id)
+		}
+	}
+	if strings.Contains(layer.Text, "private endpoint prose") {
+		t.Fatal("identity context copied semantic text")
 	}
 	if _, ok := compiled(t, e, th, turn); !ok {
 		t.Fatal("expected successful compiler")

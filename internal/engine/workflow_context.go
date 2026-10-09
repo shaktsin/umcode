@@ -55,10 +55,6 @@ func (e *Engine) workflowIdentityLayer(ctx context.Context, threadID string) (pr
 		if n.Status == protocol.StatusSuperseded || n.ValidUntil != nil || n.SupersededBy != "" {
 			continue
 		}
-		switch n.Kind {
-		case protocol.NodeGoal, protocol.NodeArtifact, protocol.NodeFact:
-			continue
-		}
 		p.Nodes = append(p.Nodes, node{n.ID, n.Kind, n.Status, n.Revision, n.EvidenceIDs})
 	}
 	for _, ev := range work.ActiveEvidence(d) {

@@ -262,7 +262,8 @@ func TestDesignedWorkflowCanonicalIdentitiesBootstrapAndRefresh(t *testing.T) {
 						t.Fatal("missing work identity/revision")
 					}
 					firstRevision = d.Work.Revision
-					return protocol.WorkUpdateRequest{WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "requirement", Kind: "requirement", Title: "Private acceptance prose"}}}
+					goal := workflowNode(t, d, protocol.NodeGoal, "")
+					return protocol.WorkUpdateRequest{WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "requirement", Kind: "requirement", Title: "Private acceptance prose"}}, Edges: []protocol.WorkEdgeChange{{From: goal.ID, Relation: "requires", To: "requirement"}}}
 				}),
 				workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
 					if d.Work.Revision <= firstRevision {
