@@ -42,7 +42,14 @@ func (*workUpdate) Schema() json.RawMessage {
 					"superseded_by":{"type":"string","minLength":1,"maxLength":128,"description":"Explicit replacement task ID or batch-local ref when retiring a blocked/failed task. The replacement must preserve criteria, requirements and dependencies and have an approved solution."},
 					"kind":{"type":"string","enum":["requirement","non_goal","option","decision","task","unknown","memory_candidate"]},
 					"title":{"type":"string","minLength":1,"maxLength":%d},
-					"content":{"type":"object","description":"Extensible semantic content; maximum %d serialized UTF-8 bytes. Known fields: solution_rung (option), required (criterion/requirement/decision/task), blocking (unknown), gate_kind (decision)."},
+					"content":{"type":"object","description":"Extensible semantic content; maximum %d serialized UTF-8 bytes. Known fields: solution_rung (option), required (criterion/requirement/decision/task), blocking (unknown), gate_kind (decision). Memory candidates use category, semantic_key, text, optional scope_paths, source_revision, and optional replaces_memory. Text is one durable project-specific bullet; bounds are UTF-8 bytes.","properties":{
+						"category":{"type":"string","enum":["capability","command","boundary","invariant","convention","path","approved_decision"]},
+						"semantic_key":{"type":"string","minLength":1,"maxLength":128},
+						"text":{"type":"string","minLength":1,"maxLength":512},
+						"scope_paths":{"type":"array","maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":512}},
+						"source_revision":{"type":"string","minLength":1},
+						"replaces_memory":{"type":"string","minLength":1,"maxLength":128}
+					}},
 					"expected_revision":{"type":"integer","minimum":1},
 					"from_status":{"type":"string","enum":["active","proposed","approved","pending","ready","in_progress","completed","failed","blocked","open","resolved","accepted_risk","conflicted","stale","rejected","superseded"]},
 					"to_status":{"type":"string","enum":["active","proposed","approved","pending","ready","in_progress","completed","failed","blocked","open","resolved","accepted_risk","conflicted","stale","rejected","superseded"]},

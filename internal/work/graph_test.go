@@ -320,6 +320,115 @@ func graphFixture() (protocol.WorkDetail, protocol.WorkUpdateRequest) {
 	return d, req
 }
 
+// Catches accepting unsafe candidate syntax or rejecting the new bounded payload.
+func TestCandidateContract(t *testing.T) {
+	base := map[string]any{"category": "command", "semantic_key": "test-command", "text": "Use go test ./... for this repository", "scope_paths": []string{"internal/./work", "app"}, "source_revision": "rev-final"}
+	cases := []struct {
+		name   string
+		change func(map[string]any)
+		valid  bool
+	}{
+		{"new payload", func(map[string]any) {}, true},
+		{"root scope", func(c map[string]any) { delete(c, "scope_paths") }, true},
+		{"legacy scope", func(c map[string]any) { delete(c, "scope_paths"); delete(c, "source_revision"); c["scope"] = "." }, true},
+		{"replacement", func(c map[string]any) { c["replaces_memory"] = "mem_previous" }, true},
+		{"one bullet", func(c map[string]any) { c["text"] = " - Use go test ./... for this repository " }, true},
+		{"key byte bound", func(c map[string]any) { c["semantic_key"] = strings.Repeat("é", 65) }, false},
+		{"key at bound", func(c map[string]any) { c["semantic_key"] = strings.Repeat("a", 128) }, true},
+		{"key above bound", func(c map[string]any) { c["semantic_key"] = strings.Repeat("a", 129) }, false},
+		{"text at byte bound", func(c map[string]any) { c["text"] = strings.Repeat("é", 256) }, true},
+		{"text byte bound", func(c map[string]any) { c["text"] = strings.Repeat("é", 257) }, false},
+		{"scope at byte bound", func(c map[string]any) { c["scope_paths"] = []string{strings.Repeat("é", 256)} }, true},
+		{"scope byte bound", func(c map[string]any) { c["scope_paths"] = []string{strings.Repeat("é", 257)} }, false},
+		{"scope count", func(c map[string]any) {
+			var paths []string
+			for i := 0; i < 17; i++ {
+				paths = append(paths, fmt.Sprintf("p%d", i))
+			}
+			c["scope_paths"] = paths
+		}, false},
+		{"duplicate scopes", func(c map[string]any) { c["scope_paths"] = []string{"internal/work", "internal/./work"} }, false},
+		{"absolute scope", func(c map[string]any) { c["scope_paths"] = []string{"/tmp"} }, false},
+		{"escaping scope", func(c map[string]any) { c["scope_paths"] = []string{"../other"} }, false},
+		{"backslash escape", func(c map[string]any) { c["scope_paths"] = []string{`..\other`} }, false},
+		{"both scopes", func(c map[string]any) { c["scope"] = "." }, false},
+		{"empty legacy alongside scopes", func(c map[string]any) { c["scope"] = "" }, false},
+		{"null scopes", func(c map[string]any) { c["scope_paths"] = nil }, false},
+		{"wrong scope type", func(c map[string]any) { c["scope_paths"] = "app" }, false},
+		{"null scope entry", func(c map[string]any) { c["scope_paths"] = []any{nil} }, false},
+		{"wrong scope entry", func(c map[string]any) { c["scope_paths"] = []any{1} }, false},
+		{"wrong revision type", func(c map[string]any) { c["source_revision"] = 1 }, false},
+		{"null revision", func(c map[string]any) { c["source_revision"] = nil }, false},
+		{"wrong replacement type", func(c map[string]any) { c["replaces_memory"] = true }, false},
+		{"unknown field", func(c map[string]any) { c["notes"] = "ordinary" }, false},
+		{"wrong field case", func(c map[string]any) { c["Scope_Paths"] = []string{"app"} }, false},
+		{"unsupported category", func(c map[string]any) { c["category"] = "preference" }, false},
+		{"prose key", func(c map[string]any) { c["semantic_key"] = "some prose key" }, false},
+		{"multiline", func(c map[string]any) { c["text"] = "first\n- second" }, false},
+		{"heading", func(c map[string]any) { c["text"] = "# Heading" }, false},
+		{"nested heading", func(c map[string]any) { c["text"] = "- # Heading" }, false},
+		{"marker", func(c map[string]any) { c["text"] = "<!-- umcode:memory:start -->" }, false},
+		{"html", func(c map[string]any) { c["text"] = "<script>alert(1)</script>" }, false},
+		{"control", func(c map[string]any) { c["text"] = "Use\tgo test" }, false},
+		{"unicode line separator", func(c map[string]any) { c["text"] = "Use go test\u2028then build" }, false},
+		{"unicode invisible control", func(c map[string]any) { c["text"] = "Use go\u200btest" }, false},
+		{"numbered bullet", func(c map[string]any) { c["text"] = "1. Use go test" }, false},
+		{"nested marker", func(c map[string]any) { c["text"] = "- <!-- umcode:memory:start -->" }, false},
+		{"secret", func(c map[string]any) { c["text"] = "API_TOKEN=ordinarysecret12345" }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := map[string]any{}
+			for k, v := range base {
+				c[k] = v
+			}
+			tc.change(c)
+			d, req := graphFixture()
+			req.Nodes[6].Content, _ = json.Marshal(c)
+			_, err := PrepareUpdate(d, req, time.Unix(10, 0))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v", tc.valid, err)
+			}
+		})
+	}
+	for _, category := range []string{"capability", "command", "boundary", "invariant", "convention", "path", "approved_decision"} {
+		t.Run(category, func(t *testing.T) {
+			d, req := graphFixture()
+			c := map[string]any{}
+			for k, v := range base {
+				c[k] = v
+			}
+			c["category"] = category
+			req.Nodes[6].Content, _ = json.Marshal(c)
+			if _, err := PrepareUpdate(d, req, time.Unix(10, 0)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCandidateDecodeCanonical(t *testing.T) {
+	n := protocol.WorkNode{Kind: protocol.NodeMemoryCandidate, Content: json.RawMessage(`{"category":"command","semantic_key":"test-command","text":" * Run go test ./... ","scope_paths":["internal/./work","app/"],"source_revision":"final"}`)}
+	c, err := DecodeMemoryCandidate(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Text != "- Run go test ./..." || !reflect.DeepEqual(c.ScopePaths, []string{"app", "internal/work"}) || c.Scope != "" {
+		t.Fatalf("canonical candidate=%+v", c)
+	}
+	for _, raw := range []string{
+		`{"category":"command","semantic_key":"test","text":"go test","scope":".","text":"go test"}`,
+		`{"Category":"command","semantic_key":"test","text":"go test","scope":"."}`,
+		`{"category":"command","semantic_key":"test","text":"go test","scope":".","source_revision":true}`,
+		`{"category":"command","semantic_key":"test","text":"go test","scope":".","replaces_memory":null}`,
+	} {
+		n.Content = json.RawMessage(raw)
+		if _, err := DecodeMemoryCandidate(n); err == nil {
+			t.Fatalf("invalid payload accepted: %s", raw)
+		}
+	}
+}
+
 func TestPrepareUpdateMaterialGateEscalatesGuidedAtomically(t *testing.T) {
 	d, r := graphFixture()
 	r.Nodes[3].ToStatus = "proposed"
