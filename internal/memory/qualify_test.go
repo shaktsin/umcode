@@ -244,3 +244,74 @@ func TestQualifyCanonicalProposal(t *testing.T) {
 		}
 	})
 }
+
+// Discovery SourceRevision identifies tool arguments, not workspace state.
+func TestQualifyCanonicalDiscoveryRevision(t *testing.T) {
+	in := qualifyFixture()
+	args := sha256.Sum256([]byte(`{"path":"go.mod"}`))
+	body := sha256.Sum256([]byte("module github.com/shaktsin/umcode"))
+	in.Detail.Evidence[0] = protocol.Evidence{ID: "ev-a", WorkID: "work", Kind: protocol.EvidenceDiscovery, SourceURI: "file.read", SourceRevision: hex.EncodeToString(args[:]), ContentHash: hex.EncodeToString(body[:]), Summary: "module github.com/shaktsin/umcode", ObservedAt: time.Unix(1, 0)}
+	p, out := Qualify(in)
+	if out != (Outcome{}) || p.CandidateNodeID != "candidate" {
+		t.Fatalf("canonical discovery rejected: proposal=%+v outcome=%+v", p, out)
+	}
+}
+
+// Approval provenance is decisionID:preapprovalRevision and has no fingerprint.
+func TestQualifyCanonicalWorkflowApprovalRevision(t *testing.T) {
+	for _, tc := range []struct{ name, revision, status, reason string }{
+		{"current approval", "fact:1", "", ""},
+		{"obsolete approval", "fact:0", "stale", "evidence_stale"},
+		{"different decision", "other:1", "stale", "evidence_stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := qualifyFixture()
+			changeContent(&in, "category", "approved_decision")
+			in.Detail.Nodes[1].Kind = protocol.NodeDecision
+			in.Detail.Nodes[1].Status = protocol.StatusApproved
+			in.Detail.Nodes[1].Revision = 2
+			in.Detail.Nodes[2].Content = json.RawMessage(`{"command":"workflow:approval"}`)
+			in.Detail.Edges[1].ToNodeID = "fact"
+			in.Detail.Evidence[2] = protocol.Evidence{ID: "ev-check", WorkID: "work", NodeID: "criterion", Kind: protocol.EvidenceWorkflowApproval, SourceURI: "approval://apr_test", SourceRevision: tc.revision, Summary: "approved", ObservedAt: time.Unix(3, 0)}
+			in.Detail.Attempts[0].CheckType = "workflow_approval"
+			in.Detail.Attempts[0].Command = "workflow:approval"
+			in.Detail.Attempts[0].FingerprintID = ""
+			in.Candidate.EvidenceIDs = []string{"ev-check"}
+			in.Detail.Nodes[0] = in.Candidate
+			p, out := Qualify(in)
+			if out.Status != tc.status || out.Reason != tc.reason {
+				t.Fatalf("canonical approval: proposal=%+v outcome=%+v, want %s/%s", p, out, tc.status, tc.reason)
+			}
+			if tc.status == "" && p.CandidateNodeID != "candidate" {
+				t.Fatal("current approval produced no proposal")
+			}
+		})
+	}
+}
+
+// A successful later check cannot turn a tool-failure fact into durable guidance.
+func TestQualifyRejectsToolErrorFact(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		content, evidence bool
+	}{
+		{"canonical failure fact", true, true},
+		{"failure content only", true, false},
+		{"tool error evidence only", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := qualifyFixture()
+			if tc.content {
+				in.Detail.Nodes[1].Title = "file.read failed"
+				in.Detail.Nodes[1].Content = json.RawMessage(`{"tool":"file.read","error":"temporarily unavailable"}`)
+			}
+			if tc.evidence {
+				in.Detail.Evidence = append(in.Detail.Evidence, protocol.Evidence{ID: "ev-error", WorkID: "work", NodeID: "fact", Kind: protocol.EvidenceToolError, SourceURI: "file.read", Summary: "temporarily unavailable", ObservedAt: time.Unix(1, 0)})
+			}
+			p, out := Qualify(in)
+			if out != (Outcome{Status: "rejected", Reason: "source_unsupported"}) || !reflect.DeepEqual(p, Proposal{}) {
+				t.Fatalf("temporary failure qualified: proposal=%+v outcome=%+v", p, out)
+			}
+		})
+	}
+}

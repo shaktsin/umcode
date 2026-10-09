@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -124,6 +125,9 @@ func Qualify(in QualifyInput) (Proposal, Outcome) {
 	if !(source.Kind == protocol.NodeFact && source.Status == "active" || source.Kind == protocol.NodeDecision && source.Status == protocol.StatusApproved) || c.Category == protocol.MemoryCategoryApprovedDecision && source.Kind != protocol.NodeDecision {
 		return outcome(protocol.MemoryOutcomeRejected, ReasonSourceUnsupported)
 	}
+	if source.Kind == protocol.NodeFact && !durableFact(source, d) {
+		return outcome(protocol.MemoryOutcomeRejected, ReasonSourceUnsupported)
+	}
 	for _, edge := range d.Edges {
 		if edge.WorkID != d.Work.ID || edge.Relation != protocol.RelContradicts {
 			continue
@@ -141,7 +145,7 @@ func Qualify(in QualifyInput) (Proposal, Outcome) {
 	}
 	evidence := map[string]protocol.Evidence{}
 	for _, e := range work.ActiveEvidence(d) {
-		if e.WorkID == d.Work.ID && (e.VaultHash == "" || e.Availability == protocol.AvailAvailable) && (e.SourceRevision == "" || e.SourceRevision == in.FinalRevision) {
+		if e.WorkID == d.Work.ID && (e.VaultHash == "" || e.Availability == protocol.AvailAvailable) && evidenceRevisionCurrent(e, in, nodes) {
 			evidence[e.ID] = e
 		}
 	}
@@ -190,6 +194,54 @@ func active(n protocol.WorkNode) bool {
 	return n.ValidUntil == nil && n.SupersededBy == "" && n.Status != protocol.StatusRejected && n.Status != protocol.StatusSuperseded && n.Status != protocol.StatusStale
 }
 
+func durableFact(n protocol.WorkNode, d protocol.WorkDetail) bool {
+	// Engine-owned includes failure observations; their kind/status alone does
+	// not establish durable knowledge, even if later unrelated checks pass.
+	var content map[string]json.RawMessage
+	if len(n.Content) > 0 && json.Unmarshal(n.Content, &content) != nil {
+		return false
+	}
+	if _, failure := content["error"]; failure {
+		return false
+	}
+	for _, e := range d.Evidence {
+		if e.WorkID != d.Work.ID || e.Kind != protocol.EvidenceToolError {
+			continue
+		}
+		if e.NodeID == n.ID {
+			return false
+		}
+		for _, id := range n.EvidenceIDs {
+			if e.ID == id {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func evidenceRevisionCurrent(e protocol.Evidence, in QualifyInput, nodes map[string]protocol.WorkNode) bool {
+	switch e.Kind {
+	case protocol.EvidenceDiscovery:
+		// Successful discovery records the tool argument hash, not a workspace revision.
+		return true
+	case protocol.EvidenceWorkflowApproval:
+		// Approval records the revision before the approval transition increments it.
+		for _, edge := range in.Detail.Edges {
+			if edge.WorkID != in.Detail.Work.ID || edge.FromNodeID != e.NodeID || edge.Relation != protocol.RelVerifies {
+				continue
+			}
+			n, ok := nodes[edge.ToNodeID]
+			if ok && n.WorkID == in.Detail.Work.ID && active(n) && n.Revision > 1 && (n.Kind == protocol.NodeDecision && n.Status == protocol.StatusApproved || n.Kind == protocol.NodeUnknown && n.Status == protocol.StatusAcceptedRisk) && e.SourceRevision == n.ID+":"+strconv.Itoa(n.Revision-1) {
+				return true
+			}
+		}
+		return false
+	default:
+		return e.SourceRevision == "" || e.SourceRevision == in.FinalRevision
+	}
+}
+
 func verified(in QualifyInput, nodes map[string]protocol.WorkNode, evidence map[string]protocol.Evidence, sourceID string) bool {
 	d := in.Detail
 	applicable := map[string]bool{}
@@ -231,7 +283,20 @@ func verified(in QualifyInput, nodes map[string]protocol.WorkNode, evidence map[
 		n := nodes[id]
 		a, ok := latest[id]
 		e, hasEvidence := evidence[a.EvidenceID]
-		if !active(n) || n.Status != protocol.AttemptPassed || !ok || a.WorkID != d.Work.ID || a.Status != protocol.AttemptPassed || a.FinishedAt.Before(a.StartedAt) || stale[id] || !hasEvidence {
+		if !active(n) || n.Status != protocol.AttemptPassed || !ok || a.WorkID != d.Work.ID || a.Status != protocol.AttemptPassed || a.FinishedAt.Before(a.StartedAt) || !hasEvidence {
+			return false
+		}
+		if e.Kind == protocol.EvidenceWorkflowApproval {
+			var c struct {
+				Command string `json:"command"`
+			}
+			_ = json.Unmarshal(n.Content, &c)
+			if e.NodeID != id || c.Command != "workflow:approval" || a.Command != c.Command || a.CheckType != "workflow_approval" {
+				return false
+			}
+			continue
+		}
+		if stale[id] {
 			return false
 		}
 		if a.FingerprintID != "" {
