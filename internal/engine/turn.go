@@ -360,12 +360,6 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		}
 		ctx = tools.WithScope(ctx, scope)
 		sctx = tools.WithScope(sctx, scope)
-	} else if e.Cfg.Models.DesignedWorkflow {
-		// General-purpose workflow tools still need an authenticated thread
-		// scope, without acquiring any project/filesystem capability.
-		scope := &tools.Scope{ThreadID: th.ID}
-		ctx = tools.WithScope(ctx, scope)
-		sctx = tools.WithScope(sctx, scope)
 	}
 	var snapshot pluginSnapshot
 	if e.Plugins != nil {
@@ -1148,6 +1142,12 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			output, workflowDenied, err = e.finishWorkflowUpdate(ctx, sctx, turn, it, update, gates)
 		}
 	} else {
+		// Only the workflow-aware projectless planner needs thread identity.
+		// Keep ordinary tools on nil scope so configured-workspace routing and
+		// project-required capability checks retain their existing behavior.
+		if e.Cfg.Models.DesignedWorkflow && name == "verification.plan" && tools.ScopeFrom(toolCtx) == nil {
+			toolCtx = tools.WithScope(toolCtx, &tools.Scope{ThreadID: th.ID})
+		}
 		output, err = tool.Call(toolCtx, call.Args)
 	}
 	if err != nil {
