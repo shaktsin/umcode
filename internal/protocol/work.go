@@ -75,6 +75,8 @@ const (
 	EvidenceFileChange         = "file_change"
 	EvidenceVerificationOutput = "verification_output"
 	EvidenceToolError          = "tool_error"
+	EvidenceDiscovery          = "discovery"
+	EvidenceWorkflowApproval   = "workflow_approval"
 )
 
 // Work is one objective in a thread, spanning turns until it is resolved.

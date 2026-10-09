@@ -167,29 +167,26 @@ func workflowFixture(t *testing.T, goal string, project bool, history bool) (*ha
 	projectID := ""
 	if project {
 		projectID = h.proj.ID
+		if err := os.WriteFile(filepath.Join(h.ws, "go.mod"), []byte("module acceptance\n\ngo 1.24\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(h.ws, "notes_test.go"), []byte("package acceptance\nimport (\"os\";\"testing\")\nfunc TestNotes(t *testing.T) { b,e:=os.ReadFile(\"notes.txt\"); if e!=nil || len(b)==0 {t.Fatal(\"notes missing\")} }\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		h.call(protocol.MethodProjectUpdate, protocol.ProjectUpdateParams{ProjectID: projectID,
 			Tools: &protocol.ProjectTools{Network: boolPtr(true)}}, &h.proj)
 	}
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: projectID, Title: "workflow"}, &th)
 	h.call(protocol.MethodThreadSetSettings, protocol.ThreadSetSettingsParams{ThreadID: th.ID,
 		Settings: protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-5", Complexity: "standard"}}, &th)
-	h.fake.push(func(llm.Request, string) ([]llm.Event, error) { return nil, context.Canceled })
-	if turn := runWorkTurn(h, th, goal); turn.Status != protocol.TurnInterrupted {
+	h.fake.push(toolReply("verification__plan", `{}`), textReply("Inspected acceptance checks."))
+	if turn := runWorkTurn(h, th, goal); turn.Status != protocol.TurnCompleted {
 		t.Fatalf("fixture turn = %+v", turn)
 	}
 	d := workflowDetail(h, th.ID)
-	// Engine-owned observations cannot be authored by work.update. Seed an
-	// inspected acceptance contract, as a resumed work can already contain one.
-	// Its eventual pass is recorded by the actual verification.run built-in.
-	criterion, err := h.eng.Store.AddWorkNode(h.ctx, protocol.WorkNode{WorkID: d.Work.ID,
-		Kind: protocol.NodeCriterion, Title: "notes exist", Status: "pending",
-		Content: json.RawMessage(`{"command":"test -s notes.txt"}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.eng.Store.AddEvidence(h.ctx, protocol.Evidence{WorkID: d.Work.ID, NodeID: criterion.ID,
-		SourceURI: "inspection://acceptance-contract", Summary: "Inspected acceptance contract", ObservedAt: time.Now().UTC()}); err != nil {
-		t.Fatal(err)
+	workflowNode(t, d, "criterion", "")
+	if len(d.Evidence) == 0 || d.Evidence[0].Kind != "discovery" {
+		t.Fatalf("successful discovery did not bootstrap evidence: %+v", d.Evidence)
 	}
 	if history {
 		for i := 0; i < 12; i++ {
@@ -386,7 +383,7 @@ func TestGuidedWorkflowRecordsSolutionTaskAndVerification(t *testing.T) {
 			return taskTransition(t, d, "Write notes", "in_progress")
 		}),
 		toolReply("file__write", `{"path":"notes.txt","content":"verified notes\n"}`),
-		toolReply("verification__run", `{"checks":[{"label":"notes exist","command":"test -s notes.txt","reason":"Acceptance contract"}]}`),
+		toolReply("verification__run", `{"checks":[{"label":"go test","command":"go test ./...","reason":"Acceptance contract"},{"label":"go vet","command":"go vet ./...","reason":"Static checks"}]}`),
 		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
 			return taskTransition(t, d, "Write notes", "completed")
 		}),
@@ -411,7 +408,7 @@ func TestGuidedWorkflowRecordsSolutionTaskAndVerification(t *testing.T) {
 			t.Fatalf("failed tool = %+v", item.Tool)
 		}
 	}
-	if len(d.Attempts) != 1 || d.Attempts[0].Status != "passed" || d.Attempts[0].CriterionNodeID == "" || d.Attempts[0].EvidenceID == "" {
+	if len(d.Attempts) != 2 || d.Attempts[0].Status != "passed" || d.Attempts[0].CriterionNodeID == "" || d.Attempts[0].EvidenceID == "" {
 		t.Fatalf("verification=%+v", d.Attempts)
 	}
 	if n := workflowNode(t, d, "task", "Write notes"); n.Status != "completed" {
@@ -637,9 +634,13 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 
 func TestDesignedWorkflowGeneralPurposeNoProject(t *testing.T) {
 	h, th, _ := workflowFixture(t, "design a public contract for a general purpose service", false, false)
-	h.fake.push(toolReply("file__write", `{"path":"notes.txt","content":"blocked"}`),
-		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, true, "") }),
-		toolReply("file__write", `{"path":"notes.txt","content":"still no project"}`), textReply("Contract approved."))
+	h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, true, "") }),
+		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+			return taskTransition(t, d, "Write notes", "in_progress")
+		}),
+		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+			return taskTransition(t, d, "Write notes", "completed")
+		}), textReply("Contract approved."))
 	approvals := 0
 	turn, items := workflowTurn(h, th, func(a protocol.Approval) bool {
 		if a.Kind == "workflow" {
@@ -652,8 +653,16 @@ func TestDesignedWorkflowGeneralPurposeNoProject(t *testing.T) {
 		return true
 	})
 	d := workflowDetail(h, th.ID)
-	if turn.Status != protocol.TurnCompleted || d.Work.ProjectID != "" || d.Work.WorkflowDepth != "designed" || approvals != 1 || len(items) != 3 || items[0].Tool.Error != "workflow not ready" || !strings.Contains(items[2].Tool.Error, "no project") || workflowNode(t, d, "task", "").Status != "ready" {
+	if turn.Status != protocol.TurnCompleted || d.Work.Status != protocol.WorkCompleted || d.Work.ProjectID != "" || d.Work.WorkflowDepth != "designed" || approvals != 1 || len(items) != 3 || workflowNode(t, d, "task", "").Status != "completed" {
 		t.Fatalf("general-purpose=%+v approvals=%d items=%+v", d, approvals, items)
+	}
+	for _, item := range items {
+		if item.Status != protocol.ItemCompleted {
+			t.Fatalf("fresh workflow required a failing tool: %+v", item)
+		}
+	}
+	if len(d.Attempts) != 1 || d.Attempts[0].CheckType != "workflow_approval" || d.Attempts[0].Status != "passed" {
+		t.Fatalf("acceptance=%+v", d.Attempts)
 	}
 	for _, ev := range d.Evidence {
 		if ev.Kind == protocol.EvidenceFileChange {
@@ -668,5 +677,15 @@ func TestDesignedWorkflowGeneralPurposeNoProject(t *testing.T) {
 	var memories int
 	if err := h.eng.Store.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='project_memories'`).Scan(&memories); err != nil || memories != 0 {
 		t.Fatalf("curated memory schema=%d %v", memories, err)
+	}
+}
+
+func TestGuidedWorkflowProjectlessPlanDoesNotImplyApproval(t *testing.T) {
+	h, th, _ := workflowFixture(t, "draft a note", false, false)
+	h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, false, "") }), textReply("Approach recorded."))
+	_, items := workflowTurn(h, th, func(a protocol.Approval) bool { t.Fatalf("ungated planning requested approval: %+v", a); return false })
+	d := workflowDetail(h, th.ID)
+	if len(items) != 1 || items[0].Status != protocol.ItemCompleted || d.Work.WorkflowDepth != "guided" || len(d.Attempts) != 0 || workflowNode(t, d, "criterion", "").Status != "pending" {
+		t.Fatalf("planning invented approval or verification: %+v", d)
 	}
 }

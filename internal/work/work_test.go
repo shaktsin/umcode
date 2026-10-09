@@ -21,6 +21,33 @@ import (
 	"github.com/shaktsin/umcode/internal/store"
 )
 
+func TestSuccessfulDiscoveryOwnsCompactEvidence(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		f := newFixture(t)
+		f.svc.DesignedWorkflow = enabled
+		f.begin(t, "inspect facts")
+		if err := f.svc.Observe(t.Context(), f.th.ID, Observation{Tool: "file.read", Args: json.RawMessage(`{"path":"facts.txt"}`), Output: "Inspected fact\napi_key=never-persist"}); err != nil {
+			t.Fatal(err)
+		}
+		d := f.detail(t)
+		if !enabled {
+			if len(d.Evidence) != 0 {
+				t.Fatal("flag-off drift")
+			}
+			continue
+		}
+		if len(d.Evidence) != 1 || d.Evidence[0].Kind != "discovery" || d.Evidence[0].SourceURI != "file.read" || strings.Contains(d.Evidence[0].Summary, "never-persist") {
+			t.Fatalf("discovery provenance=%+v", d.Evidence)
+		}
+		for _, kind := range []string{"fact", "criterion"} {
+			_, _, err := f.svc.Update(t.Context(), f.th.ID, protocol.WorkUpdateRequest{WorkID: d.Work.ID, ExpectedRevision: d.Work.Revision, WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "forged", Kind: kind, Title: "forged observation", ToStatus: "passed"}}})
+			if err == nil {
+				t.Fatalf("semantic client forged %s", kind)
+			}
+		}
+	}
+}
+
 // Catches two callers successfully committing the same expected revision.
 func TestServiceUpdateConcurrentWinner(t *testing.T) {
 	f := newFixture(t)

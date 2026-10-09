@@ -418,6 +418,11 @@ func (s *Store) DecideWorkflowApproval(ctx context.Context, id, status, by strin
 		if err = requireWorkUpdateRow(res); err != nil {
 			return 0, err
 		}
+		if status == "approved" && d.Work.ProjectID == "" {
+			if err := recordWorkflowAcceptance(ctx, tx, d, n, id, revision); err != nil {
+				return 0, err
+			}
+		}
 		statuses := workflowgraph.DeriveApprovalTaskStatuses(d, unknown && status == "denied")
 		for _, node := range originalNodes {
 			if node.Kind != protocol.NodeTask {
@@ -456,6 +461,44 @@ func (s *Store) DecideWorkflowApproval(ctx context.Context, id, status, by strin
 		return 0, err
 	}
 	return finalRevision, nil
+}
+
+// Workflow acceptance is narrowly scoped to the exact approved decision (or
+// accepted risk). It never substitutes for executable or unrelated criteria.
+func recordWorkflowAcceptance(ctx context.Context, tx *sql.Tx, d protocol.WorkDetail, target protocol.WorkNode, approvalID string, revision int) error {
+	linked := map[string]bool{}
+	for _, edge := range d.Edges {
+		if edge.Relation == protocol.RelVerifies && edge.ToNodeID == target.ID {
+			linked[edge.FromNodeID] = true
+		}
+	}
+	for _, n := range d.Nodes {
+		if n.Kind != protocol.NodeCriterion || !linked[n.ID] || n.Status == protocol.StatusSuperseded || n.ValidUntil != nil || n.SupersededBy != "" {
+			continue
+		}
+		var content struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(n.Content, &content) != nil || content.Command != "workflow:approval" {
+			continue
+		}
+		now := time.Now().UTC()
+		ev, err := insertEvidence(ctx, tx, protocol.Evidence{WorkID: d.Work.ID, NodeID: n.ID, Kind: protocol.EvidenceWorkflowApproval, SourceURI: "approval://" + approvalID, SourceRevision: fmt.Sprintf("%s:%d", target.ID, revision), Summary: "approved", ObservedAt: now})
+		if err != nil {
+			return err
+		}
+		if _, err = insertAttempt(ctx, tx, protocol.VerificationAttempt{WorkID: d.Work.ID, CriterionNodeID: n.ID, CheckType: "workflow_approval", Command: content.Command, Status: protocol.AttemptPassed, EvidenceID: ev.ID, StartedAt: now, FinishedAt: now}); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status='passed', revision=revision+1, updated_at=? WHERE id=? AND work_id=? AND revision=?`, FormatTime(now), n.ID, d.Work.ID, n.Revision)
+		if err != nil {
+			return err
+		}
+		if err = requireWorkUpdateRow(res); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateApproval inserts a pending approval.

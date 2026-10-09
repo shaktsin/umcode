@@ -337,6 +337,16 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 	if o.Err != "" {
 		return s.recordFailure(ctx, w.ID, o)
 	}
+	if s.DesignedWorkflow && discoveryTool(o.Tool) {
+		// Only engine-observed successful calls can create discovery provenance.
+		// No semantic-client assertions are accepted as observations.
+		body := redactText(o.structured())
+		hash := sha256.Sum256([]byte(body))
+		argsHash := sha256.Sum256(o.Args)
+		if _, err := s.Store.AddEvidence(ctx, protocol.Evidence{WorkID: w.ID, Kind: protocol.EvidenceDiscovery, SourceURI: o.Tool, SourceRevision: hex.EncodeToString(argsHash[:]), ContentHash: hex.EncodeToString(hash[:]), Summary: capText(body, summaryLimit), ObservedAt: s.now()}); err != nil {
+			return err
+		}
+	}
 	switch o.Tool {
 	case "file.write", "file.edit", "verification.plan", "verification.run", "browser.verify":
 	default:
@@ -357,6 +367,14 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 		return s.recordBrowser(ctx, d, o)
 	}
 	return nil
+}
+
+func discoveryTool(name string) bool {
+	switch name {
+	case "file.read", "file.list", "file.search", "web.search", "web.fetch", "verification.plan", "computer.list", "computer.inspect", "visual.inspect":
+		return true
+	}
+	return false
 }
 
 func (s *Service) recordFailure(ctx context.Context, workID string, o Observation) error {

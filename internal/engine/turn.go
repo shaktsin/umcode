@@ -360,6 +360,12 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		}
 		ctx = tools.WithScope(ctx, scope)
 		sctx = tools.WithScope(sctx, scope)
+	} else if e.Cfg.Models.DesignedWorkflow {
+		// General-purpose workflow tools still need an authenticated thread
+		// scope, without acquiring any project/filesystem capability.
+		scope := &tools.Scope{ThreadID: th.ID}
+		ctx = tools.WithScope(ctx, scope)
+		sctx = tools.WithScope(sctx, scope)
 	}
 	var snapshot pluginSnapshot
 	if e.Plugins != nil {

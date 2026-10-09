@@ -96,6 +96,55 @@ func workflowApprovalFixture(t *testing.T, kind, status string) (*Store, protoco
 	return st, w, n, a
 }
 
+func TestDecideWorkflowApprovalVerifiesOnlyLinkedAcceptance(t *testing.T) {
+	for _, status := range []string{"approved", "denied", "expired"} {
+		t.Run(status, func(t *testing.T) {
+			st, w, n, a := workflowApprovalFixture(t, "decision", "proposed")
+			for _, id := range []string{"linked", "unrelated", "executable"} {
+				command := "workflow:approval"
+				if id == "executable" {
+					command = "go test ./..."
+				}
+				content, _ := json.Marshal(map[string]string{"command": command})
+				if _, err := st.AddWorkNode(t.Context(), protocol.WorkNode{ID: id, WorkID: w.ID, Kind: "criterion", Status: "pending", Content: content}); err != nil {
+					t.Fatal(err)
+				}
+				if id != "unrelated" {
+					if err := st.AddWorkEdge(t.Context(), protocol.WorkEdge{WorkID: w.ID, FromNodeID: id, ToNodeID: n.ID, Relation: "verifies"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := st.DecideWorkflowApproval(t.Context(), a.ID, status, "user"); err != nil {
+				t.Fatal(err)
+			}
+			d, err := st.GetWorkDetail(t.Context(), w.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range d.Nodes {
+				if node.Kind != "criterion" {
+					continue
+				}
+				want := "pending"
+				if status == "approved" && node.ID == "linked" {
+					want = "passed"
+				}
+				if node.Status != want {
+					t.Fatalf("criterion %s=%s want %s", node.ID, node.Status, want)
+				}
+			}
+			if status == "approved" {
+				if len(d.Attempts) != 1 || d.Attempts[0].CriterionNodeID != "linked" || d.Attempts[0].Status != "passed" || len(d.Evidence) != 1 || d.Evidence[0].SourceURI != "approval://"+a.ID || d.Evidence[0].SourceRevision != n.ID+":1" {
+					t.Fatalf("exact approval provenance missing: %+v", d)
+				}
+			} else if len(d.Attempts) != 0 || len(d.Evidence) != 0 {
+				t.Fatal("nonapproval forged acceptance")
+			}
+		})
+	}
+}
+
 func TestDecideWorkflowApprovalDerivesDependentsAtomically(t *testing.T) {
 	for _, approve := range []bool{true, false} {
 		t.Run(map[bool]string{true: "approve", false: "deny"}[approve], func(t *testing.T) {

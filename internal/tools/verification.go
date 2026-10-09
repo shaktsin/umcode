@@ -22,19 +22,25 @@ type plannedCheck struct {
 	Kind            string `json:"kind"`
 }
 
-type verificationPlan struct{}
+type verificationPlan struct{ designedWorkflow bool }
 
 func (*verificationPlan) Name() string { return "verification.plan" }
-func (*verificationPlan) Description() string {
+func (t *verificationPlan) Description() string {
+	if t.designedWorkflow {
+		return "Inspect project verification checks before implementation. Without a project, plan acceptance of a specific proposed approach by human workflow approval; link that criterion to its gated decision. Planning does not approve or verify anything."
+	}
 	return "Inspect changed files and project manifests without executing project code, then return a compact, reviewable verification plan with a reason for every check. Call this before verification.run and pass its non-browser checks through unchanged."
 }
 func (*verificationPlan) Schema() json.RawMessage { return schema(`{"type":"object","properties":{}}`) }
 func (*verificationPlan) Assess(json.RawMessage) (Risk, string) {
 	return RiskGreen, "Inspect project verification configuration"
 }
-func (*verificationPlan) Call(ctx context.Context, _ json.RawMessage) (string, error) {
+func (t *verificationPlan) Call(ctx context.Context, _ json.RawMessage) (string, error) {
 	scope := ScopeFrom(ctx)
 	if scope == nil || scope.Root == "" {
+		if t.designedWorkflow && scope != nil && scope.ThreadID != "" {
+			return `{"checks":[{"label":"Human acceptance of the linked proposed approach","command":"workflow:approval","kind":"approval","reason":"Only approval of the exact linked decision satisfies this criterion; this is not execution or outcome verification."}],"summary":"Link this acceptance criterion to the specific decision requiring human review. Other requirements need their own verification."}`, nil
+		}
 		return "", ErrNoProject
 	}
 	changed := gitChangedFiles(ctx, scope.Root)
