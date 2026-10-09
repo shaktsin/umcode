@@ -90,6 +90,36 @@ func TestDesignedCompilerRestartReconstructsSQLitePacket(t *testing.T) {
 	}
 }
 
+func TestWorkflowIdentityContextBoundedAndAccounted(t *testing.T) {
+	e, th, turn, st := compilerEngine(t, true)
+	e.Cfg.Models.DesignedWorkflow = true
+	d := openWorkDetail(t, st, th.ID)
+	layer, err := e.workflowIdentityLayer(t.Context(), th.ID)
+	if err != nil || !strings.Contains(layer.Text, d.Work.ID) {
+		t.Fatalf("identity=%+v err=%v", layer, err)
+	}
+	if _, ok := compiled(t, e, th, turn); !ok {
+		t.Fatal("expected successful compiler")
+	}
+	b := measureRequest([]promptLayer{layer}, llm.Request{System: layer.Text}, RequestPackets{}, nil)
+	if b.Layers["workflow_identities"] <= 0 || b.TotalTokens != b.Layers["workflow_identities"] {
+		t.Fatalf("unaccounted identities: %+v", b)
+	}
+	for i := 0; i < 700; i++ {
+		_, err := st.AddWorkNode(t.Context(), protocol.WorkNode{ID: fmt.Sprintf("wnd_%0120d", i), WorkID: d.Work.ID, Kind: "requirement", Title: "not projected", Status: "active"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.workflowIdentityLayer(t.Context(), th.ID); err == nil {
+		t.Fatal("oversized identity context must fail closed")
+	}
+	e.Cfg.Models.DesignedWorkflow = false
+	if got, err := e.workflowIdentityLayer(t.Context(), th.ID); err != nil || got.Text != "" {
+		t.Fatalf("flag off changed request: %+v %v", got, err)
+	}
+}
+
 // compilerEngine is a work engine whose thread has a goal, one planned
 // criterion and a transcript of two earlier exchanges.
 func compilerEngine(t *testing.T, on bool) (*Engine, protocol.Thread, protocol.Turn, *store.Store) {

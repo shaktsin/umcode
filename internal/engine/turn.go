@@ -466,6 +466,14 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			break
 		}
 		layers := e.systemPromptLayers(sctx, p.Text, proj, instructionHint, hookContext)
+		identity, identityErr := e.workflowIdentityLayer(sctx, th.ID)
+		if identityErr != nil {
+			turnErr = identityErr
+			break
+		}
+		if identity.Text != "" {
+			layers = append(layers, identity)
+		}
 		req.System = joinLayers(layers)
 		// Old tool output is the first thing to go when the request nears the
 		// window; the newest results stay.

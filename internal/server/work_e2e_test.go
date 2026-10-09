@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -215,7 +216,7 @@ func workflowDetail(h *harness, threadID string) protocol.WorkDetail {
 func workflowNode(t *testing.T, d protocol.WorkDetail, kind, title string) protocol.WorkNode {
 	t.Helper()
 	for _, n := range d.Nodes {
-		if n.Kind == kind && (title == "" || n.Title == title) {
+		if n.Kind == kind && (title == "" || n.Title == title || n.Title == "") {
 			return n
 		}
 	}
@@ -225,7 +226,7 @@ func workflowNode(t *testing.T, d protocol.WorkDetail, kind, title string) proto
 
 func workflowUpdate(h *harness, th protocol.Thread, build func(protocol.WorkDetail) protocol.WorkUpdateRequest) func(llm.Request, string) ([]llm.Event, error) {
 	return func(req llm.Request, key string) ([]llm.Event, error) {
-		d := workflowDetail(h, th.ID)
+		d := modelWorkflowDetail(h.t, req)
 		update := build(d)
 		update.WorkID, update.ExpectedRevision = d.Work.ID, d.Work.Revision
 		raw, err := json.Marshal(update)
@@ -233,6 +234,63 @@ func workflowUpdate(h *harness, th protocol.Thread, build func(protocol.WorkDeta
 			return nil, err
 		}
 		return toolReply("work__update", string(raw))(req, key)
+	}
+}
+
+// Provider scripts may only use identities that a real model receives.
+func modelWorkflowDetail(t *testing.T, req llm.Request) protocol.WorkDetail {
+	t.Helper()
+	const marker = "Canonical workflow identities (metadata only):\n"
+	_, raw, ok := strings.Cut(req.System, marker)
+	if !ok {
+		t.Fatal("model request omitted canonical workflow identities")
+	}
+	var d protocol.WorkDetail
+	if err := json.Unmarshal([]byte(strings.SplitN(raw, "\n\n", 2)[0]), &d); err != nil {
+		t.Fatalf("workflow identities: %v", err)
+	}
+	return d
+}
+
+func TestDesignedWorkflowCanonicalIdentitiesBootstrapAndRefresh(t *testing.T) {
+	for _, compiler := range []bool{false, true} {
+		t.Run(fmt.Sprintf("compiler_%t", compiler), func(t *testing.T) {
+			h := newHarness(t, func(c *config.Config) { designedOn(c); c.Models.ContextCompiler = compiler })
+			h.addKey("claude", "workflow", "sk-1")
+			th := startWorkThread(h)
+			var firstRevision int
+			h.fake.push(
+				workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+					if d.Work.ID == "" || d.Work.Revision < 1 {
+						t.Fatal("missing work identity/revision")
+					}
+					firstRevision = d.Work.Revision
+					return protocol.WorkUpdateRequest{WorkflowDepth: "guided", Nodes: []protocol.WorkNodeChange{{Ref: "requirement", Kind: "requirement", Title: "Private acceptance prose"}}}
+				}),
+				workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+					if d.Work.Revision <= firstRevision {
+						t.Fatal("stale work identity context")
+					}
+					for _, n := range d.Nodes {
+						if n.Kind == "requirement" {
+							if n.Title != "" || len(n.Content) != 0 {
+								t.Fatal("identity context duplicated semantic prose")
+							}
+							return protocol.WorkUpdateRequest{Nodes: []protocol.WorkNodeChange{{ID: n.ID, ExpectedRevision: n.Revision, FromStatus: n.Status, ToStatus: "superseded"}}}
+						}
+					}
+					t.Fatal("created node identity missing from next request")
+					return protocol.WorkUpdateRequest{}
+				}), textReply("Recorded."),
+			)
+			if turn := runWorkTurn(h, th, "record the acceptance requirement"); turn.Status != protocol.TurnCompleted {
+				t.Fatalf("turn=%+v", turn)
+			}
+			d := workflowDetail(h, th.ID)
+			if n := workflowNode(t, d, "requirement", ""); n.Status != "superseded" {
+				t.Fatalf("transition using model identities failed: %+v", n)
+			}
+		})
 	}
 }
 
