@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/pathutil"
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
@@ -79,13 +82,109 @@ type instructionFile struct {
 	path  string
 }
 
+// InstructionInventory checks canonical scopes and inventories only literal
+// UMCODE.md files. It reads metadata, never instruction contents, and returns no
+// partial inventory on failure. Directory symlinks are not traversed.
+func InstructionInventory(root string, scopePaths []string) ([]string, error) {
+	if !filepath.IsAbs(root) {
+		return nil, fmt.Errorf("instruction inventory project invalid")
+	}
+	st, err := os.Stat(root)
+	if err != nil || !st.IsDir() {
+		return nil, fmt.Errorf("instruction inventory project unavailable")
+	}
+	root = pathutil.Resolved(root)
+	for _, scope := range scopePaths {
+		if !instructionRelativePath(scope) {
+			return nil, fmt.Errorf("instruction inventory scope invalid")
+		}
+		abs, err := Resolve(root, scope)
+		if err != nil {
+			return nil, fmt.Errorf("instruction inventory scope outside project")
+		}
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return nil, fmt.Errorf("instruction inventory scope unavailable")
+		}
+		if !instructionRelativePath(pathutil.Rel(root, resolved)) {
+			return nil, fmt.Errorf("instruction inventory scope invalid")
+		}
+		st, err := os.Stat(abs)
+		if err != nil || !(st.IsDir() || st.Mode().IsRegular()) {
+			return nil, fmt.Errorf("instruction inventory scope unavailable")
+		}
+	}
+	var existing []string
+	err = filepath.WalkDir(root, func(abs string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("instruction inventory unavailable")
+		}
+		if foreignInstructionName(entry.Name()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() != "UMCODE.md" {
+			return nil
+		}
+		if _, err := containedInstructionFile(root, abs); err != nil {
+			return err
+		}
+		existing = append(existing, pathutil.Rel(root, abs))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(existing)
+	return existing, nil
+}
+
+func foreignInstructionName(name string) bool {
+	return name == "AGENTS.md" || name == "CLAUDE.md" || name == "AGENT.md"
+}
+
+func instructionRelativePath(p string) bool {
+	if p == "" || strings.TrimSpace(p) != p || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../") || strings.HasPrefix(p, "~") || strings.ContainsAny(p, "\\\x00") || len(p) > 1 && p[1] == ':' {
+		return false
+	}
+	for _, part := range strings.Split(p, "/") {
+		if foreignInstructionName(part) {
+			return false
+		}
+	}
+	return true
+}
+
+// containedInstructionFile is shared by inventory and prompt composition, so
+// neither can treat an escaping link or a non-regular entry as guidance.
+func containedInstructionFile(root, candidate string) (string, error) {
+	abs, err := Resolve(root, candidate)
+	if err != nil {
+		return "", fmt.Errorf("instruction file outside project")
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("instruction file unavailable")
+	}
+	if !instructionRelativePath(pathutil.Rel(root, resolved)) {
+		return "", fmt.Errorf("instruction file invalid")
+	}
+	st, err := os.Stat(abs)
+	if err != nil || !st.Mode().IsRegular() {
+		return "", fmt.Errorf("instruction file is not regular")
+	}
+	return abs, nil
+}
+
 // instructionFiles lists the candidate UMCODE.md files, project root first.
 func (s *Service) instructionFiles(p protocol.Project, hint string) []instructionFile {
 	var out []instructionFile
 	if p.Root == "" {
 		return out
 	}
-	out = append(out, instructionFilesAt(p.Root, "project")...)
+	out = append(out, instructionFilesAt(p.Root, p.Root, "project")...)
 	// Include every nested UMCODE.md root-to-leaf.
 	if hint != "" {
 		if abs, err := Resolve(p.Root, hint); err == nil {
@@ -100,7 +199,7 @@ func (s *Service) instructionFiles(p protocol.Project, hint string) []instructio
 					dir = filepath.Dir(dir)
 				}
 				for i := len(dirs) - 1; i >= 0; i-- {
-					out = append(out, instructionFilesAt(dirs[i], "nested")...)
+					out = append(out, instructionFilesAt(p.Root, dirs[i], "nested")...)
 				}
 			}
 		}
@@ -118,11 +217,11 @@ func firstInstructionFile(dir string) string {
 	return ""
 }
 
-func instructionFilesAt(dir, scope string) []instructionFile {
+func instructionFilesAt(root, dir, scope string) []instructionFile {
 	var out []instructionFile
 	for _, name := range instructionNames {
 		path := filepath.Join(dir, name)
-		if st, err := os.Stat(path); err == nil && !st.IsDir() {
+		if _, err := containedInstructionFile(root, path); err == nil {
 			out = append(out, instructionFile{scope: scope, path: path})
 		}
 	}
