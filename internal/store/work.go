@@ -88,6 +88,14 @@ func (s *Store) ApplyWorkUpdate(ctx context.Context, update protocol.PreparedWor
 		if err := checkNode(tr.ID, tr.ExpectedRevision, tr.FromStatus, true); err != nil {
 			return zero, err
 		}
+		if tr.SupersededBy != "" {
+			if tr.SupersededBy == tr.ID || tr.ToStatus != protocol.StatusSuperseded {
+				return zero, ErrWorkUpdateConflict
+			}
+			if err := checkNode(tr.SupersededBy, 0, "", false); err != nil {
+				return zero, err
+			}
+		}
 	}
 	for _, n := range update.Creates {
 		if n.SupersededBy != "" {
@@ -137,8 +145,11 @@ func (s *Store) ApplyWorkUpdate(ctx context.Context, update protocol.PreparedWor
 	}
 	at := FormatTime(time.Now().UTC())
 	for _, tr := range update.Transitions {
-		changed, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND work_id = ? AND revision = ? AND status = ?`,
-			tr.ToStatus, at, tr.ID, w.ID, tr.ExpectedRevision, tr.FromStatus)
+		changed, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status = ?, revision = revision + 1, updated_at = ?,
+			valid_until=CASE WHEN ?<>'' THEN ? ELSE valid_until END,
+			superseded_by=CASE WHEN ?<>'' THEN ? ELSE superseded_by END
+			WHERE id = ? AND work_id = ? AND revision = ? AND status = ?`,
+			tr.ToStatus, at, tr.SupersededBy, at, tr.SupersededBy, tr.SupersededBy, tr.ID, w.ID, tr.ExpectedRevision, tr.FromStatus)
 		if err != nil {
 			return zero, err
 		}

@@ -316,8 +316,14 @@ func solutionBatch(t *testing.T, d protocol.WorkDetail, gated bool, suffix strin
 }
 
 func taskTransition(t *testing.T, d protocol.WorkDetail, title, to string) protocol.WorkUpdateRequest {
-	n := workflowNode(t, d, "task", title)
-	return protocol.WorkUpdateRequest{Nodes: []protocol.WorkNodeChange{{ID: n.ID, ExpectedRevision: n.Revision, FromStatus: n.Status, ToStatus: to}}}
+	for i := len(d.Nodes) - 1; i >= 0; i-- {
+		n := d.Nodes[i]
+		if n.Kind == "task" && (n.Title == title || n.Title == "") && (n.Status == "ready" || n.Status == "in_progress") {
+			return protocol.WorkUpdateRequest{Nodes: []protocol.WorkNodeChange{{ID: n.ID, ExpectedRevision: n.Revision, FromStatus: n.Status, ToStatus: to}}}
+		}
+	}
+	t.Fatalf("no runnable task %q", title)
+	return protocol.WorkUpdateRequest{}
 }
 
 func workflowTurn(h *harness, th protocol.Thread, approve func(protocol.Approval) bool) (protocol.Turn, []protocol.Item) {
@@ -614,7 +620,31 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 	h.fake.push(toolReply("file__write", `{"path":"notes.txt","content":"still denied"}`),
 		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
 			return solutionBatch(t, d, true, " replacement")
-		}), toolReply("file__write", `{"path":"notes.txt","content":"replacement\n"}`), textReply("Applied replacement."))
+		}),
+		func(req llm.Request, key string) ([]llm.Event, error) {
+			d := modelWorkflowDetail(t, req)
+			var old, replacement protocol.WorkNode
+			for _, n := range d.Nodes {
+				if n.Kind == "task" {
+					if n.Status == "blocked" {
+						old = n
+					}
+					if n.Status == "ready" {
+						replacement = n
+					}
+				}
+			}
+			raw, _ := json.Marshal(map[string]any{"work_id": d.Work.ID, "expected_revision": d.Work.Revision, "nodes": []map[string]any{{"id": old.ID, "expected_revision": old.Revision, "from_status": old.Status, "to_status": "superseded", "superseded_by": replacement.ID}}})
+			return toolReply("work__update", string(raw))(req, key)
+		},
+		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+			return taskTransition(t, d, "Write notes replacement", "in_progress")
+		}),
+		toolReply("file__write", `{"path":"notes.txt","content":"replacement\n"}`),
+		toolReply("verification__run", `{"checks":[{"label":"go test","command":"go test ./...","reason":"Acceptance contract"},{"label":"go vet","command":"go vet ./...","reason":"Static checks"}]}`),
+		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+			return taskTransition(t, d, "Write notes replacement", "completed")
+		}), textReply("Applied replacement."))
 	approved := 0
 	_, items = workflowTurn(h, th, func(a protocol.Approval) bool {
 		if a.Kind == "workflow" {
@@ -624,8 +654,12 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 		return true
 	})
 	d = workflowDetail(h, th.ID)
-	if approved != 1 || len(items) != 3 || items[0].Tool.Error != "workflow not ready" || items[2].Status != protocol.ItemCompleted || workflowNode(t, d, "task", "Write notes").Status != "blocked" || workflowNode(t, d, "task", "Write notes replacement").Status != "ready" {
+	if approved != 1 || len(items) != 7 || items[0].Tool.Error != "workflow not ready" || items[2].Status != protocol.ItemCompleted || d.Work.Status != "completed" || workflowNode(t, d, "task", "Write notes").Status != "superseded" || workflowNode(t, d, "task", "Write notes replacement").Status != "completed" {
 		t.Fatalf("replacement=%+v items=%+v approvals=%d", d, items, approved)
+	}
+	old, replacement := workflowNode(t, d, "task", "Write notes"), workflowNode(t, d, "task", "Write notes replacement")
+	if old.SupersededBy != replacement.ID || old.ValidUntil == nil || old.Revision < 3 {
+		t.Fatalf("retirement history missing: %+v", old)
 	}
 	if data, err := os.ReadFile(filepath.Join(h.ws, "notes.txt")); err != nil || string(data) != "replacement\n" {
 		t.Fatalf("replacement write=%q %v", data, err)

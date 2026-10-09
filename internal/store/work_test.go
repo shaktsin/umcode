@@ -15,6 +15,54 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
+func TestApplyWorkUpdateTaskRetirementAtomicHistory(t *testing.T) {
+	for _, mode := range []string{"valid", "stale", "foreign", "rollback"} {
+		t.Run(mode, func(t *testing.T) {
+			st, th := workFixture(t)
+			w, err := st.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID, WorkflowDepth: "guided"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			old, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: "task", Title: "Preserve original history", Status: "blocked"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			nextWork := w.ID
+			if mode == "foreign" {
+				other, err := st.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID})
+				if err != nil {
+					t.Fatal(err)
+				}
+				nextWork = other.ID
+			}
+			next, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: nextWork, Kind: "task", Status: "ready"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			revision := old.Revision
+			if mode == "stale" {
+				revision++
+			}
+			if mode == "rollback" {
+				mustExec(t, st.DB, `CREATE TRIGGER retire_failure BEFORE UPDATE ON work_nodes BEGIN SELECT RAISE(ABORT,'injected'); END`)
+			}
+			_, err = st.ApplyWorkUpdate(t.Context(), protocol.PreparedWorkUpdate{WorkID: w.ID, ExpectedRevision: w.Revision, Transitions: []protocol.WorkNodeTransition{{ID: old.ID, ExpectedRevision: revision, FromStatus: "blocked", ToStatus: "superseded", SupersededBy: next.ID}}})
+			d, readErr := st.GetWorkDetail(t.Context(), w.ID)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			got := d.Nodes[0]
+			if mode == "valid" {
+				if err != nil || got.Status != "superseded" || got.SupersededBy != next.ID || got.ValidUntil == nil || got.Title != old.Title || got.Revision != old.Revision+1 || d.Work.Revision != w.Revision+1 {
+					t.Fatalf("history=%+v work=%+v err=%v", got, d.Work, err)
+				}
+			} else if err == nil || got.Status != "blocked" || got.SupersededBy != "" || got.ValidUntil != nil || d.Work.Revision != w.Revision {
+				t.Fatalf("partial or invalid retirement=%+v work=%+v err=%v", got, d.Work, err)
+			}
+		})
+	}
+}
+
 // Catches partial batches, repeated work revisions, and dropped reference links.
 func TestApplyWorkUpdateCommitsOneRevision(t *testing.T) {
 	st, w, n, ev, p := updateFixture(t)

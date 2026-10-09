@@ -39,6 +39,7 @@ func (*workUpdate) Schema() json.RawMessage {
 				"properties":{
 					"ref":{"type":"string","minLength":1,"maxLength":%d},
 					"id":{"type":"string","minLength":1,"maxLength":128},
+					"superseded_by":{"type":"string","minLength":1,"maxLength":128,"description":"Explicit replacement task ID or batch-local ref when retiring a blocked/failed task. The replacement must preserve criteria, requirements and dependencies and have an approved solution."},
 					"kind":{"type":"string","enum":["requirement","non_goal","option","decision","task","unknown","memory_candidate"]},
 					"title":{"type":"string","minLength":1,"maxLength":%d},
 					"content":{"type":"object","description":"Extensible semantic content; maximum %d serialized UTF-8 bytes. Known fields: solution_rung (option), required (criterion/requirement/decision/task), blocking (unknown), gate_kind (decision)."},

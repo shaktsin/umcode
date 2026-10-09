@@ -221,7 +221,7 @@ func validateTransition(n protocol.WorkNode, to string) error {
 	case protocol.NodeDecision:
 		allowed = n.Status == protocol.StatusProposed && (to == protocol.StatusApproved || to == protocol.StatusRejected) || (n.Status == protocol.StatusApproved || n.Status == protocol.StatusRejected) && to == protocol.StatusSuperseded
 	case protocol.NodeTask:
-		allowed = n.Status == protocol.StatusPending && to == protocol.StatusReady || n.Status == protocol.StatusReady && to == protocol.StatusInProgress || n.Status == protocol.StatusInProgress && (to == protocol.StatusCompleted || to == protocol.StatusFailed || to == protocol.StatusBlocked)
+		allowed = n.Status == protocol.StatusPending && to == protocol.StatusReady || n.Status == protocol.StatusReady && to == protocol.StatusInProgress || n.Status == protocol.StatusInProgress && (to == protocol.StatusCompleted || to == protocol.StatusFailed || to == protocol.StatusBlocked) || (n.Status == protocol.StatusBlocked || n.Status == protocol.StatusFailed) && to == protocol.StatusSuperseded
 	case protocol.NodeUnknown:
 		allowed = n.Status == protocol.StatusOpen && to == protocol.StatusResolved
 	case protocol.NodeMemoryCandidate:
@@ -327,7 +327,11 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 	changed := map[string]bool{}
 	createIndex := map[string]int{}
 	transitionIndex := map[string]int{}
+	retirements := map[string]string{}
 	for _, c := range req.Nodes {
+		if c.SupersededBy != "" && (c.ID == "" || c.ToStatus != protocol.StatusSuperseded || !validID(c.SupersededBy)) {
+			return protocol.PreparedWorkUpdate{}, invalid("nodes.superseded_by", "invalid")
+		}
 		if len(c.Ref) > MaxClientRefBytes {
 			return protocol.PreparedWorkUpdate{}, invalid("nodes.ref", "limit")
 		}
@@ -384,6 +388,15 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 				return protocol.PreparedWorkUpdate{}, invalid("nodes.id", "missing")
 			}
 			n = d.Nodes[i]
+			if c.SupersededBy != "" && n.Kind != protocol.NodeTask {
+				return protocol.PreparedWorkUpdate{}, invalid("nodes.superseded_by", "invalid")
+			}
+			if n.Kind == protocol.NodeTask && c.ToStatus == protocol.StatusSuperseded {
+				if c.SupersededBy == "" {
+					return protocol.PreparedWorkUpdate{}, invalid("nodes.superseded_by", "required")
+				}
+				retirements[n.ID] = c.SupersededBy
+			}
 			if c.Ref != "" || c.Kind != "" || c.Title != "" || len(c.Content) != 0 {
 				return protocol.PreparedWorkUpdate{}, invalid("nodes.transition", "invalid")
 			}
@@ -466,6 +479,16 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 		return id, nil
 	}
 	seenEdges := map[protocol.WorkEdge]bool{}
+	for id, ref := range retirements {
+		replacement, err := resolve(ref)
+		if err != nil || replacement == id {
+			return protocol.PreparedWorkUpdate{}, invalid("nodes.superseded_by", "invalid")
+		}
+		i := nodes[id]
+		d.Nodes[i].SupersededBy = replacement
+		d.Nodes[i].ValidUntil = &now
+		p.Transitions[transitionIndex[id]].SupersededBy = replacement
+	}
 	for _, e := range d.Edges {
 		if e.WorkID != req.WorkID {
 			return protocol.PreparedWorkUpdate{}, invalid("edges.work_id", "foreign")
@@ -536,6 +559,13 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 		}
 	}
 	derived := DeriveTaskStatuses(readiness)
+	for id := range retirements {
+		old := d.Nodes[nodes[id]]
+		replacement := d.Nodes[nodes[old.SupersededBy]]
+		if !validTaskReplacement(d, old, replacement, derived, activeEvidence) {
+			return protocol.PreparedWorkUpdate{}, invalid("nodes.superseded_by", "structure")
+		}
+	}
 	for _, tr := range p.Transitions {
 		if tr.FromStatus == protocol.StatusReady && tr.ToStatus == protocol.StatusInProgress && derived[tr.ID] != protocol.StatusReady {
 			return protocol.PreparedWorkUpdate{}, invalid("nodes.readiness", "structure")
@@ -568,6 +598,52 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 		p.WorkflowDepth = protocol.DepthDesigned
 	}
 	return p, nil
+}
+
+// Retirement retains history but transfers every outstanding obligation to an
+// active replacement. It cannot discard criteria, dependencies, requirements,
+// or an approved decision, nor use an unrelated/unsupported task as a substitute.
+func validTaskReplacement(d protocol.WorkDetail, old, next protocol.WorkNode, derived map[string]string, evidence map[string]protocol.Evidence) bool {
+	if next.Kind != protocol.NodeTask || !active(next) || required(old) && !required(next) {
+		return false
+	}
+	status := derived[next.ID]
+	if status != protocol.StatusReady && status != protocol.StatusInProgress && status != protocol.StatusCompleted {
+		return false
+	}
+	nodes := graphNodes(d)
+	has := func(from, relation, to string) bool {
+		for _, e := range d.Edges {
+			if e.FromNodeID == from && e.Relation == relation && e.ToNodeID == to {
+				return true
+			}
+		}
+		return false
+	}
+	criteria, solution := false, false
+	for _, edge := range d.Edges {
+		if edge.Relation == protocol.RelVerifies && edge.ToNodeID == old.ID && active(nodes[edge.FromNodeID]) {
+			criteria = true
+			if !has(edge.FromNodeID, protocol.RelVerifies, next.ID) {
+				return false
+			}
+		}
+		if edge.FromNodeID == old.ID {
+			target := nodes[edge.ToNodeID]
+			if edge.Relation == protocol.RelDependsOn || edge.Relation == protocol.RelImplements && (target.Kind == protocol.NodeRequirement || active(target) && target.Status == protocol.StatusApproved) {
+				if !has(next.ID, edge.Relation, edge.ToNodeID) {
+					return false
+				}
+			}
+		}
+		if edge.FromNodeID == next.ID && edge.Relation == protocol.RelImplements {
+			decision := nodes[edge.ToNodeID]
+			if decision.Kind == protocol.NodeDecision && active(decision) && decision.Status == protocol.StatusApproved && required(decision) && solutionSupported(d, decision, evidence) {
+				solution = true
+			}
+		}
+	}
+	return criteria && solution
 }
 
 // Gate metadata is itself deterministic evidence of Designed scope. Include

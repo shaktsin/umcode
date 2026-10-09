@@ -142,6 +142,7 @@ type WorkNodeChange struct {
 	FromStatus       string          `json:"from_status,omitempty"`
 	ToStatus         string          `json:"to_status,omitempty"`
 	EvidenceIDs      []string        `json:"evidence_ids,omitempty"`
+	SupersededBy     string          `json:"superseded_by,omitempty"`
 }
 
 // WorkEdgeChange permits persisted IDs or batch-local refs at either endpoint.
@@ -196,6 +197,7 @@ type WorkNodeTransition struct {
 	ExpectedRevision int    `json:"-"`
 	FromStatus       string `json:"-"`
 	ToStatus         string `json:"-"`
+	SupersededBy     string `json:"-"`
 }
 
 // WorkNodeEvidenceLink references evidence without copying its contents.

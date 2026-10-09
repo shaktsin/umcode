@@ -702,6 +702,79 @@ func readinessFixture() protocol.WorkDetail {
 	}, Evidence: []protocol.Evidence{{ID: "evd_test", WorkID: "wrk_test"}}, Attempts: []protocol.VerificationAttempt{{ID: "attempt", CriterionNodeID: "criterion", Status: "passed"}}}
 }
 
+func TestPrepareUpdateTaskRetirementPreservesObligations(t *testing.T) {
+	for _, mode := range []string{"blocked", "failed", "missing replacement", "self replacement", "stale node", "completed source", "optional replacement", "missing criteria", "missing dependency", "missing decision", "missing requirement"} {
+		t.Run(mode, func(t *testing.T) {
+			d := readinessFixture()
+			d.Work.Status, d.Work.Revision = "open", 1
+			d.Nodes[0].Status = "blocked"
+			if mode == "failed" {
+				d.Nodes[0].Status = "failed"
+			}
+			if mode == "completed source" {
+				d.Nodes[0].Status = "completed"
+			}
+			raw := fmt.Sprintf(`{"work_id":"wrk_test","expected_revision":1,"nodes":[{"id":"task","expected_revision":1,"from_status":%q,"to_status":"superseded","superseded_by":"replacement"},{"ref":"replacement","kind":"task","title":"Complete the same obligation","content":{"required":true}}],"edges":[{"from":"replacement","relation":"depends_on","to":"dep"},{"from":"replacement","relation":"implements","to":"dec"},{"from":"criterion","relation":"verifies","to":"replacement"}]}`, d.Nodes[0].Status)
+			if mode == "missing replacement" {
+				raw = strings.Replace(raw, `"superseded_by":"replacement"`, `"superseded_by":"absent"`, 1)
+			}
+			if mode == "self replacement" {
+				raw = strings.Replace(raw, `"superseded_by":"replacement"`, `"superseded_by":"task"`, 1)
+			}
+			if mode == "stale node" {
+				d.Nodes[0].Revision = 2
+			}
+			if mode == "optional replacement" {
+				raw = strings.Replace(raw, `"required":true`, `"required":false`, 1)
+			}
+			var req protocol.WorkUpdateRequest
+			if err := json.Unmarshal([]byte(raw), &req); err != nil {
+				t.Fatal(err)
+			}
+			d.Nodes = append(d.Nodes, protocol.WorkNode{ID: "requirement", WorkID: d.Work.ID, Kind: "requirement", Status: "active"})
+			d.Edges = append(d.Edges, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: "task", Relation: "implements", ToNodeID: "requirement"})
+			if mode == "missing criteria" {
+				req.Edges = req.Edges[:2]
+			}
+			if mode == "missing dependency" {
+				req.Edges = req.Edges[1:]
+			}
+			if mode == "missing decision" {
+				req.Edges = append(req.Edges[:1], req.Edges[2:]...)
+			}
+			if mode != "missing requirement" {
+				req.Edges = append(req.Edges, protocol.WorkEdgeChange{From: "replacement", Relation: "implements", To: "requirement"})
+			}
+			p, err := PrepareUpdate(d, req, time.Now())
+			if mode == "blocked" || mode == "failed" {
+				if err != nil {
+					t.Fatalf("valid retirement rejected: %v", err)
+				}
+				if len(p.Transitions) != 1 || p.Transitions[0].ToStatus != "superseded" || p.Creates[0].Status != "ready" {
+					t.Fatalf("retirement=%+v", p)
+				}
+			} else if err == nil {
+				t.Fatalf("unsafe retirement accepted: %s", mode)
+			}
+		})
+	}
+}
+
+func TestRetiredTaskDependencyWaitsForReplacement(t *testing.T) {
+	for _, status := range []string{"ready", "completed"} {
+		d := readinessFixture()
+		d.Nodes[1].Status, d.Nodes[1].SupersededBy = "superseded", "replacement"
+		d.Nodes = append(d.Nodes, protocol.WorkNode{ID: "replacement", WorkID: "wrk_test", Kind: "task", Status: status})
+		want := "pending"
+		if status == "completed" {
+			want = "ready"
+		}
+		if got := DeriveTaskStatuses(d)["task"]; got != want {
+			t.Fatalf("replacement %s: dependent=%s want %s", status, got, want)
+		}
+	}
+}
+
 // Catches any path that trusts requested ready before graph prerequisites are satisfied.
 func TestDerivedReadiness(t *testing.T) {
 	for _, tc := range []struct {

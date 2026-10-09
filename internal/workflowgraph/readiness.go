@@ -117,6 +117,15 @@ func DeriveTaskStatuses(d protocol.WorkDetail) map[string]string {
 			dep, ok := nodes[e.ToNodeID]
 			switch e.Relation {
 			case protocol.RelDependsOn:
+				seen := map[string]bool{}
+				for ok && dep.Status == protocol.StatusSuperseded && dep.SupersededBy != "" {
+					if seen[dep.ID] {
+						ok = false
+						break
+					}
+					seen[dep.ID] = true
+					dep, ok = nodes[dep.SupersededBy]
+				}
 				ready = ready && ok && dep.Kind == protocol.NodeTask && dep.Status == protocol.StatusCompleted
 			case protocol.RelImplements:
 				if dep.Kind == protocol.NodeDecision && required(dep) {
