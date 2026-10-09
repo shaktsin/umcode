@@ -712,3 +712,37 @@ func TestDesignedWorkflowProspectivePathBlocksFirstWrite(t *testing.T) {
 		})
 	}
 }
+
+func TestGuidedWorkflowMaterialGatePersistsAcrossDenialExpiryAndRestart(t *testing.T) {
+	for _, outcome := range []string{"denied", "expired"} {
+		t.Run(outcome, func(t *testing.T) {
+			h, th, initial := workflowFixture(t, "write notes", true, false)
+			if initial.Work.WorkflowDepth != "guided" {
+				t.Fatalf("fixture depth=%s", initial.Work.WorkflowDepth)
+			}
+			if outcome == "expired" {
+				h.eng.Cfg.Policy.ApprovalTimeoutMinutes = 0
+			}
+			h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, true, "") }), textReply("Waiting."))
+			if outcome == "expired" {
+				runWorkTurn(h, th, "continue")
+			} else {
+				workflowTurn(h, th, func(protocol.Approval) bool { return false })
+			}
+			d := workflowDetail(h, th.ID)
+			if d.Work.WorkflowDepth != "designed" {
+				t.Fatalf("material gate persisted at %s", d.Work.WorkflowDepth)
+			}
+			restartWorkflowHarness(h)
+			h.eng.Cfg.Policy.ApprovalTimeoutMinutes = 0
+			h.fake.push(toolReply("file__write", `{"path":"notes.txt","content":"bypass"}`), textReply("Waiting."))
+			runWorkTurn(h, th, "continue")
+			if _, err := os.Stat(filepath.Join(h.ws, "notes.txt")); !os.IsNotExist(err) {
+				t.Fatalf("%s gate bypassed after restart: %v", outcome, err)
+			}
+			if d := workflowDetail(h, th.ID); d.Work.WorkflowDepth != "designed" {
+				t.Fatal("restart lost escalation")
+			}
+		})
+	}
+}

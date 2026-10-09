@@ -252,8 +252,11 @@ func TestWorkflowGateAllowlistAndDepth(t *testing.T) {
 		if _, err := st.DB.Exec(`UPDATE works SET workflow_depth=? WHERE id=?`, depth, g.WorkID); err != nil {
 			t.Fatal(err)
 		}
-		if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err != nil {
-			t.Fatal(err)
+		if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err == nil || err.Error() != "workflow approval pending" {
+			t.Fatalf("persisted material gate bypassed at %s: %v", depth, err)
+		}
+		if d, err := st.GetWorkDetail(t.Context(), g.WorkID); err != nil || d.Work.WorkflowDepth != "designed" {
+			t.Fatalf("legacy material gate depth not repaired: %+v %v", d.Work, err)
 		}
 	}
 }

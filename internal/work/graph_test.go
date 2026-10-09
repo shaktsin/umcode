@@ -320,6 +320,22 @@ func graphFixture() (protocol.WorkDetail, protocol.WorkUpdateRequest) {
 	return d, req
 }
 
+func TestPrepareUpdateMaterialGateEscalatesGuidedAtomically(t *testing.T) {
+	d, r := graphFixture()
+	r.Nodes[3].ToStatus = "proposed"
+	r.Nodes[3].Content = json.RawMessage(`{"required":true,"gate_kind":"security"}`)
+	p, err := PrepareUpdate(d, r, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.WorkflowDepth != "designed" || len(p.Gates) != 1 {
+		t.Fatalf("material gate remained Guided: %+v", p)
+	}
+	if d.Work.WorkflowDepth != "guided" {
+		t.Fatal("pure validation mutated original")
+	}
+}
+
 // Catches candidate credentials expressed as JSON fields rather than inline assignments.
 func TestPrepareUpdateRejectsCredentialFields(t *testing.T) {
 	for _, extra := range []string{

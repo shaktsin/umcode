@@ -57,12 +57,26 @@ func (e *Engine) workflowDetail(ctx context.Context, threadID, tool string) (*pr
 	if err != nil {
 		return nil, errWorkflowUnavailable
 	}
-	if !ok || w.WorkflowDepth != protocol.DepthDesigned {
+	if !ok {
 		return nil, nil
 	}
 	d, err := e.Store.GetWorkDetail(ctx, w.ID)
 	if err != nil {
 		return nil, errWorkflowUnavailable
+	}
+	if w.WorkflowDepth != protocol.DepthDesigned {
+		if !work.HasMaterialGate(d) {
+			return nil, nil
+		}
+		// Repair older persisted graphs before allowing any mutation. New graph
+		// updates already commit the gate and escalation in one transaction.
+		if err := e.Store.SetWorkDepth(ctx, w.ID, protocol.DepthDesigned); err != nil {
+			return nil, errWorkflowUnavailable
+		}
+		d, err = e.Store.GetWorkDetail(ctx, w.ID)
+		if err != nil {
+			return nil, errWorkflowUnavailable
+		}
 	}
 	return &d, nil
 }

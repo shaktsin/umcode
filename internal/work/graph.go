@@ -564,7 +564,21 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 		}
 	}
 	p.Gates = append(p.Gates, PendingWorkflowGates(d)...)
+	if HasMaterialGate(d) || len(p.Gates) > 0 {
+		p.WorkflowDepth = protocol.DepthDesigned
+	}
 	return p, nil
+}
+
+// Gate metadata is itself deterministic evidence of Designed scope. Include
+// historical decisions so denial or supersession can never lower that scope.
+func HasMaterialGate(d protocol.WorkDetail) bool {
+	for _, n := range d.Nodes {
+		if n.Kind == protocol.NodeDecision && validGate(gateKind(n)) || n.Kind == protocol.NodeUnknown && n.Status == protocol.StatusAcceptedRisk {
+			return true
+		}
+	}
+	return false
 }
 
 func validateEdge(from protocol.WorkNode, relation string, to protocol.WorkNode) error {
