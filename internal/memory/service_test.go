@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -436,7 +437,7 @@ func TestPromotionRequalifiesAndNoCandidatesAvoidIO(t *testing.T) {
 	execService(t, st, `DROP TABLE project_memories`)
 	s.boundary = func(string) error { t.Fatal("filesystem boundary touched"); return nil }
 	req.Project.Root = "/unavailable"
-	if r := s.PromoteCompleted(t.Context(), req); r != (Report{}) {
+	if r := s.PromoteCompleted(t.Context(), req); !reflect.DeepEqual(r, Report{}) {
 		t.Fatalf("no candidates=%+v", r)
 	}
 }

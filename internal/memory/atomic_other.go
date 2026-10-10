@@ -2,8 +2,6 @@
 
 package memory
 
-import "errors"
-
 // Platforms without a directory-relative, no-follow atomic writer fail closed.
 // They can still run qualification and the pure placement/merge functions.
 type fileTarget struct {
@@ -12,10 +10,10 @@ type fileTarget struct {
 }
 
 func openTarget(root, rel string) (*fileTarget, error) {
-	return nil, errors.New("contained memory writes unavailable")
+	return nil, errUnsupportedPlatform
 }
 func (*fileTarget) close()             {}
-func (*fileTarget) check(string) error { return errors.New("contained memory writes unavailable") }
+func (*fileTarget) check(string) error { return errUnsupportedPlatform }
 func (*fileTarget) replace([]byte, func(string) error) error {
-	return errors.New("contained memory writes unavailable")
+	return errUnsupportedPlatform
 }

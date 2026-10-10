@@ -343,7 +343,7 @@ func TestMemoryRecoveryPanicIsContained(t *testing.T) {
 }
 
 func TestMemoryRecoveryStartupPublishesOriginalTurn(t *testing.T) {
-	e, th, turn, p, id, _ := memoryEngine(t)
+	e, th, turn, p, id, logs := memoryEngine(t)
 	e.initMemory(t.Context())
 	if _, err := e.Store.DB.Exec(`CREATE TRIGGER fail_history BEFORE INSERT ON file_changes BEGIN SELECT RAISE(ABORT,'PRIVATE HISTORY BODY'); END`); err != nil {
 		t.Fatal(err)
@@ -373,6 +373,21 @@ func TestMemoryRecoveryStartupPublishesOriginalTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { recovered.Shutdown(context.Background()) })
+
+	foundRecovery := false
+	for _, line := range bytes.Split(logs.Bytes(), []byte("\n")) {
+		var data map[string]any
+		if json.Unmarshal(line, &data) != nil || data["msg"] != "memory recovery diagnostic" {
+			continue
+		}
+		foundRecovery = true
+		if data["work_id"] != id || data["target_path"] != "UMCODE.md" || data["reason"] != "recovery_completed" || data["recovery"] != "completed" {
+			t.Fatalf("recovery metadata=%s", line)
+		}
+	}
+	if !foundRecovery {
+		t.Fatalf("missing recovery provenance: %s", logs)
+	}
 	if recovered.memoryRecoveryFailures.Load() != 0 {
 		t.Fatal("recovery failed")
 	}
@@ -400,5 +415,59 @@ func TestMemoryRecoveryStartupPublishesOriginalTurn(t *testing.T) {
 	turns, err := e.Store.ListTurns(t.Context(), other.ID)
 	if err != nil || len(turns) != 1 || turns[0].Status != protocol.TurnInterrupted {
 		t.Fatalf("housekeeping not before recovery: %+v %v", turns, err)
+	}
+}
+
+// Catches reducing safe service diagnostics to aggregate counts only.
+func TestMemoryDiagnosticsLogRequiredMetadata(t *testing.T) {
+	e, th, turn, p, id, logs := memoryEngine(t)
+	e.initMemory(t.Context())
+	e.finishTurn(tools.WithScope(t.Context(), &tools.Scope{Root: p.Root}), th, turn, nil, func() {})
+	found := false
+	for _, line := range bytes.Split(logs.Bytes(), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal(line, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data["msg"] != "memory promotion diagnostic" {
+			continue
+		}
+		found = true
+		for _, key := range []string{"project_id", "work_id", "candidate_node_id", "source_node_ids", "source_revision", "evidence_ids", "operation_id", "thread_id", "turn_id", "target_path", "before_hash", "after_hash", "bytes_before", "bytes_after", "status", "reason", "inserted", "replaced", "unchanged", "conflicts", "estimated_instruction_tokens_added", "estimated_context_tokens_avoided"} {
+			if _, ok := data[key]; !ok {
+				t.Errorf("missing %s: %s", key, line)
+			}
+		}
+		if data["work_id"] != id || data["target_path"] != "UMCODE.md" || data["reason"] != "inserted" || data["status"] != "promoted" {
+			t.Fatalf("metadata=%s", line)
+		}
+		after := data["bytes_after"].(float64)
+		if data["estimated_instruction_tokens_added"] != float64((int(after)+3)/4) || data["estimated_context_tokens_avoided"] != float64(0) {
+			t.Fatalf("accounting=%s", line)
+		}
+	}
+	if !found {
+		t.Fatalf("no per-operation diagnostic: %s", logs)
+	}
+	if strings.Contains(logs.String(), "Use go test") || strings.Contains(logs.String(), "PRIVATE") || strings.Contains(logs.String(), "test-command") {
+		t.Fatalf("semantic diagnostic=%s", logs)
+	}
+}
+
+func TestMemoryRecoveryEmissionFailureUsesRecoveryCounter(t *testing.T) {
+	e, _, _, _, _, logs := memoryEngine(t)
+	e.initMemory(t.Context())
+	if e.Memory.EmitRecovery == nil {
+		t.Fatal("recovery emission attribution missing")
+	}
+	e.Memory.EmitRecovery(protocol.FileChangeData{TurnID: "missing_turn", Path: "UMCODE.md"})
+	if e.memoryRecoveryFailures.Load() != 1 || e.memoryPromotionFailures.Load() != 0 {
+		t.Fatalf("recovery=%d promotion=%d logs=%s", e.memoryRecoveryFailures.Load(), e.memoryPromotionFailures.Load(), logs)
+	}
+	if !strings.Contains(logs.String(), `"operation":"recovery"`) || !strings.Contains(logs.String(), `"class":"origin_turn"`) {
+		t.Fatalf("unclassified emission failure=%s", logs)
 	}
 }

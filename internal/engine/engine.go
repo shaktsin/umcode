@@ -1011,17 +1011,26 @@ func (e *Engine) initMemory(ctx context.Context) {
 	}
 	e.Memory = memory.New(e.Store, e.Projects, e.Cfg.Memory.TargetFileBytes)
 	emitCtx := context.WithoutCancel(ctx)
-	e.Memory.Emit = func(c protocol.FileChangeData) {
+	e.Memory.Emit = e.memoryFileChangeEmitter(emitCtx, "promotion")
+	e.Memory.EmitRecovery = e.memoryFileChangeEmitter(emitCtx, "recovery")
+	e.recoverMemory(ctx)
+}
+
+func (e *Engine) memoryFileChangeEmitter(ctx context.Context, operation string) func(protocol.FileChangeData) {
+	return func(c protocol.FileChangeData) {
 		// Recovery can originate from a different thread and an earlier turn.
 		var threadID string
-		if err := e.Store.DB.QueryRowContext(emitCtx, `SELECT thread_id FROM turns WHERE id = ?`, c.TurnID).Scan(&threadID); err != nil {
-			e.memoryPromotionFailures.Add(1)
-			e.Log.Warn("memory file change publication failed", "class", "origin_turn")
+		if err := e.Store.DB.QueryRowContext(ctx, `SELECT thread_id FROM turns WHERE id = ?`, c.TurnID).Scan(&threadID); err != nil {
+			if operation == "recovery" {
+				e.memoryRecoveryFailures.Add(1)
+			} else {
+				e.memoryPromotionFailures.Add(1)
+			}
+			e.Log.Warn("memory file change publication failed", "operation", operation, "class", "origin_turn")
 			return
 		}
-		e.publishFileChange(emitCtx, protocol.Turn{ID: c.TurnID, ThreadID: threadID}, c)
+		e.publishFileChange(ctx, protocol.Turn{ID: c.TurnID, ThreadID: threadID}, c)
 	}
-	e.recoverMemory(ctx)
 }
 
 func (e *Engine) recoverMemory(ctx context.Context) {
@@ -1088,10 +1097,6 @@ func (e *Engine) logMemoryReport(operation string, r memory.Report, workID strin
 		}
 		e.Log.Warn("memory "+operation+" failed", "class", "pending", "count", r.Pending, "work_id", workID)
 	}
-	added := r.BytesAfter - r.BytesBefore
-	if added < 0 {
-		added = 0
-	}
 	// Byte-derived estimates are diagnostics only. Request usage is untouched.
 	e.Log.Info("memory "+operation+" report", "work_id", workID,
 		"promoted", r.Promoted, "rejected", r.Rejected, "stale", r.Stale,
@@ -1099,5 +1104,20 @@ func (e *Engine) logMemoryReport(operation string, r memory.Report, workID strin
 		"replaced", r.Replaced, "unchanged", r.Unchanged, "bytes_before", r.BytesBefore,
 		"bytes_after", r.BytesAfter, "estimated_instruction_tokens_before", (r.BytesBefore+3)/4,
 		"estimated_instruction_tokens_after", (r.BytesAfter+3)/4,
-		"estimated_instruction_tokens_added", (added+3)/4)
+		"estimated_instruction_tokens_added", r.EstimatedInstructionTokensAdded,
+		"estimated_context_tokens_avoided", r.EstimatedContextTokensAvoided,
+		"recovery_completed", r.RecoveryCompleted, "recovery_retried", r.RecoveryRetried,
+		"recovery_conflicted", r.RecoveryConflicted, "recovery_pending_repair", r.RecoveryPendingRepair,
+		"diagnostics_dropped", r.DiagnosticsDropped)
+	for _, d := range r.Diagnostics {
+		e.Log.Info("memory "+operation+" diagnostic", "project_id", d.ProjectID,
+			"work_id", d.WorkID, "candidate_node_id", d.CandidateNodeID, "source_node_ids", d.SourceNodeIDs,
+			"source_revision", d.SourceRevision, "evidence_ids", d.EvidenceIDs, "operation_id", d.OperationID,
+			"thread_id", d.ThreadID, "turn_id", d.TurnID, "target_path", d.TargetPath,
+			"before_hash", d.BeforeHash, "after_hash", d.AfterHash, "bytes_before", d.BytesBefore, "bytes_after", d.BytesAfter,
+			"status", d.Status, "reason", d.Reason, "recovery", d.Recovery, "inserted", d.Inserted, "replaced", d.Replaced,
+			"unchanged", d.Unchanged, "conflicts", d.Conflicts,
+			"estimated_instruction_tokens_added", d.EstimatedInstructionTokensAdded,
+			"estimated_context_tokens_avoided", d.EstimatedContextTokensAvoided)
+	}
 }

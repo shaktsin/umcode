@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 )
@@ -52,7 +54,7 @@ func TestRecoveryExactStatesAndIdempotence(t *testing.T) {
 					t.Fatalf("recovery=%+v", r)
 				}
 			}
-			if r := s.Recover(t.Context()); r != (Report{}) {
+			if r := s.Recover(t.Context()); !reflect.DeepEqual(r, Report{}) {
 				t.Fatalf("repeat=%+v", r)
 			}
 			changes, err := st.ListFileChanges(t.Context(), req.Project.ID, "", "", 100)
@@ -138,7 +140,7 @@ func TestRecoveryUnchangedDuplicateSkipsHistoryAndRename(t *testing.T) {
 	if err != nil || len(changes) != 1 {
 		t.Fatalf("changes=%+v %v", changes, err)
 	}
-	if r := s.Recover(t.Context()); r != (Report{}) {
+	if r := s.Recover(t.Context()); !reflect.DeepEqual(r, Report{}) {
 		t.Fatalf("repeat=%+v", r)
 	}
 }
@@ -180,7 +182,7 @@ func TestRecoveryOversizedThirdStateConflicts(t *testing.T) {
 			if readTarget(t, req.Project) != third {
 				t.Fatal("oversized third-state bytes changed")
 			}
-			if r := s.Recover(t.Context()); r != (Report{}) {
+			if r := s.Recover(t.Context()); !reflect.DeepEqual(r, Report{}) {
 				t.Fatalf("repeat=%+v", r)
 			}
 			op, err := st.GetMemoryPromotionOp(t.Context(), ops[0].ID)
@@ -246,11 +248,60 @@ func TestPromotionOversizedFinalCASConflicts(t *testing.T) {
 	if readTarget(t, req.Project) != third {
 		t.Fatal("third-state bytes changed")
 	}
-	if r := s.Recover(t.Context()); r != (Report{}) {
+	if r := s.Recover(t.Context()); !reflect.DeepEqual(r, Report{}) {
 		t.Fatalf("repeat=%+v", r)
 	}
 	ops, err := st.ListIncompleteMemoryPromotionOps(t.Context())
 	if err != nil || len(ops) != 0 {
 		t.Fatalf("ops=%+v %v", ops, err)
+	}
+}
+
+// Catches recovery panic containment leaving the global project lock poisoned.
+func TestRecoveryPanicReleasesProjectLock(t *testing.T) {
+	s, st, req := serviceFixture(t)
+	s.boundary = func(stage string) error {
+		if stage == "write" {
+			return errors.New("prepare interruption")
+		}
+		return nil
+	}
+	if r := s.PromoteCompleted(t.Context(), req); r.Pending != 1 {
+		t.Fatalf("prepare=%+v", r)
+	}
+	s.boundary = func(stage string) error {
+		if stage == "recheck" {
+			panic("PRIVATE RECOVERY PANIC")
+		}
+		return nil
+	}
+	panicked := false
+	func() { defer func() { panicked = recover() != nil }(); s.Recover(t.Context()) }()
+	if !panicked {
+		t.Fatal("recovery seam did not panic")
+	}
+	s.boundary = nil
+	done := make(chan Report, 1)
+	go func() { done <- s.Recover(t.Context()) }()
+	select {
+	case r := <-done:
+		if r.Promoted != 1 {
+			t.Fatalf("next recovery=%+v", r)
+		}
+	case <-time.After(3 * time.Second):
+		// Release the old implementation's poisoned mutex before cleanup.
+		projectLock(req.Project.ID).Unlock()
+		<-done
+		t.Fatal("recovery panic poisoned project lock")
+	}
+	next := addCompletedWork(t, st, req.Project, "next-command", "Use go test ./internal/work for Work lifecycle checks")
+	go func() { done <- s.PromoteCompleted(t.Context(), next) }()
+	select {
+	case r := <-done:
+		if r.Promoted != 1 {
+			t.Fatalf("later promotion=%+v", r)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("later promotion blocked after recovery panic")
 	}
 }

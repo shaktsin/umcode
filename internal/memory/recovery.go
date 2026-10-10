@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 
+	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 )
 
@@ -13,58 +14,91 @@ func (s *Service) Recover(ctx context.Context) Report {
 	ops, err := s.st.ListIncompleteMemoryPromotionOps(ctx)
 	if err != nil {
 		report.Pending++
+		report.RecoveryPendingRepair++
+		report.diagnostic(Diagnostic{Status: protocol.MemoryOutcomePending, Reason: ReasonStorage, Recovery: "pending_repair"})
 		return report
 	}
 	for _, listed := range ops {
-		lock := projectLock(listed.ProjectID)
-		lock.Lock()
 		func() {
-			// Another reconciler may have finished this operation while we waited.
+			lock := projectLock(listed.ProjectID)
+			lock.Lock()
+			defer lock.Unlock()
 			op, err := s.st.GetMemoryPromotionOp(ctx, listed.ID)
 			if err != nil {
 				report.Pending++
+				report.RecoveryPendingRepair++
+				d := s.operationDiagnostic(ctx, listed)
+				d.Status, d.Reason, d.Recovery = protocol.MemoryOutcomePending, ReasonStorage, "pending_repair"
+				report.diagnostic(d)
 				return
 			}
 			if op.State == "committed" || op.State == "conflicted" {
 				return
 			}
+			diag := s.operationDiagnostic(ctx, op)
+			defer func() { report.diagnostic(diag) }()
+			fail := func(err error, fallback string) {
+				out := s.fail(ctx, op, err, fallback, &report)
+				diag.Status, diag.Reason = out.Status, out.Reason
+				diag.EstimatedInstructionTokensAdded, diag.EstimatedContextTokensAvoided = 0, 0
+				diag.Inserted, diag.Replaced, diag.Unchanged = 0, 0, 0
+				if out.Status == protocol.MemoryOutcomeConflicted {
+					report.RecoveryConflicted++
+					diag.Recovery = "conflicted"
+				} else {
+					report.RecoveryPendingRepair++
+					diag.Recovery = "pending_repair"
+				}
+			}
 			p, err := s.st.GetProject(ctx, op.ProjectID)
 			if err != nil {
-				s.fail(ctx, op, err, &report)
+				fail(err, ReasonStorage)
 				return
 			}
 			target, err := openTarget(p.Root, op.TargetPath)
 			if err != nil {
-				s.fail(ctx, op, err, &report)
+				fail(err, ReasonFileIO)
 				return
 			}
 			defer target.close()
 			hash := memoryHash(target.before)
 			if hash != op.FileHashBefore && hash != op.FileHashAfter {
-				s.fail(ctx, op, store.ErrMemoryConflict, &report)
+				fail(store.ErrMemoryConflict, ReasonCompareAndSwap)
 				return
 			}
 			if err = s.step("recheck"); err == nil {
 				err = target.check(hash)
 			}
+			retried := false
 			if err == nil && hash == op.FileHashBefore && hash != op.FileHashAfter {
+				retried = true
+				report.RecoveryRetried++
 				err = target.replace(op.AfterBytes, s.step)
 			}
 			if err == nil {
-				err = s.finish(ctx, p, op)
+				emit := s.Emit
+				if s.EmitRecovery != nil {
+					emit = s.EmitRecovery
+				}
+				err = s.finish(ctx, p, op, emit)
 			}
 			if err != nil {
-				s.fail(ctx, op, err, &report)
+				fail(err, ReasonFileIO)
 				return
 			}
 			report.Promoted++
+			report.RecoveryCompleted++
+			diag.Status = protocol.MemoryOutcomePromoted
+			diag.Reason, diag.Recovery = ReasonRecoveryCompleted, "completed"
+			if retried {
+				diag.Reason, diag.Recovery = ReasonRecoveryRetried, "retried"
+			}
 			report.BytesBefore += len(op.BeforeBytes)
 			report.BytesAfter += len(op.AfterBytes)
-			if op.FileHashBefore == op.FileHashAfter {
-				report.Unchanged++
-			}
+			report.Inserted += diag.Inserted
+			report.Replaced += diag.Replaced
+			report.Unchanged += diag.Unchanged
 		}()
-		lock.Unlock()
 	}
 	return report
 }
