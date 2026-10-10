@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/fingerprint"
+	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/memory"
 	"github.com/shaktsin/umcode/internal/projects"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -47,66 +49,78 @@ func memoryEngine(t *testing.T) (*Engine, protocol.Thread, protocol.Turn, protoc
 		t.Fatal(err)
 	}
 	th.ProjectID = p.ID
-	w, err := st.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID, ProjectID: p.ID, WorkflowDepth: protocol.DepthDesigned})
+	id := seedMemoryWork(t, e, th, p)
+	return e, th, turn, p, id, logs
+}
+
+// seedMemoryWork uses a completion-ready Designed graph with independent durable
+// evidence, so re-running product verification does not retire candidate provenance.
+func seedMemoryWork(t *testing.T, e *Engine, th protocol.Thread, p protocol.Project) string {
+	t.Helper()
+	w, err := e.Store.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID, ProjectID: p.ID, WorkflowDepth: protocol.DepthDesigned})
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.Work = &work.Service{Store: st, Log: e.Log, DesignedWorkflow: true, Workspace: func(context.Context, string) (fingerprint.Workspace, bool) {
+	e.Work = &work.Service{Store: e.Store, Log: e.Log, DesignedWorkflow: true, Workspace: func(context.Context, string) (fingerprint.Workspace, bool) {
 		return fingerprint.Workspace{Value: "final"}, true
 	}}
-	fact, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeFact, Status: "active"})
+	fact, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeFact, Status: "active"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	criterion, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeCriterion, Status: protocol.AttemptPassed})
+	criterion, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeCriterion, Status: protocol.AttemptPassed, Content: json.RawMessage(`{"command":"go test ./..."}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeMemoryCandidate, Status: protocol.StatusPending, Content: json.RawMessage(`{"category":"command","semantic_key":"test-command","text":"Use go test ./... for this repository","scope_paths":[],"source_revision":"final"}`)})
+	candidate, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeMemoryCandidate, Status: protocol.StatusPending, Content: json.RawMessage(`{"category":"command","semantic_key":"test-command","text":"Use go test ./... for this repository","scope_paths":[],"source_revision":"final"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev, err := st.AddEvidence(t.Context(), protocol.Evidence{WorkID: w.ID, NodeID: criterion.ID, SourceRevision: "final", Summary: "PRIVATE EVIDENCE BODY"})
+	ev, err := e.Store.AddEvidence(t.Context(), protocol.Evidence{WorkID: w.ID, NodeID: criterion.ID, SourceRevision: "final", Summary: "PRIVATE EVIDENCE BODY"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DB.Exec(`INSERT INTO work_node_evidence(work_id,node_id,evidence_id) VALUES(?,?,?)`, w.ID, candidate.ID, ev.ID); err != nil {
+	if _, err := e.Store.DB.Exec(`INSERT INTO work_node_evidence(work_id,node_id,evidence_id) VALUES(?,?,?)`, w.ID, candidate.ID, ev.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, edge := range []protocol.WorkEdge{{WorkID: w.ID, FromNodeID: candidate.ID, ToNodeID: fact.ID, Relation: protocol.RelCandidateFor}, {WorkID: w.ID, FromNodeID: criterion.ID, ToNodeID: candidate.ID, Relation: protocol.RelVerifies}} {
-		if err := st.AddWorkEdge(t.Context(), edge); err != nil {
+		if err := e.Store.AddWorkEdge(t.Context(), edge); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	decision, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeDecision, Status: protocol.StatusApproved})
+	decision, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeDecision, Status: protocol.StatusApproved})
 	if err != nil {
 		t.Fatal(err)
 	}
-	option, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeOption, Status: "active", Content: json.RawMessage(`{"solution_rung":1}`)})
+	option, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeOption, Status: "active", Content: json.RawMessage(`{"solution_rung":1}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := st.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeTask, Status: protocol.StatusCompleted})
+	task, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeTask, Status: protocol.StatusCompleted})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DB.Exec(`INSERT INTO work_node_evidence(work_id,node_id,evidence_id) VALUES(?,?,?)`, w.ID, decision.ID, ev.ID); err != nil {
+	if _, err := e.Store.DB.Exec(`INSERT INTO work_node_evidence(work_id,node_id,evidence_id) VALUES(?,?,?)`, w.ID, decision.ID, ev.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, edge := range []protocol.WorkEdge{{WorkID: w.ID, FromNodeID: decision.ID, ToNodeID: option.ID, Relation: protocol.RelSelects}, {WorkID: w.ID, FromNodeID: criterion.ID, ToNodeID: decision.ID, Relation: protocol.RelVerifies}, {WorkID: w.ID, FromNodeID: criterion.ID, ToNodeID: task.ID, Relation: protocol.RelVerifies}} {
-		if err := st.AddWorkEdge(t.Context(), edge); err != nil {
+		if err := e.Store.AddWorkEdge(t.Context(), edge); err != nil {
 			t.Fatal(err)
 		}
 	}
-	fp, err := st.AddFingerprint(t.Context(), protocol.Fingerprint{WorkID: w.ID, Kind: protocol.FingerprintVerification, Value: "final", TakenAt: time.Now()})
+	fp, err := e.Store.AddFingerprint(t.Context(), protocol.Fingerprint{WorkID: w.ID, Kind: protocol.FingerprintVerification, Value: "final", TakenAt: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AddVerificationAttempt(t.Context(), protocol.VerificationAttempt{WorkID: w.ID, CriterionNodeID: criterion.ID, Status: protocol.AttemptPassed, EvidenceID: ev.ID, FingerprintID: fp.ID, StartedAt: time.Now(), FinishedAt: time.Now()}); err != nil {
+	attemptEvidence, err := e.Store.AddEvidence(t.Context(), protocol.Evidence{WorkID: w.ID, NodeID: criterion.ID, SourceRevision: "final"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return e, th, turn, p, w.ID, logs
+	if _, err := e.Store.AddVerificationAttempt(t.Context(), protocol.VerificationAttempt{WorkID: w.ID, CriterionNodeID: criterion.ID, Status: protocol.AttemptPassed, EvidenceID: attemptEvidence.ID, FingerprintID: fp.ID, StartedAt: time.Now(), FinishedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	return w.ID
 }
 
 type memorySubscriber struct {
@@ -469,5 +483,296 @@ func TestMemoryRecoveryEmissionFailureUsesRecoveryCounter(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `"operation":"recovery"`) || !strings.Contains(logs.String(), `"class":"origin_turn"`) {
 		t.Fatalf("unclassified emission failure=%s", logs)
+	}
+}
+
+func setMemoryCandidate(t *testing.T, e *Engine, id, text, replaces string, scopes []string) {
+	t.Helper()
+	b, err := json.Marshal(work.MemoryCandidateContent{Category: "command", SemanticKey: "test-command", Text: text, ScopePaths: scopes, SourceRevision: "final", ReplacesMemory: replaces})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Store.DB.Exec(`UPDATE work_nodes SET content_json=? WHERE work_id=? AND kind='memory_candidate'`, string(b), id); err != nil {
+		t.Fatal(err)
+	}
+}
+func memoryRows(t *testing.T, e *Engine, project string) []protocol.ProjectMemory {
+	t.Helper()
+	rows, err := e.Store.ListProjectMemories(t.Context(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+func memoryRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+func memoryWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Catches root-only placement, accidental nested creation, omitted prompt
+// guidance, double injection, or a provider request made by promotion itself.
+func TestCuratedMemoryE2EPlacementAndNextPrompt(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(map[bool]string{false: "root", true: "nearest_existing_nested"}[nested], func(t *testing.T) {
+			e, th, turn, p, id, _ := memoryEngine(t)
+			provider := installMemoryProvider(t, e)
+			rootBefore := "# Root instructions\nUser-owned text stays intact.\n"
+			memoryWrite(t, filepath.Join(p.Root, "UMCODE.md"), rootBefore)
+			path := "UMCODE.md"
+			prefix := rootBefore
+			if nested {
+				path = "pkg/UMCODE.md"
+				prefix = "# Package instructions\nRetain this wording.\n"
+				memoryWrite(t, filepath.Join(p.Root, path), prefix)
+				memoryWrite(t, filepath.Join(p.Root, "pkg/deep/source.go"), "package deep\n")
+				setMemoryCandidate(t, e, id, memoryCommandText, "", []string{"pkg/deep/source.go"})
+			}
+			foreign := map[string]string{"AGENTS.md": "Foreign root guidance must stay untouched.\n", "CLAUDE.md": "Foreign project guidance.\n", "pkg/deep/AGENTS.md": "Foreign nested guidance.\n"}
+			for name, content := range foreign {
+				memoryWrite(t, filepath.Join(p.Root, name), content)
+			}
+			e.initMemory(t.Context())
+			runMemoryTurn(t, e, th, turn)
+			assertMemoryCompletion(t, e, id)
+			if len(provider.requests) != 1 {
+				t.Fatalf("promotion added a model call: %d", len(provider.requests))
+			}
+			rows := memoryRows(t, e, p.ID)
+			if len(rows) != 1 || rows[0].Status != protocol.MemoryStatusActive || rows[0].TargetPath != path {
+				t.Fatalf("memory placement=%+v", rows)
+			}
+			want := prefix + "\n## Verified project memory\n\n<!-- umcode:generated -->\n- " + memoryCommandText + "\n"
+			if got := string(memoryRead(t, filepath.Join(p.Root, path))); got != want {
+				t.Fatalf("instructions=%q want=%q", got, want)
+			}
+			if nested {
+				if got := string(memoryRead(t, filepath.Join(p.Root, "UMCODE.md"))); got != rootBefore {
+					t.Fatalf("root changed=%q", got)
+				}
+				if _, err := os.Stat(filepath.Join(p.Root, "pkg/deep/UMCODE.md")); !os.IsNotExist(err) {
+					t.Fatalf("created absent nested instructions: %v", err)
+				}
+			}
+			for name, content := range foreign {
+				if got := string(memoryRead(t, filepath.Join(p.Root, name))); got != content {
+					t.Fatalf("foreign file %s changed", name)
+				}
+			}
+			next := nextMemoryTurn(t, e, th)
+			nextID := seedMemoryWork(t, e, th, p)
+			calls := 0
+			provider.script = func(req llm.Request) []llm.Event {
+				calls++
+				if nested && calls == 1 {
+					if strings.Contains(req.System, memoryCommandText) {
+						t.Fatal("nested guidance applied before a scoped path")
+					}
+					return memoryCall("file.read", `{"path":"pkg/deep/source.go"}`)
+				}
+				if got := strings.Count(req.System, memoryCommandText); got != 1 {
+					t.Fatalf("next applicable prompt contains guidance %d times", got)
+				}
+				if strings.Contains(req.System, "Foreign root guidance") || strings.Contains(req.System, "Foreign project guidance") || strings.Contains(req.System, "Foreign nested guidance") {
+					t.Fatal("foreign instructions entered prompt")
+				}
+				return memoryAnswer(req)
+			}
+			runMemoryTurn(t, e, th, next)
+			assertMemoryCompletion(t, e, nextID)
+			wantCalls := 2
+			if nested {
+				wantCalls = 3
+			}
+			if len(provider.requests) != wantCalls {
+				t.Fatalf("unexpected total provider calls=%d want=%d", len(provider.requests), wantCalls)
+			}
+		})
+	}
+}
+
+// Catches destructive replacement, lost provenance, overwriting an external
+// edit, or reopening completed product verification after the instruction edit.
+func TestCuratedMemoryE2EReplacementAndExternalOwnership(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		t.Run(map[bool]string{false: "exact_replacement", true: "external_edit_conflicts"}[external], func(t *testing.T) {
+			e, th, turn, p, id, _ := memoryEngine(t)
+			provider := installMemoryProvider(t, e)
+			e.initMemory(t.Context())
+			runMemoryTurn(t, e, th, turn)
+			assertMemoryCompletion(t, e, id)
+			initial := memoryRows(t, e, p.ID)
+			if len(initial) != 1 {
+				t.Fatalf("initial promoted memory=%+v", initial)
+			}
+			old := initial[0]
+			path := filepath.Join(p.Root, "UMCODE.md")
+			before := memoryRead(t, path)
+			if external {
+				before = bytes.ReplaceAll(before, []byte("- "+memoryCommandText), []byte("- User-edited command: go test ./... -race; retain café exactly."))
+				before = append(before, []byte("\nUser addition with  two spaces.\r\n")...)
+				if err := os.WriteFile(path, before, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			next := nextMemoryTurn(t, e, th)
+			replacementID := seedMemoryWork(t, e, th, p)
+			newText := "Use go test ./... -count=1 for this repository"
+			setMemoryCandidate(t, e, replacementID, newText, old.ID, nil)
+			runMemoryTurn(t, e, th, next)
+			assertMemoryCompletion(t, e, replacementID)
+			if len(provider.requests) != 2 {
+				t.Fatalf("replacement added provider calls=%d", len(provider.requests))
+			}
+			rows := memoryRows(t, e, p.ID)
+			if external {
+				if !bytes.Equal(memoryRead(t, path), before) {
+					t.Fatal("external edit overwritten")
+				}
+				d, err := e.Store.GetWorkDetail(t.Context(), replacementID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, n := range d.Nodes {
+					if n.Kind == protocol.NodeMemoryCandidate && n.Status != protocol.MemoryOutcomeConflicted {
+						t.Fatalf("candidate=%+v", n)
+					}
+				}
+				if len(rows) != 1 || rows[0].ID != old.ID || rows[0].Text != old.Text {
+					t.Fatalf("external conflict lost historical row=%+v", rows)
+				}
+			} else {
+				if len(rows) != 1 {
+					t.Fatalf("active replacement=%+v", rows)
+				}
+				active := rows[0]
+				historical, err := e.Store.GetProjectMemory(t.Context(), old.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var total int
+				if err := e.Store.DB.QueryRow(`SELECT COUNT(*) FROM project_memories WHERE project_id=?`, p.ID).Scan(&total); err != nil {
+					t.Fatal(err)
+				}
+				if total != 2 || active.ID == old.ID || active.Text != "- "+newText || historical.Status != protocol.MemoryStatusSuperseded || historical.SupersededBy != active.ID || historical.Text != old.Text || historical.WorkID != id {
+					t.Fatalf("replacement active=%+v historical=%+v total=%d", active, historical, total)
+				}
+				want := bytes.ReplaceAll(before, []byte(memoryCommandText), []byte(newText))
+				if !bytes.Equal(memoryRead(t, path), want) {
+					t.Fatal("replacement changed unrelated bytes")
+				}
+			}
+		})
+	}
+}
+
+// Catches memory writes bypassing the ordinary project recorder or undo path.
+func TestCuratedMemoryE2EDiffUndoPreservesCompletedCriteria(t *testing.T) {
+	e, th, turn, p, id, _ := memoryEngine(t)
+	provider := installMemoryProvider(t, e)
+	original := "# User guidance\r\nKeep these bytes.\r\n"
+	memoryWrite(t, filepath.Join(p.Root, "UMCODE.md"), original)
+	e.initMemory(t.Context())
+	runMemoryTurn(t, e, th, turn)
+	d := assertMemoryCompletion(t, e, id)
+	diff, err := e.Projects.Diff(t.Context(), p, protocol.ProjectDiffParams{TurnID: turn.ID})
+	if err != nil || len(diff.Files) != 1 || diff.Files[0].Path != "UMCODE.md" || !diff.Files[0].Revertable || !strings.Contains(diff.Files[0].Diff, "+"+"- "+memoryCommandText) {
+		t.Fatalf("diff=%+v err=%v", diff, err)
+	}
+	undo, err := e.Projects.RevertTurn(t.Context(), turn.ID, nil)
+	if err != nil || len(undo.Reverted) != 1 || undo.Reverted[0] != "UMCODE.md" || len(undo.Skipped) != 0 {
+		t.Fatalf("undo=%+v err=%v", undo, err)
+	}
+	if got := string(memoryRead(t, filepath.Join(p.Root, "UMCODE.md"))); got != original {
+		t.Fatalf("undo bytes=%q", got)
+	}
+	after := assertMemoryCompletion(t, e, id)
+	if !reflect.DeepEqual(d, after) {
+		t.Fatal("memory promotion/undo modified completed Work graph")
+	}
+	diff, err = e.Projects.Diff(t.Context(), p, protocol.ProjectDiffParams{TurnID: turn.ID})
+	if err != nil || len(diff.Files) != 0 {
+		t.Fatalf("undo still in diff=%+v err=%v", diff, err)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("promotion/undo added model calls=%d", len(provider.requests))
+	}
+}
+
+// Simulate interruption after the atomic rename by failing history persistence,
+// then close/reopen SQLite and construct a new engine for actual startup repair.
+func TestCuratedMemoryE2ERestartAfterRename(t *testing.T) {
+	e, th, turn, p, id, _ := memoryEngine(t)
+	provider := installMemoryProvider(t, e)
+	e.initMemory(t.Context())
+	if _, err := e.Store.DB.Exec(`CREATE TRIGGER fail_history BEFORE INSERT ON file_changes BEGIN SELECT RAISE(ABORT,'injected crash boundary'); END`); err != nil {
+		t.Fatal(err)
+	}
+	runMemoryTurn(t, e, th, turn)
+	assertMemoryCompletion(t, e, id)
+	written := memoryRead(t, filepath.Join(p.Root, "UMCODE.md"))
+	ops, err := e.Store.ListIncompleteMemoryPromotionOps(t.Context())
+	if err != nil || len(ops) != 1 || !bytes.Equal(ops[0].AfterBytes, written) {
+		t.Fatalf("post-rename operation=%+v err=%v", ops, err)
+	}
+	if _, err := e.Store.DB.Exec(`DROP TRIGGER fail_history`); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(t.TempDir(), "restart.db")
+	if _, err := e.Store.DB.Exec(`VACUUM INTO ?`, db); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	cfg := config.Default(t.TempDir())
+	cfg.Models.DesignedWorkflow = true
+	cfg.Memory.AutoPromote = true
+	recovered, err := New(t.Context(), Options{Config: cfg, Store: reopened, Secrets: secrets.NewFileStore(filepath.Join(cfg.Home, "secrets.json")), Logger: e.Log, DisableMCP: true, DisableScheduler: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { recovered.Shutdown(context.Background()) })
+	recovered.LLMs.Register(provider)
+	recovered.recoverMemory(t.Context())
+	rows := memoryRows(t, recovered, p.ID)
+	if len(rows) != 1 || rows[0].Status != protocol.MemoryStatusActive {
+		t.Fatalf("recovered memories=%+v", rows)
+	}
+	var count int
+	if err := reopened.DB.QueryRow(`SELECT COUNT(*) FROM file_changes WHERE promotion_op_id=?`, ops[0].ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("recovered history count=%d err=%v", count, err)
+	}
+	if err := reopened.DB.QueryRow(`SELECT COUNT(*) FROM memory_promotion_ops WHERE id=? AND state='committed'`, ops[0].ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("operation not committed count=%d err=%v", count, err)
+	}
+	if err := reopened.DB.QueryRow(`SELECT COUNT(*) FROM llm_usage`).Scan(&count); err != nil || count != 1 || len(provider.requests) != 1 {
+		t.Fatalf("restart added model call usage=%d calls=%d err=%v", count, len(provider.requests), err)
+	}
+	if !bytes.Equal(memoryRead(t, filepath.Join(p.Root, "UMCODE.md")), written) {
+		t.Fatal("recovery rewrote post-rename bytes")
+	}
+	d := assertMemoryCompletion(t, recovered, id)
+	for _, n := range d.Nodes {
+		if n.Kind == protocol.NodeMemoryCandidate && n.Status != protocol.MemoryOutcomePromoted {
+			t.Fatalf("recovered candidate=%+v", n)
+		}
 	}
 }
