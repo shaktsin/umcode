@@ -48,6 +48,14 @@ func TestSnapshotIncludesNamespacedMCPTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("snapshot tools = %v", toolNames(snapshot.Tools()))
 	}
+	metadata, ok := tool.(tools.SelectionMetadata)
+	if !ok {
+		t.Fatal("registered plugin provenance missing")
+	}
+	family, origin := metadata.SelectionMetadata()
+	if family != "plugin:sample-plugin" || !strings.HasSuffix(origin, "/mcp:sample-plugin__echo") {
+		t.Fatalf("family=%q origin=%q", family, origin)
+	}
 	out, err := tool.Call(ctx, json.RawMessage(`{"message":"hello"}`))
 	if err != nil || out != "v1" {
 		t.Fatalf("tool call = %q, %v", out, err)

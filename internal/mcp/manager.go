@@ -441,3 +441,7 @@ func formatResult(res json.RawMessage) (string, error) {
 	}
 	return out, nil
 }
+
+func (t *mcpTool) SelectionMetadata() (string, string) {
+	return "mcp:" + t.s.cfg.Name, "mcp:" + t.s.cfg.Name
+}

@@ -147,6 +147,7 @@ type ModelsConfig struct {
 	// transcript. Off by default; a failure falls back to the transcript.
 	ContextCompiler  bool `yaml:"context_compiler"`
 	ContextRetrieval bool `yaml:"context_retrieval"`
+	ProgressiveTools bool `yaml:"progressive_tools"`
 	// ToolResultReducers compacts selected tool results only for model messages.
 	// Stored results and other observers retain the canonical output.
 	ToolResultReducers bool `yaml:"tool_result_reducers"`
