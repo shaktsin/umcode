@@ -27,7 +27,7 @@ func MemorySourceGuidance(n protocol.WorkNode) (category, text string, ok bool) 
 		}
 		category, text = protocol.MemoryCategoryCommand, "Use "+f.Command+" for this repository"
 	case protocol.NodeDecision:
-		if n.Status != protocol.StatusApproved {
+		if n.Status != protocol.StatusApproved || n.DecisionActor != "user" {
 			return "", "", false
 		}
 		category, text = protocol.MemoryCategoryApprovedDecision, n.Title

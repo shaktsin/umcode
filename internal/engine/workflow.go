@@ -26,7 +26,7 @@ func workflowDiscoveryTool(name string) bool {
 // Prospective signals must persist before any hook, policy approval, or Call.
 // Observations still perform their existing post-execution escalation.
 func (e *Engine) escalateProspectiveWorkflow(ctx context.Context, threadID string, o work.Observation) error {
-	if !e.Cfg.Models.DesignedWorkflow || workflowDiscoveryTool(o.Tool) {
+	if !e.optimizationPolicy(ctx).DesignedWorkflow || workflowDiscoveryTool(o.Tool) {
 		return nil
 	}
 	w, ok, err := e.Store.OpenWorkForThread(ctx, threadID)
@@ -50,7 +50,7 @@ func (e *Engine) escalateProspectiveWorkflow(ctx context.Context, threadID strin
 }
 
 func (e *Engine) workflowDetail(ctx context.Context, threadID, tool string) (*protocol.WorkDetail, error) {
-	if !e.Cfg.Models.DesignedWorkflow || workflowDiscoveryTool(tool) {
+	if !e.optimizationPolicy(ctx).DesignedWorkflow || workflowDiscoveryTool(tool) {
 		return nil, nil
 	}
 	w, ok, err := e.Store.OpenWorkForThread(ctx, threadID)
@@ -113,6 +113,31 @@ func (e *Engine) recoverWorkflowGate(ctx, sctx context.Context, turn protocol.Tu
 		return nil
 	}
 	gates := work.PendingWorkflowGates(*d)
+	if e.optimizationPolicy(ctx).AutomaticWorkflow {
+		// Obsolete workflow waiters convey no action authority. Keep the decision
+		// proposed until the agent resolves it through a revision-checked update.
+		for _, gate := range gates {
+			a, found, err := e.Store.PendingWorkflowApproval(sctx, gate.WorkID, gate.NodeID, gate.NodeRevision)
+			if err != nil {
+				return errWorkflowUnavailable
+			}
+			if found {
+				e.mu.Lock()
+				live := e.approvals[a.ID] != nil
+				e.mu.Unlock()
+				if live {
+					return errWorkflowNotReady
+				}
+				if err := e.expireApproval(sctx, a, "automatic workflow supersedes internal review"); err != nil {
+					return errWorkflowUnavailable
+				}
+			}
+		}
+		if len(gates) > 0 {
+			return errWorkflowNotReady
+		}
+		return e.checkWorkflowGate(sctx, turn.ThreadID, tool)
+	}
 	var blocked error
 	for _, gate := range gates {
 		a, found, err := e.Store.PendingWorkflowApproval(sctx, gate.WorkID, gate.NodeID, gate.NodeRevision)
@@ -156,6 +181,10 @@ type workflowGateResult struct {
 }
 
 func (e *Engine) finishWorkflowUpdate(ctx, sctx context.Context, turn protocol.Turn, item protocol.Item, result protocol.WorkUpdateResult, gates []protocol.WorkflowGate) (string, bool, error) {
+	if e.optimizationPolicy(ctx).AutomaticWorkflow {
+		raw, err := json.Marshal(result)
+		return string(raw), false, err
+	}
 	var outcomes []workflowGateResult
 	for _, gate := range gates {
 		approved, err := e.requestWorkflowApproval(ctx, sctx, turn, item, gate)

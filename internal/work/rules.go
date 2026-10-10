@@ -116,6 +116,13 @@ func Unresolved(d protocol.WorkDetail) []string {
 		if n.Kind != protocol.NodeCriterion || n.Status == StatusSuperseded {
 			continue
 		}
+
+		if criterionCommand(n) == "workflow:evidence" {
+			if !evidenceCriterionSatisfied(d, n) {
+				out = append(out, n.Title)
+			}
+			continue
+		}
 		a, ok := latest[n.ID]
 		switch {
 		case !ok, a.Status != protocol.AttemptPassed, n.Status == protocol.StatusStale:
@@ -203,4 +210,37 @@ func ActiveEvidence(d protocol.WorkDetail) []protocol.Evidence {
 		out = append(out, e)
 	}
 	return out
+}
+
+// evidenceCriterionSatisfied checks graph support, not command execution. No
+// verification attempt or human-approval provenance is manufactured.
+func evidenceCriterionSatisfied(d protocol.WorkDetail, c protocol.WorkNode) bool {
+	nodes := graphNodes(d)
+	ev := map[string]protocol.Evidence{}
+	for _, e := range ActiveEvidence(d) {
+		ev[e.ID] = e
+	}
+	decision, task := false, false
+	for _, edge := range d.Edges {
+		if edge.FromNodeID != c.ID || edge.Relation != protocol.RelVerifies {
+			continue
+		}
+		n := nodes[edge.ToNodeID]
+		if !active(n) {
+			continue
+		}
+		switch n.Kind {
+		case protocol.NodeDecision:
+			if n.Status != protocol.StatusApproved || !solutionSupported(d, n, ev) {
+				return false
+			}
+			decision = true
+		case protocol.NodeTask:
+			if n.Status != protocol.StatusCompleted {
+				return false
+			}
+			task = true
+		}
+	}
+	return decision && task
 }

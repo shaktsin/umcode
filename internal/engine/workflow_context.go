@@ -15,7 +15,7 @@ import (
 const maxWorkflowIdentityBytes = 64 * 1024
 
 func (e *Engine) workflowIdentityLayer(ctx context.Context, threadID string) (promptLayer, error) {
-	if e.Cfg == nil || !e.Cfg.Models.DesignedWorkflow {
+	if e.Cfg == nil || !e.optimizationPolicy(ctx).DesignedWorkflow {
 		return promptLayer{}, nil
 	}
 	w, ok, err := e.Store.OpenWorkForThread(ctx, threadID)
@@ -30,11 +30,13 @@ func (e *Engine) workflowIdentityLayer(ctx context.Context, threadID string) (pr
 		return promptLayer{}, errWorkflowUnavailable
 	}
 	type node struct {
-		ID          string   `json:"id"`
-		Kind        string   `json:"kind"`
-		Status      string   `json:"status"`
-		Revision    int      `json:"revision"`
-		EvidenceIDs []string `json:"evidenceIds,omitempty"`
+		Content       json.RawMessage `json:"content,omitempty"`
+		DecisionActor string          `json:"decisionActor,omitempty"`
+		ID            string          `json:"id"`
+		Kind          string          `json:"kind"`
+		Status        string          `json:"status"`
+		Revision      int             `json:"revision"`
+		EvidenceIDs   []string        `json:"evidenceIds,omitempty"`
 	}
 	type evidence struct {
 		ID     string `json:"id"`
@@ -55,7 +57,13 @@ func (e *Engine) workflowIdentityLayer(ctx context.Context, threadID string) (pr
 		if n.Status == protocol.StatusSuperseded || n.ValidUntil != nil || n.SupersededBy != "" {
 			continue
 		}
-		p.Nodes = append(p.Nodes, node{n.ID, n.Kind, n.Status, n.Revision, n.EvidenceIDs})
+		identity := node{ID: n.ID, Kind: n.Kind, Status: n.Status, Revision: n.Revision, EvidenceIDs: n.EvidenceIDs, DecisionActor: n.DecisionActor}
+		if n.Kind == protocol.NodeFact && e.optimizationPolicy(ctx).AutoPromote {
+			if _, _, supported := work.MemorySourceGuidance(n); supported {
+				identity.Content = n.Content
+			}
+		}
+		p.Nodes = append(p.Nodes, identity)
 	}
 	for _, ev := range work.ActiveEvidence(d) {
 		if ev.StaleAt == nil && ev.Availability != protocol.AvailUnavailable {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/fingerprint"
+	"github.com/shaktsin/umcode/internal/optimization"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/retrieval"
 	"github.com/shaktsin/umcode/internal/store"
@@ -110,7 +111,7 @@ func (s *Service) Update(ctx context.Context, threadID string, req protocol.Work
 			}
 		}
 	}
-	prepared, err := PrepareUpdate(detail, clean, s.now())
+	prepared, err := prepareUpdate(detail, clean, s.now(), s.optimizationPolicy(ctx).AutomaticWorkflow)
 	if err != nil {
 		return result, nil, err
 	}
@@ -287,7 +288,7 @@ func (s *Service) Begin(ctx context.Context, th protocol.Thread, text string) er
 
 func (s *Service) begin(ctx context.Context, th protocol.Thread, text string) error {
 	if w, ok, err := s.Store.OpenWorkForThread(ctx, th.ID); err != nil || ok {
-		if err == nil && ok && s.DesignedWorkflow {
+		if err == nil && ok && s.optimizationPolicy(ctx).DesignedWorkflow {
 			depth := MaxDepth(w.WorkflowDepth, InitialDepth(text))
 			if depth != w.WorkflowDepth {
 				return s.Store.SetWorkDepth(ctx, w.ID, depth)
@@ -298,7 +299,7 @@ func (s *Service) begin(ctx context.Context, th protocol.Thread, text string) er
 	goal := capText(redactText(text), goalLimit)
 	now := s.now()
 	depth := ""
-	if s.DesignedWorkflow {
+	if s.optimizationPolicy(ctx).DesignedWorkflow {
 		depth = InitialDepth(text)
 	}
 	w, err := s.Store.CreateWork(ctx, protocol.Work{ThreadID: th.ID, ProjectID: th.ProjectID, Goal: goal, CreatedAt: now, WorkflowDepth: depth})
@@ -321,7 +322,7 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 	if err != nil || !ok {
 		return err
 	}
-	if s.DesignedWorkflow {
+	if s.optimizationPolicy(ctx).DesignedWorkflow {
 		d, err := s.Store.GetWorkDetail(ctx, w.ID)
 		if err != nil {
 			return err
@@ -340,7 +341,7 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 	if o.Err != "" {
 		return s.recordFailure(ctx, w.ID, o)
 	}
-	if s.DesignedWorkflow && discoveryTool(o.Tool) || s.ContextRetrieval && (o.Tool == "file.read" || o.Tool == "file.search") {
+	if s.optimizationPolicy(ctx).DesignedWorkflow && discoveryTool(o.Tool) || s.optimizationPolicy(ctx).ContextRetrieval && (o.Tool == "file.read" || o.Tool == "file.search") {
 		// Only engine-observed successful calls can create discovery provenance.
 		// No semantic-client assertions are accepted as observations.
 		body := redactText(o.structured())
@@ -348,7 +349,7 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 		argsHash := sha256.Sum256(o.Args)
 		ev := protocol.Evidence{WorkID: w.ID, Kind: protocol.EvidenceDiscovery, SourceURI: o.Tool, SourceRevision: hex.EncodeToString(argsHash[:]), ContentHash: hex.EncodeToString(hash[:]), Summary: capText(body, summaryLimit), ObservedAt: s.now()}
 		var err error
-		if s.ContextRetrieval && (o.Tool == "file.read" || o.Tool == "file.search") && len(o.Excerpts) > 0 {
+		if s.optimizationPolicy(ctx).ContextRetrieval && (o.Tool == "file.read" || o.Tool == "file.search") && len(o.Excerpts) > 0 {
 			for _, x := range o.Excerpts {
 				if x.WorkspaceRootHash != retrieval.WorkspaceHash(o.Root) {
 					return errors.New("invalid excerpt workspace")
@@ -534,6 +535,9 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 		if c.Kind == "browser" {
 			metadata["check_type"] = "browser"
 		}
+		if c.Kind == "evidence" && c.Command == "workflow:evidence" && o.Root == "" && s.optimizationPolicy(ctx).AutomaticWorkflow {
+			metadata["check_type"] = "evidence"
+		}
 		content, _ := json.Marshal(metadata)
 		title := c.Label
 		if title == "" {
@@ -543,6 +547,24 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 			Content: content, Status: "pending", ValidFrom: now, CreatedAt: now, UpdatedAt: now})
 		if err != nil {
 			return err
+		}
+
+		// Reconnect obligations from the retired engine-owned projectless
+		// approval criterion. This never records a pass or approves a decision.
+		if c.Command == "workflow:evidence" && o.Root == "" && s.optimizationPolicy(ctx).AutomaticWorkflow {
+			old := map[string]bool{}
+			for _, prior := range d.Nodes {
+				if prior.Kind == protocol.NodeCriterion && criterionCommand(prior) == "workflow:approval" {
+					old[prior.ID] = true
+				}
+			}
+			for _, edge := range d.Edges {
+				if old[edge.FromNodeID] && edge.Relation == protocol.RelVerifies {
+					if err := s.Store.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: n.ID, Relation: protocol.RelVerifies, ToNodeID: edge.ToNodeID}); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		if hasGoal {
 			if err := s.Store.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: goal.ID, Relation: protocol.RelRequires, ToNodeID: n.ID}); err != nil {
@@ -639,7 +661,7 @@ func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Ob
 	attempt, err := s.Store.RecordAttempt(ctx, in)
 	// Repository-wide guidance must reproduce the actual command at the root.
 	// Keep recording other attempts, but never promote masked or scoped commands.
-	if err != nil || !s.DesignedWorkflow || checkType != "command" || commandRedacted || strings.Contains(command, "[REDACTED]") || (directory != "" && directory != ".") || status != protocol.AttemptPassed || exit == nil || *exit != 0 || !wsOK || critID == "" {
+	if err != nil || !s.optimizationPolicy(ctx).DesignedWorkflow || checkType != "command" || commandRedacted || strings.Contains(command, "[REDACTED]") || (directory != "" && directory != ".") || status != protocol.AttemptPassed || exit == nil || *exit != 0 || !wsOK || critID == "" {
 		return err
 	}
 	content, _ := json.Marshal(VerifiedCommandFact{Type: "verified_command", Command: command, EvidenceID: attempt.EvidenceID, SourceRevision: ws.Value})
@@ -721,7 +743,7 @@ func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused b
 		return "", err
 	}
 	blockers := Unresolved(d)
-	if s.DesignedWorkflow && d.Work.WorkflowDepth != protocol.DepthDirect {
+	if s.optimizationPolicy(ctx).DesignedWorkflow && d.Work.WorkflowDepth != protocol.DepthDirect {
 		blockers = CompletionBlockers(d)
 	}
 	if len(blockers) > 0 {
@@ -812,4 +834,11 @@ func (s *Service) settle(ctx context.Context, d protocol.WorkDetail, root string
 		}
 	}
 	return s.Store.MarkEvidenceStale(ctx, ids, now)
+}
+
+func (s *Service) optimizationPolicy(ctx context.Context) optimization.Policy {
+	if p, ok := optimization.FromContext(ctx); ok {
+		return p
+	}
+	return optimization.Policy{DesignedWorkflow: s.DesignedWorkflow, ContextRetrieval: s.ContextRetrieval}
 }

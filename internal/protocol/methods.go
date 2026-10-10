@@ -57,6 +57,8 @@ const (
 
 	MethodComplexityGetDefaults = "complexity/getDefaults"
 	MethodComplexitySetDefaults = "complexity/setDefaults"
+	MethodTokenOptimizationGet  = "settings/tokenOptimization/get"
+	MethodTokenOptimizationSet  = "settings/tokenOptimization/set"
 	MethodComputerUseGetDefault = "settings/computerUse/getDefault"
 	MethodComputerUseSetDefault = "settings/computerUse/setDefault"
 	MethodComputerUseAct        = "computer/act"

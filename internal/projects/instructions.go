@@ -33,8 +33,14 @@ type instructionCache struct {
 // InstructionsFor composes the project-root UMCODE.md, then nested UMCODE.md
 // files from the project root through the hinted path.
 func (s *Service) InstructionsFor(ctx context.Context, p protocol.Project, hint string) (string, []protocol.InstructionSource) {
+	return s.InstructionsForProjection(ctx, p, hint, "", nil)
+}
+
+// InstructionsForProjection keeps transformed instruction caches separate from
+// canonical content. project paths and stamps follow the ordinary reader.
+func (s *Service) InstructionsForProjection(ctx context.Context, p protocol.Project, hint, projection string, transform func([]byte) []byte) (string, []protocol.InstructionSource) {
 	files := s.instructionFiles(p, hint)
-	key := p.ID + "\x00" + hint
+	key := p.ID + "\x00" + hint + "\x00" + projection
 	s.mu.Lock()
 	c := s.cache[key]
 	s.mu.Unlock()
@@ -59,6 +65,9 @@ func (s *Service) InstructionsFor(ctx context.Context, p protocol.Project, hint 
 		if len(data) > maxInstructionBytes {
 			data = data[:maxInstructionBytes]
 			src.Error = fmt.Sprintf("truncated to %d KB", maxInstructionBytes>>10)
+		}
+		if transform != nil {
+			data = transform(data)
 		}
 		title := map[string]string{
 			"project": fmt.Sprintf("# Project instructions (%s)",

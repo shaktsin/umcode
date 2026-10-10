@@ -350,6 +350,9 @@ func validateTransition(n protocol.WorkNode, to string) error {
 // PrepareUpdate validates a complete batch against a private graph projection.
 // IDs derive from work/revision/ref so equal inputs prepare equal deltas.
 func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, now time.Time) (protocol.PreparedWorkUpdate, error) {
+	return prepareUpdate(detail, req, now, false)
+}
+func prepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, now time.Time, automatic bool) (protocol.PreparedWorkUpdate, error) {
 	var p protocol.PreparedWorkUpdate
 	if len(req.Nodes) > MaxNodeChanges {
 		return p, invalid("nodes", "limit")
@@ -480,8 +483,11 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 			if _, err := decodeContent(n); err != nil {
 				return protocol.PreparedWorkUpdate{}, err
 			}
-			if n.Kind == protocol.NodeDecision && gateKind(n) != "" && n.Status == protocol.StatusApproved {
+			if !automatic && n.Kind == protocol.NodeDecision && gateKind(n) != "" && n.Status == protocol.StatusApproved {
 				return protocol.PreparedWorkUpdate{}, invalid("nodes.to_status", "approval_required")
+			}
+			if automatic && n.Kind == protocol.NodeDecision && (n.Status == protocol.StatusApproved || n.Status == protocol.StatusRejected) {
+				n.DecisionActor = "agent"
 			}
 			nodes[id] = len(d.Nodes)
 			d.Nodes = append(d.Nodes, n)
@@ -516,13 +522,13 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 				return protocol.PreparedWorkUpdate{}, invalid("nodes.expected_revision", "stale")
 			}
 			riskIntent := n.Kind == protocol.NodeUnknown && n.Status == protocol.StatusOpen && c.ToStatus == protocol.StatusAcceptedRisk && active(n) && blocking(n)
-			if err := validateTransition(n, c.ToStatus); err != nil && !riskIntent {
+			if err := validateTransition(n, c.ToStatus); err != nil && !riskIntent && !(automatic && n.Kind == protocol.NodeDecision && n.Status == protocol.StatusProposed && (c.ToStatus == protocol.StatusApproved || c.ToStatus == protocol.StatusRejected)) {
 				return protocol.PreparedWorkUpdate{}, err
 			}
 			p.NodeChecks = append(p.NodeChecks, protocol.WorkNodeCheck{ID: n.ID, ExpectedRevision: n.Revision, ExpectedStatus: n.Status})
 			// A requested ready state is derived after projecting the entire batch.
 			to := c.ToStatus
-			if riskIntent {
+			if riskIntent && !automatic {
 				to = n.Status
 				p.Gates = append(p.Gates, protocol.WorkflowGate{WorkID: req.WorkID, NodeID: n.ID, NodeRevision: n.Revision, Kind: GateAcceptedRisk, Reason: GateAcceptedRisk, Summary: n.Title})
 			}
@@ -531,8 +537,16 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 			}
 			if to != n.Status {
 				transitionIndex[n.ID] = len(p.Transitions)
-				p.Transitions = append(p.Transitions, protocol.WorkNodeTransition{ID: n.ID, ExpectedRevision: n.Revision, FromStatus: n.Status, ToStatus: to})
+				p.Transitions = append(p.Transitions, protocol.WorkNodeTransition{ID: n.ID, ExpectedRevision: n.Revision, FromStatus: n.Status, ToStatus: to, DecisionActor: func() string {
+					if automatic && (n.Kind == protocol.NodeDecision || riskIntent) {
+						return "agent"
+					}
+					return ""
+				}()})
 				n.Status = to
+				if automatic && (n.Kind == protocol.NodeDecision || riskIntent) {
+					n.DecisionActor = "agent"
+				}
 				n.Revision++
 				n.UpdatedAt = now
 			}
@@ -705,7 +719,9 @@ func PrepareUpdate(detail protocol.WorkDetail, req protocol.WorkUpdateRequest, n
 			d.Nodes[i].Revision++
 		}
 	}
-	p.Gates = append(p.Gates, PendingWorkflowGates(d)...)
+	if !automatic {
+		p.Gates = append(p.Gates, PendingWorkflowGates(d)...)
+	}
 	if HasMaterialGate(d) || len(p.Gates) > 0 {
 		p.WorkflowDepth = protocol.DepthDesigned
 	}
@@ -991,7 +1007,7 @@ func CompletionBlockers(d protocol.WorkDetail) []string {
 	filtered := d
 	filtered.Nodes = nil
 	for _, n := range d.Nodes {
-		if n.Kind == protocol.NodeCriterion && active(n) && required(n) {
+		if n.Kind != protocol.NodeCriterion || active(n) && required(n) {
 			filtered.Nodes = append(filtered.Nodes, n)
 		}
 	}

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/shaktsin/umcode/internal/toolreduce"
@@ -9,7 +10,10 @@ import (
 // reduceToolResult returns a model-facing projection. The caller keeps output
 // for storage, observation, hooks, and repeat detection.
 func (e *Engine) reduceToolResult(name string, args json.RawMessage, output string, isError bool) (model string, report toolreduce.Report) {
-	if e.Cfg == nil || !e.Cfg.Models.ToolResultReducers || output == "" {
+	return e.reduceToolResultFor(context.Background(), name, args, output, isError)
+}
+func (e *Engine) reduceToolResultFor(ctx context.Context, name string, args json.RawMessage, output string, isError bool) (model string, report toolreduce.Report) {
+	if !e.optimizationPolicy(ctx).ToolResultReducers || output == "" {
 		return output, toolreduce.Report{}
 	}
 	model = output

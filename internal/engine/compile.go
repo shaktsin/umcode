@@ -35,7 +35,7 @@ func requestMessages(prefix, live []llm.Message) []llm.Message {
 // items is the transcript the caller already read, so a long tool loop does not
 // re-read it for every model call. Nothing here blocks or prompts.
 func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string, window, historyTokens int, items []protocol.Item, request, root string) (out compileOutcome, ok bool) {
-	if e.Cfg == nil || !e.Cfg.Models.ContextCompiler || e.Work == nil {
+	if e.Cfg == nil || !e.optimizationPolicy(ctx).ContextCompiler || e.Work == nil {
 		return compileOutcome{}, false
 	}
 	defer func() {
@@ -67,9 +67,9 @@ func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string,
 	// only written back at turn end. The environment rule is left to that
 	// write-back: running git for every model call would cost a turn latency.
 	in := ctxcompiler.Input{Detail: d, Stale: work.Staleness(d, ""),
-		DesignedWorkflow: e.Cfg.Models.DesignedWorkflow,
+		DesignedWorkflow: e.optimizationPolicy(ctx).DesignedWorkflow,
 		Active:           work.ActiveEvidence(d), Items: items, TurnID: turnID, Window: window, HistoryTokens: historyTokens}
-	if e.Cfg.Models.ContextRetrieval {
+	if e.optimizationPolicy(ctx).ContextRetrieval {
 		scope := retrieval.Scope{ThreadID: th.ID, WorkID: d.Work.ID, ProjectID: th.ProjectID, TurnID: turnID}
 		candidates, report, retrievalErr := e.retrieve(ctx, scope, d, request, root, items, turnID)
 		if retrievalErr == nil {

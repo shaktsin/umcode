@@ -6,6 +6,7 @@ import (
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
+	"github.com/shaktsin/umcode/internal/optimization"
 	"github.com/shaktsin/umcode/internal/policy"
 	"github.com/shaktsin/umcode/internal/projects"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -227,5 +228,64 @@ func TestProgressiveMCPRevocationDuringApproval(t *testing.T) {
 	out := <-done
 	if !out.IsError || target.calls.Load() != 0 {
 		t.Fatalf("MCP revocation during approval bypassed: %+v calls=%d", out, target.calls.Load())
+	}
+}
+
+func TestOptimizationToggleDuringApprovalPreservesRevocation(t *testing.T) {
+	e, th, turn, st := pluginHookEngine(t)
+	installMemoryProvider(t, e)
+	th.ApprovalMode = policy.ApprovalNormal
+	yes := true
+	p := selectionProject(t, e, &th, protocol.ProjectTools{ComputerUse: &yes})
+	target := &engineTestTool{name: "computer.action", risk: tools.RiskRed}
+	e.Tools.Add(target)
+	snapshot := optimization.WithPolicy(t.Context(), optimization.All(true))
+	s := e.startToolSelection(snapshot, th, nil, &p, "operate desktop")
+	ctx := context.WithValue(snapshot, selectionContextKey{}, s)
+	ctx = tools.WithScope(ctx, &tools.Scope{ThreadID: th.ID, ProjectID: p.ID, Root: p.Root, AllowComputerUse: true})
+	done := make(chan toolRunResult, 1)
+	go func() {
+		done <- e.runTool(ctx, ctx, th, turn, llm.ToolCall{ID: "action", Name: tools.ToWire(target.Name()), Args: json.RawMessage(`{}`)}, nil)
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	var approval protocol.Approval
+	for time.Now().Before(deadline) {
+		rows, err := st.ListApprovals(t.Context(), "pending")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range rows {
+			e.mu.Lock()
+			live := e.approvals[a.ID] != nil
+			e.mu.Unlock()
+			if live {
+				approval = a
+				break
+			}
+		}
+		if approval.ID != "" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if approval.ID == "" {
+		t.Fatal("approval did not become pending")
+	}
+	if _, err := e.SetTokenOptimization(t.Context(), protocol.TokenOptimizationParams{Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	if !e.optimizationPolicy(ctx).AutomaticWorkflow {
+		t.Fatal("active approval lost policy snapshot")
+	}
+	no := false
+	if _, err := e.Projects.Update(t.Context(), protocol.ProjectUpdateParams{ProjectID: p.ID, Tools: &protocol.ProjectTools{ComputerUse: &no}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RespondApproval(t.Context(), approval.ID, true, false, "user"); err != nil {
+		t.Fatal(err)
+	}
+	out := <-done
+	if !out.IsError || target.calls.Load() != 0 {
+		t.Fatalf("revocation during approval bypassed: %+v calls=%d", out, target.calls.Load())
 	}
 }

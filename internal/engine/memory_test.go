@@ -343,7 +343,7 @@ func TestMemoryRecoveryStartupGateAndFailure(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Cleanup(func() { e.Shutdown(context.Background()) })
-				if (e.Memory != nil) != (auto && designed) {
+				if e.Memory == nil {
 					t.Fatalf("service activated=%v", e.Memory != nil)
 				}
 				want := int64(0)

@@ -95,20 +95,21 @@ type Work struct {
 
 // WorkNode is a semantic node in a work's graph.
 type WorkNode struct {
-	ID           string          `json:"id"`
-	WorkID       string          `json:"workId"`
-	Kind         string          `json:"kind"`
-	Title        string          `json:"title"`
-	Content      json.RawMessage `json:"content,omitempty"`
-	Status       string          `json:"status"`
-	Confidence   float64         `json:"confidence"`
-	Revision     int             `json:"revision"`
-	EvidenceIDs  []string        `json:"evidenceIds,omitempty"`
-	ValidFrom    time.Time       `json:"validFrom"`
-	ValidUntil   *time.Time      `json:"validUntil,omitempty"`
-	SupersededBy string          `json:"supersededBy,omitempty"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	UpdatedAt    time.Time       `json:"updatedAt"`
+	DecisionActor string          `json:"decisionActor,omitempty"`
+	ID            string          `json:"id"`
+	WorkID        string          `json:"workId"`
+	Kind          string          `json:"kind"`
+	Title         string          `json:"title"`
+	Content       json.RawMessage `json:"content,omitempty"`
+	Status        string          `json:"status"`
+	Confidence    float64         `json:"confidence"`
+	Revision      int             `json:"revision"`
+	EvidenceIDs   []string        `json:"evidenceIds,omitempty"`
+	ValidFrom     time.Time       `json:"validFrom"`
+	ValidUntil    *time.Time      `json:"validUntil,omitempty"`
+	SupersededBy  string          `json:"supersededBy,omitempty"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	UpdatedAt     time.Time       `json:"updatedAt"`
 }
 
 // WorkEdge links two nodes of one work.
@@ -193,6 +194,7 @@ type WorkNodeCheck struct {
 
 // WorkNodeTransition carries the predicates needed for a conditional update.
 type WorkNodeTransition struct {
+	DecisionActor    string `json:"-"`
 	ID               string `json:"-"`
 	ExpectedRevision int    `json:"-"`
 	FromStatus       string `json:"-"`

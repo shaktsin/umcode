@@ -137,9 +137,9 @@ func (s *Store) ApplyWorkUpdate(ctx context.Context, update protocol.PreparedWor
 	}
 	for _, n := range update.Creates {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO work_nodes (id, work_id, kind, title, content_json, status, confidence, revision,
-			valid_from, valid_until, superseded_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			valid_from, valid_until, superseded_by, created_at, updated_at, decision_actor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			n.ID, w.ID, n.Kind, n.Title, string(n.Content), n.Status, n.Confidence, n.Revision,
-			FormatTime(n.ValidFrom), nullTimePtr(n.ValidUntil), n.SupersededBy, FormatTime(n.CreatedAt), FormatTime(n.UpdatedAt)); err != nil {
+			FormatTime(n.ValidFrom), nullTimePtr(n.ValidUntil), n.SupersededBy, FormatTime(n.CreatedAt), FormatTime(n.UpdatedAt), n.DecisionActor); err != nil {
 			return zero, err
 		}
 		if err := indexRetrievalDocument(ctx, tx, "node", n.ID, w.ID, n.Title); err != nil {
@@ -148,11 +148,11 @@ func (s *Store) ApplyWorkUpdate(ctx context.Context, update protocol.PreparedWor
 	}
 	at := FormatTime(time.Now().UTC())
 	for _, tr := range update.Transitions {
-		changed, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status = ?, revision = revision + 1, updated_at = ?,
+		changed, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status = ?, revision = revision + 1, updated_at = ?, decision_actor=CASE WHEN ?<>'' THEN ? ELSE decision_actor END,
 			valid_until=CASE WHEN ?<>'' THEN ? ELSE valid_until END,
 			superseded_by=CASE WHEN ?<>'' THEN ? ELSE superseded_by END
 			WHERE id = ? AND work_id = ? AND revision = ? AND status = ?`,
-			tr.ToStatus, at, tr.SupersededBy, at, tr.SupersededBy, tr.SupersededBy, tr.ID, w.ID, tr.ExpectedRevision, tr.FromStatus)
+			tr.ToStatus, at, tr.DecisionActor, tr.DecisionActor, tr.SupersededBy, at, tr.SupersededBy, tr.SupersededBy, tr.ID, w.ID, tr.ExpectedRevision, tr.FromStatus)
 		if err != nil {
 			return zero, err
 		}
@@ -438,7 +438,7 @@ func getWorkDetail(ctx context.Context, q workQuerier, workID string) (protocol.
 	d.Work = w
 
 	rows, err := q.QueryContext(ctx, `SELECT id, work_id, kind, title, content_json, status, confidence, revision, valid_from,
-		valid_until, superseded_by, created_at, updated_at FROM work_nodes WHERE work_id = ? ORDER BY created_at, rowid`, workID)
+		valid_until, superseded_by, created_at, updated_at, decision_actor FROM work_nodes WHERE work_id = ? ORDER BY created_at, rowid`, workID)
 	if err != nil {
 		return d, err
 	}
@@ -447,7 +447,7 @@ func getWorkDetail(ctx context.Context, q workQuerier, workID string) (protocol.
 		var content, validFrom, created, updated string
 		var validUntil sql.NullString
 		if err := rows.Scan(&n.ID, &n.WorkID, &n.Kind, &n.Title, &content, &n.Status, &n.Confidence, &n.Revision,
-			&validFrom, &validUntil, &n.SupersededBy, &created, &updated); err != nil {
+			&validFrom, &validUntil, &n.SupersededBy, &created, &updated, &n.DecisionActor); err != nil {
 			rows.Close()
 			return d, err
 		}

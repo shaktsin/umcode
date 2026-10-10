@@ -242,3 +242,11 @@ func TestMergeAlreadyCurrentAndReplacementDuplicate(t *testing.T) {
 		})
 	}
 }
+
+func TestWithoutGeneratedMemoryPreservesCommentedRules(t *testing.T) {
+	before := "# Rules\nAsk before deployment.\n<!-- team note -->\n\n## Verified project memory\n<!-- umcode:generated -->\n- generated fact\n\n## More rules\nKeep backups.\n"
+	want := "# Rules\nAsk before deployment.\n<!-- team note -->\n\n## More rules\nKeep backups.\n"
+	if got := string(WithoutGeneratedMemory([]byte(before))); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}

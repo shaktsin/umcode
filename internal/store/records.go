@@ -411,7 +411,7 @@ func (s *Store) DecideWorkflowApproval(ctx context.Context, id, status, by strin
 			}
 		}
 		d.Nodes[index].Status = outcome
-		res, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status=?,revision=revision+1,updated_at=? WHERE id=? AND work_id=? AND revision=? AND status=?`, outcome, Now(), nodeID, workID, revision, n.Status)
+		res, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status=?,revision=revision+1,updated_at=?,decision_actor='user' WHERE id=? AND work_id=? AND revision=? AND status=?`, outcome, Now(), nodeID, workID, revision, n.Status)
 		if err != nil {
 			return 0, err
 		}

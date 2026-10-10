@@ -25,6 +25,7 @@ import (
 	"github.com/shaktsin/umcode/internal/mcp"
 	"github.com/shaktsin/umcode/internal/memory"
 	"github.com/shaktsin/umcode/internal/models"
+	"github.com/shaktsin/umcode/internal/optimization"
 	"github.com/shaktsin/umcode/internal/plugins"
 	"github.com/shaktsin/umcode/internal/policy"
 	"github.com/shaktsin/umcode/internal/preview"
@@ -153,9 +154,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	reg := tools.NewRegistry()
 	sk := skills.NewRegistry(o.Config)
 	tools.RegisterBuiltins(reg, o.Config, ws, sk.EnvFor, tools.BuiltinServices{Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs})
-	if o.Config.Models.DesignedWorkflow {
-		reg.Add(tools.NewWorkUpdate(workService))
-	}
+	reg.Add(tools.NewWorkUpdate(workService))
 	sk.Register(reg)
 
 	mcpm := mcp.NewManager(o.Config.MCPServers, o.Logger)
@@ -939,10 +938,15 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 	flush(layerCore)
 	b.WriteString(fmt.Sprintf("Current time: %s (%s).\n", time.Now().Format(time.RFC1123), tasks.ZoneName(time.Local)))
 	flush(layerClock)
-	if e.Cfg.Models.DesignedWorkflow {
-		b.WriteString("\nWorkflow: Direct work should call work.update only when semantic structure or classification changes. Before Guided or Designed implementation, call verification.plan to establish applicable criteria, inspect with discovery tools for supporting evidence, then record the first sufficient solution rung, linked criteria and evidence, the current task, and blocking unknowns. Use the canonical identity context for work/node revisions and evidence IDs. Without a project, the planned approval criterion verifies only human acceptance of its linked decision, not execution or unrelated outcomes. Keep updates compact; the engine derives readiness and enforces gates.\n")
+	if e.optimizationPolicy(ctx).DesignedWorkflow {
+		if e.optimizationPolicy(ctx).AutomaticWorkflow {
+			b.WriteString("\nAutomatic workflow: maintain compact internal plans, decisions, tasks and verification evidence through work.update. Resolve proposed decisions autonomously using revision-checked transitions; these are agent decisions, never user approval. Do not ask for optimization activation, planning or design approval merely because workflow classification escalates. Preserve explicit user review requirements and the chat's normal action permissions. For simple tasks keep this lightweight. Missing evidence or runnable tasks must be repaired internally before implementation; do not claim unperformed checks passed.\n")
+		} else {
+			b.WriteString("\nWorkflow: Direct work should call work.update only when semantic structure or classification changes. Before Guided or Designed implementation, call verification.plan to establish applicable criteria, inspect with discovery tools for supporting evidence, then record the first sufficient solution rung, linked criteria and evidence, the current task, and blocking unknowns. Use the canonical identity context for work/node revisions and evidence IDs. Without a project, the planned approval criterion verifies only human acceptance of its linked decision, not execution or unrelated outcomes. Keep updates compact; the engine derives readiness and enforces gates.\n")
+		}
 		flush(layerWorkflow)
 	}
+
 	if cat := e.Skills.CatalogContext(ctx); cat != "" {
 		b.WriteString("\n" + cat)
 		if sk, ok := e.Skills.MatchContext(ctx, userText); ok && userText != "" {
@@ -971,7 +975,12 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 			fmt.Fprintf(&b, "It is a git checkout on branch %s with %d changed files.\n", proj.VCS.Branch, proj.VCS.Dirty)
 		}
 		flush(layerProject)
-		instructions, _ := e.Projects.InstructionsFor(ctx, *proj, instructionHint)
+		var instructions string
+		if p, explicit := optimization.FromContext(ctx); explicit && !p.AutoPromote {
+			instructions, _ = e.Projects.InstructionsForProjection(ctx, *proj, instructionHint, "without-generated-memory", memory.WithoutGeneratedMemory)
+		} else {
+			instructions, _ = e.Projects.InstructionsFor(ctx, *proj, instructionHint)
+		}
 		b.WriteString(instructions)
 		flush(layerInstructions)
 		return layers
@@ -1001,21 +1010,23 @@ func toolVersion(ctx context.Context) string {
 	return toolVersionValue
 }
 
-// initMemory is the only feature gate: inactive configurations construct no
-// promoter and perform no promotion or recovery reads.
+// initMemory constructs an inert promoter; only the effective policy permits I/O.
 func (e *Engine) initMemory(ctx context.Context) {
-	if !e.Cfg.Memory.AutoPromote {
-		return
-	}
-	if !e.Cfg.Models.DesignedWorkflow {
-		e.Log.Info("memory promotion inactive", "reason", "designed_workflow_disabled")
-		return
-	}
 	e.Memory = memory.New(e.Store, e.Projects, e.Cfg.Memory.TargetFileBytes)
 	emitCtx := context.WithoutCancel(ctx)
 	e.Memory.Emit = e.memoryFileChangeEmitter(emitCtx, "promotion")
 	e.Memory.EmitRecovery = e.memoryFileChangeEmitter(emitCtx, "recovery")
-	e.recoverMemory(ctx)
+	p, err := e.resolveOptimizationPolicy(ctx)
+	if err != nil {
+		e.Log.Warn("memory recovery deferred", "class", "optimization_setting")
+		return
+	}
+	if p.AutoPromote && !p.DesignedWorkflow {
+		e.Log.Info("memory promotion inactive", "reason", "designed_workflow_disabled")
+	}
+	if p.AutoPromote && p.DesignedWorkflow {
+		e.recoverMemory(optimization.WithPolicy(ctx, p))
+	}
 }
 
 func (e *Engine) memoryFileChangeEmitter(ctx context.Context, operation string) func(protocol.FileChangeData) {
@@ -1052,7 +1063,7 @@ func (e *Engine) recoverMemory(ctx context.Context) {
 // observational Work recorder follows the instruction-file write, so completed
 // product verification remains fresh.
 func (e *Engine) promoteMemory(ctx context.Context, th protocol.Thread, turn protocol.Turn, workID string) {
-	if e.Memory == nil || workID == "" || th.ProjectID == "" {
+	if !e.optimizationPolicy(ctx).AutoPromote || !e.optimizationPolicy(ctx).DesignedWorkflow || e.Memory == nil || workID == "" || th.ProjectID == "" {
 		return
 	}
 	defer func() {
