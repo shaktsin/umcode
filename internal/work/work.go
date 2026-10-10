@@ -654,43 +654,48 @@ func (s *Service) recordBrowser(ctx context.Context, d protocol.WorkDetail, o Ob
 // End finishes a turn for the thread's open work: it fingerprints the workspace
 // (recording shell-made changes), settles staleness, and closes the work as
 // completed only when the turn completed, was not paused, and no criterion is
-// unresolved. root is the turn's project root ("" without a project).
-func (s *Service) End(ctx context.Context, threadID, turnStatus string, paused bool, root string) error {
-	return s.count("end", s.end(ctx, threadID, turnStatus, paused, root))
+// unresolved. It returns the ID only when this call newly completes the Work.
+// root is the turn's project root ("" without a project).
+func (s *Service) End(ctx context.Context, threadID, turnStatus string, paused bool, root string) (completedWorkID string, err error) {
+	id, err := s.end(ctx, threadID, turnStatus, paused, root)
+	return id, s.count("end", err)
 }
 
-func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused bool, root string) error {
+func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused bool, root string) (string, error) {
 	w, ok, err := s.Store.OpenWorkForThread(ctx, threadID)
 	if err != nil || !ok {
-		return err
+		return "", err
 	}
 	d, err := s.Store.GetWorkDetail(ctx, w.ID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := s.turnEndFingerprint(ctx, d, root); err != nil {
 		s.count("fingerprint", err)
 	}
 	if d, err = s.Store.GetWorkDetail(ctx, w.ID); err != nil {
-		return err
+		return "", err
 	}
 	if err := s.settle(ctx, d, root); err != nil {
 		s.count("staleness", err)
 	}
 	if turnStatus != protocol.TurnCompleted || paused {
-		return nil
+		return "", nil
 	}
 	if d, err = s.Store.GetWorkDetail(ctx, w.ID); err != nil {
-		return err
+		return "", err
 	}
 	blockers := Unresolved(d)
 	if s.DesignedWorkflow && d.Work.WorkflowDepth != protocol.DepthDirect {
 		blockers = CompletionBlockers(d)
 	}
 	if len(blockers) > 0 {
-		return nil
+		return "", nil
 	}
-	return s.Store.CloseWork(ctx, w.ID, protocol.WorkCompleted, s.now())
+	if err := s.Store.CloseWork(ctx, w.ID, protocol.WorkCompleted, s.now()); err != nil {
+		return "", err
+	}
+	return w.ID, nil
 }
 
 // turnEndFingerprint stores the turn-end workspace fingerprint. When it differs

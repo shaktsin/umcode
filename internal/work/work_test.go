@@ -624,7 +624,7 @@ func TestDesignedWorkflowServiceCompletion(t *testing.T) {
 			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, tc.depth); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+			if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			if got := f.detail(t).Work.Status; got != tc.want {
@@ -667,7 +667,7 @@ func TestDesignedWorkflowServiceCompletion(t *testing.T) {
 	if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+	if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.detail(t).Work.Status; got != "completed" {
@@ -719,7 +719,7 @@ func TestDesignedWorkflowServiceCompletionKeepsStaleSolutionOpen(t *testing.T) {
 			if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+			if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			want := "completed"
@@ -889,7 +889,7 @@ func TestFailedToolRecordsFactOnly(t *testing.T) {
 	if d.Work.WorkflowDepth != protocol.DepthDirect {
 		t.Fatalf("failed read escalated depth")
 	}
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+	if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if d = f.detail(t); d.Work.Status != protocol.WorkCompleted {
@@ -913,7 +913,7 @@ func TestMalformedOutputIgnored(t *testing.T) {
 	}
 }
 
-func TestEndRules(t *testing.T) {
+func TestEndReturnsCompletedWork(t *testing.T) {
 	cases := []struct {
 		name   string
 		setup  func(f fixture, t *testing.T)
@@ -942,8 +942,20 @@ func TestEndRules(t *testing.T) {
 			f := newFixture(t)
 			f.begin(t, "g")
 			c.setup(f, t)
-			if err := f.svc.End(context.Background(), f.th.ID, c.status, c.paused, ""); err != nil {
+			id, err := f.svc.End(context.Background(), f.th.ID, c.status, c.paused, "")
+			if err != nil {
 				t.Fatal(err)
+			}
+			if (id != "") != (c.want == protocol.WorkCompleted) {
+				t.Fatalf("completed ID = %q, want status %s", id, c.want)
+			}
+			if id != "" {
+				if id != f.detail(t).Work.ID {
+					t.Fatalf("wrong Work ID: %q", id)
+				}
+				if again, err := f.svc.End(context.Background(), f.th.ID, c.status, c.paused, ""); again != "" || err != nil {
+					t.Fatalf("repeat completion = %q, %v", again, err)
+				}
 			}
 			d := f.detail(t)
 			if d.Work.Status != c.want {
@@ -956,10 +968,10 @@ func TestEndRules(t *testing.T) {
 	}
 }
 
-func TestEndWithoutOpenWorkIsNoop(t *testing.T) {
+func TestEndReturnsCompletedWorkWithoutOpenWorkIsNoop(t *testing.T) {
 	f := newFixture(t)
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
-		t.Fatal(err)
+	if id, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil || id != "" {
+		t.Fatalf("no-open completion = %q, %v", id, err)
 	}
 	if err := f.svc.Observe(context.Background(), f.th.ID, Observation{Tool: "file.write"}); err != nil {
 		t.Fatal(err)
@@ -1034,5 +1046,17 @@ func TestReplanSupersedesDroppedCriteria(t *testing.T) {
 	f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, "")
 	if d := f.detail(t); d.Work.Status != protocol.WorkCompleted {
 		t.Fatalf("status = %s", d.Work.Status)
+	}
+}
+
+func TestEndReturnsCompletedWorkCloseFailure(t *testing.T) {
+	f := newFixture(t)
+	f.begin(t, "g")
+	if _, err := f.st.DB.Exec(`CREATE TRIGGER fail_close BEFORE UPDATE OF status ON works WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT,'close failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.svc.End(t.Context(), f.th.ID, protocol.TurnCompleted, false, "")
+	if err == nil || id != "" || f.detail(t).Work.Status != protocol.WorkOpen || f.svc.Failures.Load() != 1 {
+		t.Fatalf("failed close ID=%q error=%v failures=%d", id, err, f.svc.Failures.Load())
 	}
 }
