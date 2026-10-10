@@ -201,3 +201,25 @@ func TestDesignedWorkflowFlagDefaultsFalse(t *testing.T) {
 		})
 	}
 }
+
+func TestRetrievalConfigDependency(t *testing.T) {
+	c := Default(t.TempDir())
+	if c.Models.ContextRetrieval {
+		t.Fatal("enabled by default")
+	}
+	c.Models.ContextRetrieval = true
+	if c.Validate() == nil {
+		t.Fatal("retrieval accepted without compiler")
+	}
+	c.Models.ContextCompiler = true
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, enabled := range []bool{false, true} {
+		c.Models.DesignedWorkflow = enabled
+		c.Models.ToolResultReducers = enabled
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
