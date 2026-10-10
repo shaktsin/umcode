@@ -75,7 +75,7 @@ func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string,
 		if retrievalErr == nil {
 			in.Retrieval = candidates
 			in.RetrievalQuery = retrieval.BuildQuery(request, retrievalTaskTitles(d))
-		} else {
+		} else if report.Fallback == "" {
 			report.Fallback = "unavailable"
 		}
 		e.Log.Debug("context retrieval", "report", report)

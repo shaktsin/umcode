@@ -33,18 +33,21 @@ type Query struct {
 	Paths, Symbols []string
 }
 type Candidate struct {
-	ID, Kind, ThreadID, WorkID, ProjectID, Body, SourceRevision, ContentHash, Path, WorkspaceRootHash string
-	StartLine, EndLine, Distance                                                                      int
-	LexicalScore                                                                                      float64
-	Historical                                                                                        bool
+	ID, Kind, ThreadID, WorkID, ProjectID, Body, SourceRevision, ContentHash, Path, WorkspaceRootHash, EvidenceID string
+	StartLine, EndLine, Distance                                                                                  int
+	LexicalScore                                                                                                  float64
+	Historical                                                                                                    bool
 }
 type Entry = Candidate
 type Report struct {
-	Candidates int            `json:"candidates"`
-	Selected   int            `json:"selected"`
-	Tokens     int            `json:"tokens"`
-	Drops      map[string]int `json:"drops,omitempty"`
-	Fallback   string         `json:"fallback,omitempty"`
+	DurationMS       int64          `json:"durationMs,omitempty"`
+	CandidateSources map[string]int `json:"candidateSources,omitempty"`
+	SelectedSources  map[string]int `json:"selectedSources,omitempty"`
+	Candidates       int            `json:"candidates"`
+	Selected         int            `json:"selected"`
+	Tokens           int            `json:"tokens"`
+	Drops            map[string]int `json:"drops,omitempty"`
+	Fallback         string         `json:"fallback,omitempty"`
 }
 
 func WorkspaceHash(root string) string {

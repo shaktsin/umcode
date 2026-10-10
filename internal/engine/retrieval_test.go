@@ -119,3 +119,33 @@ func TestRetrievalLexicalCannotRestoreStalePass(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewAdHocOldPass(t *testing.T) {
+	e, th, turn, st := compilerEngine(t, true)
+	d := openWorkDetail(t, st, th.ID)
+	for i, status := range []string{protocol.AttemptPassed, protocol.AttemptFailed} {
+		summary := "QUASAR_OLD_PASS"
+		if i == 1 {
+			summary = "QUASAR_NEW_FAIL"
+		}
+		at := time.Now().Add(time.Duration(i) * time.Second)
+		ev, err := st.AddEvidence(t.Context(), protocol.Evidence{WorkID: d.Work.ID, Kind: protocol.EvidenceVerificationOutput, SourceURI: "go test ./...", Summary: summary, ObservedAt: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = st.AddVerificationAttempt(t.Context(), protocol.VerificationAttempt{WorkID: d.Work.ID, Command: "go test ./...", Status: status, EvidenceID: ev.ID, StartedAt: at, FinishedAt: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	d = openWorkDetail(t, st, th.ID)
+	cs, _, err := e.retrieve(t.Context(), retrieval.Scope{ThreadID: th.ID, WorkID: d.Work.ID, ProjectID: th.ProjectID, TurnID: turn.ID}, d, "QUASAR_OLD_PASS", "", nil, turn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cs {
+		if strings.Contains(c.Body, "QUASAR_OLD_PASS") {
+			t.Fatalf("obsolete ad hoc pass recovered as current: %+v", c)
+		}
+	}
+}

@@ -67,13 +67,16 @@ func matchHint(q Query, c Candidate) int {
 	return n
 }
 func Select(q Query, candidates []Candidate, excluded map[string]bool, budget int) ([]Entry, Report, error) {
-	report := Report{Candidates: len(candidates), Drops: map[string]int{}}
+	report := Report{Candidates: len(candidates), Drops: map[string]int{}, CandidateSources: map[string]int{}, SelectedSources: map[string]int{}}
 	total := 0
 	if len(candidates) > 4096 {
 		return nil, report, errors.New("retrieval candidate count oversized")
 	}
 	cs := append([]Candidate(nil), candidates...)
 	for i, c := range cs {
+		if sourcePriority(c.Kind) <= 5 {
+			report.CandidateSources[c.Kind]++
+		}
 		total += len(c.Body) + len(c.ID) + len(c.Path)
 		if total > MaxCandidateBytes {
 			return nil, report, errors.New("retrieval candidate bytes oversized")
@@ -147,6 +150,7 @@ func Select(q Query, candidates []Candidate, excluded map[string]bool, budget in
 			continue
 		}
 		out = next
+		report.SelectedSources[c.Kind]++
 		report.Tokens = cost
 	}
 	report.Selected = len(out)

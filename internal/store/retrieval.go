@@ -94,7 +94,7 @@ func (s *Store) SearchRetrieval(ctx context.Context, scope retrieval.Scope, q re
  CASE d.source_kind WHEN 'node' THEN n.title WHEN 'evidence' THEN e.summary ELSE x.text END,
  CASE d.source_kind WHEN 'node' THEN n.kind ELSE d.source_kind END,
  CASE d.source_kind WHEN 'node' THEN CAST(n.revision AS TEXT) WHEN 'evidence' THEN e.source_revision ELSE '' END,
- coalesce(x.path,''),coalesce(x.workspace_root_hash,''),coalesce(x.content_hash,''),coalesce(x.start_line,0),coalesce(x.end_line,0),bm25(retrieval_fts)
+ coalesce(x.path,''),coalesce(x.workspace_root_hash,''),coalesce(x.content_hash,''),coalesce(x.start_line,0),coalesce(x.end_line,0),coalesce(x.evidence_id,''),bm25(retrieval_fts)
  FROM retrieval_fts JOIN retrieval_documents d ON d.rowid=retrieval_fts.rowid
  JOIN works w ON w.id=d.work_id
  LEFT JOIN work_nodes n ON d.source_kind='node' AND n.id=d.source_id AND n.work_id=w.id
@@ -114,7 +114,7 @@ func (s *Store) SearchRetrieval(ctx context.Context, scope retrieval.Scope, q re
 	for rows.Next() {
 		var c retrieval.Candidate
 		var kind, id, hash, canonical string
-		if err := rows.Scan(&kind, &id, &hash, &canonical, &c.Kind, &c.SourceRevision, &c.Path, &c.WorkspaceRootHash, &c.ContentHash, &c.StartLine, &c.EndLine, &c.LexicalScore); err != nil {
+		if err := rows.Scan(&kind, &id, &hash, &canonical, &c.Kind, &c.SourceRevision, &c.Path, &c.WorkspaceRootHash, &c.ContentHash, &c.StartLine, &c.EndLine, &c.EvidenceID, &c.LexicalScore); err != nil {
 			rows.Close()
 			return nil, err
 		}

@@ -19,6 +19,7 @@ func redact(s string) string {
 }
 
 type graphPacket struct {
+	p0IDs, p1IDs               map[string]bool
 	p0, p1, evidence           string
 	criteria, supporting, rows int
 }
@@ -27,7 +28,7 @@ type graphPacket struct {
 // read through a small typed vocabulary; opaque prose and evidence bodies are
 // never copied. Identity ordering makes timestamps and transcript order inert.
 func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence []protocol.Evidence) (graphPacket, error) {
-	var p graphPacket
+	p := graphPacket{p0IDs: map[string]bool{}, p1IDs: map[string]bool{}}
 	nodes := append([]protocol.WorkNode(nil), d.Nodes...)
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
 	edges := append([]protocol.WorkEdge(nil), d.Edges...)
@@ -156,6 +157,7 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 			completion = append(completion, n.ID+"="+status)
 		}
 		if included[n.ID] {
+			p.p0IDs["node:"+n.ID] = true
 			fmt.Fprintf(&p0, "- %s %s revision=%d status=%s required=%t: %s", n.ID, n.Kind, n.Revision, status, required(n), redact(n.Title))
 			switch n.Kind {
 			case protocol.NodeDecision:
@@ -171,6 +173,7 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 			p0.WriteByte('\n')
 		}
 		if supporting[n.ID] {
+			p.p1IDs["node:"+n.ID] = true
 			fmt.Fprintf(&p1, "- %s %s: %s", n.ID, n.Kind, redact(n.Title))
 			if selected[n.ID] {
 				fmt.Fprintf(&p1, " rung=%d", m.Rung)
@@ -260,6 +263,7 @@ func designedPacket(d protocol.WorkDetail, stale map[string]bool, activeEvidence
 	sort.Strings(ids)
 	var evidence strings.Builder
 	for _, id := range ids {
+		p.p1IDs["evidence:"+id] = true
 		fmt.Fprintf(&evidence, "- %s", id)
 		if uri := allowed[id].SourceURI; uri != "" {
 			fmt.Fprintf(&evidence, " uri=%s", redact(uri))

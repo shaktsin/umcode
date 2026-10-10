@@ -8,6 +8,7 @@ import (
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/projects"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/retrieval"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
 	"os"
@@ -184,5 +185,22 @@ func TestRetrievalRestartAndEdit(t *testing.T) {
 	}
 	if got := compile(); strings.Contains(got, `"Kind":"excerpt"`) {
 		t.Fatal("external edit retained old excerpt")
+	}
+}
+
+func TestRetrievalInactiveExcerptParent(t *testing.T) {
+	e, th, turn, root := retrievalObservedFixture(t)
+	if _, err := e.Store.DB.Exec(`UPDATE evidence SET availability='unavailable' WHERE id IN (SELECT evidence_id FROM observed_excerpts)`); err != nil {
+		t.Fatal(err)
+	}
+	d := openWorkDetail(t, e.Store, th.ID)
+	cs, _, err := e.retrieve(t.Context(), retrieval.Scope{ThreadID: th.ID, ProjectID: th.ProjectID, WorkID: d.Work.ID, TurnID: turn.ID}, d, "QUASAR", root, nil, turn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cs {
+		if c.Kind == "excerpt" {
+			t.Fatal("excerpt parent is inactive")
+		}
 	}
 }

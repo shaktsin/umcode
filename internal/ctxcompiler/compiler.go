@@ -65,17 +65,18 @@ type Drop struct {
 
 // Report explains one compilation. It is diagnostic only.
 type Report struct {
-	RetrievalTokens      int      `json:"retrievalTokens,omitempty"`
-	RetrievalIDs         []string `json:"retrievalIDs,omitempty"`
-	Criteria             int      `json:"criteria"`
-	Evidence             int      `json:"evidence"`
-	TailMessages         int      `json:"tailMessages"`
-	WorkPacketTokens     int      `json:"workPacketTokens"`
-	EvidencePacketTokens int      `json:"evidencePacketTokens"`
-	TailTokens           int      `json:"tailTokens"`
-	P0Tokens             int      `json:"p0Tokens,omitempty"`
-	P1Tokens             int      `json:"p1Tokens,omitempty"`
-	Drops                []Drop   `json:"drops,omitempty"`
+	Retrieval            retrieval.Report `json:"retrieval,omitempty"`
+	RetrievalTokens      int              `json:"retrievalTokens,omitempty"`
+	RetrievalIDs         []string         `json:"retrievalIDs,omitempty"`
+	Criteria             int              `json:"criteria"`
+	Evidence             int              `json:"evidence"`
+	TailMessages         int              `json:"tailMessages"`
+	WorkPacketTokens     int              `json:"workPacketTokens"`
+	EvidencePacketTokens int              `json:"evidencePacketTokens"`
+	TailTokens           int              `json:"tailTokens"`
+	P0Tokens             int              `json:"p0Tokens,omitempty"`
+	P1Tokens             int              `json:"p1Tokens,omitempty"`
+	Drops                []Drop           `json:"drops,omitempty"`
 	// Declined names why compilation was refused, and is empty on success.
 	Declined string `json:"declined,omitempty"`
 }
@@ -144,6 +145,9 @@ func Compile(in Input) (Result, bool) {
 	var p2 []int
 	p0Tokens, p1Tokens := 0, 0
 	var drops []Drop
+	represented := map[string]bool{}
+	var evidenceLineIDs map[int]string
+	var droppedEvidenceLines map[int]bool
 	if in.DesignedWorkflow {
 		p, err := designedPacket(in.Detail, in.Stale, in.Active)
 		if err != nil {
@@ -157,12 +161,33 @@ func Compile(in Input) (Result, bool) {
 		if budget > 0 && textTokens(p.p0+p.p1)+textTokens(p.evidence) > budget {
 			drops = append(drops, Drop{Class: "designed P1", Reason: "packet budget", Count: p.supporting + p.rows})
 			p.p1, p.evidence, p.rows = "", "", 0
+			p.p1IDs = nil
+		}
+		for id := range p.p0IDs {
+			represented[id] = true
+		}
+		for id := range p.p1IDs {
+			represented[id] = true
 		}
 		work, criteria, evidence, rows, p2 = p.p0+p.p1, p.criteria, p.evidence, p.rows, nil
 		p1Tokens = textTokens(work) - p0Tokens + textTokens(evidence)
 	} else {
 		work, criteria = workPacket(in.Detail, in.Stale)
-		evidence, rows, p2 = evidencePacket(in.Detail, in.Active, in.Stale)
+		evidence, rows, p2, evidenceLineIDs = evidencePacketTracked(in.Detail, in.Active, in.Stale)
+		for _, n := range in.Detail.Nodes {
+			if n.Kind == protocol.NodeCriterion && n.Status != protocol.StatusSuperseded {
+				represented["node:"+n.ID] = true
+			}
+		}
+		for _, a := range latestAttempts(in.Detail) {
+			if a.Status != protocol.AttemptPassed && represented["node:"+a.CriterionNodeID] {
+				for _, ev := range in.Detail.Evidence {
+					if ev.ID == a.EvidenceID && strings.TrimSpace(ev.Summary) != "" {
+						represented["evidence:"+ev.ID] = true
+					}
+				}
+			}
+		}
 	}
 
 	budget := packetBudget(in.Window)
@@ -171,7 +196,7 @@ func Compile(in Input) (Result, bool) {
 			return Result{Report: Report{Declined: "P0 over budget", Criteria: criteria}}, false
 		}
 		var dropped []Drop
-		evidence, rows, dropped = fitEvidence(evidence, rows, p2, budget-textTokens(work))
+		evidence, rows, dropped, droppedEvidenceLines = fitEvidenceTracked(evidence, rows, p2, budget-textTokens(work))
 		drops = append(drops, dropped...)
 		// Failure lines are never dropped, so the packets can still be over the
 		// ceiling. The budget is a promise, so decline rather than break it.
@@ -188,27 +213,31 @@ func Compile(in Input) (Result, bool) {
 	tailMsgs, tailDropped, excluded := tailWithIDs(in.Items, in.TurnID, tailBudget(in.Window))
 	retrievalTokens := 0
 	var retrievalIDs []string
+	var retrievalReport retrieval.Report
 	if len(in.Retrieval) > 0 {
-		for _, n := range in.Detail.Nodes {
-			if strings.Contains(head, "- "+n.ID+" ") {
-				excluded["node:"+n.ID] = true
-			}
+		for id := range represented {
+			excluded[id] = true
 		}
-		for _, ev := range in.Detail.Evidence {
-			if strings.Contains(head, "- "+ev.ID+" ") || ev.Summary != "" && strings.Contains(head, ev.Summary) {
-				excluded["evidence:"+ev.ID] = true
+		for line, id := range evidenceLineIDs {
+			if !droppedEvidenceLines[line] {
+				excluded[id] = true
 			}
 		}
 		remaining := retrieval.MaxTokens
 		if in.Window > 0 {
-			remaining = min(remaining, share(in.Window, 0.05), packetBudget(in.Window)-textTokens(head)-1)
+			remaining = min(remaining, share(in.Window, 0.05), packetBudget(in.Window)-textTokens(head)-messageOverhead-1)
 		}
-		entries, _, err := retrieval.Select(in.RetrievalQuery, in.Retrieval, excluded, max(0, remaining))
+		entries, selectionReport, err := retrieval.Select(in.RetrievalQuery, in.Retrieval, excluded, max(0, remaining))
+		retrievalReport = selectionReport
+		if err != nil {
+			retrievalReport.Fallback = "invalid_candidates"
+		}
 		if err == nil && len(entries) > 0 {
 			addition := "\n" + retrieval.Render(entries)
 			candidate := head + addition
-			if in.Window <= 0 || textTokens(candidate) <= packetBudget(in.Window) {
+			if in.Window <= 0 || estimate([]llm.Message{llm.Text(llm.RoleUser, candidate)}) <= packetBudget(in.Window) {
 				retrievalTokens = textTokens(candidate) - textTokens(head)
+				retrievalReport.Tokens = retrievalTokens
 				msgs[0] = llm.Text(llm.RoleUser, candidate)
 				for _, entry := range entries {
 					retrievalIDs = append(retrievalIDs, entry.ID)
@@ -226,7 +255,7 @@ func Compile(in Input) (Result, bool) {
 
 	rep := Report{
 		Criteria: criteria, Evidence: rows, TailMessages: len(tailMsgs),
-		RetrievalTokens: retrievalTokens, RetrievalIDs: retrievalIDs,
+		RetrievalTokens: retrievalTokens, RetrievalIDs: retrievalIDs, Retrieval: retrievalReport,
 		WorkPacketTokens: textTokens(work), EvidencePacketTokens: textTokens(evidence),
 		TailTokens: estimate(tailMsgs), Drops: drops,
 		P0Tokens: p0Tokens, P1Tokens: p1Tokens,
@@ -245,8 +274,13 @@ func textTokens(s string) int { return int(llm.EstimateTokens(s)) }
 // then the oldest tool errors (P1). Failure lines are never dropped here; when
 // nothing is left to drop the packet goes over and the caller decides.
 func fitEvidence(text string, rows int, p2 []int, budget int) (string, int, []Drop) {
+	text, n, drops, _ := fitEvidenceTracked(text, rows, p2, budget)
+	return text, n, drops
+}
+
+func fitEvidenceTracked(text string, rows int, p2 []int, budget int) (string, int, []Drop, map[int]bool) {
 	if text == "" || budget <= 0 || textTokens(text) <= budget {
-		return text, rows, nil
+		return text, rows, nil, nil
 	}
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 	drop := map[int]bool{}
@@ -276,7 +310,7 @@ func fitEvidence(text string, rows int, p2 []int, budget int) (string, int, []Dr
 	if count > 0 {
 		drops = append(drops, Drop{Class: "tool errors", Reason: "packet budget", Count: count})
 	}
-	return render(lines, drop), rows - len(drop), drops
+	return render(lines, drop), rows - len(drop), drops, drop
 }
 
 // render rebuilds a packet without the dropped lines, and returns "" when only

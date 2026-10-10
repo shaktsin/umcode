@@ -136,3 +136,18 @@ func TestRetrievalFileLimits(t *testing.T) {
 		t.Fatal("cancellation ignored")
 	}
 }
+
+func TestRetrievalReadFailureDiscardsMixedCandidates(t *testing.T) {
+	root, c := excerptFixture(t)
+	if err := os.Remove(filepath.Join(root, "main.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing.go", filepath.Join(root, "main.go")); err != nil {
+		t.Fatal(err)
+	}
+	cs := []retrieval.Candidate{{ID: "item:old", Kind: "conversation", Historical: true, Body: "current-thread data"}, c}
+	got, err := validateRetrievalFiles(t.Context(), root, cs)
+	if err == nil || len(got) != 0 {
+		t.Fatalf("partial retrieval after containment failure: %+v %v", got, err)
+	}
+}
