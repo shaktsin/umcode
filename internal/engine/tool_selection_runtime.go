@@ -131,6 +131,11 @@ func (e *Engine) currentSelectionProject(ctx context.Context, s *turnSelection) 
 	if err != nil {
 		return nil, errors.New("tool policy unavailable")
 	}
+	enabled := e.ComputerUseDefault(ctx).Enabled
+	if p.Tools.ComputerUse != nil {
+		enabled = *p.Tools.ComputerUse
+	}
+	p.Tools.ComputerUse = &enabled
 	return &p, nil
 }
 func (e *Engine) refreshSelectionPermissions(ctx context.Context, s *turnSelection) error {
@@ -138,6 +143,8 @@ func (e *Engine) refreshSelectionPermissions(ctx context.Context, s *turnSelecti
 	if err != nil {
 		if s.state != nil {
 			s.state.Restrict(map[string]bool{})
+		} else {
+			s.baseline = nil
 		}
 		return err
 	}
@@ -289,4 +296,21 @@ func (e *Engine) permittedTool(c turnTool, p *protocol.Project) bool {
 		}
 	}
 	return true
+}
+
+// Keep the frozen workspace/recorder but narrow capabilities using current
+// project policy. Existing tool-specific sandbox and approval rules still apply.
+func currentSelectionScope(ctx context.Context, p *protocol.Project) context.Context {
+	scope := tools.ScopeFrom(ctx)
+	if scope == nil || p == nil {
+		return ctx
+	}
+	narrowed := *scope
+	narrowed.AllowNet = scope.AllowNet && boolOr(p.Tools.Network, false)
+	narrowed.UseCompute = scope.UseCompute && boolOr(p.Tools.Compute, false)
+	narrowed.AllowComputerUse = scope.AllowComputerUse && boolOr(p.Tools.ComputerUse, false)
+	narrowed.ComputeVCPUs = intOr(p.Tools.ComputeVCPUs, 0)
+	narrowed.ComputeMemoryMiB = intOr(p.Tools.ComputeMemoryMiB, 0)
+	narrowed.ComputeDiskMiB = intOr(p.Tools.ComputeDiskMiB, 0)
+	return tools.WithScope(ctx, &narrowed)
 }

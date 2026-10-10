@@ -1026,6 +1026,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			if !e.selectionToolAvailable(candidate) {
 				return e.selectionFailure(sctx, turn, call, tool.Name(), "tool unavailable")
 			}
+			ctx = currentSelectionScope(ctx, p)
 			if selection.state != nil {
 				_ = selection.state.Pin(tool.Name())
 			}
@@ -1155,6 +1156,18 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 	}
 
+	// An approval wait or plugin hook can outlive policy changes. Check again
+	// immediately before action, against the same frozen implementation.
+	if selection := selectionFrom(ctx); selection != nil {
+		candidate, found := resolveTurnTool(selection.actual, call.Name)
+		p, policyErr := e.currentSelectionProject(ctx, selection)
+		if policyErr != nil || !found || !e.permittedTool(candidate, p) || !e.selectionToolAvailable(candidate) {
+			it.Status, it.Tool.Error = protocol.ItemDenied, "tool is no longer permitted or available"
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+		}
+		ctx = currentSelectionScope(ctx, p)
+	}
 	toolCtx := ctx
 	if scope := tools.ScopeFrom(ctx); scope != nil {
 		streamScope := *scope
