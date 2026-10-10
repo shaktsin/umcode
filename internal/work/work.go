@@ -20,6 +20,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/fingerprint"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/retrieval"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/vault"
 )
@@ -30,6 +31,7 @@ var fingerprintBudget = 2 * time.Second
 // Service records and evaluates works. All methods find the thread's open work
 // themselves; with none open, Observe and End do nothing.
 type Service struct {
+	ContextRetrieval bool
 	DesignedWorkflow bool // deterministic graph semantics; false preserves legacy behavior
 	Store            *store.Store
 	Log              *slog.Logger
@@ -217,13 +219,14 @@ func redactNodeContent(raw json.RawMessage) (json.RawMessage, error) {
 
 // Observation is one finished tool call as seen by the engine.
 type Observation struct {
-	Tool   string          // dotted name, e.g. "file.write"
-	Args   json.RawMessage // tool arguments
-	Output string          // tool output as the model saw it (possibly clipped)
-	Raw    string          // unclipped structured output, preferred over Output when set
-	Err    string          // non-empty when the tool failed or was denied
-	Risk   string          // "green", "yellow" or "red"
-	Root   string          // project root, "" without a project
+	Excerpts []protocol.ObservedExcerpt
+	Tool     string          // dotted name, e.g. "file.write"
+	Args     json.RawMessage // tool arguments
+	Output   string          // tool output as the model saw it (possibly clipped)
+	Raw      string          // unclipped structured output, preferred over Output when set
+	Err      string          // non-empty when the tool failed or was denied
+	Risk     string          // "green", "yellow" or "red"
+	Root     string          // project root, "" without a project
 
 	fp *obsFingerprints // shared by the results of one observation
 }
@@ -337,13 +340,25 @@ func (s *Service) observe(ctx context.Context, threadID string, o Observation) e
 	if o.Err != "" {
 		return s.recordFailure(ctx, w.ID, o)
 	}
-	if s.DesignedWorkflow && discoveryTool(o.Tool) {
+	if s.DesignedWorkflow && discoveryTool(o.Tool) || s.ContextRetrieval && (o.Tool == "file.read" || o.Tool == "file.search") {
 		// Only engine-observed successful calls can create discovery provenance.
 		// No semantic-client assertions are accepted as observations.
 		body := redactText(o.structured())
 		hash := sha256.Sum256([]byte(body))
 		argsHash := sha256.Sum256(o.Args)
-		if _, err := s.Store.AddEvidence(ctx, protocol.Evidence{WorkID: w.ID, Kind: protocol.EvidenceDiscovery, SourceURI: o.Tool, SourceRevision: hex.EncodeToString(argsHash[:]), ContentHash: hex.EncodeToString(hash[:]), Summary: capText(body, summaryLimit), ObservedAt: s.now()}); err != nil {
+		ev := protocol.Evidence{WorkID: w.ID, Kind: protocol.EvidenceDiscovery, SourceURI: o.Tool, SourceRevision: hex.EncodeToString(argsHash[:]), ContentHash: hex.EncodeToString(hash[:]), Summary: capText(body, summaryLimit), ObservedAt: s.now()}
+		var err error
+		if s.ContextRetrieval && (o.Tool == "file.read" || o.Tool == "file.search") && len(o.Excerpts) > 0 {
+			for _, x := range o.Excerpts {
+				if x.WorkspaceRootHash != retrieval.WorkspaceHash(o.Root) {
+					return errors.New("invalid excerpt workspace")
+				}
+			}
+			_, err = s.Store.RecordDiscoveryObservation(ctx, ev, o.Excerpts)
+		} else {
+			_, err = s.Store.AddEvidence(ctx, ev)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -514,7 +529,12 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 		}
 		known[c.Command] = true
 		now := s.now()
-		content, _ := json.Marshal(map[string]string{"command": c.Command, "directory": c.Directory, "reason": c.Reason})
+		metadata := map[string]string{"command": c.Command, "directory": c.Directory, "reason": c.Reason}
+		// Preserve only recognized typed plan kinds, never arbitrary output prose.
+		if c.Kind == "browser" {
+			metadata["check_type"] = "browser"
+		}
+		content, _ := json.Marshal(metadata)
 		title := c.Label
 		if title == "" {
 			title = c.Command

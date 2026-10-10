@@ -33,6 +33,7 @@ func tailText(s string, n int) string {
 }
 
 type plannedCheck struct {
+	Kind      string `json:"kind"`
 	Label     string `json:"label"`
 	Command   string `json:"command"`
 	Directory string `json:"directory"`

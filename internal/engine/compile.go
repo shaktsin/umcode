@@ -6,6 +6,7 @@ import (
 	"github.com/shaktsin/umcode/internal/ctxcompiler"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/retrieval"
 	"github.com/shaktsin/umcode/internal/work"
 )
 
@@ -33,7 +34,7 @@ func requestMessages(prefix, live []llm.Message) []llm.Message {
 // is off, no work is open, a read failed, the compiler declined, or it panicked.
 // items is the transcript the caller already read, so a long tool loop does not
 // re-read it for every model call. Nothing here blocks or prompts.
-func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string, window, historyTokens int, items []protocol.Item) (out compileOutcome, ok bool) {
+func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string, window, historyTokens int, items []protocol.Item, request, root string) (out compileOutcome, ok bool) {
 	if e.Cfg == nil || !e.Cfg.Models.ContextCompiler || e.Work == nil {
 		return compileOutcome{}, false
 	}
@@ -65,9 +66,21 @@ func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string,
 	// Staleness is computed here rather than read from the node status, which is
 	// only written back at turn end. The environment rule is left to that
 	// write-back: running git for every model call would cost a turn latency.
-	res, good := ctxcompiler.Compile(ctxcompiler.Input{Detail: d, Stale: work.Staleness(d, ""),
+	in := ctxcompiler.Input{Detail: d, Stale: work.Staleness(d, ""),
 		DesignedWorkflow: e.Cfg.Models.DesignedWorkflow,
-		Active:           work.ActiveEvidence(d), Items: items, TurnID: turnID, Window: window, HistoryTokens: historyTokens})
+		Active:           work.ActiveEvidence(d), Items: items, TurnID: turnID, Window: window, HistoryTokens: historyTokens}
+	if e.Cfg.Models.ContextRetrieval {
+		scope := retrieval.Scope{ThreadID: th.ID, WorkID: d.Work.ID, ProjectID: th.ProjectID, TurnID: turnID}
+		candidates, report, retrievalErr := e.retrieve(ctx, scope, d, request, root, items, turnID)
+		if retrievalErr == nil {
+			in.Retrieval = candidates
+			in.RetrievalQuery = retrieval.BuildQuery(request, retrievalTaskTitles(d))
+		} else if report.Fallback == "" {
+			report.Fallback = "unavailable"
+		}
+		e.Log.Debug("context retrieval", "report", report)
+	}
+	res, good := ctxcompiler.Compile(in)
 	if !good {
 		e.compilerFailures.Add(1)
 		e.Log.Debug("context compiler declined", "thread", th.ID, "reason", res.Report.Declined)
@@ -75,5 +88,5 @@ func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string,
 	}
 	e.Log.Debug("context compiled", "thread", th.ID, "report", res.Report)
 	return compileOutcome{msgs: res.Messages,
-		packets: RequestPackets{Work: res.Report.WorkPacketTokens, Evidence: res.Report.EvidencePacketTokens, P0: res.Report.P0Tokens, P1: res.Report.P1Tokens}}, true
+		packets: RequestPackets{Retrieval: res.Report.RetrievalTokens, Work: res.Report.WorkPacketTokens, Evidence: res.Report.EvidencePacketTokens, P0: res.Report.P0Tokens, P1: res.Report.P1Tokens}}, true
 }

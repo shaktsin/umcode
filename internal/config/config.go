@@ -145,7 +145,9 @@ type ModelsConfig struct {
 	DefaultPool string      `yaml:"default_pool"`
 	// ContextCompiler sends the recorded work state instead of replaying the
 	// transcript. Off by default; a failure falls back to the transcript.
-	ContextCompiler bool `yaml:"context_compiler"`
+	ContextCompiler  bool `yaml:"context_compiler"`
+	ContextRetrieval bool `yaml:"context_retrieval"`
+	ProgressiveTools bool `yaml:"progressive_tools"`
 	// ToolResultReducers compacts selected tool results only for model messages.
 	// Stored results and other observers retain the canonical output.
 	ToolResultReducers bool `yaml:"tool_result_reducers"`
@@ -357,6 +359,9 @@ func (c *Config) finalize() {
 
 // Validate checks values the engine depends on.
 func (c *Config) Validate() error {
+	if c.Models.ContextRetrieval && !c.Models.ContextCompiler {
+		return fmt.Errorf("models.context_retrieval requires models.context_compiler")
+	}
 	if c.Memory.TargetFileBytes < 1024 || c.Memory.TargetFileBytes > 32768 {
 		return fmt.Errorf("memory.target_file_bytes must be 1024–32768")
 	}

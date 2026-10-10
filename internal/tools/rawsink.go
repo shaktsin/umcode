@@ -1,12 +1,19 @@
 package tools
 
-import "context"
+import (
+	"context"
+	"github.com/shaktsin/umcode/internal/protocol"
+)
 
 type rawSinkKey struct{}
 
 // RawSink receives a tool's unclipped result so the engine can record it
 // without depending on the clipped string the model sees.
-type RawSink struct{ Text string }
+type RawSink struct {
+	Text            string
+	CaptureExcerpts bool
+	Excerpts        []protocol.ObservedExcerpt
+}
 
 // WithRawSink returns a context carrying a fresh sink.
 func WithRawSink(ctx context.Context) (context.Context, *RawSink) {

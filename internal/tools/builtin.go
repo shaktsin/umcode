@@ -379,6 +379,7 @@ func (t *fileRead) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if !utf8.Valid(b) {
 		return "", errors.New("file is not UTF-8 text")
 	}
+	captureFileExcerpt(ctx, p, b, 1, 40)
 	return clip(string(b)), nil
 }
 

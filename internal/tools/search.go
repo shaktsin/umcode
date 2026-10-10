@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -168,9 +169,26 @@ func (t *fileSearch) Call(ctx context.Context, args json.RawMessage) (string, er
 		if err != nil || info.Size() > searchMaxFile {
 			return nil
 		}
-		matches, err := searchFile(p, re, lines)
+		matches, observed, err := searchFile(p, re, lines, captureEnabled(ctx))
 		if err != nil || len(matches) == 0 {
 			return nil
+		}
+		if len(observed) > 0 {
+			start, end := 0, 0
+			for _, m := range matches {
+				if m.number == 0 {
+					break
+				}
+				if start == 0 {
+					start = m.number
+					end = start
+				} else if m.number == end+1 {
+					end = m.number
+				} else {
+					break
+				}
+			}
+			captureFileExcerpt(ctx, p, observed, start, end)
 		}
 		files++
 		for _, m := range matches {
@@ -206,35 +224,41 @@ func (t *fileSearch) Call(ctx context.Context, args json.RawMessage) (string, er
 }
 
 type searchLine struct {
-	text string // ":<line>: <text>" for a hit, "-<line>- <text>" for context
-	hit  bool
-	raw  bool // printed as is, without the file path (group separator)
+	number int
+	text   string // ":<line>: <text>" for a hit, "-<line>- <text>" for context
+	hit    bool
+	raw    bool // printed as is, without the file path (group separator)
 }
 
 // searchFile returns the lines of a text file matching re, with context lines.
 // Binary files return nothing.
-func searchFile(path string, re *regexp.Regexp, context int) ([]searchLine, error) {
+func searchFile(path string, re *regexp.Regexp, context int, capture bool) ([]searchLine, []byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 	head := make([]byte, 8192)
 	n, _ := f.Read(head)
 	if bytes.IndexByte(head[:n], 0) >= 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if _, err := f.Seek(0, 0); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var all []string
-	sc := bufio.NewScanner(f)
+	var observed boundedCapture
+	var reader io.Reader = f
+	if capture {
+		reader = io.TeeReader(f, &observed)
+	}
+	sc := bufio.NewScanner(reader)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		all = append(all, sc.Text())
 	}
 	if sc.Err() != nil {
-		return nil, nil // a line longer than the buffer: treat the file as not searchable
+		return nil, nil, nil // a line longer than the buffer: treat the file as not searchable
 	}
 	var out []searchLine
 	last := -1 // last line index already emitted
@@ -252,19 +276,19 @@ func searchFile(path string, re *regexp.Regexp, context int) ([]searchLine, erro
 			out = append(out, searchLine{text: "--", raw: true})
 		}
 		for j := start; j < i; j++ {
-			out = append(out, searchLine{text: fmt.Sprintf("-%d- %s", j+1, clipLine(all[j]))})
+			out = append(out, searchLine{number: j + 1, text: fmt.Sprintf("-%d- %s", j+1, clipLine(all[j]))})
 		}
-		out = append(out, searchLine{text: fmt.Sprintf(":%d: %s", i+1, clipLine(line)), hit: true})
+		out = append(out, searchLine{number: i + 1, text: fmt.Sprintf(":%d: %s", i+1, clipLine(line)), hit: true})
 		last = i
 		for j := i + 1; j <= i+context && j < len(all); j++ {
 			if re.MatchString(all[j]) {
 				break // it becomes the next hit
 			}
-			out = append(out, searchLine{text: fmt.Sprintf("-%d- %s", j+1, clipLine(all[j]))})
+			out = append(out, searchLine{number: j + 1, text: fmt.Sprintf("-%d- %s", j+1, clipLine(all[j]))})
 			last = j
 		}
 	}
-	return out, nil
+	return out, observed.body, nil
 }
 
 func clipLine(s string) string {

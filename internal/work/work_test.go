@@ -1146,3 +1146,26 @@ func TestVerifiedCommandObservationRejectsRedactedCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestObservedFileRetrievalWithoutDesignedWorkflow(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		f := newFixture(t)
+		f.svc.ContextRetrieval = enabled
+		f.begin(t, "inspect compiler")
+		root := t.TempDir()
+		h := sha256.Sum256([]byte(filepath.Clean(root)))
+		x := protocol.ObservedExcerpt{Path: "main.go", StartLine: 1, EndLine: 1, Text: "func BuildPacket() {}", ContentHash: strings.Repeat("a", 64), WorkspaceRootHash: hex.EncodeToString(h[:])}
+		f.observe(t, Observation{Tool: "file.read", Root: root, Output: x.Text, Excerpts: []protocol.ObservedExcerpt{x}})
+		var count int
+		if err := f.st.DB.QueryRow(`SELECT count(*) FROM observed_excerpts`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if enabled {
+			want = 1
+		}
+		if count != want {
+			t.Fatalf("enabled=%t excerpts=%d", enabled, count)
+		}
+	}
+}

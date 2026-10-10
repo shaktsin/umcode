@@ -170,3 +170,13 @@ func decode[T any](args json.RawMessage) (T, error) {
 	}
 	return v, nil
 }
+
+// SelectionMetadata is trusted registration provenance, not name parsing.
+// It is used only to group advertisements; it grants no execution permission.
+type SelectionMetadata interface {
+	SelectionMetadata() (family, origin string)
+}
+
+// SelectionIdentity identifies the execution target of dynamically re-created
+// wrappers without allowing a later registry winner to replace the frozen one.
+type SelectionIdentity interface{ SelectionIdentity() any }

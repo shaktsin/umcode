@@ -712,8 +712,8 @@ func TestCuratedMemoryMigrationPreservesDesignedWorkflow(t *testing.T) {
 		}
 	}
 	var version int
-	if err := st.DB.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 16 {
-		t.Fatalf("migration version=%d err=%v", version, err)
+	if err := st.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version=16`).Scan(&version); err != nil || version != 1 {
+		t.Fatalf("curated-memory migration count=%d err=%v", version, err)
 	}
 	if err := st.migrate(ctx); err != nil {
 		t.Fatalf("repeat migration: %v", err)

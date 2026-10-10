@@ -201,3 +201,46 @@ func TestDesignedWorkflowFlagDefaultsFalse(t *testing.T) {
 		})
 	}
 }
+
+func TestRetrievalConfigDependency(t *testing.T) {
+	c := Default(t.TempDir())
+	if c.Models.ContextRetrieval {
+		t.Fatal("enabled by default")
+	}
+	c.Models.ContextRetrieval = true
+	if c.Validate() == nil {
+		t.Fatal("retrieval accepted without compiler")
+	}
+	c.Models.ContextCompiler = true
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, enabled := range []bool{false, true} {
+		c.Models.DesignedWorkflow = enabled
+		c.Models.ToolResultReducers = enabled
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestProgressiveToolsConfigIndependent(t *testing.T) {
+	c := Default(t.TempDir())
+	if c.Models.ProgressiveTools {
+		t.Fatal("progressive tools default enabled")
+	}
+	for _, compiler := range []bool{false, true} {
+		for _, retrieval := range []bool{false, true} {
+			if retrieval && !compiler {
+				continue
+			}
+			c := Default(t.TempDir())
+			c.Models.ContextCompiler = compiler
+			c.Models.ContextRetrieval = retrieval
+			c.Models.ProgressiveTools = true
+			if err := c.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}

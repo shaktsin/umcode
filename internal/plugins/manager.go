@@ -358,8 +358,8 @@ func (m *Manager) buildSnapshot(inputs []snapshotInput, generation string) (*Sna
 	installations := make([]store.PluginInstallation, 0, len(inputs))
 	componentHealth := map[string]map[string]ComponentHealth{}
 	type mcpOwner struct {
-		pluginID, component string
-		secretValues        []string
+		pluginID, pluginName, component string
+		secretValues                    []string
 	}
 	mcpOwners := map[string]mcpOwner{}
 	for _, input := range inputs {
@@ -381,7 +381,7 @@ func (m *Manager) buildSnapshot(inputs []snapshotInput, generation string) (*Sna
 				return nil, fmt.Errorf("plugin %s MCP %s: %w", input.installation.ID, component.Name, err)
 			}
 			cfg.Name = input.pkg.Name + "__" + component.Name
-			mcpOwners[cfg.Name] = mcpOwner{pluginID: input.installation.ID, component: "mcp:" + component.Name, secretValues: append([]string(nil), input.runtime.secretValues...)}
+			mcpOwners[cfg.Name] = mcpOwner{pluginID: input.installation.ID, pluginName: input.pkg.Name, component: "mcp:" + component.Name, secretValues: append([]string(nil), input.runtime.secretValues...)}
 			if cfg.Cwd == "" {
 				cfg.Cwd = input.pkg.Root
 			} else if !filepath.IsAbs(cfg.Cwd) {
@@ -443,16 +443,19 @@ func (m *Manager) buildSnapshot(inputs []snapshotInput, generation string) (*Sna
 	}
 	byTool := make(map[string]tools.Tool, len(snapshotTools))
 	for index, tool := range snapshotTools {
-		// MCP names are qualified with the plugin's display name, so locate the
-		// owning declaration by the stable server prefix rather than exposing
-		// credential-bearing descriptions or results directly to the model.
+		// The registered server identity is unambiguous even when server names
+		// share prefixes or contain underscores.
 		wrapped := &redactingTool{Tool: tool}
-		for serverName, owner := range mcpOwners {
-			if strings.HasPrefix(tool.Name(), "mcp_"+serverName+"_") {
+		if metadata, ok := tool.(tools.SelectionMetadata); ok {
+			family, _ := metadata.SelectionMetadata()
+			serverName := strings.TrimPrefix(family, "mcp:")
+			if owner, ok := mcpOwners[serverName]; ok {
 				wrapped.values = append([]string(nil), owner.secretValues...)
-				break
+				wrapped.family = "plugin:" + owner.pluginName
+				wrapped.origin = "plugin:" + owner.pluginID + "/mcp:" + serverName
 			}
 		}
+
 		snapshotTools[index] = wrapped
 		byTool[wrapped.Name()] = wrapped
 	}
@@ -597,6 +600,7 @@ func redactSecrets(value string, secrets []string) string {
 }
 
 type redactingTool struct {
+	family, origin string
 	tools.Tool
 	values []string
 }
@@ -618,3 +622,5 @@ func (t *redactingTool) Call(ctx context.Context, args json.RawMessage) (string,
 	}
 	return result, err
 }
+
+func (t *redactingTool) SelectionMetadata() (string, string) { return t.family, t.origin }

@@ -23,23 +23,26 @@ func nextToolReductionKey(occurrences map[string]int, callID string) toolReducti
 // RequestBreakdown estimates where one model request's input tokens go. It is
 // diagnostic only: nothing in it changes what is sent to the model.
 type RequestPackets struct {
-	Work     int `json:"work"`
-	Evidence int `json:"evidence"`
-	P0       int `json:"p0,omitempty"`
-	P1       int `json:"p1,omitempty"`
+	Retrieval int `json:"retrieval,omitempty"`
+	Work      int `json:"work"`
+	Evidence  int `json:"evidence"`
+	P0        int `json:"p0,omitempty"`
+	P1        int `json:"p1,omitempty"`
 }
 
 type RequestBreakdown struct {
-	Layers                 map[string]int `json:"layers"`         // tokens per system-prompt layer
-	SystemTokens           int            `json:"systemTokens"`   // sum of Layers
-	ToolSpecTokens         int            `json:"toolSpecTokens"` // tool names, descriptions and schemas
-	ToolCount              int            `json:"toolCount"`      // tools exposed on the request
-	WorkUpdateSpecTokens   int            `json:"workUpdateSpecTokens,omitempty"`
-	WorkUpdateCallTokens   int            `json:"workUpdateCallTokens,omitempty"`
-	WorkUpdateResultTokens int            `json:"workUpdateResultTokens,omitempty"`
-	P0PacketTokens         int            `json:"p0PacketTokens,omitempty"`
-	P1PacketTokens         int            `json:"p1PacketTokens,omitempty"`
-	ConversationTokens     int            `json:"conversationTokens"` // messages excluding tool results and packets
+	ToolSelection          *ToolSelectionAccounting `json:"toolSelection,omitempty"`
+	RetrievalPacketTokens  int                      `json:"retrievalPacketTokens,omitempty"`
+	Layers                 map[string]int           `json:"layers"`         // tokens per system-prompt layer
+	SystemTokens           int                      `json:"systemTokens"`   // sum of Layers
+	ToolSpecTokens         int                      `json:"toolSpecTokens"` // tool names, descriptions and schemas
+	ToolCount              int                      `json:"toolCount"`      // tools exposed on the request
+	WorkUpdateSpecTokens   int                      `json:"workUpdateSpecTokens,omitempty"`
+	WorkUpdateCallTokens   int                      `json:"workUpdateCallTokens,omitempty"`
+	WorkUpdateResultTokens int                      `json:"workUpdateResultTokens,omitempty"`
+	P0PacketTokens         int                      `json:"p0PacketTokens,omitempty"`
+	P1PacketTokens         int                      `json:"p1PacketTokens,omitempty"`
+	ConversationTokens     int                      `json:"conversationTokens"` // messages excluding tool results and packets
 	// Packet tokens are carved out of ConversationTokens; both are zero when the
 	// history path built the request.
 	WorkPacketTokens         int `json:"workPacketTokens,omitempty"`
@@ -110,6 +113,43 @@ func measureRequest(layers []promptLayer, req llm.Request, packets RequestPacket
 	b.TotalTokens = b.SystemTokens + b.ToolSpecTokens + b.ConversationTokens + b.ToolResultTokens
 	b.WorkPacketTokens, b.EvidencePacketTokens = packets.Work, packets.Evidence
 	b.P0PacketTokens, b.P1PacketTokens = packets.P0, packets.P1
-	b.ConversationTokens -= packets.Work + packets.Evidence
+	b.RetrievalPacketTokens = packets.Retrieval
+	b.ConversationTokens -= packets.Work + packets.Evidence + packets.Retrieval
 	return b
+}
+
+// ToolSelectionAccounting compares the original permitted baseline schemas
+// (without discovery) to the actual schemas plus the enabled-only prompt.
+// These are estimates within the existing request total, never usage credits.
+type ToolSelectionAccounting struct {
+	CatalogCount          int    `json:"catalogCount"`
+	ExposedCount          int    `json:"exposedCount"`
+	FullSchemaTokens      int    `json:"fullSchemaTokens"`
+	ExposedSchemaTokens   int    `json:"exposedSchemaTokens"`
+	DiscoverySchemaTokens int    `json:"discoverySchemaTokens"`
+	PromptTokens          int    `json:"promptTokens"`
+	DiscoveryCalls        int    `json:"discoveryCalls"`
+	Additions             int    `json:"additions"`
+	PhaseID               string `json:"phaseId"`
+	Fallback              string `json:"fallback,omitempty"`
+	DurationMS            int64  `json:"durationMs"`
+}
+
+func (s *turnSelection) accounting(specs []llm.ToolSpec) ToolSelectionAccounting {
+	r := ToolSelectionAccounting{CatalogCount: len(s.baseline), ExposedCount: len(specs), FullSchemaTokens: toolSpecTokens(s.baseline), ExposedSchemaTokens: toolSpecTokens(specs), Fallback: s.fallback, DurationMS: s.durationMS}
+	if s.state != nil {
+		sr := s.state.Report()
+		r.DiscoveryCalls = sr.DiscoveryCalls
+		r.Additions = sr.Additions
+		r.PhaseID = sr.PhaseID
+		r.Fallback = sr.Fallback
+		r.PromptTokens = tokens(discoveryInstruction)
+		for _, spec := range specs {
+			if spec.Name == tools.ToWire("tools.discover") {
+				r.DiscoverySchemaTokens = toolSpecTokens([]llm.ToolSpec{spec})
+				break
+			}
+		}
+	}
+	return r
 }

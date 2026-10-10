@@ -17,7 +17,7 @@ var errWorkflowNotReady = errors.New("workflow not ready")
 
 func workflowDiscoveryTool(name string) bool {
 	switch name {
-	case "file.read", "file.list", "file.search", "web.search", "web.fetch", "verification.plan", "computer.list", "computer.inspect", "visual.inspect", "work.update":
+	case "tools.discover", "file.read", "file.list", "file.search", "web.search", "web.fetch", "verification.plan", "computer.list", "computer.inspect", "visual.inspect", "work.update":
 		return true
 	}
 	return false

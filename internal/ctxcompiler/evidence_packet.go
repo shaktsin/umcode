@@ -15,11 +15,18 @@ const maxToolErrors = 5
 // with a vault reference for the full output, and one line per passing check.
 // The third result holds the line indexes that may be dropped first (P2).
 func evidencePacket(d protocol.WorkDetail, active []protocol.Evidence, stale map[string]bool) (string, int, []int) {
+	text, n, p2, _ := evidencePacketTracked(d, active, stale)
+	return text, n, p2
+}
+
+func evidencePacketTracked(d protocol.WorkDetail, active []protocol.Evidence, stale map[string]bool) (string, int, []int, map[int]string) {
 	rows := newestPerCheck(withUnavailable(d, activeRows(d, active)))
 	status := attemptStatusByEvidence(d)
 	criterionOf := criterionByEvidence(d)
 
 	var lines []string
+	ids := map[int]string{}
+	add := func(id, text string) { ids[len(lines)+1] = "evidence:" + id; lines = append(lines, text) }
 	var p2 []int
 	var toolErrors []protocol.Evidence
 	for _, e := range rows {
@@ -29,7 +36,7 @@ func evidencePacket(d protocol.WorkDetail, active []protocol.Evidence, stale map
 			case protocol.AttemptNotRun, protocol.AttemptBlocked:
 				// Never run is not the same as failed, and saying so would send
 				// the model chasing a failure that does not exist.
-				lines = append(lines, "- not completed "+redact(e.SourceURI)+": "+redact(strings.TrimSpace(e.Summary)))
+				add(e.ID, "- not completed "+redact(e.SourceURI)+": "+redact(strings.TrimSpace(e.Summary)))
 				continue
 			}
 			if stale[e.NodeID] || stale[criterionOf[e.ID]] {
@@ -39,7 +46,7 @@ func evidencePacket(d protocol.WorkDetail, active []protocol.Evidence, stale map
 			}
 			if status[e.ID] == protocol.AttemptPassed {
 				p2 = append(p2, len(lines))
-				lines = append(lines, "- ok "+redact(e.SourceURI))
+				add(e.ID, "- ok "+redact(e.SourceURI))
 				continue
 			}
 			line := "- FAILED " + redact(e.SourceURI) + ": " + redact(strings.TrimSpace(e.Summary))
@@ -49,7 +56,7 @@ func evidencePacket(d protocol.WorkDetail, active []protocol.Evidence, stale map
 			case e.VaultHash != "":
 				line += " [full output: vault " + e.VaultHash[:8] + "]"
 			}
-			lines = append(lines, line)
+			add(e.ID, line)
 		case protocol.EvidenceToolError:
 			toolErrors = append(toolErrors, e)
 		}
@@ -59,12 +66,12 @@ func evidencePacket(d protocol.WorkDetail, active []protocol.Evidence, stale map
 		toolErrors = toolErrors[:maxToolErrors]
 	}
 	for _, e := range toolErrors {
-		lines = append(lines, "- tool "+redact(e.SourceURI)+" failed: "+redact(strings.TrimSpace(e.Summary)))
+		add(e.ID, "- tool "+redact(e.SourceURI)+" failed: "+redact(strings.TrimSpace(e.Summary)))
 	}
 	if len(lines) == 0 {
-		return "", 0, nil
+		return "", 0, nil, ids
 	}
-	return "## Evidence\n" + strings.Join(lines, "\n") + "\n", len(lines), shift(p2, 1)
+	return "## Evidence\n" + strings.Join(lines, "\n") + "\n", len(lines), shift(p2, 1), ids
 }
 
 // shift moves P2 indexes past the section heading, so they index the rendered

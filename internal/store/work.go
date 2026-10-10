@@ -142,6 +142,9 @@ func (s *Store) ApplyWorkUpdate(ctx context.Context, update protocol.PreparedWor
 			FormatTime(n.ValidFrom), nullTimePtr(n.ValidUntil), n.SupersededBy, FormatTime(n.CreatedAt), FormatTime(n.UpdatedAt)); err != nil {
 			return zero, err
 		}
+		if err := indexRetrievalDocument(ctx, tx, "node", n.ID, w.ID, n.Title); err != nil {
+			return zero, err
+		}
 	}
 	at := FormatTime(time.Now().UTC())
 	for _, tr := range update.Transitions {
@@ -301,11 +304,22 @@ func (s *Store) AddWorkNode(ctx context.Context, n protocol.WorkNode) (protocol.
 	if n.Confidence == 0 {
 		n.Confidence = 1
 	}
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO work_nodes (id, work_id, kind, title, content_json, status, confidence, revision,
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return n, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO work_nodes (id, work_id, kind, title, content_json, status, confidence, revision,
 		valid_from, valid_until, superseded_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		n.ID, n.WorkID, n.Kind, n.Title, string(n.Content), n.Status, n.Confidence, n.Revision,
 		FormatTime(n.ValidFrom), nullTimePtr(n.ValidUntil), n.SupersededBy, FormatTime(n.CreatedAt), FormatTime(n.UpdatedAt))
-	return n, err
+	if err != nil {
+		return n, err
+	}
+	if err = indexRetrievalDocument(ctx, tx, "node", n.ID, n.WorkID, n.Title); err != nil {
+		return n, err
+	}
+	return n, tx.Commit()
 }
 
 // UpdateWorkNode changes a node's status and revision.
@@ -343,12 +357,24 @@ func insertEvidence(ctx context.Context, x execer, e protocol.Evidence) (protoco
 		summary, confidence, observed_at, stale_at, vault_hash, env_fingerprint, availability) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.ID, e.WorkID, nullIfEmpty(e.NodeID), e.Kind, e.SourceURI, e.SourceRevision, e.ContentHash, e.Summary,
 		e.Confidence, FormatTime(e.ObservedAt), nullTimePtr(e.StaleAt), e.VaultHash, e.EnvFingerprint, e.Availability)
-	return e, err
+	if err != nil {
+		return e, err
+	}
+	return e, indexRetrievalDocument(ctx, x, "evidence", e.ID, e.WorkID, e.Summary)
 }
 
 // AddEvidence inserts an immutable observation.
 func (s *Store) AddEvidence(ctx context.Context, e protocol.Evidence) (protocol.Evidence, error) {
-	return insertEvidence(ctx, s.DB, e)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return e, err
+	}
+	defer tx.Rollback()
+	e, err = insertEvidence(ctx, tx, e)
+	if err != nil {
+		return e, err
+	}
+	return e, tx.Commit()
 }
 
 func insertAttempt(ctx context.Context, x execer, a protocol.VerificationAttempt) (protocol.VerificationAttempt, error) {

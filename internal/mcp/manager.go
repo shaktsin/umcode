@@ -441,3 +441,21 @@ func formatResult(res json.RawMessage) (string, error) {
 	}
 	return out, nil
 }
+
+func (t *mcpTool) SelectionMetadata() (string, string) {
+	return "mcp:" + t.s.cfg.Name, "mcp:" + t.s.cfg.Name
+}
+
+func (t *mcpTool) SelectionIdentity() any {
+	return struct {
+		Manager *Manager
+		Server  *server
+		Name    string
+	}{t.m, t.s, t.def.Name}
+}
+
+// ToolAllowed shares the manager's configured capability filter with immutable
+// advertisement snapshots and current execution revocation checks.
+func ToolAllowed(cfg config.MCPServerConfig, name string) bool {
+	return cfg.IsEnabled() && allowed(cfg, name)
+}
