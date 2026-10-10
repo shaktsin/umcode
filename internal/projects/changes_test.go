@@ -50,3 +50,62 @@ func TestRecordPromotionStrictAndIdempotent(t *testing.T) {
 		t.Fatalf("changes=%+v %v", changes, err)
 	}
 }
+
+func TestRecordPromotionPreservesAbsentVersusEmptySnapshot(t *testing.T) {
+	for _, absent := range []bool{true, false} {
+		name := "empty"
+		if absent {
+			name = "absent"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, st, _ := newService(t)
+			ctx := t.Context()
+			p, err := st.CreateProject(ctx, protocol.Project{Root: t.TempDir(), Name: "memory"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var snapshot any = []byte{}
+			if absent {
+				snapshot = nil
+			}
+			_, err = st.DB.Exec(`INSERT INTO memory_promotion_ops(id,project_id,work_id,candidate_node_id,memory_id,thread_id,turn_id,target_path,state,file_hash_before,file_hash_after,before_bytes,after_bytes,error_class,created_at,updated_at) VALUES('op',?,'work','candidate','memory','thread','turn','UMCODE.md','prepared','before','after',?,?,'','2026-10-09T00:00:00Z','2026-10-09T00:00:00Z')`, p.ID, snapshot, []byte("after\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			emitted := 0
+			r := s.NewRecorder(p, "thread", "turn", func(protocol.FileChangeData) { emitted++ })
+			empty := ""
+			var mismatch, match *string
+			action := protocol.FileCreated
+			if absent {
+				mismatch = &empty
+			} else {
+				match = &empty
+				action = protocol.FileModified
+			}
+			abs := filepath.Join(p.Root, "UMCODE.md")
+			if _, err := r.RecordPromotion(ctx, "op", abs, mismatch); err == nil {
+				t.Fatal("mismatched file existence accepted")
+			}
+			if emitted != 0 {
+				t.Fatal("mismatch emitted an event")
+			}
+			changes, err := st.ListFileChanges(ctx, p.ID, "", "", 100)
+			if err != nil || len(changes) != 0 {
+				t.Fatalf("mismatch recorded history: %+v %v", changes, err)
+			}
+			data, err := r.RecordPromotion(ctx, "op", abs, match)
+			if err != nil || data.Action != action || !data.Revertable || emitted != 1 {
+				t.Fatalf("matching snapshot=%+v %v emits=%d", data, err, emitted)
+			}
+			repeat, err := r.RecordPromotion(ctx, "op", abs, match)
+			if err != nil || !reflect.DeepEqual(repeat, data) || emitted != 1 {
+				t.Fatalf("repeat changed payload: %+v %v emits=%d", repeat, err, emitted)
+			}
+			changes, err = st.ListFileChanges(ctx, p.ID, "", "", 100)
+			if err != nil || len(changes) != 1 || (changes[0].Before == nil) != absent {
+				t.Fatalf("existence lost in history: %+v %v", changes, err)
+			}
+		})
+	}
+}

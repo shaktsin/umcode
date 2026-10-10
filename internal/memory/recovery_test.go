@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -139,5 +140,117 @@ func TestRecoveryUnchangedDuplicateSkipsHistoryAndRename(t *testing.T) {
 	}
 	if r := s.Recover(t.Context()); r != (Report{}) {
 		t.Fatalf("repeat=%+v", r)
+	}
+}
+
+func TestRecoveryOversizedThirdStateConflicts(t *testing.T) {
+	for _, stage := range []string{"initial", "recheck"} {
+		t.Run(stage, func(t *testing.T) {
+			s, st, req := serviceFixture(t)
+			abs := filepath.Join(req.Project.Root, "UMCODE.md")
+			os.WriteFile(abs, []byte("original\n"), 0644)
+			s.boundary = func(at string) error {
+				if at == "write" {
+					return errors.New("interrupt")
+				}
+				return nil
+			}
+			if r := s.PromoteCompleted(t.Context(), req); r.Pending != 1 {
+				t.Fatalf("prepare=%+v", r)
+			}
+			ops, _ := st.ListIncompleteMemoryPromotionOps(t.Context())
+			if len(ops) != 1 {
+				t.Fatal("missing prepared operation")
+			}
+			third := strings.Repeat("external third state\n", 2000)
+			s.boundary = nil
+			if stage == "initial" {
+				os.WriteFile(abs, []byte(third), 0644)
+			} else {
+				s.boundary = func(at string) error {
+					if at == "recheck" {
+						return os.WriteFile(abs, []byte(third), 0644)
+					}
+					return nil
+				}
+			}
+			if r := s.Recover(t.Context()); r.Conflicted != 1 || r.Pending != 0 {
+				t.Fatalf("recover=%+v", r)
+			}
+			if readTarget(t, req.Project) != third {
+				t.Fatal("oversized third-state bytes changed")
+			}
+			if r := s.Recover(t.Context()); r != (Report{}) {
+				t.Fatalf("repeat=%+v", r)
+			}
+			op, err := st.GetMemoryPromotionOp(t.Context(), ops[0].ID)
+			if err != nil || op.State != protocol.MemoryOpConflicted {
+				t.Fatalf("op=%+v %v", op, err)
+			}
+			row, err := st.GetProjectMemory(t.Context(), op.MemoryID)
+			if err != nil || row.Status != protocol.MemoryStatusConflicted {
+				t.Fatalf("memory=%+v %v", row, err)
+			}
+			d, err := st.GetWorkDetail(t.Context(), req.WorkID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range d.Nodes {
+				if n.Kind == protocol.NodeMemoryCandidate && n.Status != protocol.StatusConflicted {
+					t.Fatalf("candidate=%+v", n)
+				}
+			}
+			incomplete, err := st.ListIncompleteMemoryPromotionOps(t.Context())
+			if err != nil || len(incomplete) != 0 {
+				t.Fatalf("reservation retained: %+v %v", incomplete, err)
+			}
+			changes, err := st.ListFileChanges(t.Context(), req.Project.ID, "", "", 100)
+			if err != nil || len(changes) != 0 {
+				t.Fatalf("history=%+v %v", changes, err)
+			}
+			assertCompleted(t, st, req)
+		})
+	}
+}
+
+func TestPromotionInitiallyOversizedTargetRemainsPending(t *testing.T) {
+	s, st, req := serviceFixture(t)
+	original := strings.Repeat("user-authored content\n", 2000)
+	os.WriteFile(filepath.Join(req.Project.Root, "UMCODE.md"), []byte(original), 0644)
+	if r := s.PromoteCompleted(t.Context(), req); r.Pending != 1 {
+		t.Fatalf("report=%+v", r)
+	}
+	if readTarget(t, req.Project) != original {
+		t.Fatal("oversized original changed")
+	}
+	ops, err := st.ListIncompleteMemoryPromotionOps(t.Context())
+	if err != nil || len(ops) != 0 {
+		t.Fatalf("ops=%+v %v", ops, err)
+	}
+}
+
+func TestPromotionOversizedFinalCASConflicts(t *testing.T) {
+	s, st, req := serviceFixture(t)
+	abs := filepath.Join(req.Project.Root, "UMCODE.md")
+	os.WriteFile(abs, []byte("original\n"), 0644)
+	third := strings.Repeat("external third state\n", 2000)
+	s.boundary = func(at string) error {
+		if at == "rename" {
+			return os.WriteFile(abs, []byte(third), 0644)
+		}
+		return nil
+	}
+	if r := s.PromoteCompleted(t.Context(), req); r.Conflicted != 1 {
+		t.Fatalf("report=%+v", r)
+	}
+	if readTarget(t, req.Project) != third {
+		t.Fatal("third-state bytes changed")
+	}
+	if r := s.Recover(t.Context()); r != (Report{}) {
+		t.Fatalf("repeat=%+v", r)
+	}
+	ops, err := st.ListIncompleteMemoryPromotionOps(t.Context())
+	if err != nil || len(ops) != 0 {
+		t.Fatalf("ops=%+v %v", ops, err)
 	}
 }

@@ -103,7 +103,7 @@ func (t *fileTarget) read() ([]byte, os.FileInfo, error) {
 		return nil, nil, err
 	}
 	if len(b) > 32<<10 {
-		return nil, nil, errors.New("memory target size limit")
+		return nil, nil, errTargetSizeLimit
 	}
 	return b, info, nil
 }

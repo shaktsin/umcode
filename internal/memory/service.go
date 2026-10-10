@@ -46,6 +46,10 @@ func New(st *store.Store, projects *projects.Service, targetBytes int) *Service 
 // the same serialization boundary in this process.
 var projectLocks sync.Map
 
+// Prepared operation snapshots are bounded to this limit. An oversized live
+// target is retryable before preparation, but necessarily a third state after it.
+var errTargetSizeLimit = errors.New("memory target size limit")
+
 func projectLock(id string) *sync.Mutex {
 	v, _ := projectLocks.LoadOrStore(id, &sync.Mutex{})
 	return v.(*sync.Mutex)
@@ -303,7 +307,7 @@ func (s *Service) finish(ctx context.Context, project protocol.Project, op proto
 
 func (s *Service) fail(ctx context.Context, op protocol.MemoryPromotionOp, err error, report *Report) {
 	state, status, class := protocol.MemoryOpPendingRepair, protocol.MemoryOutcomePending, "retryable"
-	if errors.Is(err, store.ErrMemoryConflict) {
+	if errors.Is(err, store.ErrMemoryConflict) || errors.Is(err, errTargetSizeLimit) {
 		state, status, class = protocol.MemoryOpConflicted, protocol.MemoryOutcomeConflicted, "compare_and_swap"
 	}
 	// If persistence itself is unavailable the prepared/file_written operation

@@ -115,7 +115,7 @@ func (r *Recorder) RecordPromotion(ctx context.Context, promotionOpID, abs strin
 	if op.ProjectID != r.project.ID || op.ThreadID != r.threadID || op.TurnID != r.turnID || filepath.Clean(abs) != filepath.Join(r.project.Root, filepath.FromSlash(op.TargetPath)) || filepath.Base(abs) != "UMCODE.md" {
 		return protocol.FileChangeData{}, fmt.Errorf("promotion recorder provenance mismatch")
 	}
-	if before == nil && op.BeforeBytes != nil || before != nil && !bytes.Equal([]byte(*before), op.BeforeBytes) {
+	if (before == nil) != (op.BeforeBytes == nil) || before != nil && !bytes.Equal([]byte(*before), op.BeforeBytes) {
 		return protocol.FileChangeData{}, fmt.Errorf("promotion recorder snapshot mismatch")
 	}
 	text := ""
