@@ -580,9 +580,10 @@ func (s *Service) workspace(ctx context.Context, root string) (fingerprint.Works
 // recordAttempt stores the full output in the vault, then writes evidence, the
 // append-only attempt, the workspace fingerprint and the criterion update in one
 // transaction.
-func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Observation, checkType, command, status string, exit *int, full string) error {
+func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Observation, checkType, command, directory, status string, exit *int, full string) error {
 	now := s.now()
-	command = redactText(command)
+	redactedCommand, commandRedacted := vault.Redact([]byte(command))
+	command = string(redactedCommand)
 	crit := criterionFor(d, command)
 	critID := ""
 	if crit != nil {
@@ -616,7 +617,9 @@ func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Ob
 		in.Criterion = &store.CriterionUpdate{NodeID: crit.ID, Status: status, Revision: crit.Revision, At: now}
 	}
 	attempt, err := s.Store.RecordAttempt(ctx, in)
-	if err != nil || !s.DesignedWorkflow || checkType != "command" || status != protocol.AttemptPassed || exit == nil || *exit != 0 || !wsOK || critID == "" {
+	// Repository-wide guidance must reproduce the actual command at the root.
+	// Keep recording other attempts, but never promote masked or scoped commands.
+	if err != nil || !s.DesignedWorkflow || checkType != "command" || commandRedacted || strings.Contains(command, "[REDACTED]") || (directory != "" && directory != ".") || status != protocol.AttemptPassed || exit == nil || *exit != 0 || !wsOK || critID == "" {
 		return err
 	}
 	content, _ := json.Marshal(VerifiedCommandFact{Type: "verified_command", Command: command, EvidenceID: attempt.EvidenceID, SourceRevision: ws.Value})
@@ -644,7 +647,7 @@ func (s *Service) recordRun(ctx context.Context, d protocol.WorkDetail, o Observ
 		if full == "" {
 			full = r.Error
 		}
-		if err := s.recordAttempt(ctx, d, o, "command", r.Command, r.Status, r.ExitCode, full); err != nil {
+		if err := s.recordAttempt(ctx, d, o, "command", r.Command, r.Directory, r.Status, r.ExitCode, full); err != nil {
 			return err
 		}
 	}
@@ -660,7 +663,7 @@ func (s *Service) recordBrowser(ctx context.Context, d protocol.WorkDetail, o Ob
 	if full == "" {
 		full = r.Reason
 	}
-	return s.recordAttempt(ctx, d, o, "browser", r.Command, r.Status, r.ExitCode, full)
+	return s.recordAttempt(ctx, d, o, "browser", r.Command, "", r.Status, r.ExitCode, full)
 }
 
 // End finishes a turn for the thread's open work: it fingerprints the workspace

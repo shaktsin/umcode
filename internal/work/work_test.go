@@ -1092,3 +1092,57 @@ func TestVerifiedCommandObservationCreatesDurableSource(t *testing.T) {
 		t.Fatal("fact lacks actual successful attempt")
 	}
 }
+
+func TestVerifiedCommandObservationRejectsNonRootDirectory(t *testing.T) {
+	for _, directory := range []string{"", ".", "pkg/api", "./pkg/api"} {
+		t.Run(directory, func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = true
+			f.begin(t, "verify repository")
+			f.observe(t, Observation{Tool: "verification.plan", Output: planOut})
+			output, err := json.Marshal(map[string]any{"results": []map[string]any{{"command": "go test ./...", "directory": directory, "status": "passed", "exit_code": 0, "output": "ok"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.observe(t, Observation{Tool: "verification.run", Root: t.TempDir(), Output: string(output)})
+			d := f.detail(t)
+			want := 0
+			if directory == "" || directory == "." {
+				want = 1
+			}
+			if facts := kinds(d, protocol.NodeFact); len(facts) != want {
+				t.Fatalf("directory %q produced %d promotable command facts, want %d", directory, len(facts), want)
+			}
+			if len(d.Attempts) != 1 || d.Attempts[0].Status != protocol.AttemptPassed {
+				t.Fatalf("verification recording changed: %+v", d.Attempts)
+			}
+		})
+	}
+}
+
+func TestVerifiedCommandObservationRejectsRedactedCommand(t *testing.T) {
+	for _, command := range []string{"API_TOKEN=privatevalue123456 go test ./...", "API_TOKEN=[REDACTED] go test ./..."} {
+		t.Run(command, func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = true
+			f.begin(t, "verify repository")
+			plan, err := json.Marshal(map[string]any{"checks": []map[string]string{{"command": command}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.observe(t, Observation{Tool: "verification.plan", Output: string(plan)})
+			output, err := json.Marshal(map[string]any{"results": []map[string]any{{"command": command, "status": "passed", "exit_code": 0, "output": "ok"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.observe(t, Observation{Tool: "verification.run", Root: t.TempDir(), Output: string(output)})
+			d := f.detail(t)
+			if facts := kinds(d, protocol.NodeFact); len(facts) != 0 {
+				t.Fatalf("redacted command produced %d promotable facts", len(facts))
+			}
+			if len(d.Attempts) != 1 || strings.Contains(d.Attempts[0].Command, "privatevalue123456") || !strings.Contains(d.Attempts[0].Command, "[REDACTED]") {
+				t.Fatalf("verification redaction changed: %+v", d.Attempts)
+			}
+		})
+	}
+}
