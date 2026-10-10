@@ -58,4 +58,4 @@ This work adds the global control and consistent runtime behavior. It does not c
 
 ## Review status
 
-Product behavior approved conversationally. Written spec awaiting user review; implementation plan has not been written and product implementation has not started.
+Written spec accepted by the user. Implementation plan written separately and awaiting review/execution selection; product implementation has not started.
