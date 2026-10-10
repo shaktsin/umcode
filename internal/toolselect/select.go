@@ -1,6 +1,7 @@
 package toolselect
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -19,6 +20,9 @@ type Report struct {
 	PhaseID, Fallback                                                                  string
 }
 type State struct {
+	cursorKey                [32]byte
+	nonce                    [16]byte
+	permissionRevision       int
 	mu                       sync.Mutex
 	catalog                  Catalog
 	loaded, initial, allowed map[string]bool
@@ -32,6 +36,12 @@ func Start(c Catalog, signals Signals) (*State, Report, error) {
 		return nil, Report{}, err
 	}
 	s := &State{catalog: frozen, loaded: map[string]bool{}, initial: map[string]bool{}, allowed: map[string]bool{}}
+	if _, err := rand.Read(s.cursorKey[:]); err != nil {
+		return nil, Report{}, errors.New("selection entropy unavailable")
+	}
+	if _, err := rand.Read(s.nonce[:]); err != nil {
+		return nil, Report{}, errors.New("selection entropy unavailable")
+	}
 	for _, e := range frozen.Entries {
 		s.allowed[e.CanonicalName] = true
 		if e.Family == "core" {
