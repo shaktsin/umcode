@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/vault"
@@ -19,14 +21,18 @@ import (
 
 // Graph batch bounds are byte limits, shared by validation and tool schemas.
 const (
-	MaxNodeChanges      = 32
-	MaxEdgeChanges      = 64
-	MaxNodeEvidenceIDs  = 16
-	MaxClientRefBytes   = 64
-	MaxNodeTitleBytes   = 512
-	MaxRationaleBytes   = 2048
-	MaxNodeContentBytes = 8192
-	MaxWorkUpdateBytes  = 65536
+	MaxNodeChanges         = 32
+	MaxEdgeChanges         = 64
+	MaxNodeEvidenceIDs     = 16
+	MaxClientRefBytes      = 64
+	MaxNodeTitleBytes      = 512
+	MaxRationaleBytes      = 2048
+	MaxNodeContentBytes    = 8192
+	MaxWorkUpdateBytes     = 65536
+	MaxCandidateKeyBytes   = 128
+	MaxCandidateTextBytes  = 512
+	MaxCandidateScopePaths = 16
+	MaxCandidateScopeBytes = 512
 )
 
 const (
@@ -57,10 +63,115 @@ type UnknownContent struct {
 	Blocking bool `json:"blocking"`
 }
 type MemoryCandidateContent struct {
-	Category    string `json:"category"`
-	SemanticKey string `json:"semantic_key"`
-	Text        string `json:"text"`
-	Scope       string `json:"scope"`
+	Category       string   `json:"category"`
+	SemanticKey    string   `json:"semantic_key"`
+	Text           string   `json:"text"`
+	ScopePaths     []string `json:"scope_paths,omitempty"`
+	SourceRevision string   `json:"source_revision"`
+	ReplacesMemory string   `json:"replaces_memory,omitempty"`
+	Scope          string   `json:"scope,omitempty"` // Legacy input only.
+}
+
+// DecodeMemoryCandidate validates and canonicalizes without filesystem I/O.
+// Filesystem existence and symlink containment are placement predicates.
+func DecodeMemoryCandidate(n protocol.WorkNode) (MemoryCandidateContent, error) {
+	var c MemoryCandidateContent
+	fields, err := decodeContent(n)
+	if err != nil {
+		return c, err
+	}
+	if _, legacy := fields["scope"]; legacy {
+		if _, current := fields["scope_paths"]; current {
+			return c, invalid("nodes.candidate.scope_paths", "invalid")
+		}
+	}
+	for key, value := range fields {
+		switch key {
+		case "category", "semantic_key", "text", "scope_paths", "source_revision", "replaces_memory", "scope":
+		default:
+			return c, invalid("nodes.candidate", "invalid")
+		}
+		if string(value) == "null" {
+			return c, invalid("nodes.candidate", "invalid")
+		}
+		if key == "scope_paths" {
+			var paths []string
+			if json.Unmarshal(value, &paths) != nil {
+				return c, invalid("nodes.candidate.scope_paths", "invalid")
+			}
+			for _, item := range paths {
+				if item == "" {
+					return c, invalid("nodes.candidate.scope_paths", "invalid")
+				}
+			}
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(n.Content))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&c) != nil {
+		return c, invalid("nodes.candidate", "invalid")
+	}
+	switch c.Category {
+	case protocol.MemoryCategoryCapability, protocol.MemoryCategoryCommand, protocol.MemoryCategoryBoundary, protocol.MemoryCategoryInvariant, protocol.MemoryCategoryConvention, protocol.MemoryCategoryPath, protocol.MemoryCategoryApprovedDecision:
+	default:
+		return c, invalid("nodes.candidate.category", "invalid")
+	}
+	if len(c.SemanticKey) > MaxCandidateKeyBytes || !validID(c.SemanticKey) || len(c.Text) > MaxCandidateTextBytes || !candidateString(c.Text) || !candidateString(c.SourceRevision) || c.ReplacesMemory != "" && !validID(c.ReplacesMemory) {
+		return c, invalid("nodes.candidate", "invalid")
+	}
+	if containsSecret(n.Content) || containsSecret(n.Title) {
+		return c, invalid("nodes.candidate.text", "invalid")
+	}
+	text := strings.TrimSpace(c.Text)
+	if strings.HasPrefix(text, "- ") || strings.HasPrefix(text, "* ") || strings.HasPrefix(text, "+ ") {
+		text = strings.TrimSpace(text[2:])
+	}
+	if text == "" || strings.ContainsAny(text, "<>") || strings.HasPrefix(text, "#") || strings.HasPrefix(text, "```") || strings.HasPrefix(text, "~~~") || strings.HasPrefix(text, "- ") || strings.HasPrefix(text, "* ") || strings.HasPrefix(text, "+ ") || numberedBullet.MatchString(text) {
+		return c, invalid("nodes.candidate.text", "invalid")
+	}
+	c.Text = "- " + text
+	if _, legacy := fields["scope"]; legacy {
+		if strings.TrimSpace(c.Scope) == "" {
+			return c, invalid("nodes.candidate.scope", "invalid")
+		}
+		c.ScopePaths = []string{c.Scope}
+	}
+	if len(c.ScopePaths) > MaxCandidateScopePaths {
+		return c, invalid("nodes.candidate.scope_paths", "limit")
+	}
+	paths := make([]string, 0, len(c.ScopePaths))
+	seen := map[string]bool{}
+	for _, scope := range c.ScopePaths {
+		if len(scope) > MaxCandidateScopeBytes || !candidateString(scope) {
+			return c, invalid("nodes.candidate.scope_paths", "invalid")
+		}
+		scope = strings.TrimSpace(scope)
+		if scope == "" || path.IsAbs(scope) || strings.HasPrefix(scope, "~") || strings.Contains(scope, `\`) || len(scope) > 1 && scope[1] == ':' {
+			return c, invalid("nodes.candidate.scope_paths", "invalid")
+		}
+		scope = path.Clean(scope)
+		if scope == ".." || strings.HasPrefix(scope, "../") || seen[scope] {
+			return c, invalid("nodes.candidate.scope_paths", "invalid")
+		}
+		seen[scope] = true
+		paths = append(paths, scope)
+	}
+	sort.Strings(paths)
+	c.ScopePaths = paths
+	c.Scope = ""
+	return c, nil
+}
+
+func candidateString(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidationError gives consumers a compact field/class without graph contents.
@@ -73,6 +184,7 @@ func (e *ValidationError) Error() string { return e.Field + ": " + e.Code }
 func invalid(field, code string) error   { return &ValidationError{Field: field, Code: code} }
 
 var graphID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]*$`)
+var numberedBullet = regexp.MustCompile(`^\d+[.)]\s`)
 
 func validID(id string) bool { return len(id) > 0 && len(id) <= 128 && graphID.MatchString(id) }
 func validGate(kind string) bool {
@@ -668,7 +780,7 @@ func validateEdge(from protocol.WorkNode, relation string, to protocol.WorkNode)
 	case protocol.RelImplements:
 		good = from.Kind == protocol.NodeTask && (to.Kind == protocol.NodeRequirement || to.Kind == protocol.NodeDecision)
 	case protocol.RelVerifies:
-		good = from.Kind == protocol.NodeCriterion && (to.Kind == protocol.NodeRequirement || to.Kind == protocol.NodeTask || to.Kind == protocol.NodeDecision || to.Kind == protocol.NodeMemoryCandidate)
+		good = from.Kind == protocol.NodeCriterion && (to.Kind == protocol.NodeRequirement || to.Kind == protocol.NodeTask || to.Kind == protocol.NodeDecision || to.Kind == protocol.NodeMemoryCandidate || to.Kind == protocol.NodeFact)
 	case protocol.RelSupports:
 		good = len(from.EvidenceIDs) > 0 && (to.Kind == protocol.NodeDecision || to.Kind == protocol.NodeRequirement || to.Kind == protocol.NodeMemoryCandidate || to.Kind == protocol.NodeFact)
 	case protocol.RelCandidateFor:
@@ -726,20 +838,8 @@ func solutionSupported(d protocol.WorkDetail, n protocol.WorkNode, ev map[string
 	return ok && hasCriterion(d, n.ID) && (hasActiveEvidence(n, ev) || hasActiveEvidence(opt, ev))
 }
 func validateCandidate(d protocol.WorkDetail, n protocol.WorkNode, ev map[string]protocol.Evidence) error {
-	var c MemoryCandidateContent
-	if json.Unmarshal(n.Content, &c) != nil {
-		return invalid("nodes.candidate", "invalid")
-	}
-	switch c.Category {
-	case "capability", "command", "boundary", "invariant", "convention", "path", "approved_decision":
-	default:
-		return invalid("nodes.candidate.category", "invalid")
-	}
-	if strings.TrimSpace(c.SemanticKey) == "" || strings.TrimSpace(c.Text) == "" || c.Scope == "" || path.IsAbs(c.Scope) || path.Clean(c.Scope) == ".." || strings.HasPrefix(path.Clean(c.Scope), "../") {
-		return invalid("nodes.candidate", "invalid")
-	}
-	if containsSecret(n.Content) || containsSecret(n.Title) {
-		return invalid("nodes.candidate.text", "invalid")
+	if _, err := DecodeMemoryCandidate(n); err != nil {
+		return err
 	}
 	nodes := graphNodes(d)
 	source := false

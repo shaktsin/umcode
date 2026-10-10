@@ -557,3 +557,54 @@ func getWorkDetail(ctx context.Context, q workQuerier, workID string) (protocol.
 	}
 	return d, rows.Err()
 }
+
+// finalMemoryRevision selects the latest recorded workspace fingerprint; the
+// canonical ordered snapshot breaks ties by insertion order.
+func finalMemoryRevision(d protocol.WorkDetail) string {
+	var final *protocol.Fingerprint
+	for i := range d.Fingerprints {
+		f := &d.Fingerprints[i]
+		if f.Kind != protocol.FingerprintTurnEnd && f.Kind != protocol.FingerprintVerification {
+			continue
+		}
+		if final == nil || !f.TakenAt.Before(final.TakenAt) {
+			final = f
+		}
+	}
+	if final == nil {
+		return ""
+	}
+	return final.Value
+}
+
+// transitionMemoryCandidate permits post-completion curation without changing
+// the completed Work revision or its verification graph. Source deletion leaves
+// durable operation provenance intact and is harmless during failure handling.
+func transitionMemoryCandidate(ctx context.Context, tx *sql.Tx, op protocol.MemoryPromotionOp, status string, at time.Time) error {
+	result, err := tx.ExecContext(ctx, `UPDATE work_nodes SET status=?,revision=revision+1,updated_at=? WHERE id=? AND work_id=? AND kind='memory_candidate' AND status<>? AND status IN ('pending','conflicted')`, status, FormatTime(at), op.CandidateNodeID, op.WorkID, status)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 0 {
+		return nil
+	}
+	var current string
+	err = tx.QueryRowContext(ctx, `SELECT status FROM work_nodes WHERE id=? AND work_id=? AND kind='memory_candidate'`, op.CandidateNodeID, op.WorkID).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		if status == protocol.StatusPromoted {
+			return ErrMemoryStale
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current != status {
+		return ErrMemoryStale
+	}
+	return nil
+}

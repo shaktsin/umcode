@@ -154,7 +154,45 @@ Designed mutation fails closed before tool hooks, safety policy, and tool execut
 
 With the independent `models.context_compiler: true` flag, eligible compact requests project active semantic state. P0 carries workflow depth/revision, required decisions and unresolved gates, current tasks/dependencies, blocking unknowns, criteria and completion obligations. P1 carries selected solution options/rungs, applicable requirements, and supporting evidence identities/URIs. Rejected and superseded obligations, opaque node content, evidence bodies, and memory-candidate text are omitted. P1 is dropped before P0; P0 stays intact or compilation declines to the transcript fallback. Short threads can also fall back when a packet would not save tokens. Request diagnostics report `p0PacketTokens`, `p1PacketTokens`, `workPacketTokens`, `evidencePacketTokens`, plus `workUpdateSpecTokens`, `workUpdateCallTokens`, and `workUpdateResultTokens`; these are attribution fields within existing totals, not additional charged tokens.
 
-Phase 5a does not implement automatic curated memory: there is no `project_memories` store, memory merge/auto-promotion, automatic promotion into `UMCODE.md`, or generated user-project graph file. A validated memory candidate remains internal graph data. Existing user-directed project-instruction editing remains available through normal file tools.
+Phase 5a introduced validated memory candidates as internal graph data. Phase 5b can now promote eligible candidates into `UMCODE.md` when explicitly enabled, as described below. Existing user-directed project-instruction editing remains available through normal file tools; no user-project graph file is generated.
+
+### Curated project memory (off by default)
+
+Automatic promotion requires both flags:
+
+```yaml
+models:
+  designed_workflow: true
+memory:
+  auto_promote: true
+  target_file_bytes: 4096
+```
+
+`memory.auto_promote` defaults to `false`. Enabling it without `models.designed_workflow` emits `designed_workflow_disabled` and performs no promotion reads or writes. `target_file_bytes` is a soft ceiling for the complete target file, including user content; invalid limits fail configuration validation. Projectless Work and Work without pending candidates skip promotion.
+
+After successful Work completion commits, the engine synchronously qualifies concise project facts and approved decisions against canonical evidence and final verification freshness. It adds no model call. The next applicable turn receives guidance once through the existing root-to-leaf instruction composition. Promotion does not change completed product criteria or evidence freshness, and a promotion failure never reopens or fails completed Work.
+
+Successful Designed-workflow `verification.run` observations with a matching criterion and workspace fingerprint create engine-owned `verified_command` facts. Their content records `command`, `evidence_id`, and `source_revision`; candidates must use category `command`, the exact canonical text `Use <command> for this repository`, and cite that passing attempt's evidence. The final revision and the observed command must match. Only commands executed at the project root (empty directory or `.`) and unchanged by secret redaction create promotable facts; other verification attempts remain recorded without generating command guidance. Approved decisions project only their canonical title, under category `approved_decision`, and require evidence linked to that decision or its current approval criterion. Other free-form fact/category combinations fail closed; no semantic inference or rewriting occurs. Clients still cannot create observational facts through `work.update`.
+
+Only `UMCODE.md` is eligible. For scoped facts, the target is the nearest existing `UMCODE.md` shared by all scope paths; cross-cutting scopes fall back to the root. The root file may be created, but nested instruction files are never created automatically. Foreign instruction files, including `AGENTS.md`, `CLAUDE.md` and global `AGENT.md`, are never scanned or written.
+
+Entries appear under `## Verified project memory` and `<!-- umcode:generated -->`. SQLite records ownership and provenance. User text outside this section is preserved byte-for-byte; replacement requires an exact unchanged recorded generated bullet in a single well-formed section. External edits, deletion, movement or malformed sections end automatic ownership and conflict without overwriting the file. Replacements preserve the superseded historical row, and normal project diff and turn undo include each automatic write.
+
+Exact duplicates already present in user text activate a row marked `user_owned` without a write or a claim of generated ownership. Repeated duplicate candidates and subsequent unrelated insertions remain supported. Adopted text cannot authorize replacement. If replacement guidance already exists elsewhere, promotion conservatively conflicts and leaves the old row active rather than claiming successful supersession. Indented list continuations and raw HTML structures that prevent proving Markdown ownership also conflict with all bytes preserved.
+
+The safe writer supports Darwin and Linux; other platforms fail closed with `unsupported_platform`. It preserves existing permissions and line endings, writes and syncs a sibling temporary file, checks the target's final hash and inode identity, atomically renames, then syncs the parent directory. The final check and rename are separate filesystem operations: atomic rename prevents partial-file visibility, but does not provide a kernel-level compare-and-swap against an external edit in that remaining interval. UMCode serializes its own promotions per project; arbitrary external writers must still coordinate.
+
+SQLite and filesystem changes use a persisted operation with exact before/after bytes and hashes. Before rename, storage failures leave the target unchanged; size overflow remains pending without eviction or truncation. I/O failures retain a pending-repair operation. After rename, a history or SQLite failure can leave the generated file present while metadata needs repair. Snapshot matching includes file existence: a missing file differs from an existing empty file. Startup recovery retries an exact before state, finalizes an exact after state, and conflicts on a third state without overwriting it. History recording is idempotent by operation ID, so repeated recovery produces one file-change row and one active memory. Undo restores file bytes; it does not delete historical memory rows or reopen completed Work. Later ownership checks detect the missing or changed entry.
+
+Logs expose metadata-only `memory promotion diagnostic` and `memory recovery diagnostic` events: project/Work/candidate/evidence identities, target path, fixed outcome/reason, before/after hashes and byte sizes, inserted/replaced/unchanged/conflict counts, and estimated instruction tokens added/context tokens avoided. Aggregate reports count promoted, rejected, stale, conflicted and pending candidates, plus completed/retried/conflicted/pending-repair recovery operations. Engine failure counters distinguish promotion and recovery failures, including contained panics. Diagnostics omit candidate/generated text, evidence bodies, tool output, secrets and approval rationale. Token estimates use roughly four bytes per token; avoided-context estimates count only duplicate suppression or authoritative replacement. Normal request usage includes promoted instructions and never subtracts estimated savings.
+
+Validate repeated-task quality and cost without network calls or model variance:
+
+```sh
+go test ./internal/engine -run 'TestCuratedMemory(E2E|ReducesRepeatedDiscoveryWithoutQualityLoss)' -count=1 -v
+```
+
+The deterministic A/B test runs real file tools and repository verification with identical supported completions, answers and artifacts. It reports discovery calls, tool rounds, model calls, and cumulative second-turn input bytes/token estimates, including the promoted bullet's cost. These fixture measurements establish regression behavior, not a prediction of savings for every project.
 
 ### Evidence vault and staleness
 

@@ -33,7 +33,7 @@ func (f fixture) withVault(t *testing.T) (*vault.Vault, *string) {
 
 func (f fixture) end(t *testing.T) {
 	t.Helper()
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, "/r"); err != nil {
+	if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, "/r"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -274,7 +274,7 @@ func TestNoApprovalOrBlocking(t *testing.T) {
 	f.passAll(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := f.svc.End(ctx, f.th.ID, protocol.TurnCompleted, false, "/r"); err != nil {
+	if _, err := f.svc.End(ctx, f.th.ID, protocol.TurnCompleted, false, "/r"); err != nil {
 		t.Fatal(err)
 	}
 	if ctx.Err() != nil {

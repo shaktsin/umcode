@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -101,6 +102,41 @@ func (r *Recorder) Record(ctx context.Context, abs string, before *string, delet
 		r.emit(data)
 	}
 	return data
+}
+
+// RecordPromotion persists exact operation snapshots before emitting a change.
+// It never rereads the replaced path, which may already have been externally
+// changed. Recovery returns the same payload without emitting a second event.
+func (r *Recorder) RecordPromotion(ctx context.Context, promotionOpID, abs string, before *string) (protocol.FileChangeData, error) {
+	op, err := r.svc.st.GetMemoryPromotionOp(ctx, promotionOpID)
+	if err != nil {
+		return protocol.FileChangeData{}, err
+	}
+	if op.ProjectID != r.project.ID || op.ThreadID != r.threadID || op.TurnID != r.turnID || filepath.Clean(abs) != filepath.Join(r.project.Root, filepath.FromSlash(op.TargetPath)) || filepath.Base(abs) != "UMCODE.md" {
+		return protocol.FileChangeData{}, fmt.Errorf("promotion recorder provenance mismatch")
+	}
+	if (before == nil) != (op.BeforeBytes == nil) || before != nil && !bytes.Equal([]byte(*before), op.BeforeBytes) {
+		return protocol.FileChangeData{}, fmt.Errorf("promotion recorder snapshot mismatch")
+	}
+	text := ""
+	if before != nil {
+		text = *before
+	}
+	action := protocol.FileModified
+	if before == nil {
+		action = protocol.FileCreated
+	}
+	diff, adds, dels, truncated := Unified(op.TargetPath, text, string(op.AfterBytes))
+	data := protocol.FileChangeData{Path: op.TargetPath, Action: action, TurnID: r.turnID, Additions: adds, Deletions: dels, Diff: diff, Truncated: truncated, Revertable: true}
+	sum := sha256.Sum256(op.AfterBytes)
+	_, inserted, err := r.svc.st.RecordFileChangeOnce(ctx, store.FileChange{ProjectID: r.project.ID, ThreadID: r.threadID, TurnID: r.turnID, Path: op.TargetPath, Action: action, Before: before, AfterHash: hex.EncodeToString(sum[:8]), Additions: adds, Deletions: dels, Revertable: true, PromotionOpID: promotionOpID})
+	if err != nil {
+		return protocol.FileChangeData{}, err
+	}
+	if inserted && r.emit != nil {
+		r.emit(data)
+	}
+	return data, nil
 }
 
 // Diff reports what has been changed, newest first. With a turn id it is what

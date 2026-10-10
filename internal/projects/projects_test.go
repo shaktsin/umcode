@@ -2,8 +2,10 @@ package projects
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -283,6 +285,337 @@ func TestInstructionsSkipDirectoryNamedUMCode(t *testing.T) {
 	res, err := svc.Instructions(ctx, p, nil)
 	if err != nil || res.Exists {
 		t.Fatalf("a directory was reported as an instruction file: %+v err = %v", res, err)
+	}
+}
+
+func TestInstructionInventory(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"UMCODE.md", "web/UMCODE.md", "web/deep/UMCODE.md", "web/deep/code.go", "api/code.go"} {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte("guidance"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Foreign instruction names must not be statted, read, or followed. An
+	// unreadable/escaping symlink with a foreign name cannot poison inventory.
+	if err := os.Symlink(filepath.Join(t.TempDir(), "absent"), filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstructionInventory(root, []string{"web/deep/code.go", "api"})
+	if err != nil || !reflect.DeepEqual(got, []string{"UMCODE.md", "web/UMCODE.md", "web/deep/UMCODE.md"}) {
+		t.Fatalf("inventory = %v, %v", got, err)
+	}
+	if got, err := InstructionInventory(t.TempDir(), nil); err != nil || len(got) != 0 {
+		t.Fatalf("absent root instruction = %v, %v", got, err)
+	}
+}
+
+func TestInstructionInventoryRejectsUnsafePaths(t *testing.T) {
+	for _, kind := range []string{"directory instruction", "escaping instruction", "foreign instruction target", "broken instruction", "escaping directory scope", "escaping file scope", "missing scope", "absolute scope", "parent scope", "foreign scope", "relative root", "missing root"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			outside := t.TempDir()
+			if err := os.WriteFile(filepath.Join(outside, "code.go"), []byte("outside"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(root, "web"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			var scopes []string
+			switch kind {
+			case "directory instruction":
+				if err := os.Mkdir(filepath.Join(root, "web/UMCODE.md"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			case "escaping instruction":
+				if err := os.Symlink(filepath.Join(outside, "code.go"), filepath.Join(root, "web/UMCODE.md")); err != nil {
+					t.Fatal(err)
+				}
+			case "broken instruction":
+				if err := os.Symlink(filepath.Join(root, "absent"), filepath.Join(root, "UMCODE.md")); err != nil {
+					t.Fatal(err)
+				}
+			case "foreign instruction target":
+				if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("foreign"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("AGENTS.md", filepath.Join(root, "UMCODE.md")); err != nil {
+					t.Fatal(err)
+				}
+			case "escaping directory scope":
+				if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+					t.Fatal(err)
+				}
+				scopes = []string{"escape"}
+			case "escaping file scope":
+				if err := os.Symlink(filepath.Join(outside, "code.go"), filepath.Join(root, "escape.go")); err != nil {
+					t.Fatal(err)
+				}
+				scopes = []string{"escape.go"}
+			case "missing scope":
+				scopes = []string{"web/absent.go"}
+			case "absolute scope":
+				scopes = []string{filepath.Join(root, "web")}
+			case "parent scope":
+				scopes = []string{"web/../web"}
+			case "foreign scope":
+				scopes = []string{"CLAUDE.md"}
+			case "relative root":
+				root = "relative-project"
+			case "missing root":
+				root = filepath.Join(root, "absent")
+			}
+			if got, err := InstructionInventory(root, scopes); err == nil || len(got) != 0 {
+				t.Fatalf("unsafe inventory = %v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestInstructionInventoryContainedSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "guidance.txt"), []byte("contained guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("guidance.txt", filepath.Join(root, "UMCODE.md")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstructionInventory(root, []string{"guidance.txt"})
+	if err != nil || !reflect.DeepEqual(got, []string{"UMCODE.md"}) {
+		t.Fatalf("contained link = %v, %v", got, err)
+	}
+}
+
+// A final-path-only check misses forbidden names that disappear through an
+// additional symlink or through '..'. Missing forbidden destinations must be
+// rejected as forbidden before any lookup can report them unavailable.
+func TestInstructionInventoryForbiddenSymlinkHops(t *testing.T) {
+	for _, kind := range []string{"direct missing", "chained file", "intermediate directory", "unclean destination"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			makeForbiddenInstructionAlias(t, root, "UMCODE.md", kind)
+			got, err := InstructionInventory(root, nil)
+			if len(got) != 0 || err == nil || !strings.Contains(err.Error(), "instruction path forbidden") {
+				t.Fatalf("forbidden instruction hop = %v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestInstructionInventoryForbiddenScopeHops(t *testing.T) {
+	for _, kind := range []string{"direct missing", "chained file", "intermediate directory", "unclean destination"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			makeForbiddenInstructionAlias(t, root, "alias", kind)
+			got, err := InstructionInventory(root, []string{"alias"})
+			if len(got) != 0 || err == nil || !strings.Contains(err.Error(), "instruction path forbidden") {
+				t.Fatalf("forbidden scope hop = %v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestInstructionInventoryCompositionForbiddenHops(t *testing.T) {
+	for _, kind := range []string{"direct missing", "chained file", "intermediate directory", "unclean destination"} {
+		t.Run(kind, func(t *testing.T) {
+			svc, _, _ := newService(t)
+			root := t.TempDir()
+			makeForbiddenInstructionAlias(t, root, "UMCODE.md", kind)
+			got, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "foreign-hops"}, "")
+			if got != "" || len(sources) != 0 {
+				t.Fatalf("forbidden instruction hop composed: %q, %+v", got, sources)
+			}
+		})
+	}
+}
+
+func makeForbiddenInstructionAlias(t *testing.T, root, name, kind string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, "guidance.txt"), []byte("foreign hop guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	destination := "AGENTS.md"
+	switch kind {
+	case "chained file":
+		if err := os.Symlink("guidance.txt", filepath.Join(root, "AGENTS.md")); err != nil {
+			t.Fatal(err)
+		}
+	case "intermediate directory":
+		if err := os.Mkdir(filepath.Join(root, "safe"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "safe/guidance.txt"), []byte("foreign hop guidance"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("safe", filepath.Join(root, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		destination = "CLAUDE.md/guidance.txt"
+	case "unclean destination":
+		if err := os.Mkdir(filepath.Join(root, "AGENT.md"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		destination = "AGENT.md/../guidance.txt"
+	}
+	if err := os.Symlink(destination, filepath.Join(root, name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstructionInventorySafeSymlinkHops(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "safe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "safe/guidance.txt"), []byte("safe chained guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("safe", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "alias/guidance.txt"), filepath.Join(root, "middle")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("middle", filepath.Join(root, "UMCODE.md")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstructionInventory(root, []string{"middle"})
+	if err != nil || !reflect.DeepEqual(got, []string{"UMCODE.md"}) {
+		t.Fatalf("safe chained inventory = %v, %v", got, err)
+	}
+	svc, _, _ := newService(t)
+	composed, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "safe-hops"}, "alias")
+	if !strings.Contains(composed, "safe chained guidance") || len(sources) != 1 {
+		t.Fatalf("safe chain composition = %q, %+v", composed, sources)
+	}
+}
+
+func TestInstructionInventoryCompositionMissingHopCannotResume(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "safe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("safe", filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("AGENTS.md", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing/../alias", filepath.Join(root, "hint")); err != nil {
+		t.Fatal(err)
+	}
+	// A missing component cannot be cleaned away and resume traversal through
+	// an unchecked alias. This is the allow-missing boundary used by composition.
+	if got, _, err := checkedInstructionPath(root, "hint", true); err == nil || got != "" {
+		t.Fatalf("missing hop resumed: %q, %v", got, err)
+	}
+}
+
+func TestInstructionInventoryCompositionPreservesSafeAliasAncestors(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "deep/web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "deep/UMCODE.md"), []byte("physical ancestor"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "deep/web/UMCODE.md"), []byte("alias guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("deep/web", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	svc, _, _ := newService(t)
+	got, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "alias-ancestors"}, "alias/missing.go")
+	if !strings.Contains(got, "alias guidance") || strings.Contains(got, "physical ancestor") || len(sources) != 1 || sources[0].Path != filepath.Join(root, "alias/UMCODE.md") {
+		t.Fatalf("safe alias ancestors changed: %q, %+v", got, sources)
+	}
+}
+
+func TestInstructionInventoryCompositionAbsoluteHintParentAlias(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"deep/leaf", "deep/pick", "safe"} {
+		if err := os.MkdirAll(filepath.Join(root, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "safe/UMCODE.md"), []byte("forbidden alias guidance"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for source, destination := range map[string]string{"alias": "deep/leaf", "pick": "AGENTS.md", "AGENTS.md": "safe"} {
+		if err := os.Symlink(destination, filepath.Join(root, source)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Keep the raw absolute spelling: filepath.Join would erase alias/.. before
+	// the production boundary receives it. The guard and Resolve must both
+	// inspect pick, rather than guarding deep/pick and later following pick.
+	hint := root + "/alias/../pick"
+	t.Run("checked path", func(t *testing.T) {
+		if got, _, err := checkedInstructionPath(root, hint, true); got != "" || err == nil || !strings.Contains(err.Error(), "instruction path forbidden") {
+			t.Fatalf("unchecked lexical reinterpretation: %q, %v", got, err)
+		}
+	})
+	t.Run("composition", func(t *testing.T) {
+		svc, _, _ := newService(t)
+		got, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "absolute-parent-alias"}, hint)
+		if got != "" || len(sources) != 0 {
+			t.Fatalf("unchecked absolute hint composed: %q, %+v", got, sources)
+		}
+	})
+}
+
+func TestInstructionInventoryRootParentAliasUsesResolveSemantics(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "deep/leaf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "deep/nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"UMCODE.md", "deep/nested/UMCODE.md"} {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte("guidance"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("deep/leaf", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := InstructionInventory(root+"/alias/..", nil)
+	if err != nil || !reflect.DeepEqual(got, []string{"UMCODE.md", "deep/nested/UMCODE.md"}) {
+		t.Fatalf("root traversal disagrees with Resolve: %v, %v", got, err)
+	}
+}
+
+func TestInstructionInventoryCompositionContainment(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprint(nested), func(t *testing.T) {
+			svc, _, _ := newService(t)
+			root, outside := t.TempDir(), t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "web"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(outside, "UMCODE.md"), []byte("outside secret"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(root, "UMCODE.md")
+			if nested {
+				link = filepath.Join(root, "web/UMCODE.md")
+			}
+			if err := os.Symlink(filepath.Join(outside, "UMCODE.md"), link); err != nil {
+				t.Fatal(err)
+			}
+			got, sources := svc.InstructionsFor(context.Background(), protocol.Project{Root: root, ID: "containment"}, "web")
+			if got != "" || len(sources) != 0 {
+				t.Fatalf("escaped instruction composed: %q, %+v", got, sources)
+			}
+		})
 	}
 }
 

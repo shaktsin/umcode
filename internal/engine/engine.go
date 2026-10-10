@@ -23,6 +23,7 @@ import (
 	"github.com/shaktsin/umcode/internal/hooks"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/mcp"
+	"github.com/shaktsin/umcode/internal/memory"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/plugins"
 	"github.com/shaktsin/umcode/internal/policy"
@@ -67,6 +68,7 @@ type Engine struct {
 	Bus         *Bus
 	Log         *slog.Logger
 	Work        *work.Service
+	Memory      *memory.Service
 
 	gate      *policy.Gate
 	started   time.Time
@@ -74,9 +76,11 @@ type Engine struct {
 	retention work.Retention
 	cancelAll context.CancelFunc
 
-	compilerFailures    atomic.Int64 // context-compiler errors, declines and panics
-	toolReducerFailures atomic.Int64 // recovered tool-result reducer panics
-	reduceHook          func()       // instance-local panic test seam; set before use
+	memoryPromotionFailures atomic.Int64 // promotion failures, isolated from Work completion
+	memoryRecoveryFailures  atomic.Int64 // startup reconciliation failures
+	compilerFailures        atomic.Int64 // context-compiler errors, declines and panics
+	toolReducerFailures     atomic.Int64 // recovered tool-result reducer panics
+	reduceHook              func()       // instance-local panic test seam; set before use
 
 	mu           sync.Mutex
 	activeTurns  map[string]*activeTurn // by turn id
@@ -206,6 +210,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	if err := o.Store.ExpirePendingApprovals(ctx); err != nil {
 		return nil, err
 	}
+	e.initMemory(ctx)
 	if added, err := e.Creds.ImportConfigKeys(ctx, o.Config); err != nil {
 		e.Log.Warn("could not import API keys from config", "err", err)
 	} else {
@@ -992,4 +997,127 @@ func toolVersion(ctx context.Context) string {
 		}
 	})
 	return toolVersionValue
+}
+
+// initMemory is the only feature gate: inactive configurations construct no
+// promoter and perform no promotion or recovery reads.
+func (e *Engine) initMemory(ctx context.Context) {
+	if !e.Cfg.Memory.AutoPromote {
+		return
+	}
+	if !e.Cfg.Models.DesignedWorkflow {
+		e.Log.Info("memory promotion inactive", "reason", "designed_workflow_disabled")
+		return
+	}
+	e.Memory = memory.New(e.Store, e.Projects, e.Cfg.Memory.TargetFileBytes)
+	emitCtx := context.WithoutCancel(ctx)
+	e.Memory.Emit = e.memoryFileChangeEmitter(emitCtx, "promotion")
+	e.Memory.EmitRecovery = e.memoryFileChangeEmitter(emitCtx, "recovery")
+	e.recoverMemory(ctx)
+}
+
+func (e *Engine) memoryFileChangeEmitter(ctx context.Context, operation string) func(protocol.FileChangeData) {
+	return func(c protocol.FileChangeData) {
+		// Recovery can originate from a different thread and an earlier turn.
+		var threadID string
+		if err := e.Store.DB.QueryRowContext(ctx, `SELECT thread_id FROM turns WHERE id = ?`, c.TurnID).Scan(&threadID); err != nil {
+			if operation == "recovery" {
+				e.memoryRecoveryFailures.Add(1)
+			} else {
+				e.memoryPromotionFailures.Add(1)
+			}
+			e.Log.Warn("memory file change publication failed", "operation", operation, "class", "origin_turn")
+			return
+		}
+		e.publishFileChange(ctx, protocol.Turn{ID: c.TurnID, ThreadID: threadID}, c)
+	}
+}
+
+func (e *Engine) recoverMemory(ctx context.Context) {
+	if e.Memory == nil {
+		return
+	}
+	defer func() {
+		if recover() != nil {
+			e.memoryRecoveryFailures.Add(1)
+			e.Log.Warn("memory recovery failed", "class", "panic")
+		}
+	}()
+	e.logMemoryReport("recovery", e.Memory.Recover(ctx), "")
+}
+
+// promoteMemory runs after End's CloseWork call has committed. No call to the
+// observational Work recorder follows the instruction-file write, so completed
+// product verification remains fresh.
+func (e *Engine) promoteMemory(ctx context.Context, th protocol.Thread, turn protocol.Turn, workID string) {
+	if e.Memory == nil || workID == "" || th.ProjectID == "" {
+		return
+	}
+	defer func() {
+		if recover() != nil {
+			e.memoryPromotionFailures.Add(1)
+			e.Log.Warn("memory promotion failed", "class", "panic", "work_id", workID)
+		}
+	}()
+	// Avoid project and promotion I/O for Works with no pending candidates.
+	d, err := e.Store.GetWorkDetail(ctx, workID)
+	if err != nil {
+		e.memoryPromotionFailures.Add(1)
+		e.Log.Warn("memory promotion failed", "class", "work_lookup", "work_id", workID)
+		return
+	}
+	if d.Work.ProjectID == "" || d.Work.ProjectID != th.ProjectID {
+		return
+	}
+	pending := false
+	for _, n := range d.Nodes {
+		if n.Kind == protocol.NodeMemoryCandidate && n.Status == protocol.StatusPending && n.ValidUntil == nil && n.SupersededBy == "" {
+			pending = true
+			break
+		}
+	}
+	if !pending {
+		return
+	}
+	p, err := e.Store.GetProject(ctx, d.Work.ProjectID)
+	if err != nil {
+		e.memoryPromotionFailures.Add(1)
+		e.Log.Warn("memory promotion failed", "class", "project_lookup", "work_id", workID)
+		return
+	}
+	e.logMemoryReport("promotion", e.Memory.PromoteCompleted(ctx, memory.Request{Project: p, WorkID: workID, ThreadID: th.ID, TurnID: turn.ID}), workID)
+}
+
+func (e *Engine) logMemoryReport(operation string, r memory.Report, workID string) {
+	if r.Pending > 0 {
+		if operation == "recovery" {
+			e.memoryRecoveryFailures.Add(1)
+		} else {
+			e.memoryPromotionFailures.Add(1)
+		}
+		e.Log.Warn("memory "+operation+" failed", "class", "pending", "count", r.Pending, "work_id", workID)
+	}
+	// Byte-derived estimates are diagnostics only. Request usage is untouched.
+	e.Log.Info("memory "+operation+" report", "work_id", workID,
+		"promoted", r.Promoted, "rejected", r.Rejected, "stale", r.Stale,
+		"conflicted", r.Conflicted, "pending", r.Pending, "inserted", r.Inserted,
+		"replaced", r.Replaced, "unchanged", r.Unchanged, "bytes_before", r.BytesBefore,
+		"bytes_after", r.BytesAfter, "estimated_instruction_tokens_before", (r.BytesBefore+3)/4,
+		"estimated_instruction_tokens_after", (r.BytesAfter+3)/4,
+		"estimated_instruction_tokens_added", r.EstimatedInstructionTokensAdded,
+		"estimated_context_tokens_avoided", r.EstimatedContextTokensAvoided,
+		"recovery_completed", r.RecoveryCompleted, "recovery_retried", r.RecoveryRetried,
+		"recovery_conflicted", r.RecoveryConflicted, "recovery_pending_repair", r.RecoveryPendingRepair,
+		"diagnostics_dropped", r.DiagnosticsDropped)
+	for _, d := range r.Diagnostics {
+		e.Log.Info("memory "+operation+" diagnostic", "project_id", d.ProjectID,
+			"work_id", d.WorkID, "candidate_node_id", d.CandidateNodeID, "source_node_ids", d.SourceNodeIDs,
+			"source_revision", d.SourceRevision, "evidence_ids", d.EvidenceIDs, "operation_id", d.OperationID,
+			"thread_id", d.ThreadID, "turn_id", d.TurnID, "target_path", d.TargetPath,
+			"before_hash", d.BeforeHash, "after_hash", d.AfterHash, "bytes_before", d.BytesBefore, "bytes_after", d.BytesAfter,
+			"status", d.Status, "reason", d.Reason, "recovery", d.Recovery, "inserted", d.Inserted, "replaced", d.Replaced,
+			"unchanged", d.Unchanged, "conflicts", d.Conflicts,
+			"estimated_instruction_tokens_added", d.EstimatedInstructionTokensAdded,
+			"estimated_context_tokens_avoided", d.EstimatedContextTokensAvoided)
+	}
 }

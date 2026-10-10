@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/pathutil"
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
@@ -79,28 +82,227 @@ type instructionFile struct {
 	path  string
 }
 
+// InstructionInventory checks canonical scopes and inventories only literal
+// UMCODE.md files. It reads metadata, never instruction contents, and returns no
+// partial inventory on failure. Directory symlinks are not traversed.
+func InstructionInventory(root string, scopePaths []string) ([]string, error) {
+	if !filepath.IsAbs(root) {
+		return nil, fmt.Errorf("instruction inventory project invalid")
+	}
+	resolvedRoot, st, err := guardedInstructionPath(root, false)
+	if err != nil || !st.IsDir() {
+		return nil, fmt.Errorf("instruction inventory project unavailable")
+	}
+	root = resolvedRoot
+	for _, scope := range scopePaths {
+		if !instructionRelativePath(scope) {
+			return nil, fmt.Errorf("instruction inventory scope invalid")
+		}
+		_, st, err := checkedInstructionPath(root, scope, false)
+		if err != nil {
+			return nil, err
+		}
+		if err != nil || !(st.IsDir() || st.Mode().IsRegular()) {
+			return nil, fmt.Errorf("instruction inventory scope unavailable")
+		}
+	}
+	var existing []string
+	err = filepath.WalkDir(root, func(abs string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("instruction inventory unavailable")
+		}
+		if foreignInstructionName(entry.Name()) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() != "UMCODE.md" {
+			return nil
+		}
+		if _, err := containedInstructionFile(root, abs); err != nil {
+			return err
+		}
+		existing = append(existing, pathutil.Rel(root, abs))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(existing)
+	return existing, nil
+}
+
+func foreignInstructionName(name string) bool {
+	return name == "AGENTS.md" || name == "CLAUDE.md" || name == "AGENT.md"
+}
+
+func instructionRelativePath(p string) bool {
+	if p == "" || strings.TrimSpace(p) != p || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../") || strings.HasPrefix(p, "~") || strings.ContainsAny(p, "\\\x00") || len(p) > 1 && p[1] == ':' {
+		return false
+	}
+	for _, part := range strings.Split(p, "/") {
+		if foreignInstructionName(part) {
+			return false
+		}
+	}
+	return true
+}
+
+// forbiddenInstructionPath checks the raw spelling before cleaning can erase a
+// component or a symlink lookup can follow it. It performs no filesystem I/O.
+func forbiddenInstructionPath(candidate string) bool {
+	for _, component := range strings.FieldsFunc(candidate, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if foreignInstructionName(component) {
+			return true
+		}
+	}
+	return false
+}
+
+// guardedInstructionPath resolves one component at a time, rejecting every raw
+// symlink destination before touching it. EvalSymlinks/Stat cannot provide that
+// guarantee: both can follow a forbidden intermediate name before returning.
+func guardedInstructionPath(candidate string, allowMissing bool) (string, os.FileInfo, error) {
+	if !filepath.IsAbs(candidate) || forbiddenInstructionPath(candidate) {
+		return "", nil, fmt.Errorf("instruction path forbidden")
+	}
+	// Initial roots and hints follow Resolve's lexical cleaning. Link
+	// destinations below remain raw so every forbidden hop is checked first.
+	candidate = filepath.Clean(candidate)
+	volume := filepath.VolumeName(candidate)
+	current := volume + string(filepath.Separator)
+	pending := strings.Split(filepath.ToSlash(strings.TrimPrefix(candidate, volume)), "/")
+	var info os.FileInfo
+	links := 0
+	for len(pending) > 0 {
+		part := pending[0]
+		pending = pending[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			current = filepath.Dir(current)
+			info = nil
+			continue
+		}
+		next := filepath.Join(current, part)
+		st, err := os.Lstat(next)
+		if err != nil {
+			if allowMissing && os.IsNotExist(err) {
+				for _, remaining := range pending {
+					if remaining == ".." {
+						return "", nil, fmt.Errorf("instruction path unavailable")
+					}
+				}
+				return filepath.Join(append([]string{next}, pending...)...), nil, nil
+			}
+			return "", nil, fmt.Errorf("instruction path unavailable")
+		}
+		if st.Mode()&os.ModeSymlink != 0 {
+			links++
+			if links > 40 {
+				return "", nil, fmt.Errorf("instruction path symlink limit")
+			}
+			destination, err := os.Readlink(next)
+			if err != nil {
+				return "", nil, fmt.Errorf("instruction path unavailable")
+			}
+			if forbiddenInstructionPath(destination) {
+				return "", nil, fmt.Errorf("instruction path forbidden")
+			}
+			if filepath.IsAbs(destination) {
+				volume = filepath.VolumeName(destination)
+				current = volume + string(filepath.Separator)
+				destination = strings.TrimPrefix(destination, volume)
+			}
+			pending = append(strings.Split(filepath.ToSlash(destination), "/"), pending...)
+			info = nil
+			continue
+		}
+		if len(pending) > 0 && !st.IsDir() {
+			return "", nil, fmt.Errorf("instruction path is not a directory")
+		}
+		current, info = next, st
+	}
+	if info == nil {
+		var err error
+		info, err = os.Lstat(current)
+		if err != nil {
+			return "", nil, fmt.Errorf("instruction path unavailable")
+		}
+	}
+	return current, info, nil
+}
+
+func checkedInstructionPath(root, candidate string, allowMissing bool) (string, os.FileInfo, error) {
+	candidate = strings.TrimSpace(candidate)
+	if forbiddenInstructionPath(candidate) {
+		return "", nil, fmt.Errorf("instruction path forbidden")
+	}
+	// Resolve lexically cleans its input before following links. Guard that same
+	// spelling, including for absolute hints, after checking raw forbidden names.
+	candidate = filepath.Clean(candidate)
+	abs := candidate
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(root, abs)
+	}
+	_, info, err := guardedInstructionPath(abs, allowMissing)
+	if err != nil {
+		return "", nil, err
+	}
+	// Apply the existing containment policy only after every destination has
+	// passed the guard. Preserve its lexical spelling for relative hints so a
+	// safe directory alias retains its original instruction ancestors.
+	contained, err := Resolve(root, candidate)
+	if err != nil {
+		return "", nil, fmt.Errorf("instruction path outside project")
+	}
+	return contained, info, nil
+}
+
+// containedInstructionFile is shared by inventory and prompt composition, so
+// neither can treat an escaping link or a non-regular entry as guidance.
+func containedInstructionFile(root, candidate string) (string, error) {
+	_, st, err := checkedInstructionPath(root, candidate, false)
+	if err != nil {
+		return "", err
+	}
+	if err != nil || !st.Mode().IsRegular() {
+		return "", fmt.Errorf("instruction file is not regular")
+	}
+	return candidate, nil
+}
+
 // instructionFiles lists the candidate UMCODE.md files, project root first.
 func (s *Service) instructionFiles(p protocol.Project, hint string) []instructionFile {
 	var out []instructionFile
 	if p.Root == "" {
 		return out
 	}
-	out = append(out, instructionFilesAt(p.Root, "project")...)
+	root, st, err := guardedInstructionPath(p.Root, false)
+	if err != nil || !st.IsDir() {
+		return out
+	}
+	out = append(out, instructionFilesAt(root, p.Root, "project")...)
 	// Include every nested UMCODE.md root-to-leaf.
 	if hint != "" {
-		if abs, err := Resolve(p.Root, hint); err == nil {
+		if abs, st, err := checkedInstructionPath(root, hint, true); err == nil {
 			dir := abs
-			if st, err := os.Stat(abs); err != nil || !st.IsDir() {
+			if st == nil || !st.IsDir() {
 				dir = filepath.Dir(abs)
 			}
-			if within(p.Root, dir) {
+			if within(root, dir) {
 				var dirs []string
-				for within(p.Root, dir) && dir != p.Root {
+				for within(root, dir) && dir != root {
 					dirs = append(dirs, dir)
 					dir = filepath.Dir(dir)
 				}
 				for i := len(dirs) - 1; i >= 0; i-- {
-					out = append(out, instructionFilesAt(dirs[i], "nested")...)
+					rel, err := filepath.Rel(root, dirs[i])
+					if err == nil {
+						out = append(out, instructionFilesAt(root, filepath.Join(p.Root, rel), "nested")...)
+					}
 				}
 			}
 		}
@@ -118,11 +320,11 @@ func firstInstructionFile(dir string) string {
 	return ""
 }
 
-func instructionFilesAt(dir, scope string) []instructionFile {
+func instructionFilesAt(root, dir, scope string) []instructionFile {
 	var out []instructionFile
 	for _, name := range instructionNames {
 		path := filepath.Join(dir, name)
-		if st, err := os.Stat(path); err == nil && !st.IsDir() {
+		if _, err := containedInstructionFile(root, path); err == nil {
 			out = append(out, instructionFile{scope: scope, path: path})
 		}
 	}

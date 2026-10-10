@@ -580,9 +580,10 @@ func (s *Service) workspace(ctx context.Context, root string) (fingerprint.Works
 // recordAttempt stores the full output in the vault, then writes evidence, the
 // append-only attempt, the workspace fingerprint and the criterion update in one
 // transaction.
-func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Observation, checkType, command, status string, exit *int, full string) error {
+func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Observation, checkType, command, directory, status string, exit *int, full string) error {
 	now := s.now()
-	command = redactText(command)
+	redactedCommand, commandRedacted := vault.Redact([]byte(command))
+	command = string(redactedCommand)
 	crit := criterionFor(d, command)
 	critID := ""
 	if crit != nil {
@@ -615,8 +616,22 @@ func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Ob
 	if crit != nil && status != protocol.AttemptNotRun {
 		in.Criterion = &store.CriterionUpdate{NodeID: crit.ID, Status: status, Revision: crit.Revision, At: now}
 	}
-	_, err := s.Store.RecordAttempt(ctx, in)
-	return err
+	attempt, err := s.Store.RecordAttempt(ctx, in)
+	// Repository-wide guidance must reproduce the actual command at the root.
+	// Keep recording other attempts, but never promote masked or scoped commands.
+	if err != nil || !s.DesignedWorkflow || checkType != "command" || commandRedacted || strings.Contains(command, "[REDACTED]") || (directory != "" && directory != ".") || status != protocol.AttemptPassed || exit == nil || *exit != 0 || !wsOK || critID == "" {
+		return err
+	}
+	content, _ := json.Marshal(VerifiedCommandFact{Type: "verified_command", Command: command, EvidenceID: attempt.EvidenceID, SourceRevision: ws.Value})
+	fact := protocol.WorkNode{WorkID: d.Work.ID, Kind: protocol.NodeFact, Status: "active", Content: content, Title: "Verified repository command", ValidFrom: now, CreatedAt: now, UpdatedAt: now}
+	if _, _, ok := MemorySourceGuidance(fact); !ok {
+		return nil
+	}
+	fact, err = s.Store.AddWorkNode(ctx, fact)
+	if err != nil {
+		return err
+	}
+	return s.Store.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: critID, ToNodeID: fact.ID, Relation: protocol.RelVerifies})
 }
 
 func (o Observation) structured() string {
@@ -632,7 +647,7 @@ func (s *Service) recordRun(ctx context.Context, d protocol.WorkDetail, o Observ
 		if full == "" {
 			full = r.Error
 		}
-		if err := s.recordAttempt(ctx, d, o, "command", r.Command, r.Status, r.ExitCode, full); err != nil {
+		if err := s.recordAttempt(ctx, d, o, "command", r.Command, r.Directory, r.Status, r.ExitCode, full); err != nil {
 			return err
 		}
 	}
@@ -648,49 +663,54 @@ func (s *Service) recordBrowser(ctx context.Context, d protocol.WorkDetail, o Ob
 	if full == "" {
 		full = r.Reason
 	}
-	return s.recordAttempt(ctx, d, o, "browser", r.Command, r.Status, r.ExitCode, full)
+	return s.recordAttempt(ctx, d, o, "browser", r.Command, "", r.Status, r.ExitCode, full)
 }
 
 // End finishes a turn for the thread's open work: it fingerprints the workspace
 // (recording shell-made changes), settles staleness, and closes the work as
 // completed only when the turn completed, was not paused, and no criterion is
-// unresolved. root is the turn's project root ("" without a project).
-func (s *Service) End(ctx context.Context, threadID, turnStatus string, paused bool, root string) error {
-	return s.count("end", s.end(ctx, threadID, turnStatus, paused, root))
+// unresolved. It returns the ID only when this call newly completes the Work.
+// root is the turn's project root ("" without a project).
+func (s *Service) End(ctx context.Context, threadID, turnStatus string, paused bool, root string) (completedWorkID string, err error) {
+	id, err := s.end(ctx, threadID, turnStatus, paused, root)
+	return id, s.count("end", err)
 }
 
-func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused bool, root string) error {
+func (s *Service) end(ctx context.Context, threadID, turnStatus string, paused bool, root string) (string, error) {
 	w, ok, err := s.Store.OpenWorkForThread(ctx, threadID)
 	if err != nil || !ok {
-		return err
+		return "", err
 	}
 	d, err := s.Store.GetWorkDetail(ctx, w.ID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := s.turnEndFingerprint(ctx, d, root); err != nil {
 		s.count("fingerprint", err)
 	}
 	if d, err = s.Store.GetWorkDetail(ctx, w.ID); err != nil {
-		return err
+		return "", err
 	}
 	if err := s.settle(ctx, d, root); err != nil {
 		s.count("staleness", err)
 	}
 	if turnStatus != protocol.TurnCompleted || paused {
-		return nil
+		return "", nil
 	}
 	if d, err = s.Store.GetWorkDetail(ctx, w.ID); err != nil {
-		return err
+		return "", err
 	}
 	blockers := Unresolved(d)
 	if s.DesignedWorkflow && d.Work.WorkflowDepth != protocol.DepthDirect {
 		blockers = CompletionBlockers(d)
 	}
 	if len(blockers) > 0 {
-		return nil
+		return "", nil
 	}
-	return s.Store.CloseWork(ctx, w.ID, protocol.WorkCompleted, s.now())
+	if err := s.Store.CloseWork(ctx, w.ID, protocol.WorkCompleted, s.now()); err != nil {
+		return "", err
+	}
+	return w.ID, nil
 }
 
 // turnEndFingerprint stores the turn-end workspace fingerprint. When it differs

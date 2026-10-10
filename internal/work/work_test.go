@@ -624,7 +624,7 @@ func TestDesignedWorkflowServiceCompletion(t *testing.T) {
 			if err := f.st.SetWorkDepth(context.Background(), d.Work.ID, tc.depth); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+			if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			if got := f.detail(t).Work.Status; got != tc.want {
@@ -667,7 +667,7 @@ func TestDesignedWorkflowServiceCompletion(t *testing.T) {
 	if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+	if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.detail(t).Work.Status; got != "completed" {
@@ -719,7 +719,7 @@ func TestDesignedWorkflowServiceCompletionKeepsStaleSolutionOpen(t *testing.T) {
 			if _, err := f.st.AddVerificationAttempt(context.Background(), a); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+			if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 				t.Fatal(err)
 			}
 			want := "completed"
@@ -889,7 +889,7 @@ func TestFailedToolRecordsFactOnly(t *testing.T) {
 	if d.Work.WorkflowDepth != protocol.DepthDirect {
 		t.Fatalf("failed read escalated depth")
 	}
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
+	if _, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if d = f.detail(t); d.Work.Status != protocol.WorkCompleted {
@@ -913,7 +913,7 @@ func TestMalformedOutputIgnored(t *testing.T) {
 	}
 }
 
-func TestEndRules(t *testing.T) {
+func TestEndReturnsCompletedWork(t *testing.T) {
 	cases := []struct {
 		name   string
 		setup  func(f fixture, t *testing.T)
@@ -942,8 +942,20 @@ func TestEndRules(t *testing.T) {
 			f := newFixture(t)
 			f.begin(t, "g")
 			c.setup(f, t)
-			if err := f.svc.End(context.Background(), f.th.ID, c.status, c.paused, ""); err != nil {
+			id, err := f.svc.End(context.Background(), f.th.ID, c.status, c.paused, "")
+			if err != nil {
 				t.Fatal(err)
+			}
+			if (id != "") != (c.want == protocol.WorkCompleted) {
+				t.Fatalf("completed ID = %q, want status %s", id, c.want)
+			}
+			if id != "" {
+				if id != f.detail(t).Work.ID {
+					t.Fatalf("wrong Work ID: %q", id)
+				}
+				if again, err := f.svc.End(context.Background(), f.th.ID, c.status, c.paused, ""); again != "" || err != nil {
+					t.Fatalf("repeat completion = %q, %v", again, err)
+				}
 			}
 			d := f.detail(t)
 			if d.Work.Status != c.want {
@@ -956,10 +968,10 @@ func TestEndRules(t *testing.T) {
 	}
 }
 
-func TestEndWithoutOpenWorkIsNoop(t *testing.T) {
+func TestEndReturnsCompletedWorkWithoutOpenWorkIsNoop(t *testing.T) {
 	f := newFixture(t)
-	if err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil {
-		t.Fatal(err)
+	if id, err := f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, ""); err != nil || id != "" {
+		t.Fatalf("no-open completion = %q, %v", id, err)
 	}
 	if err := f.svc.Observe(context.Background(), f.th.ID, Observation{Tool: "file.write"}); err != nil {
 		t.Fatal(err)
@@ -1034,5 +1046,103 @@ func TestReplanSupersedesDroppedCriteria(t *testing.T) {
 	f.svc.End(context.Background(), f.th.ID, protocol.TurnCompleted, false, "")
 	if d := f.detail(t); d.Work.Status != protocol.WorkCompleted {
 		t.Fatalf("status = %s", d.Work.Status)
+	}
+}
+
+func TestEndReturnsCompletedWorkCloseFailure(t *testing.T) {
+	f := newFixture(t)
+	f.begin(t, "g")
+	if _, err := f.st.DB.Exec(`CREATE TRIGGER fail_close BEFORE UPDATE OF status ON works WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT,'close failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.svc.End(t.Context(), f.th.ID, protocol.TurnCompleted, false, "")
+	if err == nil || id != "" || f.detail(t).Work.Status != protocol.WorkOpen || f.svc.Failures.Load() != 1 {
+		t.Fatalf("failed close ID=%q error=%v failures=%d", id, err, f.svc.Failures.Load())
+	}
+}
+
+func TestVerifiedCommandObservationCreatesDurableSource(t *testing.T) {
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	f.begin(t, "verify repository")
+	f.observe(t, Observation{Tool: "verification.plan", Output: planOut})
+	f.observe(t, Observation{Tool: "verification.run", Root: t.TempDir(), Output: `{"results":[{"command":"go test ./...","status":"passed","exit_code":0,"output":"ok"}]}`})
+	d := f.detail(t)
+	facts := kinds(d, protocol.NodeFact)
+	if len(facts) != 1 {
+		t.Fatalf("successful verification produced %d facts, want one typed source", len(facts))
+	}
+	var content struct{ Type, Command, EvidenceID, SourceRevision string }
+	// Inspect raw wire fields to keep the test independent of the implementation type.
+	var raw map[string]string
+	if err := json.Unmarshal(facts[0].Content, &raw); err != nil {
+		t.Fatal(err)
+	}
+	content.Type, content.Command, content.EvidenceID, content.SourceRevision = raw["type"], raw["command"], raw["evidence_id"], raw["source_revision"]
+	if content.Type != "verified_command" || content.Command != "go test ./..." || content.EvidenceID == "" || content.SourceRevision == "" {
+		t.Fatalf("source=%s", facts[0].Content)
+	}
+	found := false
+	for _, a := range d.Attempts {
+		if a.EvidenceID == content.EvidenceID && a.Command == content.Command && a.Status == protocol.AttemptPassed {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("fact lacks actual successful attempt")
+	}
+}
+
+func TestVerifiedCommandObservationRejectsNonRootDirectory(t *testing.T) {
+	for _, directory := range []string{"", ".", "pkg/api", "./pkg/api"} {
+		t.Run(directory, func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = true
+			f.begin(t, "verify repository")
+			f.observe(t, Observation{Tool: "verification.plan", Output: planOut})
+			output, err := json.Marshal(map[string]any{"results": []map[string]any{{"command": "go test ./...", "directory": directory, "status": "passed", "exit_code": 0, "output": "ok"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.observe(t, Observation{Tool: "verification.run", Root: t.TempDir(), Output: string(output)})
+			d := f.detail(t)
+			want := 0
+			if directory == "" || directory == "." {
+				want = 1
+			}
+			if facts := kinds(d, protocol.NodeFact); len(facts) != want {
+				t.Fatalf("directory %q produced %d promotable command facts, want %d", directory, len(facts), want)
+			}
+			if len(d.Attempts) != 1 || d.Attempts[0].Status != protocol.AttemptPassed {
+				t.Fatalf("verification recording changed: %+v", d.Attempts)
+			}
+		})
+	}
+}
+
+func TestVerifiedCommandObservationRejectsRedactedCommand(t *testing.T) {
+	for _, command := range []string{"API_TOKEN=privatevalue123456 go test ./...", "API_TOKEN=[REDACTED] go test ./..."} {
+		t.Run(command, func(t *testing.T) {
+			f := newFixture(t)
+			f.svc.DesignedWorkflow = true
+			f.begin(t, "verify repository")
+			plan, err := json.Marshal(map[string]any{"checks": []map[string]string{{"command": command}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.observe(t, Observation{Tool: "verification.plan", Output: string(plan)})
+			output, err := json.Marshal(map[string]any{"results": []map[string]any{{"command": command, "status": "passed", "exit_code": 0, "output": "ok"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.observe(t, Observation{Tool: "verification.run", Root: t.TempDir(), Output: string(output)})
+			d := f.detail(t)
+			if facts := kinds(d, protocol.NodeFact); len(facts) != 0 {
+				t.Fatalf("redacted command produced %d promotable facts", len(facts))
+			}
+			if len(d.Attempts) != 1 || strings.Contains(d.Attempts[0].Command, "privatevalue123456") || !strings.Contains(d.Attempts[0].Command, "[REDACTED]") {
+				t.Fatalf("verification redaction changed: %+v", d.Attempts)
+			}
+		})
 	}
 }

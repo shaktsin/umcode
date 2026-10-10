@@ -91,6 +91,35 @@ func TestWorkUpdateSchema(t *testing.T) {
 	}
 }
 
+func TestWorkUpdateSchemaMemoryCandidate(t *testing.T) {
+	var root map[string]any
+	if err := json.Unmarshal(NewWorkUpdate(&workUpdateSpy{}).Schema(), &root); err != nil {
+		t.Fatal(err)
+	}
+	content := root["properties"].(map[string]any)["nodes"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["content"].(map[string]any)
+	props, ok := content["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("candidate fields are not advertised")
+	}
+	for _, field := range []string{"category", "semantic_key", "text", "scope_paths", "source_revision", "replaces_memory"} {
+		if _, ok := props[field]; !ok {
+			t.Errorf("missing %s", field)
+		}
+	}
+	if _, ok := props["scope"]; ok {
+		t.Fatal("legacy scope advertised")
+	}
+	for field, bound := range map[string]float64{"semantic_key": 128, "text": 512} {
+		if props[field].(map[string]any)["maxLength"] != bound {
+			t.Errorf("incorrect %s bound", field)
+		}
+	}
+	paths := props["scope_paths"].(map[string]any)
+	if paths["maxItems"] != float64(16) || paths["items"].(map[string]any)["maxLength"] != float64(512) {
+		t.Fatal("incorrect scope bounds")
+	}
+}
+
 func TestWorkUpdateRequiresThreadScope(t *testing.T) {
 	for _, ctx := range []context.Context{t.Context(), WithScope(t.Context(), &Scope{}), WithScope(t.Context(), &Scope{ThreadID: " "})} {
 		for _, apply := range []bool{false, true} {

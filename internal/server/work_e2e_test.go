@@ -710,8 +710,8 @@ func TestDesignedWorkflowGeneralPurposeNoProject(t *testing.T) {
 		}
 	}
 	var memories int
-	if err := h.eng.Store.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='project_memories'`).Scan(&memories); err != nil || memories != 0 {
-		t.Fatalf("curated memory schema=%d %v", memories, err)
+	if err := h.eng.Store.DB.QueryRow(`SELECT count(*) FROM project_memories`).Scan(&memories); err != nil || memories != 0 {
+		t.Fatalf("curated memory rows=%d %v", memories, err)
 	}
 }
 

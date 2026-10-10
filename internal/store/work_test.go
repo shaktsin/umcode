@@ -672,6 +672,54 @@ func TestDesignedWorkflowMigrationPreservesExistingWork(t *testing.T) {
 	}
 }
 
+func TestCuratedMemoryMigrationPreservesDesignedWorkflow(t *testing.T) {
+	ctx := context.Background()
+	st, _ := designedLegacyFixture(t)
+	body, err := migrationsFS.ReadFile("migrations/0015_designed_workflow.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, st.DB, string(body))
+	mustExec(t, st.DB, `INSERT INTO schema_migrations VALUES (15, '0015_designed_workflow.sql', '2026-10-08T12:00:00Z')`)
+	mustExec(t, st.DB, `UPDATE works SET revision = 7, workflow_depth = 'designed' WHERE id = 'wrk_old'`)
+	mustExec(t, st.DB, `INSERT INTO work_node_evidence VALUES ('wrk_old', 'wnd_old_criterion', 'evd_old')`)
+	mustExec(t, st.DB, `UPDATE approvals SET kind = 'workflow', work_id = 'wrk_old', node_id = 'wnd_old_goal', node_revision = 3`)
+	mustExec(t, st.DB, `INSERT INTO work_nodes (id, work_id, kind, title, content_json, status, confidence, revision, valid_from, created_at, updated_at)
+		VALUES ('wnd_candidate', 'wrk_old', 'memory_candidate', 'command', '{"semantic_key":"test.command"}', 'pending', 1, 1, '2026-10-08T12:00:00Z', '2026-10-08T12:00:00Z', '2026-10-08T12:00:00Z')`)
+	mustExec(t, st.DB, `INSERT INTO work_edges VALUES ('wrk_old', 'wnd_candidate', 'candidate_for', 'wnd_old_goal')`)
+	mustExec(t, st.DB, `INSERT INTO file_changes (project_id, path, action, created_at) VALUES ('', 'README.md', 'edit', '2026-10-08T12:00:00Z')`)
+	queries := map[string]string{}
+	before := map[string][][]any{}
+	for _, table := range []string{"works", "work_nodes", "work_edges", "work_node_evidence", "evidence", "verification_attempts", "approvals", "file_changes"} {
+		rows, err := st.DB.QueryContext(ctx, `SELECT * FROM `+table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		columns, err := rows.Columns()
+		rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		queries[table] = `SELECT ` + strings.Join(columns, ",") + ` FROM ` + table + ` ORDER BY rowid`
+		before[table] = designedRows(t, st.DB, queries[table])
+	}
+	if err := st.migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for table, query := range queries {
+		if got := designedRows(t, st.DB, query); !reflect.DeepEqual(got, before[table]) {
+			t.Fatalf("migration changed %s: before=%v after=%v", table, before[table], got)
+		}
+	}
+	var version int
+	if err := st.DB.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 16 {
+		t.Fatalf("migration version=%d err=%v", version, err)
+	}
+	if err := st.migrate(ctx); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
 func designedRows(t *testing.T, db *sql.DB, query string) [][]any {
 	t.Helper()
 	rows, err := db.Query(query)
