@@ -49,8 +49,21 @@ func TestToolAllowedWorkUpdateRegistration(t *testing.T) {
 		}
 		t.Cleanup(func() { e.Shutdown(context.Background()) })
 		tool, exists := e.Tools.Get("work.update")
-		if exists != enabled || e.Work.DesignedWorkflow != enabled {
+		if !exists || e.Work.DesignedWorkflow != enabled {
 			t.Fatalf("enabled=%t registered=%t service flag=%t", enabled, exists, e.Work.DesignedWorkflow)
+		}
+		actual, _, err := e.permittedTurnCatalog(t.Context(), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		visible := false
+		for _, c := range actual {
+			if c.tool.Name() == "work.update" {
+				visible = true
+			}
+		}
+		if visible != enabled {
+			t.Fatalf("legacy enabled=%v visible=%v", enabled, visible)
 		}
 		var names []string
 		for _, tool := range e.Tools.All() {

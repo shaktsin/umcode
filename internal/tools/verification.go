@@ -26,11 +26,27 @@ type plannedCheck struct {
 type verificationPlan struct{ designedWorkflow bool }
 
 func (*verificationPlan) Name() string { return "verification.plan" }
+
+const verificationPlanDefaultDescription = "Inspect changed files and project manifests without executing project code, then return a compact, reviewable verification plan with a reason for every check. Call this before verification.run and pass its non-browser checks through unchanged."
+const verificationPlanLegacyDescription = "Inspect project verification checks before implementation. Without a project, plan acceptance of a specific proposed approach by human workflow approval; link that criterion to its gated decision. Planning does not approve or verify anything."
+
 func (t *verificationPlan) Description() string {
 	if t.designedWorkflow {
-		return "Inspect project verification checks before implementation. Without a project, plan acceptance of a specific proposed approach by human workflow approval; link that criterion to its gated decision. Planning does not approve or verify anything."
+		return verificationPlanLegacyDescription
 	}
-	return "Inspect changed files and project manifests without executing project code, then return a compact, reviewable verification plan with a reason for every check. Call this before verification.run and pass its non-browser checks through unchanged."
+	return verificationPlanDefaultDescription
+}
+func (t *verificationPlan) DescriptionContext(ctx context.Context) string {
+	if p, ok := optimization.FromContext(ctx); ok {
+		if p.AutomaticWorkflow {
+			return "Inspect project verification checks without executing project code and return a compact plan with reasons. Without a project, report the available evidence-based checks. Planning does not approve or verify anything."
+		}
+		if !p.DesignedWorkflow {
+			return verificationPlanDefaultDescription
+		}
+		return verificationPlanLegacyDescription
+	}
+	return t.Description()
 }
 func (*verificationPlan) Schema() json.RawMessage { return schema(`{"type":"object","properties":{}}`) }
 func (*verificationPlan) Assess(json.RawMessage) (Risk, string) {
@@ -38,11 +54,16 @@ func (*verificationPlan) Assess(json.RawMessage) (Risk, string) {
 }
 func (t *verificationPlan) Call(ctx context.Context, _ json.RawMessage) (string, error) {
 	scope := ScopeFrom(ctx)
+	automatic := false
 	designed := t.designedWorkflow
 	if p, ok := optimization.FromContext(ctx); ok {
 		designed = p.DesignedWorkflow
+		automatic = p.AutomaticWorkflow
 	}
 	if scope == nil || scope.Root == "" {
+		if automatic && scope != nil && scope.ThreadID != "" {
+			return `{"checks":[],"summary":"No executable project checks are available in this chat. Verify claims with supporting evidence; do not create an internal human approval criterion. Report execution checks as not run."}`, nil
+		}
 		if designed && scope != nil && scope.ThreadID != "" {
 			return `{"checks":[{"label":"Human acceptance of the linked proposed approach","command":"workflow:approval","kind":"approval","reason":"Only approval of the exact linked decision satisfies this criterion; this is not execution or outcome verification."}],"summary":"Link this acceptance criterion to the specific decision requiring human review. Other requirements need their own verification."}`, nil
 		}

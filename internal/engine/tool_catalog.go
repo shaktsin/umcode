@@ -20,7 +20,7 @@ func (e *Engine) permittedTurnCatalog(ctx context.Context, snapshot pluginSnapsh
 			continue
 		}
 		family, origin := catalogMetadata(c)
-		c.spec = llm.ToolSpec{Name: tools.ToWire(c.tool.Name()), Description: c.tool.Description(), Schema: append([]byte(nil), c.tool.Schema()...)}
+		c.spec = llm.ToolSpec{Name: tools.ToWire(c.tool.Name()), Description: toolDescription(ctx, c.tool), Schema: append([]byte(nil), c.tool.Schema()...)}
 		actual = append(actual, c)
 		entries = append(entries, toolselect.Entry{CanonicalName: c.tool.Name(), WireName: tools.ToWire(c.tool.Name()), Family: family, Origin: origin, Spec: c.spec})
 	}
@@ -67,4 +67,11 @@ func catalogToolAllowed(c turnTool, p *protocol.Project) bool {
 		}
 	}
 	return toolAllowed(c.tool.Name(), p)
+}
+
+func toolDescription(ctx context.Context, t tools.Tool) string {
+	if contextual, ok := t.(interface{ DescriptionContext(context.Context) string }); ok {
+		return contextual.DescriptionContext(ctx)
+	}
+	return t.Description()
 }

@@ -447,11 +447,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	} else {
 		if res.meta.Tools {
 			for _, candidate := range e.turnTools(snapshot) {
-				if !candidate.plugin && !toolAllowed(candidate.tool.Name(), proj) {
+				if !e.permittedToolFor(ctx, candidate, proj) {
 					continue
 				}
 				t := candidate.tool
-				specs = append(specs, llm.ToolSpec{Name: tools.ToWire(t.Name()), Description: t.Description(), Schema: t.Schema()})
+				specs = append(specs, llm.ToolSpec{Name: tools.ToWire(t.Name()), Description: toolDescription(ctx, t), Schema: t.Schema()})
 			}
 		}
 	}

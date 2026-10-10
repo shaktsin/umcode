@@ -111,7 +111,7 @@ func (s *Service) Update(ctx context.Context, threadID string, req protocol.Work
 			}
 		}
 	}
-	prepared, err := PrepareUpdate(detail, clean, s.now())
+	prepared, err := prepareUpdate(detail, clean, s.now(), s.optimizationPolicy(ctx).AutomaticWorkflow)
 	if err != nil {
 		return result, nil, err
 	}
