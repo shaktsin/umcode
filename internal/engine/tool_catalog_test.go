@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/tools"
 	"testing"
@@ -43,6 +44,7 @@ type catalogMetadataTool struct {
 func (t *catalogMetadataTool) SelectionMetadata() (string, string) { return t.family, t.origin }
 func TestPermittedCatalogExactServerIdentity(t *testing.T) {
 	e, _, _, _ := pluginHookEngine(t)
+	e.Cfg.MCPServers = []config.MCPServerConfig{{Name: "allowed_server"}}
 	e.Tools.Add(&catalogMetadataTool{engineTestTool: &engineTestTool{name: "mcp_allowed_server_lookup", risk: tools.RiskGreen}, family: "mcp:allowed_server", origin: "mcp:allowed_server"})
 	for _, allowed := range []string{"allowed", "allowed_server"} {
 		p := &protocol.Project{Tools: protocol.ProjectTools{MCPServers: []string{allowed}}}

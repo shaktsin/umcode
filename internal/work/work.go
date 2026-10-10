@@ -529,7 +529,12 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 		}
 		known[c.Command] = true
 		now := s.now()
-		content, _ := json.Marshal(map[string]string{"command": c.Command, "directory": c.Directory, "reason": c.Reason})
+		metadata := map[string]string{"command": c.Command, "directory": c.Directory, "reason": c.Reason}
+		// Preserve only recognized typed plan kinds, never arbitrary output prose.
+		if c.Kind == "browser" {
+			metadata["check_type"] = "browser"
+		}
+		content, _ := json.Marshal(metadata)
 		title := c.Label
 		if title == "" {
 			title = c.Command

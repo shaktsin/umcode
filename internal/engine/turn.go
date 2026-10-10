@@ -428,16 +428,29 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	liveFrom := len(msgs)
 	msgs = append(msgs, user)
 
+	var selection *turnSelection
 	var specs []llm.ToolSpec
-	if res.meta.Tools {
-		for _, candidate := range e.turnTools(snapshot) {
-			if !candidate.plugin && !toolAllowed(candidate.tool.Name(), proj) {
-				continue
+	if res.meta.Tools && e.Cfg.Models.ProgressiveTools {
+		selection = e.startToolSelection(ctx, th, snapshot, proj, p.Text)
+		if selection.fatal {
+			finish(errors.New("tool catalog unavailable"))
+			return
+		}
+		ctx = context.WithValue(ctx, selectionContextKey{}, selection)
+		sctx = context.WithValue(sctx, selectionContextKey{}, selection)
+		specs = selection.specs()
+	} else {
+		if res.meta.Tools {
+			for _, candidate := range e.turnTools(snapshot) {
+				if !candidate.plugin && !toolAllowed(candidate.tool.Name(), proj) {
+					continue
+				}
+				t := candidate.tool
+				specs = append(specs, llm.ToolSpec{Name: tools.ToWire(t.Name()), Description: t.Description(), Schema: t.Schema()})
 			}
-			t := candidate.tool
-			specs = append(specs, llm.ToolSpec{Name: tools.ToWire(t.Name()), Description: t.Description(), Schema: t.Schema()})
 		}
 	}
+
 	req := llm.Request{
 		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, "", hookContext), Tools: specs, MaxTokens: res.preset.MaxOutputTokens,
 	}
@@ -466,6 +479,14 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			break
 		}
 		layers := e.systemPromptLayers(sctx, p.Text, proj, instructionHint, hookContext)
+		if selection != nil {
+			e.refreshToolSelection(ctx, selection)
+			specs = selection.specs()
+			req.Tools = specs
+			if selection.state != nil {
+				layers = append(layers, promptLayer{Name: "tool_discovery", Text: discoveryInstruction})
+			}
+		}
 		identity, identityErr := e.workflowIdentityLayer(sctx, th.ID)
 		if identityErr != nil {
 			turnErr = identityErr
@@ -488,7 +509,12 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
 			packets = out.packets
 		}
-		log.Debug("context accounting", "turn", turn.ID, "breakdown", measureRequest(layers, req, packets, reductions))
+		breakdown := measureRequest(layers, req, packets, reductions)
+		if selection != nil {
+			report := selection.accounting(req.Tools)
+			breakdown.ToolSelection = &report
+		}
+		log.Debug("context accounting", "turn", turn.ID, "breakdown", breakdown)
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
 			if reason := budget.stopReason(); reason != "" {
@@ -906,6 +932,7 @@ type pluginSnapshot interface {
 type turnTool struct {
 	tool   tools.Tool
 	plugin bool
+	spec   llm.ToolSpec
 }
 
 type toolRunResult struct {
@@ -983,10 +1010,35 @@ func (e *Engine) runTurnCompleteHooks(ctx context.Context, snapshot pluginSnapsh
 // runTool executes one tool call, asking for approval when policy requires it.
 func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn protocol.Turn, call llm.ToolCall, snapshot pluginSnapshot) toolRunResult {
 	name := call.Name
-	tool, ok := e.Tools.Get(call.Name)
-	if !ok && snapshot != nil {
-		tool, ok = snapshot.Tool(call.Name)
+	var tool tools.Tool
+	var ok bool
+	if selection := selectionFrom(ctx); selection != nil {
+		candidate, found := resolveTurnTool(selection.actual, call.Name)
+		if found {
+			tool, ok = candidate.tool, true
+			if discovery, owned := tool.(*discoveryTool); owned {
+				return e.runDiscovery(ctx, sctx, turn, call, discovery)
+			}
+			p, err := e.currentSelectionProject(ctx, selection)
+			if err != nil || !e.permittedTool(candidate, p) {
+				return e.selectionFailure(sctx, turn, call, tool.Name(), "tool is not permitted")
+			}
+			if !e.selectionToolAvailable(candidate) {
+				return e.selectionFailure(sctx, turn, call, tool.Name(), "tool unavailable")
+			}
+			if selection.state != nil {
+				_ = selection.state.Pin(tool.Name())
+			}
+		} else if call.Name == "tools.discover" || call.Name == tools.ToWire("tools.discover") {
+			return e.runDiscovery(ctx, sctx, turn, call, nil)
+		}
+	} else {
+		tool, ok = e.Tools.Get(call.Name)
+		if !ok && snapshot != nil {
+			tool, ok = snapshot.Tool(call.Name)
+		}
 	}
+
 	if ok {
 		name = tool.Name()
 	}

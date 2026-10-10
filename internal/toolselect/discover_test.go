@@ -114,3 +114,21 @@ func TestDiscoverySecretMetadata(t *testing.T) {
 		t.Fatal("unbounded or secret metadata", string(b))
 	}
 }
+
+func TestDiscoveryRevocationCannotLoadOrFallback(t *testing.T) {
+	c := selectionCatalog(t)
+	s, _, _ := Start(c, Signals{})
+	permitted := map[string]bool{}
+	for _, e := range c.Entries {
+		permitted[e.CanonicalName] = e.CanonicalName != "web.search"
+	}
+	s.Restrict(permitted)
+	r, err := s.Discover(json.RawMessage(`{"names":["web.search"]}`))
+	if err != nil || len(r.Entries) != 0 {
+		t.Fatal("revoked entry discoverable", r, err)
+	}
+	s.Fallback("selection_error")
+	if specNames(s)["web__search"] {
+		t.Fatal("fallback restored revoked permission")
+	}
+}

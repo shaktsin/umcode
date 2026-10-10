@@ -194,3 +194,21 @@ func (s *State) fallbackLocked(reason string) {
 	}
 }
 func (s *State) Fallback(reason string) { s.mu.Lock(); defer s.mu.Unlock(); s.fallbackLocked(reason) }
+
+func (s *State) Restrict(permitted map[string]bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for name, allowed := range s.allowed {
+		if allowed && !permitted[name] {
+			s.allowed[name] = false
+			changed = true
+		}
+	}
+	if changed {
+		s.permissionRevision++
+	}
+}
+
+// Report returns a diagnostic snapshot without changing the phase.
+func (s *State) Report() Report { s.mu.Lock(); defer s.mu.Unlock(); return s.reportLocked() }

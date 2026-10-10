@@ -13,15 +13,16 @@ func (e *Engine) permittedTurnCatalog(ctx context.Context, snapshot pluginSnapsh
 	var actual []turnTool
 	var entries []toolselect.Entry
 	for _, c := range e.turnTools(snapshot) {
-		if !catalogToolAllowed(c, project) {
+		if !e.permittedTool(c, project) {
 			continue
 		}
 		if c.tool.Name() == "work.update" && (e.Cfg == nil || !e.Cfg.Models.DesignedWorkflow) {
 			continue
 		}
-		actual = append(actual, c)
 		family, origin := catalogMetadata(c)
-		entries = append(entries, toolselect.Entry{CanonicalName: c.tool.Name(), WireName: tools.ToWire(c.tool.Name()), Family: family, Origin: origin, Spec: llm.ToolSpec{Name: tools.ToWire(c.tool.Name()), Description: c.tool.Description(), Schema: c.tool.Schema()}})
+		c.spec = llm.ToolSpec{Name: tools.ToWire(c.tool.Name()), Description: c.tool.Description(), Schema: append([]byte(nil), c.tool.Schema()...)}
+		actual = append(actual, c)
+		entries = append(entries, toolselect.Entry{CanonicalName: c.tool.Name(), WireName: tools.ToWire(c.tool.Name()), Family: family, Origin: origin, Spec: c.spec})
 	}
 	catalog, err := toolselect.NewCatalog(entries)
 	return actual, catalog, err
