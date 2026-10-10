@@ -115,6 +115,12 @@ func (s *Store) migrate(ctx context.Context) error {
 			tx.Rollback()
 			return fmt.Errorf("migration %s: %w", name, err)
 		}
+		if ver == 17 {
+			if err := backfillRetrieval(ctx, tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("retrieval backfill: %w", err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
 			ver, name, Now()); err != nil {
 			tx.Rollback()
