@@ -49,3 +49,9 @@ umcode plugin remove SOURCE_ID/PLUGIN --disable-projects
 ```
 
 Legacy standalone `skill` commands, `skill_dirs`, and `mcp_servers` remain backend-compatible during the migration window, but they are not separate sections in the desktop Plugins screen.
+
+### Token optimization
+
+Open **Settings → Token optimization** to enable the complete optimization system globally: context compilation and retrieval, progressive tools, result reduction, internal workflow tracking and verified memory promotion. All components operate automatically across chats, without separate opt-ins or internal design/planning approval prompts. Chat action permissions still apply.
+
+The saved switch survives restarts and applies to new turns; active turns keep their current settings. Fresh installations start with it off until rollout qualification. Existing YAML feature flags remain effective until you save an explicit global choice; the settings panel identifies legacy or mixed configuration. Saving on enables the whole bundle, and saving off overrides all legacy component flags. Turning it off retains history and stored memory but omits generated memory from subsequent optimized prompt retrieval and stops new promotion. User-written project instructions remain available.

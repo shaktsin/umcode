@@ -1,7 +1,12 @@
 package engine
 
 import (
+	"context"
+	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/secrets"
+	"github.com/shaktsin/umcode/internal/store"
+	"path/filepath"
 	"testing"
 )
 
@@ -44,5 +49,36 @@ func TestTokenOptimizationResolution(t *testing.T) {
 	}
 	if _, err := e.SetTokenOptimization(t.Context(), protocol.TokenOptimizationParams{Enabled: true}); err == nil {
 		t.Fatal("store write failure hidden")
+	}
+}
+
+func TestTokenOptimizationSurvivesRestart(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Default(home)
+	for i := 0; i < 2; i++ {
+		st, err := store.Open(t.Context(), filepath.Join(home, "test.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := New(t.Context(), Options{Config: cfg, Store: st, Secrets: secrets.NewFileStore(filepath.Join(home, "secrets.json")), DisableScheduler: true, DisableMCP: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			_, err = e.SetTokenOptimization(t.Context(), protocol.TokenOptimizationParams{Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		r, err := e.TokenOptimization(t.Context())
+		if err != nil || !r.Enabled || r.Source != "stored" {
+			t.Fatalf("restart %+v %v", r, err)
+		}
+		p, err := e.resolveOptimizationPolicy(t.Context())
+		if err != nil || !p.AutomaticWorkflow || !p.AutoPromote {
+			t.Fatalf("restart policy %+v %v", p, err)
+		}
+		e.Shutdown(context.Background())
+		st.Close()
 	}
 }
