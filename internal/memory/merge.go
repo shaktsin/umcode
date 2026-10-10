@@ -304,3 +304,32 @@ func parseMemorySection(current []byte) (memorySection, bool) {
 	}
 	return s, true
 }
+
+// WithoutGeneratedMemory removes only the engine-owned section. Ambiguous
+// ownership requires an explicit file inspection rather than implicit reuse.
+func WithoutGeneratedMemory(data []byte) []byte {
+	if !bytes.Contains(data, []byte(managedMarker)) {
+		return data
+	}
+	section, ok := parseMemorySection(data)
+	if !ok {
+		return []byte("Instruction file has ambiguous generated memory boundaries; inspect it explicitly before acting.\n")
+	}
+	if section.marker < 0 {
+		return data
+	}
+	start := section.lines[section.marker].start
+	// The parser has validated the unique heading immediately above its marker.
+	for i := section.marker - 1; i >= 0; i-- {
+		if section.lines[i].text == managedHeading {
+			start = section.lines[i].start
+			break
+		}
+	}
+	end := len(data)
+	if section.end < len(section.lines) {
+		end = section.lines[section.end].start
+	}
+	out := append([]byte(nil), data[:start]...)
+	return append(out, data[end:]...)
+}

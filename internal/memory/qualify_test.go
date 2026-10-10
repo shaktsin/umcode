@@ -67,14 +67,17 @@ func TestQualifyMatrix(t *testing.T) {
 		}},
 		{"unsupported source", "rejected", "source_unsupported", func(in *QualifyInput) { in.Detail.Nodes[1].Kind = protocol.NodeTask }},
 		{"proposed decision", "rejected", "source_unsupported", func(in *QualifyInput) {
+			in.Detail.Nodes[1].DecisionActor = "user"
 			in.Detail.Nodes[1].Kind = protocol.NodeDecision
 			in.Detail.Nodes[1].Status = protocol.StatusProposed
 		}},
 		{"rejected decision", "stale", "source_stale", func(in *QualifyInput) {
+			in.Detail.Nodes[1].DecisionActor = "user"
 			in.Detail.Nodes[1].Kind = protocol.NodeDecision
 			in.Detail.Nodes[1].Status = protocol.StatusRejected
 		}},
 		{"superseded decision", "stale", "source_stale", func(in *QualifyInput) {
+			in.Detail.Nodes[1].DecisionActor = "user"
 			in.Detail.Nodes[1].Kind = protocol.NodeDecision
 			in.Detail.Nodes[1].Status = protocol.StatusSuperseded
 		}},
@@ -205,6 +208,7 @@ func TestQualifyCanonicalProposal(t *testing.T) {
 			in := qualifyFixture()
 			changeContent(&in, "category", category)
 			if category == "approved_decision" {
+				in.Detail.Nodes[1].DecisionActor = "user"
 				in.Detail.Nodes[1].Kind = protocol.NodeDecision
 				in.Detail.Nodes[1].Status = protocol.StatusApproved
 				in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
@@ -248,6 +252,7 @@ func TestQualifyCanonicalProposal(t *testing.T) {
 		in := qualifyFixture()
 		changeContent(&in, "text", "This repository stores packages in /nonexistent/project/internal")
 		changeContent(&in, "category", "approved_decision")
+		in.Detail.Nodes[1].DecisionActor = "user"
 		in.Detail.Nodes[1].Kind = protocol.NodeDecision
 		in.Detail.Nodes[1].Status = protocol.StatusApproved
 		in.Detail.Nodes[1].Title = "This repository stores packages in /nonexistent/project/internal"
@@ -263,6 +268,7 @@ func TestQualifyCanonicalProposal(t *testing.T) {
 func TestQualifyCanonicalDiscoveryRevision(t *testing.T) {
 	in := qualifyFixture()
 	changeContent(&in, "category", "approved_decision")
+	in.Detail.Nodes[1].DecisionActor = "user"
 	in.Detail.Nodes[1].Kind = protocol.NodeDecision
 	in.Detail.Nodes[1].Status = protocol.StatusApproved
 	in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
@@ -286,6 +292,7 @@ func TestQualifyCanonicalWorkflowApprovalRevision(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in := qualifyFixture()
 			changeContent(&in, "category", "approved_decision")
+			in.Detail.Nodes[1].DecisionActor = "user"
 			in.Detail.Nodes[1].Kind = protocol.NodeDecision
 			in.Detail.Nodes[1].Status = protocol.StatusApproved
 			in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
@@ -349,6 +356,7 @@ func TestQualifyBindsCanonicalSourceGuidance(t *testing.T) {
 			changeContent(&in, "category", tc.category)
 			changeContent(&in, "text", tc.text)
 			if tc.title != "" {
+				in.Detail.Nodes[1].DecisionActor = "user"
 				in.Detail.Nodes[1].Kind = protocol.NodeDecision
 				in.Detail.Nodes[1].Status = protocol.StatusApproved
 				in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
@@ -377,6 +385,7 @@ func TestQualifyRejectsUnrelatedSourceEvidence(t *testing.T) {
 func TestQualifyDecisionRequiresSourceEvidence(t *testing.T) {
 	in := qualifyFixture()
 	changeContent(&in, "category", "approved_decision")
+	in.Detail.Nodes[1].DecisionActor = "user"
 	in.Detail.Nodes[1].Kind = protocol.NodeDecision
 	in.Detail.Nodes[1].Status = protocol.StatusApproved
 	in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
@@ -392,6 +401,7 @@ func TestQualifyDecisionRequiresSourceEvidence(t *testing.T) {
 func TestQualifyRejectsAnotherDecisionsApprovalEvidence(t *testing.T) {
 	in := qualifyFixture()
 	changeContent(&in, "category", "approved_decision")
+	in.Detail.Nodes[1].DecisionActor = "user"
 	in.Detail.Nodes[1].Kind, in.Detail.Nodes[1].Status = protocol.NodeDecision, protocol.StatusApproved
 	in.Detail.Nodes[1].Title, in.Detail.Nodes[1].Revision = "Use go test ./... for this repository", 2
 	in.Detail.Nodes = append(in.Detail.Nodes, protocol.WorkNode{ID: "other-decision", WorkID: "work", Kind: protocol.NodeDecision, Status: protocol.StatusApproved, Revision: 2, Title: "Use SQLite for this repository"})
