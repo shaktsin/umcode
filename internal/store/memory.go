@@ -18,7 +18,7 @@ import (
 )
 
 const projectMemoryCols = `id, project_id, work_id, candidate_node_id, semantic_key, category, target_path,
-	text, text_hash, status, source_revision, evidence_json, file_hash_before, file_hash_after, superseded_by, created_at, promoted_at`
+	text, text_hash, status, source_revision, evidence_json, file_hash_before, file_hash_after, superseded_by, created_at, promoted_at, user_owned`
 
 func scanProjectMemory(sc interface{ Scan(...any) error }) (protocol.ProjectMemory, error) {
 	var m protocol.ProjectMemory
@@ -26,7 +26,7 @@ func scanProjectMemory(sc interface{ Scan(...any) error }) (protocol.ProjectMemo
 	var promoted sql.NullString
 	err := sc.Scan(&m.ID, &m.ProjectID, &m.WorkID, &m.CandidateNodeID, &m.SemanticKey, &m.Category, &m.TargetPath,
 		&m.Text, &m.TextHash, &m.Status, &m.SourceRevision, &m.EvidenceJSON, &m.FileHashBefore, &m.FileHashAfter,
-		&m.SupersededBy, &created, &promoted)
+		&m.SupersededBy, &created, &promoted, &m.UserOwned)
 	if err != nil {
 		return m, err
 	}
@@ -298,7 +298,7 @@ func (s *Store) PrepareMemoryPromotion(ctx context.Context, in PrepareMemoryProm
 		return zero, ErrMemoryConflict
 	}
 	duplicate := current != nil && current.Category == m.Category && current.Text == m.Text && current.TextHash == m.TextHash && current.TargetPath == m.TargetPath
-	if in.ReplacesMemory != "" && (current == nil || current.ID != in.ReplacesMemory || current.TargetPath != m.TargetPath || memoryHash([]byte(current.Text)) != current.TextHash || current.SupersededBy != "") {
+	if in.ReplacesMemory != "" && (current == nil || current.ID != in.ReplacesMemory || current.TargetPath != m.TargetPath || memoryHash([]byte(current.Text)) != current.TextHash || current.SupersededBy != "" || current.UserOwned) {
 		return zero, ErrMemoryConflict
 	}
 	if current != nil && !duplicate && in.ReplacesMemory == "" {
@@ -317,7 +317,7 @@ func (s *Store) PrepareMemoryPromotion(ctx context.Context, in PrepareMemoryProm
 		if m.ID == "" {
 			m.ID = NewID("mem")
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO project_memories (`+projectMemoryCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.ID, m.ProjectID, m.WorkID, m.CandidateNodeID, m.SemanticKey, m.Category, m.TargetPath, m.Text, m.TextHash, protocol.MemoryStatusPendingRepair, m.SourceRevision, m.EvidenceJSON, m.FileHashBefore, m.FileHashAfter, "", FormatTime(at), nil)
+		_, err = tx.ExecContext(ctx, `INSERT INTO project_memories (`+projectMemoryCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.ID, m.ProjectID, m.WorkID, m.CandidateNodeID, m.SemanticKey, m.Category, m.TargetPath, m.Text, m.TextHash, protocol.MemoryStatusPendingRepair, m.SourceRevision, m.EvidenceJSON, m.FileHashBefore, m.FileHashAfter, "", FormatTime(at), nil, m.UserOwned)
 		if err != nil {
 			return zero, err
 		}

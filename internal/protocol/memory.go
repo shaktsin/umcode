@@ -42,6 +42,8 @@ const (
 // ProjectMemory is durable project knowledge with immutable source IDs.
 // Provenance survives deletion of the originating Work or chat.
 type ProjectMemory struct {
+	// UserOwned records duplicate adoption without granting generated ownership.
+	UserOwned                                         bool
 	ID, ProjectID, WorkID, CandidateNodeID            string
 	SemanticKey, Category, TargetPath, Text, TextHash string
 	Status, SourceRevision, EvidenceJSON              string

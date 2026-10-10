@@ -10,6 +10,7 @@ CREATE TABLE project_memories (
     target_path TEXT NOT NULL,
     text TEXT NOT NULL,
     text_hash TEXT NOT NULL,
+    user_owned INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     source_revision TEXT NOT NULL DEFAULT '',
     evidence_json TEXT NOT NULL DEFAULT '[]',

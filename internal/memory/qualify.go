@@ -178,7 +178,7 @@ func Qualify(in QualifyInput) (Proposal, Outcome) {
 	}
 	if len(current) == 1 {
 		row := current[0]
-		if owned(row) && row.Category == c.Category && row.Text == c.Text {
+		if validMemory(row) && row.Category == c.Category && row.Text == c.Text {
 			return outcome(protocol.MemoryOutcomePromoted, ReasonAlreadyCurrent)
 		}
 		if c.ReplacesMemory == "" {
@@ -311,7 +311,9 @@ func verified(in QualifyInput, nodes map[string]protocol.WorkNode, evidence map[
 	return len(applicable) > 0
 }
 
-func owned(row protocol.ProjectMemory) bool {
+func owned(row protocol.ProjectMemory) bool { return !row.UserOwned && validMemory(row) }
+
+func validMemory(row protocol.ProjectMemory) bool {
 	sum := sha256.Sum256([]byte(row.Text))
 	target := path.Clean(row.TargetPath)
 	return row.ID != "" && row.SupersededBy == "" && row.Status == protocol.MemoryStatusActive && row.TextHash == hex.EncodeToString(sum[:]) && !path.IsAbs(target) && target != ".." && !strings.HasPrefix(target, "../") && !strings.Contains(target, `\`) && path.Base(target) == "UMCODE.md" && strings.HasPrefix(row.Text, "- ") && !strings.ContainsAny(row.Text, "\r\n")

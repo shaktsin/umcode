@@ -22,6 +22,7 @@ type MergeInput struct {
 }
 
 type MergeResult struct {
+	Adopted                       []string // Existing text remains user-owned.
 	After                         []byte
 	Inserted, Replaced, Unchanged []string // Candidate node IDs, in graph-ID order.
 	BeforeHash, AfterHash         string
@@ -75,8 +76,12 @@ func Merge(in MergeInput) (MergeResult, Outcome) {
 		if project == "" {
 			project = row.ProjectID
 		}
-		if !owned(row) || !memoryTarget(row.TargetPath) || row.TargetPath != target || row.ProjectID != project || rows[row.ID].ID != "" || semantic[row.SemanticKey] != "" || seen[row.Text] != 1 {
+		if !validMemory(row) || !memoryTarget(row.TargetPath) || row.TargetPath != target || row.ProjectID != project || rows[row.ID].ID != "" || semantic[row.SemanticKey] != "" || seen[row.Text] == 0 || !row.UserOwned && seen[row.Text] != 1 {
 			return conflict(ReasonOwnershipConflict)
+		}
+		if row.UserOwned {
+			rows[row.ID], semantic[row.SemanticKey] = row, row.ID
+			continue
 		}
 		found := false
 		for i := section.marker + 1; section.marker >= 0 && i < section.end; i++ {
@@ -122,7 +127,7 @@ func Merge(in MergeInput) (MergeResult, Outcome) {
 		candidates[id], keys[proposal.SemanticKey] = true, true
 		oldID := semantic[proposal.SemanticKey]
 		if proposal.ReplacesMemory != "" {
-			if oldID != proposal.ReplacesMemory || replaced[oldID] || rows[oldID].ID == "" {
+			if oldID != proposal.ReplacesMemory || replaced[oldID] || rows[oldID].ID == "" || rows[oldID].UserOwned {
 				return conflict(ReasonReplacementConflict)
 			}
 			replaced[oldID] = true
@@ -130,6 +135,12 @@ func Merge(in MergeInput) (MergeResult, Outcome) {
 			return conflict(ReasonSemanticConflict)
 		}
 		if seen[proposal.Text] > 0 {
+			if proposal.ReplacesMemory != "" && rows[oldID].Text != proposal.Text {
+				return conflict(ReasonReplacementConflict)
+			}
+			if oldID == "" || rows[oldID].UserOwned {
+				result.Adopted = append(result.Adopted, id)
+			}
 			result.Unchanged = append(result.Unchanged, id)
 			continue
 		}

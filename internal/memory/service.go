@@ -280,7 +280,7 @@ func (s *Service) promote(ctx context.Context, req Request, d protocol.WorkDetai
 	diag.BytesAfter = len(merge.After)
 	evidence, _ := json.Marshal(p.EvidenceIDs)
 	op, err := s.st.PrepareMemoryPromotion(ctx, store.PrepareMemoryPromotion{
-		Memory:               protocol.ProjectMemory{ProjectID: req.Project.ID, WorkID: p.WorkID, CandidateNodeID: p.CandidateNodeID, SemanticKey: p.SemanticKey, Category: p.Category, TargetPath: target.rel, Text: p.Text, TextHash: memoryHash([]byte(p.Text)), SourceRevision: p.SourceRevision, EvidenceJSON: string(evidence), FileHashBefore: merge.BeforeHash, FileHashAfter: merge.AfterHash},
+		Memory:               protocol.ProjectMemory{UserOwned: len(merge.Adopted) > 0, ProjectID: req.Project.ID, WorkID: p.WorkID, CandidateNodeID: p.CandidateNodeID, SemanticKey: p.SemanticKey, Category: p.Category, TargetPath: target.rel, Text: p.Text, TextHash: memoryHash([]byte(p.Text)), SourceRevision: p.SourceRevision, EvidenceJSON: string(evidence), FileHashBefore: merge.BeforeHash, FileHashAfter: merge.AfterHash},
 		ExpectedWorkRevision: d.Work.Revision, ExpectedCandidateRevision: candidate.Revision, ReplacesMemory: p.ReplacesMemory, ThreadID: req.ThreadID, TurnID: req.TurnID, BeforeBytes: target.before, AfterBytes: merge.After,
 		Validate: func(snapshot store.MemoryPromotionSnapshot) error {
 			if snapshot.ProjectRoot != req.Project.Root {

@@ -226,6 +226,12 @@ func TestMergeAlreadyCurrentAndReplacementDuplicate(t *testing.T) {
 			before := "## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n" + tc.suffix
 			current := []byte(before)
 			got, out := Merge(MergeInput{Current: current, Active: []protocol.ProjectMemory{mergeRecorded("- Old checks.")}, Proposals: []Proposal{{CandidateNodeID: "new", SemanticKey: "checks", Text: tc.text, ReplacesMemory: tc.replaces}}, TargetBytes: 4096})
+			if tc.replaces != "" {
+				if out.Status != protocol.MemoryOutcomeConflicted || !reflect.DeepEqual(got, MergeResult{}) || string(current) != before {
+					t.Fatalf("unsafe duplicate replacement: %+v %v", got, out)
+				}
+				return
+			}
 			if out != (Outcome{}) || string(got.After) != before || !reflect.DeepEqual(got.Unchanged, []string{"new"}) {
 				t.Fatalf("already current changed bytes: %+v, %v", got, out)
 			}

@@ -456,3 +456,29 @@ func setCandidateField(t *testing.T, st *store.Store, req Request, key string, v
 		}
 	}
 }
+
+func TestPromotionUserDuplicateLifecycle(t *testing.T) {
+	s, st, req := serviceFixture(t)
+	original := "# User guidance\n- Use go test ./... for this repository\n"
+	if err := os.WriteFile(filepath.Join(req.Project.Root, "UMCODE.md"), []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r := s.PromoteCompleted(t.Context(), req); r.Promoted != 1 || r.Unchanged != 1 {
+		t.Fatalf("adoption=%+v", r)
+	}
+	rows, err := st.ListProjectMemories(t.Context(), req.Project.ID)
+	if err != nil || len(rows) != 1 || !rows[0].UserOwned {
+		t.Fatalf("adoption ownership=%+v %v", rows, err)
+	}
+	duplicate := addCompletedWork(t, st, req.Project, "test-command", "Use go test ./... for this repository")
+	if r := s.PromoteCompleted(t.Context(), duplicate); r.Promoted != 1 || r.Unchanged != 1 {
+		t.Fatalf("repeat adoption=%+v", r)
+	}
+	next := addCompletedWork(t, st, req.Project, "other", "Use go vet ./... for this repository")
+	if r := s.PromoteCompleted(t.Context(), next); r.Promoted != 1 || r.Inserted != 1 {
+		t.Fatalf("subsequent insertion=%+v", r)
+	}
+	if got := readTarget(t, req.Project); !strings.HasPrefix(got, original) || strings.Count(got, "- Use go test") != 1 || !strings.Contains(got, "- Use go vet") {
+		t.Fatalf("bytes=%q", got)
+	}
+}
