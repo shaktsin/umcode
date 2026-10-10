@@ -120,6 +120,10 @@ func (s *Server) routes() map[string]handler {
 		protocol.MethodThreadSetApproval: bind(func(ctx context.Context, c *conn, p protocol.ThreadSetApprovalModeParams) (any, error) {
 			return e.SetThreadApprovalMode(ctx, p)
 		}),
+		protocol.MethodTokenOptimizationGet: bind(func(ctx context.Context, c *conn, _ struct{}) (any, error) { return e.TokenOptimization(ctx) }),
+		protocol.MethodTokenOptimizationSet: bind(func(ctx context.Context, c *conn, p protocol.TokenOptimizationParams) (any, error) {
+			return e.SetTokenOptimization(ctx, p)
+		}),
 		protocol.MethodComputerUseGetDefault: bind(func(ctx context.Context, c *conn, _ struct{}) (any, error) {
 			return e.ComputerUseDefault(ctx), nil
 		}),
