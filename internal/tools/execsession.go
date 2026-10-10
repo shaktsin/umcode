@@ -494,3 +494,18 @@ func (t *execStop) Call(ctx context.Context, args json.RawMessage) (string, erro
 	t.manager.remove(s.id)
 	return s.report(), nil
 }
+
+// ActiveForThread reports owned retained sessions without exposing process data.
+func (m *ExecManager) ActiveForThread(threadID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || threadID == "" {
+		return false
+	}
+	for _, s := range m.sessions {
+		if s.thread == threadID {
+			return true
+		}
+	}
+	return false
+}

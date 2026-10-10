@@ -148,3 +148,18 @@ func TestExecStartRejectsDisplayNameAsWorkspace(t *testing.T) {
 		t.Fatalf("invalid cwd was misreported as a missing sandbox launcher: %v", err)
 	}
 }
+
+func TestSelectionExecSessionOwnership(t *testing.T) {
+	ctx, m, r := execHarness(t)
+	if m.ActiveForThread("thr_1") {
+		t.Fatal("empty manager active")
+	}
+	r.call(t, ctx, "exec.start", map[string]any{"command": "sleep 30", "yield_seconds": 1})
+	if !m.ActiveForThread("thr_1") || m.ActiveForThread("foreign") {
+		t.Fatal("session ownership not retained")
+	}
+	m.Close()
+	if m.ActiveForThread("thr_1") {
+		t.Fatal("closed sessions active")
+	}
+}
