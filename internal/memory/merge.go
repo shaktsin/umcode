@@ -228,6 +228,12 @@ func parseMemorySection(current []byte) (memorySection, bool) {
 			indent++
 		}
 		text := line.text[indent:]
+		// Raw HTML can change Markdown interpretation across later blank lines.
+		// Conservatively decline these documents rather than claim ownership
+		// of headings or bullets inside an HTML example/block.
+		if strings.HasPrefix(strings.TrimSpace(text), "<") && line.text != managedMarker {
+			return memorySection{}, false
+		}
 		if len(text) > 0 && (text[0] == '`' || text[0] == '~') {
 			length := 0
 			for length < len(text) && text[length] == text[0] {
@@ -273,7 +279,7 @@ func parseMemorySection(current []byte) (memorySection, bool) {
 	}
 	s.insert = s.lines[s.marker].next
 	for i := s.marker + 1; i < len(s.lines); i++ {
-		text := strings.TrimSpace(s.lines[i].text)
+		text := s.lines[i].text
 		if strings.HasPrefix(text, "# ") || strings.HasPrefix(text, "## ") {
 			s.end = i
 			break

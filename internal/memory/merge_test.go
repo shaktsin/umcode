@@ -88,6 +88,8 @@ func TestMergeOwnershipConflicts(t *testing.T) {
 		{"target mismatch", section + "- Old checks.\n", func(r *protocol.ProjectMemory) { r.TargetPath = "nested/UMCODE.md" }},
 		{"invalid target", section + "- Old checks.\n", func(r *protocol.ProjectMemory) { r.TargetPath = "../UMCODE.md" }},
 		{"superseded row", section + "- Old checks.\n", func(r *protocol.ProjectMemory) { r.SupersededBy = "other" }},
+		{"indented heading continuation", section + "- Old checks.\n\n    ## Local caveat\n    Only use with integration service.\n", nil},
+		{"raw HTML relocation", "<pre>\n" + section + "- Old checks.\n## Example footer\n</pre>\n", nil},
 		{"continued bullet", section + "- Old checks.\n  User continuation.\n", nil},
 		{"blank before continuation", section + "- Old checks.\n\n  User continuation.\n", nil},
 		{"multiple blanks before tab continuation", section + "- Old checks.\n\n \t\n\tUser continuation.\n- User bullet.\n", nil},
