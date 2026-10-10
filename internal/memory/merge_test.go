@@ -114,6 +114,10 @@ func TestMergeManagedExampleInsideOuterFenceConflicts(t *testing.T) {
 		{"tildes with level one boundary CRLF", "~~~markdown\r\n## Verified project memory\r\n\r\n<!-- umcode:generated -->\r\n- Old checks.\r\n# Example footer\r\n~~~\r\n"},
 		{"long fence with shorter apparent close", "````markdown\n```\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n# Example footer\n````\n"},
 		{"unclosed enclosing fence", "```markdown\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n## Example footer\n"},
+		{"four-space false delimiters", "```markdown\n    ```\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n## Example footer\n    ```\n```\n"},
+		{"tab-indented false delimiters", "```markdown\n\t```\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n## Example footer\n\t```\n```\n"},
+		{"space-and-tab false delimiters", "~~~markdown\n \t~~~\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n# Example footer\n \t~~~\n~~~\n"},
+		{"non-ASCII trailing whitespace false delimiters", "```markdown\n```\u00a0\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n## Example footer\n```\u00a0\n```\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := []byte(tc.before)
@@ -126,8 +130,8 @@ func TestMergeManagedExampleInsideOuterFenceConflicts(t *testing.T) {
 }
 
 func TestMergeReplacementPreservesBlankItemSeparators(t *testing.T) {
-	before := "```markdown\n# Ordinary example\n```\n\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n\n- User bullet.\n\n## User footer\n"
-	want := "```markdown\n# Ordinary example\n```\n\n## Verified project memory\n\n<!-- umcode:generated -->\n- New checks.\n\n- User bullet.\n\n## User footer\n"
+	before := "```markdown\n# Ordinary example\n   ``` \t\n\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n\n- User bullet.\n\n## User footer\n"
+	want := "```markdown\n# Ordinary example\n   ``` \t\n\n## Verified project memory\n\n<!-- umcode:generated -->\n- New checks.\n\n- User bullet.\n\n## User footer\n"
 	got, out := Merge(MergeInput{Current: []byte(before), Active: []protocol.ProjectMemory{mergeRecorded("- Old checks.")}, Proposals: []Proposal{{CandidateNodeID: "new", SemanticKey: "checks", Text: "- New checks.", ReplacesMemory: "old"}}, TargetPath: "UMCODE.md", TargetBytes: 4096})
 	if out != (Outcome{}) || string(got.After) != want || !reflect.DeepEqual(got.Replaced, []string{"new"}) {
 		t.Fatalf("safe replacement = %+v, %v; want %q", got, out, want)

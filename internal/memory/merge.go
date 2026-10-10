@@ -220,7 +220,14 @@ func parseMemorySection(current []byte) (memorySection, bool) {
 		line := memoryLine{start, end, next, string(current[start:end])}
 		i := len(s.lines)
 		s.lines = append(s.lines, line)
-		text := strings.TrimSpace(line.text)
+		// A fence permits at most three leading ASCII spaces. Tabs, a
+		// fourth space, and other whitespace leave the line inside the code
+		// block; treating them as a closer could expose user examples.
+		indent := 0
+		for indent < len(line.text) && indent < 3 && line.text[indent] == ' ' {
+			indent++
+		}
+		text := line.text[indent:]
 		if len(text) > 0 && (text[0] == '`' || text[0] == '~') {
 			length := 0
 			for length < len(text) && text[length] == text[0] {
@@ -228,7 +235,7 @@ func parseMemorySection(current []byte) (memorySection, bool) {
 			}
 			if fence == 0 && length >= 3 {
 				fence, fenceLength = text[0], length
-			} else if text[0] == fence && length >= fenceLength && strings.TrimSpace(text[length:]) == "" {
+			} else if text[0] == fence && length >= fenceLength && strings.Trim(text[length:], " \t") == "" {
 				fence, fenceLength = 0, 0
 			}
 		}
