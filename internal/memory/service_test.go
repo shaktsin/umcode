@@ -16,6 +16,7 @@ import (
 	"github.com/shaktsin/umcode/internal/projects"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/work"
 )
 
 func serviceFixture(t *testing.T) (*Service, *store.Store, Request) {
@@ -60,6 +61,13 @@ func addCompletedWork(t *testing.T, st *store.Store, p protocol.Project, key, te
 	for _, e := range in.Detail.Evidence {
 		ids[e.ID] = store.NewID("ev")
 	}
+	command := strings.TrimSuffix(strings.TrimPrefix(text, "Use "), " for this repository")
+	if text != "Use "+command+" for this repository" {
+		t.Fatalf("noncanonical test command: %q", text)
+	}
+	in.Detail.Nodes[1].Content, _ = json.Marshal(work.VerifiedCommandFact{Type: "verified_command", Command: command, EvidenceID: ids["ev-a"], SourceRevision: "final"})
+	in.Detail.Evidence[0].SourceURI = command
+	in.Detail.Attempts[0].Command = command
 	for _, n := range in.Detail.Nodes {
 		n.ID, n.WorkID = ids[n.ID], w.ID
 		n.EvidenceIDs = nil
@@ -480,5 +488,30 @@ func TestPromotionUserDuplicateLifecycle(t *testing.T) {
 	}
 	if got := readTarget(t, req.Project); !strings.HasPrefix(got, original) || strings.Count(got, "- Use go test") != 1 || !strings.Contains(got, "- Use go vet") {
 		t.Fatalf("bytes=%q", got)
+	}
+}
+
+func TestPromotionReplacementDuplicatePreservesActiveOwnership(t *testing.T) {
+	s, st, req := serviceFixture(t)
+	if r := s.PromoteCompleted(t.Context(), req); r.Promoted != 1 {
+		t.Fatal(r)
+	}
+	rows, err := st.ListProjectMemories(t.Context(), req.Project.ID)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v %v", rows, err)
+	}
+	old := rows[0]
+	before := readTarget(t, req.Project) + "\n## User guidance\n- Use go vet ./... for this repository\n"
+	if err := os.WriteFile(filepath.Join(req.Project.Root, "UMCODE.md"), []byte(before), 0600); err != nil {
+		t.Fatal(err)
+	}
+	next := addCompletedWork(t, st, req.Project, "test-command", "Use go vet ./... for this repository")
+	setCandidateField(t, st, next, "replaces_memory", old.ID)
+	if r := s.PromoteCompleted(t.Context(), next); r.Conflicted != 1 || r.Promoted != 0 {
+		t.Fatalf("replacement=%+v", r)
+	}
+	rows, err = st.ListProjectMemories(t.Context(), req.Project.ID)
+	if err != nil || len(rows) != 1 || rows[0].ID != old.ID || rows[0].SupersededBy != "" || readTarget(t, req.Project) != before {
+		t.Fatalf("unsafe supersession: rows=%+v err=%v", rows, err)
 	}
 }

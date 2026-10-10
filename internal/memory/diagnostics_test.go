@@ -33,7 +33,7 @@ func TestPromotionDiagnosticsProvenanceAndEstimates(t *testing.T) {
 	if len(r.Diagnostics) != 1 || r.Diagnostics[0].Reason != ReasonAlreadyCurrent || r.Diagnostics[0].Unchanged != 1 || r.EstimatedContextTokensAvoided != (len(rows[0].Text)+3)/4 || r.EstimatedInstructionTokensAdded != 0 {
 		t.Fatalf("duplicate=%+v", r)
 	}
-	newer := addCompletedWork(t, st, req.Project, "test-command", "Use go test ./internal/work for Work lifecycle checks")
+	newer := addCompletedWork(t, st, req.Project, "test-command", "Use go test ./internal/work for this repository")
 	setCandidateField(t, st, newer, "replaces_memory", rows[0].ID)
 	r = s.PromoteCompleted(t.Context(), newer)
 	if len(r.Diagnostics) != 1 || r.Diagnostics[0].Reason != ReasonReplaced || r.Diagnostics[0].Replaced != 1 || r.EstimatedContextTokensAvoided != (len(rows[0].Text)+3)/4 {

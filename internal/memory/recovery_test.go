@@ -294,7 +294,7 @@ func TestRecoveryPanicReleasesProjectLock(t *testing.T) {
 		<-done
 		t.Fatal("recovery panic poisoned project lock")
 	}
-	next := addCompletedWork(t, st, req.Project, "next-command", "Use go test ./internal/work for Work lifecycle checks")
+	next := addCompletedWork(t, st, req.Project, "next-command", "Use go test ./internal/work for this repository")
 	go func() { done <- s.PromoteCompleted(t.Context(), next) }()
 	select {
 	case r := <-done:

@@ -615,8 +615,20 @@ func (s *Service) recordAttempt(ctx context.Context, d protocol.WorkDetail, o Ob
 	if crit != nil && status != protocol.AttemptNotRun {
 		in.Criterion = &store.CriterionUpdate{NodeID: crit.ID, Status: status, Revision: crit.Revision, At: now}
 	}
-	_, err := s.Store.RecordAttempt(ctx, in)
-	return err
+	attempt, err := s.Store.RecordAttempt(ctx, in)
+	if err != nil || !s.DesignedWorkflow || checkType != "command" || status != protocol.AttemptPassed || exit == nil || *exit != 0 || !wsOK || critID == "" {
+		return err
+	}
+	content, _ := json.Marshal(VerifiedCommandFact{Type: "verified_command", Command: command, EvidenceID: attempt.EvidenceID, SourceRevision: ws.Value})
+	fact := protocol.WorkNode{WorkID: d.Work.ID, Kind: protocol.NodeFact, Status: "active", Content: content, Title: "Verified repository command", ValidFrom: now, CreatedAt: now, UpdatedAt: now}
+	if _, _, ok := MemorySourceGuidance(fact); !ok {
+		return nil
+	}
+	fact, err = s.Store.AddWorkNode(ctx, fact)
+	if err != nil {
+		return err
+	}
+	return s.Store.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: critID, ToNodeID: fact.ID, Relation: protocol.RelVerifies})
 }
 
 func (o Observation) structured() string {

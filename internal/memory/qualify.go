@@ -128,6 +128,10 @@ func Qualify(in QualifyInput) (Proposal, Outcome) {
 	if source.Kind == protocol.NodeFact && !durableFact(source, d) {
 		return outcome(protocol.MemoryOutcomeRejected, ReasonSourceUnsupported)
 	}
+	category, text, supported := work.MemorySourceGuidance(source)
+	if !supported || category != c.Category || text != c.Text {
+		return outcome(protocol.MemoryOutcomeRejected, ReasonSourceUnsupported)
+	}
 	for _, edge := range d.Edges {
 		if edge.WorkID != d.Work.ID || edge.Relation != protocol.RelContradicts {
 			continue
@@ -161,6 +165,9 @@ func Qualify(in QualifyInput) (Proposal, Outcome) {
 	}
 	if !verified(in, nodes, evidence, source.ID) {
 		return outcome(protocol.MemoryOutcomeStale, ReasonVerificationStale)
+	}
+	if !sourceEvidenceSupported(source, in, evidence, seen) {
+		return outcome(protocol.MemoryOutcomeRejected, ReasonSourceUnsupported)
 	}
 	var current []protocol.ProjectMemory
 	for _, row := range in.ActiveMemories {
@@ -218,6 +225,54 @@ func durableFact(n protocol.WorkNode, d protocol.WorkDetail) bool {
 		}
 	}
 	return true
+}
+
+// A candidate must cite the exact observed command evidence, or evidence
+// attached to the approved decision (including its current approval criterion).
+func sourceEvidenceSupported(source protocol.WorkNode, in QualifyInput, evidence map[string]protocol.Evidence, cited map[string]bool) bool {
+	if source.Kind == protocol.NodeFact {
+		var fact work.VerifiedCommandFact
+		if json.Unmarshal(source.Content, &fact) != nil || fact.SourceRevision != in.FinalRevision || !cited[fact.EvidenceID] {
+			return false
+		}
+		e, ok := evidence[fact.EvidenceID]
+		if !ok || e.Kind != protocol.EvidenceVerificationOutput || e.SourceURI != fact.Command {
+			return false
+		}
+		for _, a := range in.Detail.Attempts {
+			if a.WorkID == source.WorkID && a.EvidenceID == e.ID && a.CriterionNodeID == e.NodeID && a.Command == fact.Command && a.Status == protocol.AttemptPassed && a.ExitCode != nil && *a.ExitCode == 0 {
+				for _, f := range in.Detail.Fingerprints {
+					if f.ID == a.FingerprintID && f.WorkID == source.WorkID && f.Value == fact.SourceRevision {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	for id := range cited {
+		e := evidence[id]
+		if e.Kind == protocol.EvidenceWorkflowApproval {
+			if source.Revision > 1 && e.SourceRevision == source.ID+":"+strconv.Itoa(source.Revision-1) {
+				for _, edge := range in.Detail.Edges {
+					if edge.WorkID == source.WorkID && edge.Relation == protocol.RelVerifies && edge.FromNodeID == e.NodeID && edge.ToNodeID == source.ID {
+						return true
+					}
+				}
+			}
+			continue
+		}
+		if e.NodeID == source.ID {
+			return true
+		}
+		for _, sourceID := range source.EvidenceIDs {
+			if id == sourceID {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func evidenceRevisionCurrent(e protocol.Evidence, in QualifyInput, nodes map[string]protocol.WorkNode) bool {

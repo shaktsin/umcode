@@ -53,9 +53,13 @@ func memoryEngine(t *testing.T) (*Engine, protocol.Thread, protocol.Turn, protoc
 	return e, th, turn, p, id, logs
 }
 
-// seedMemoryWork uses a completion-ready Designed graph with independent durable
-// evidence, so re-running product verification does not retire candidate provenance.
+// seedMemoryWork observes a successful verification through the production Work
+// service, then creates its candidate through the semantic client API.
 func seedMemoryWork(t *testing.T, e *Engine, th protocol.Thread, p protocol.Project) string {
+	return seedMemoryWorkCommand(t, e, th, p, "go test ./...")
+}
+
+func seedMemoryWorkCommand(t *testing.T, e *Engine, th protocol.Thread, p protocol.Project, command string) string {
 	t.Helper()
 	w, err := e.Store.CreateWork(t.Context(), protocol.Work{ThreadID: th.ID, ProjectID: p.ID, WorkflowDepth: protocol.DepthDesigned})
 	if err != nil {
@@ -64,29 +68,35 @@ func seedMemoryWork(t *testing.T, e *Engine, th protocol.Thread, p protocol.Proj
 	e.Work = &work.Service{Store: e.Store, Log: e.Log, DesignedWorkflow: true, Workspace: func(context.Context, string) (fingerprint.Workspace, bool) {
 		return fingerprint.Workspace{Value: "final"}, true
 	}}
-	fact, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeFact, Status: "active"})
+	commandJSON, _ := json.Marshal(map[string]string{"command": command})
+	observationJSON, _ := json.Marshal(map[string]any{"results": []map[string]any{{"command": command, "status": "passed", "exit_code": 0, "output": "ok"}}})
+	criterion, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeCriterion, Status: protocol.StatusPending, Content: commandJSON})
 	if err != nil {
 		t.Fatal(err)
 	}
-	criterion, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeCriterion, Status: protocol.AttemptPassed, Content: json.RawMessage(`{"command":"go test ./..."}`)})
+	if err := e.Work.Observe(t.Context(), th.ID, work.Observation{Tool: "verification.run", Root: p.Root, Output: string(observationJSON)}); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := e.Store.GetWorkDetail(t.Context(), w.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeMemoryCandidate, Status: protocol.StatusPending, Content: json.RawMessage(`{"category":"command","semantic_key":"test-command","text":"Use go test ./... for this repository","scope_paths":[],"source_revision":"final"}`)})
-	if err != nil {
-		t.Fatal(err)
+	var fact protocol.WorkNode
+	var factContent work.VerifiedCommandFact
+	for _, n := range observed.Nodes {
+		if n.Kind == protocol.NodeFact {
+			fact = n
+			if err := json.Unmarshal(n.Content, &factContent); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if fact.ID == "" || factContent.EvidenceID == "" {
+		t.Fatal("successful production observation created no durable fact")
 	}
 	ev, err := e.Store.AddEvidence(t.Context(), protocol.Evidence{WorkID: w.ID, NodeID: criterion.ID, SourceRevision: "final", Summary: "PRIVATE EVIDENCE BODY"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := e.Store.DB.Exec(`INSERT INTO work_node_evidence(work_id,node_id,evidence_id) VALUES(?,?,?)`, w.ID, candidate.ID, ev.ID); err != nil {
-		t.Fatal(err)
-	}
-	for _, edge := range []protocol.WorkEdge{{WorkID: w.ID, FromNodeID: candidate.ID, ToNodeID: fact.ID, Relation: protocol.RelCandidateFor}, {WorkID: w.ID, FromNodeID: criterion.ID, ToNodeID: candidate.ID, Relation: protocol.RelVerifies}} {
-		if err := e.Store.AddWorkEdge(t.Context(), edge); err != nil {
-			t.Fatal(err)
-		}
 	}
 
 	decision, err := e.Store.AddWorkNode(t.Context(), protocol.WorkNode{WorkID: w.ID, Kind: protocol.NodeDecision, Status: protocol.StatusApproved})
@@ -109,18 +119,22 @@ func seedMemoryWork(t *testing.T, e *Engine, th protocol.Thread, p protocol.Proj
 			t.Fatal(err)
 		}
 	}
-	fp, err := e.Store.AddFingerprint(t.Context(), protocol.Fingerprint{WorkID: w.ID, Kind: protocol.FingerprintVerification, Value: "final", TakenAt: time.Now()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	attemptEvidence, err := e.Store.AddEvidence(t.Context(), protocol.Evidence{WorkID: w.ID, NodeID: criterion.ID, SourceRevision: "final"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.Store.AddVerificationAttempt(t.Context(), protocol.VerificationAttempt{WorkID: w.ID, CriterionNodeID: criterion.ID, Status: protocol.AttemptPassed, EvidenceID: attemptEvidence.ID, FingerprintID: fp.ID, StartedAt: time.Now(), FinishedAt: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
+	addObservedMemoryCandidate(t, e, th, w.ID, fact, factContent)
+
 	return w.ID
+}
+
+func addObservedMemoryCandidate(t *testing.T, e *Engine, th protocol.Thread, workID string, fact protocol.WorkNode, factContent work.VerifiedCommandFact) {
+	t.Helper()
+	d, err := e.Store.GetWorkDetail(t.Context(), workID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ := json.Marshal(work.MemoryCandidateContent{Category: "command", SemanticKey: "test-command", Text: "Use " + factContent.Command + " for this repository", SourceRevision: factContent.SourceRevision})
+	_, _, err = e.Work.Update(t.Context(), th.ID, protocol.WorkUpdateRequest{WorkID: workID, ExpectedRevision: d.Work.Revision, Nodes: []protocol.WorkNodeChange{{Ref: "candidate", Title: "Repository test command", Kind: protocol.NodeMemoryCandidate, ToStatus: protocol.StatusPending, Content: content, EvidenceIDs: []string{factContent.EvidenceID}}}, Edges: []protocol.WorkEdgeChange{{From: "candidate", To: fact.ID, Relation: protocol.RelCandidateFor}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 type memorySubscriber struct {
@@ -628,7 +642,7 @@ func TestCuratedMemoryE2EReplacementAndExternalOwnership(t *testing.T) {
 				}
 			}
 			next := nextMemoryTurn(t, e, th)
-			replacementID := seedMemoryWork(t, e, th, p)
+			replacementID := seedMemoryWorkCommand(t, e, th, p, "go test ./... -count=1")
 			newText := "Use go test ./... -count=1 for this repository"
 			setMemoryCandidate(t, e, replacementID, newText, old.ID, nil)
 			runMemoryTurn(t, e, th, next)

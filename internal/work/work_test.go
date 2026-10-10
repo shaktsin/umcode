@@ -1060,3 +1060,35 @@ func TestEndReturnsCompletedWorkCloseFailure(t *testing.T) {
 		t.Fatalf("failed close ID=%q error=%v failures=%d", id, err, f.svc.Failures.Load())
 	}
 }
+
+func TestVerifiedCommandObservationCreatesDurableSource(t *testing.T) {
+	f := newFixture(t)
+	f.svc.DesignedWorkflow = true
+	f.begin(t, "verify repository")
+	f.observe(t, Observation{Tool: "verification.plan", Output: planOut})
+	f.observe(t, Observation{Tool: "verification.run", Root: t.TempDir(), Output: `{"results":[{"command":"go test ./...","status":"passed","exit_code":0,"output":"ok"}]}`})
+	d := f.detail(t)
+	facts := kinds(d, protocol.NodeFact)
+	if len(facts) != 1 {
+		t.Fatalf("successful verification produced %d facts, want one typed source", len(facts))
+	}
+	var content struct{ Type, Command, EvidenceID, SourceRevision string }
+	// Inspect raw wire fields to keep the test independent of the implementation type.
+	var raw map[string]string
+	if err := json.Unmarshal(facts[0].Content, &raw); err != nil {
+		t.Fatal(err)
+	}
+	content.Type, content.Command, content.EvidenceID, content.SourceRevision = raw["type"], raw["command"], raw["evidence_id"], raw["source_revision"]
+	if content.Type != "verified_command" || content.Command != "go test ./..." || content.EvidenceID == "" || content.SourceRevision == "" {
+		t.Fatalf("source=%s", facts[0].Content)
+	}
+	found := false
+	for _, a := range d.Attempts {
+		if a.EvidenceID == content.EvidenceID && a.Command == content.Command && a.Status == protocol.AttemptPassed {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("fact lacks actual successful attempt")
+	}
+}

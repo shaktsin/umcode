@@ -13,13 +13,14 @@ import (
 )
 
 func qualifyFixture() QualifyInput {
+	zero := 0
 	c := protocol.WorkNode{ID: "candidate", WorkID: "work", Kind: protocol.NodeMemoryCandidate, Status: protocol.StatusPending, Revision: 1, Content: json.RawMessage(`{"category":"command","semantic_key":"test-command","text":"  - Use go test ./... for this repository  ","scope_paths":["internal/./work","app"],"source_revision":"final"}`), EvidenceIDs: []string{"ev-z", "ev-a"}}
 	return QualifyInput{ProjectRoot: "/nonexistent/project", FinalRevision: "final", Candidate: c, Detail: protocol.WorkDetail{
 		Work:         protocol.Work{ID: "work", ProjectID: "project", Status: protocol.WorkCompleted, WorkflowDepth: protocol.DepthDesigned},
-		Nodes:        []protocol.WorkNode{c, {ID: "fact", WorkID: "work", Kind: protocol.NodeFact, Status: "active"}, {ID: "criterion", WorkID: "work", Kind: protocol.NodeCriterion, Status: protocol.AttemptPassed}},
+		Nodes:        []protocol.WorkNode{c, {ID: "fact", WorkID: "work", Kind: protocol.NodeFact, Status: "active", Content: json.RawMessage(`{"type":"verified_command","command":"go test ./...","evidence_id":"ev-a","source_revision":"final"}`)}, {ID: "criterion", WorkID: "work", Kind: protocol.NodeCriterion, Status: protocol.AttemptPassed}},
 		Edges:        []protocol.WorkEdge{{WorkID: "work", FromNodeID: "candidate", Relation: protocol.RelCandidateFor, ToNodeID: "fact"}, {WorkID: "work", FromNodeID: "criterion", Relation: protocol.RelVerifies, ToNodeID: "candidate"}},
-		Evidence:     []protocol.Evidence{{ID: "ev-a", WorkID: "work", SourceRevision: "final", Summary: "PRIVATE EVIDENCE BODY"}, {ID: "ev-z", WorkID: "work", SourceRevision: "final"}, {ID: "ev-check", WorkID: "work", SourceRevision: "final", NodeID: "criterion"}},
-		Attempts:     []protocol.VerificationAttempt{{ID: "attempt", WorkID: "work", CriterionNodeID: "criterion", Status: protocol.AttemptPassed, EvidenceID: "ev-check", FingerprintID: "fingerprint", StartedAt: time.Unix(2, 0), FinishedAt: time.Unix(3, 0)}},
+		Evidence:     []protocol.Evidence{{ID: "ev-a", WorkID: "work", NodeID: "criterion", Kind: protocol.EvidenceVerificationOutput, SourceURI: "go test ./...", SourceRevision: "final", Summary: "PRIVATE EVIDENCE BODY"}, {ID: "ev-z", WorkID: "work", SourceRevision: "final"}, {ID: "ev-check", WorkID: "work", SourceRevision: "final", NodeID: "criterion"}},
+		Attempts:     []protocol.VerificationAttempt{{ID: "attempt", WorkID: "work", CriterionNodeID: "criterion", Status: protocol.AttemptPassed, Command: "go test ./...", ExitCode: &zero, EvidenceID: "ev-a", FingerprintID: "fingerprint", StartedAt: time.Unix(2, 0), FinishedAt: time.Unix(3, 0)}},
 		Fingerprints: []protocol.Fingerprint{{ID: "fingerprint", WorkID: "work", Value: "final", Kind: protocol.FingerprintVerification}},
 	}}
 }
@@ -96,7 +97,7 @@ func TestQualifyMatrix(t *testing.T) {
 		{"changed after check", "stale", "verification_stale", func(in *QualifyInput) {
 			in.Detail.Evidence = append(in.Detail.Evidence, protocol.Evidence{ID: "edit", WorkID: "work", Kind: protocol.EvidenceFileChange, ObservedAt: time.Unix(4, 0)})
 		}},
-		{"new failed check", "stale", "verification_stale", func(in *QualifyInput) {
+		{"new failed check", "stale", "evidence_stale", func(in *QualifyInput) {
 			a := in.Detail.Attempts[0]
 			a.ID = "new"
 			a.Status = protocol.AttemptFailed
@@ -206,8 +207,16 @@ func TestQualifyCanonicalProposal(t *testing.T) {
 			if category == "approved_decision" {
 				in.Detail.Nodes[1].Kind = protocol.NodeDecision
 				in.Detail.Nodes[1].Status = protocol.StatusApproved
+				in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
+				in.Detail.Nodes[1].EvidenceIDs = []string{"ev-a", "ev-z"}
 			}
 			p, out := Qualify(in)
+			if category != "command" && category != "approved_decision" {
+				if out != (Outcome{Status: "rejected", Reason: ReasonSourceUnsupported}) {
+					t.Fatal(out)
+				}
+				return
+			}
 			if out != (Outcome{}) {
 				t.Fatal(out)
 			}
@@ -238,6 +247,11 @@ func TestQualifyCanonicalProposal(t *testing.T) {
 	t.Run("inside absolute path", func(t *testing.T) {
 		in := qualifyFixture()
 		changeContent(&in, "text", "This repository stores packages in /nonexistent/project/internal")
+		changeContent(&in, "category", "approved_decision")
+		in.Detail.Nodes[1].Kind = protocol.NodeDecision
+		in.Detail.Nodes[1].Status = protocol.StatusApproved
+		in.Detail.Nodes[1].Title = "This repository stores packages in /nonexistent/project/internal"
+		in.Detail.Nodes[1].EvidenceIDs = []string{"ev-a"}
 		p, out := Qualify(in)
 		if out != (Outcome{}) || p.Text != "- This repository stores packages in /nonexistent/project/internal" {
 			t.Fatalf("%+v %+v", p, out)
@@ -248,6 +262,11 @@ func TestQualifyCanonicalProposal(t *testing.T) {
 // Discovery SourceRevision identifies tool arguments, not workspace state.
 func TestQualifyCanonicalDiscoveryRevision(t *testing.T) {
 	in := qualifyFixture()
+	changeContent(&in, "category", "approved_decision")
+	in.Detail.Nodes[1].Kind = protocol.NodeDecision
+	in.Detail.Nodes[1].Status = protocol.StatusApproved
+	in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
+	in.Detail.Nodes[1].EvidenceIDs = []string{"ev-a"}
 	args := sha256.Sum256([]byte(`{"path":"go.mod"}`))
 	body := sha256.Sum256([]byte("module github.com/shaktsin/umcode"))
 	in.Detail.Evidence[0] = protocol.Evidence{ID: "ev-a", WorkID: "work", Kind: protocol.EvidenceDiscovery, SourceURI: "file.read", SourceRevision: hex.EncodeToString(args[:]), ContentHash: hex.EncodeToString(body[:]), Summary: "module github.com/shaktsin/umcode", ObservedAt: time.Unix(1, 0)}
@@ -269,10 +288,13 @@ func TestQualifyCanonicalWorkflowApprovalRevision(t *testing.T) {
 			changeContent(&in, "category", "approved_decision")
 			in.Detail.Nodes[1].Kind = protocol.NodeDecision
 			in.Detail.Nodes[1].Status = protocol.StatusApproved
+			in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
+			in.Detail.Nodes[1].EvidenceIDs = []string{"ev-a", "ev-z"}
 			in.Detail.Nodes[1].Revision = 2
 			in.Detail.Nodes[2].Content = json.RawMessage(`{"command":"workflow:approval"}`)
 			in.Detail.Edges[1].ToNodeID = "fact"
 			in.Detail.Evidence[2] = protocol.Evidence{ID: "ev-check", WorkID: "work", NodeID: "criterion", Kind: protocol.EvidenceWorkflowApproval, SourceURI: "approval://apr_test", SourceRevision: tc.revision, Summary: "approved", ObservedAt: time.Unix(3, 0)}
+			in.Detail.Attempts[0].EvidenceID = "ev-check"
 			in.Detail.Attempts[0].CheckType = "workflow_approval"
 			in.Detail.Attempts[0].Command = "workflow:approval"
 			in.Detail.Attempts[0].FingerprintID = ""
@@ -313,5 +335,71 @@ func TestQualifyRejectsToolErrorFact(t *testing.T) {
 				t.Fatalf("temporary failure qualified: proposal=%+v outcome=%+v", p, out)
 			}
 		})
+	}
+}
+
+func TestQualifyBindsCanonicalSourceGuidance(t *testing.T) {
+	for _, tc := range []struct{ name, title, text, category string }{
+		{"contradictory decision", "Use SQLite for this repository", "Use PostgreSQL for this repository", "approved_decision"},
+		{"unrelated decision", "Use SQLite for this repository", "Use go test ./... for this repository", "approved_decision"},
+		{"unrelated command", "", "Use rm -rf build for this repository", "command"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := qualifyFixture()
+			changeContent(&in, "category", tc.category)
+			changeContent(&in, "text", tc.text)
+			if tc.title != "" {
+				in.Detail.Nodes[1].Kind = protocol.NodeDecision
+				in.Detail.Nodes[1].Status = protocol.StatusApproved
+				in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
+				in.Detail.Nodes[1].EvidenceIDs = []string{"ev-a", "ev-z"}
+				in.Detail.Nodes[1].Title = tc.title
+			}
+			if _, out := Qualify(in); out.Status != protocol.MemoryOutcomeRejected || out.Reason != ReasonSourceUnsupported {
+				t.Fatalf("unbound guidance accepted: %+v", out)
+			}
+		})
+	}
+}
+
+func TestQualifyRejectsUnrelatedSourceEvidence(t *testing.T) {
+	in := qualifyFixture()
+	in.Candidate.EvidenceIDs = []string{"ev-z"}
+	in.Detail.Nodes[0] = in.Candidate
+	in.Detail.Nodes[1].EvidenceIDs = []string{"ev-check"}
+	in.Detail.Evidence[0].NodeID = "other"
+	in.Detail.Evidence[1].NodeID = "other"
+	if _, out := Qualify(in); out != (Outcome{Status: protocol.MemoryOutcomeRejected, Reason: ReasonSourceUnsupported}) {
+		t.Fatalf("same-Work evidence unrelated to source outcome=%+v", out)
+	}
+}
+
+func TestQualifyDecisionRequiresSourceEvidence(t *testing.T) {
+	in := qualifyFixture()
+	changeContent(&in, "category", "approved_decision")
+	in.Detail.Nodes[1].Kind = protocol.NodeDecision
+	in.Detail.Nodes[1].Status = protocol.StatusApproved
+	in.Detail.Nodes[1].Title = "Use go test ./... for this repository"
+	if _, out := Qualify(in); out != (Outcome{Status: protocol.MemoryOutcomeRejected, Reason: ReasonSourceUnsupported}) {
+		t.Fatalf("unrelated decision evidence accepted: %+v", out)
+	}
+	in.Detail.Nodes[1].EvidenceIDs = []string{"ev-a"}
+	if _, out := Qualify(in); out != (Outcome{}) {
+		t.Fatalf("canonical decision evidence rejected: %+v", out)
+	}
+}
+
+func TestQualifyRejectsAnotherDecisionsApprovalEvidence(t *testing.T) {
+	in := qualifyFixture()
+	changeContent(&in, "category", "approved_decision")
+	in.Detail.Nodes[1].Kind, in.Detail.Nodes[1].Status = protocol.NodeDecision, protocol.StatusApproved
+	in.Detail.Nodes[1].Title, in.Detail.Nodes[1].Revision = "Use go test ./... for this repository", 2
+	in.Detail.Nodes = append(in.Detail.Nodes, protocol.WorkNode{ID: "other-decision", WorkID: "work", Kind: protocol.NodeDecision, Status: protocol.StatusApproved, Revision: 2, Title: "Use SQLite for this repository"})
+	in.Detail.Nodes[2].Content = json.RawMessage(`{"command":"workflow:approval"}`)
+	in.Detail.Edges = append(in.Detail.Edges, protocol.WorkEdge{WorkID: "work", FromNodeID: "criterion", ToNodeID: "fact", Relation: protocol.RelVerifies}, protocol.WorkEdge{WorkID: "work", FromNodeID: "criterion", ToNodeID: "other-decision", Relation: protocol.RelVerifies})
+	in.Detail.Evidence[0] = protocol.Evidence{ID: "ev-a", WorkID: "work", NodeID: "criterion", Kind: protocol.EvidenceWorkflowApproval, SourceRevision: "other-decision:1"}
+	in.Detail.Attempts[0].Command, in.Detail.Attempts[0].CheckType, in.Detail.Attempts[0].FingerprintID = "workflow:approval", "workflow_approval", ""
+	if _, out := Qualify(in); out != (Outcome{Status: protocol.MemoryOutcomeRejected, Reason: ReasonSourceUnsupported}) {
+		t.Fatalf("another decision approval accepted: %+v", out)
 	}
 }

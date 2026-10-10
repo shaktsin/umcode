@@ -780,7 +780,7 @@ func validateEdge(from protocol.WorkNode, relation string, to protocol.WorkNode)
 	case protocol.RelImplements:
 		good = from.Kind == protocol.NodeTask && (to.Kind == protocol.NodeRequirement || to.Kind == protocol.NodeDecision)
 	case protocol.RelVerifies:
-		good = from.Kind == protocol.NodeCriterion && (to.Kind == protocol.NodeRequirement || to.Kind == protocol.NodeTask || to.Kind == protocol.NodeDecision || to.Kind == protocol.NodeMemoryCandidate)
+		good = from.Kind == protocol.NodeCriterion && (to.Kind == protocol.NodeRequirement || to.Kind == protocol.NodeTask || to.Kind == protocol.NodeDecision || to.Kind == protocol.NodeMemoryCandidate || to.Kind == protocol.NodeFact)
 	case protocol.RelSupports:
 		good = len(from.EvidenceIDs) > 0 && (to.Kind == protocol.NodeDecision || to.Kind == protocol.NodeRequirement || to.Kind == protocol.NodeMemoryCandidate || to.Kind == protocol.NodeFact)
 	case protocol.RelCandidateFor:

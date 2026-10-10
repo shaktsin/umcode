@@ -18,7 +18,7 @@ import (
 )
 
 const memoryCommandText = "Use go test ./... for this repository"
-const memoryVerificationCommand = `GOCACHE="$PWD/.go-cache" go test ./...`
+const memoryVerificationCommand = `go test ./...`
 
 // Only the external provider is scripted; prompt composition, looping, tool
 // execution, Work observation/completion, promotion and persistence remain real.
@@ -146,6 +146,13 @@ func TestCuratedMemoryReducesRepeatedDiscoveryWithoutQualityLoss(t *testing.T) {
 				turn = nextMemoryTurn(t, e, th)
 				id = seedMemoryWork(t, e, th, p)
 			}
+			// The A/B candidate is created only after this turn's actual tool result.
+			if _, err := e.Store.DB.Exec(`DELETE FROM work_edges WHERE work_id=? AND (from_node_id IN (SELECT id FROM work_nodes WHERE work_id=? AND kind='memory_candidate') OR to_node_id IN (SELECT id FROM work_nodes WHERE work_id=? AND kind='memory_candidate'))`, id, id, id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.Store.DB.Exec(`DELETE FROM work_nodes WHERE work_id=? AND kind='memory_candidate'`, id); err != nil {
+				t.Fatal(err)
+			}
 			criterion, err := json.Marshal(map[string]string{"command": memoryVerificationCommand})
 			if err != nil {
 				t.Fatal(err)
@@ -187,6 +194,24 @@ func TestCuratedMemoryReducesRepeatedDiscoveryWithoutQualityLoss(t *testing.T) {
 					}
 					return memoryCall("verification.run", string(args))
 				}
+				d, err := e.Store.GetWorkDetail(t.Context(), id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var fact protocol.WorkNode
+				var content work.VerifiedCommandFact
+				for _, n := range d.Nodes {
+					if n.Kind == protocol.NodeFact && n.CreatedAt.After(fact.CreatedAt) {
+						var c work.VerifiedCommandFact
+						if json.Unmarshal(n.Content, &c) == nil && c.Command == memoryVerificationCommand {
+							fact, content = n, c
+						}
+					}
+				}
+				if fact.ID == "" {
+					t.Fatal("real tool observation created no command source")
+				}
+				addObservedMemoryCandidate(t, e, th, id, fact, content)
 				return memoryAnswer(req)
 			}
 			runMemoryTurn(t, e, th, turn)
