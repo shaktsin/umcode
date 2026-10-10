@@ -1,6 +1,6 @@
 # Phase 4c: deterministic context retrieval
 
-Status: proposed written spec; approach approved, awaiting written-spec approval.
+Status: written spec approved in conversation on 2026-10-10.
 Date: 2026-10-10
 Parent: 2026-09-30-quality-first-token-efficiency-design.md
 Base: master after Phase 5b, PR #51 (3939bb7).

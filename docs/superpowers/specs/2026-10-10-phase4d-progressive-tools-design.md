@@ -1,6 +1,6 @@
 # Phase 4d: progressive tool schemas
 
-Status: proposed written spec; approach approved, awaiting written-spec approval.
+Status: written spec approved in conversation on 2026-10-10.
 Date: 2026-10-10
 Parent: 2026-09-30-quality-first-token-efficiency-design.md
 Base: Phase 4c integration on master after Phase 5b.
