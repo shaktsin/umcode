@@ -84,11 +84,15 @@ func Merge(in MergeInput) (MergeResult, Outcome) {
 			if line.text != row.Text {
 				continue
 			}
-			// A continuation or attached prose makes the recorded one-line
-			// bullet a different entry, even when its first line still matches.
-			if i+1 < section.end {
-				next := section.lines[i+1].text
-				if strings.TrimSpace(next) != "" && !strings.HasPrefix(next, "- ") {
+			// Prove the whole item is still the recorded one-line bullet.
+			// Blank lines do not end a Markdown list item: indented prose
+			// or a nested list after them still belongs to the user-extended item.
+			for j := i + 1; j < section.end; j++ {
+				next := section.lines[j].text
+				if strings.HasPrefix(next, "- ") {
+					break
+				}
+				if strings.TrimSpace(next) != "" {
 					return conflict(ReasonOwnershipConflict)
 				}
 			}
@@ -199,6 +203,8 @@ func memoryEOL(current []byte) string {
 func parseMemorySection(current []byte) (memorySection, bool) {
 	s := memorySection{marker: -1}
 	heading := -1
+	var fence byte
+	fenceLength := 0
 	for start := 0; start < len(current); {
 		next := len(current)
 		if i := bytes.IndexByte(current[start:], '\n'); i >= 0 {
@@ -214,20 +220,37 @@ func parseMemorySection(current []byte) (memorySection, bool) {
 		line := memoryLine{start, end, next, string(current[start:end])}
 		i := len(s.lines)
 		s.lines = append(s.lines, line)
+		text := strings.TrimSpace(line.text)
+		if len(text) > 0 && (text[0] == '`' || text[0] == '~') {
+			length := 0
+			for length < len(text) && text[length] == text[0] {
+				length++
+			}
+			if fence == 0 && length >= 3 {
+				fence, fenceLength = text[0], length
+			} else if text[0] == fence && length >= fenceLength && strings.TrimSpace(text[length:]) == "" {
+				fence, fenceLength = 0, 0
+			}
+		}
 		if strings.HasPrefix(strings.TrimSpace(line.text), managedHeading) {
-			if line.text != managedHeading || heading >= 0 {
+			if line.text != managedHeading || heading >= 0 || fence != 0 {
 				return memorySection{}, false
 			}
 			heading = i
 		}
 		lower := strings.ToLower(line.text)
 		if strings.Contains(lower, "umcode:generated") || strings.Contains(lower, "<!--") && strings.Contains(lower, "umcode:") {
-			if line.text != managedMarker || s.marker >= 0 || heading < 0 {
+			if line.text != managedMarker || s.marker >= 0 || heading < 0 || fence != 0 {
 				return memorySection{}, false
 			}
 			s.marker = i
 		}
 		start = next
+	}
+	// Appending a new section to an unclosed example would put generated
+	// instructions inside user code, so it is ambiguous even without a marker.
+	if fence != 0 {
+		return memorySection{}, false
 	}
 	s.end = len(s.lines)
 	if heading < 0 {

@@ -89,6 +89,9 @@ func TestMergeOwnershipConflicts(t *testing.T) {
 		{"invalid target", section + "- Old checks.\n", func(r *protocol.ProjectMemory) { r.TargetPath = "../UMCODE.md" }},
 		{"superseded row", section + "- Old checks.\n", func(r *protocol.ProjectMemory) { r.SupersededBy = "other" }},
 		{"continued bullet", section + "- Old checks.\n  User continuation.\n", nil},
+		{"blank before continuation", section + "- Old checks.\n\n  User continuation.\n", nil},
+		{"multiple blanks before tab continuation", section + "- Old checks.\n\n \t\n\tUser continuation.\n- User bullet.\n", nil},
+		{"blank before nested bullet", section + "- Old checks.\n\n  - User child bullet.\n", nil},
 		{"fenced text", section + "```markdown\n- Old checks.\n\n```\n", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,6 +108,32 @@ func TestMergeOwnershipConflicts(t *testing.T) {
 	}
 }
 
+func TestMergeManagedExampleInsideOuterFenceConflicts(t *testing.T) {
+	for _, tc := range []struct{ name, before string }{
+		{"backticks with level two boundary", "```markdown\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n## Example footer\n```\n"},
+		{"tildes with level one boundary CRLF", "~~~markdown\r\n## Verified project memory\r\n\r\n<!-- umcode:generated -->\r\n- Old checks.\r\n# Example footer\r\n~~~\r\n"},
+		{"long fence with shorter apparent close", "````markdown\n```\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n# Example footer\n````\n"},
+		{"unclosed enclosing fence", "```markdown\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n## Example footer\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := []byte(tc.before)
+			got, out := Merge(MergeInput{Current: before, Active: []protocol.ProjectMemory{mergeRecorded("- Old checks.")}, Proposals: []Proposal{{CandidateNodeID: "new", SemanticKey: "checks", Text: "- New checks.", ReplacesMemory: "old"}}, TargetPath: "UMCODE.md", TargetBytes: 4096})
+			if out.Status != protocol.MemoryOutcomeConflicted || !reflect.DeepEqual(got, MergeResult{}) || string(before) != tc.before {
+				t.Fatalf("writable fenced example: %+v, %v", got, out)
+			}
+		})
+	}
+}
+
+func TestMergeReplacementPreservesBlankItemSeparators(t *testing.T) {
+	before := "```markdown\n# Ordinary example\n```\n\n## Verified project memory\n\n<!-- umcode:generated -->\n- Old checks.\n\n- User bullet.\n\n## User footer\n"
+	want := "```markdown\n# Ordinary example\n```\n\n## Verified project memory\n\n<!-- umcode:generated -->\n- New checks.\n\n- User bullet.\n\n## User footer\n"
+	got, out := Merge(MergeInput{Current: []byte(before), Active: []protocol.ProjectMemory{mergeRecorded("- Old checks.")}, Proposals: []Proposal{{CandidateNodeID: "new", SemanticKey: "checks", Text: "- New checks.", ReplacesMemory: "old"}}, TargetPath: "UMCODE.md", TargetBytes: 4096})
+	if out != (Outcome{}) || string(got.After) != want || !reflect.DeepEqual(got.Replaced, []string{"new"}) {
+		t.Fatalf("safe replacement = %+v, %v; want %q", got, out, want)
+	}
+}
+
 func TestMergeMalformedSections(t *testing.T) {
 	for _, before := range []string{
 		"## Verified project memory\n",
@@ -118,6 +147,7 @@ func TestMergeMalformedSections(t *testing.T) {
 		"## Verified project memory\n## User section\n<!-- umcode:generated -->\n",
 		" ## Verified project memory\n<!-- umcode:generated -->\n",
 		"## Verified project memory\n<!-- umcode:generated --> trailing text\n",
+		"```markdown\n# Unclosed user example\n",
 	} {
 		got, out := Merge(MergeInput{Current: []byte(before), Proposals: []Proposal{{CandidateNodeID: "new", Text: "- New."}}, TargetBytes: 4096})
 		if out.Status != protocol.MemoryOutcomeConflicted || out.Reason == "" || !reflect.DeepEqual(got, MergeResult{}) {
