@@ -14,6 +14,7 @@ const compactionPrefix = "Earlier conversation summary (the full transcript rema
 
 // turnMessage is one kept transcript entry before role merging.
 type turnMessage struct {
+	id   string
 	role llm.Role
 	text string
 }
@@ -24,6 +25,11 @@ type turnMessage struct {
 // the work packet already carries them. The second result counts those
 // omissions. A budget of zero means unbounded.
 func tail(items []protocol.Item, currentTurn string, budget int) ([]llm.Message, int) {
+	msgs, dropped, _ := tailWithIDs(items, currentTurn, budget)
+	return msgs, dropped
+}
+
+func tailWithIDs(items []protocol.Item, currentTurn string, budget int) ([]llm.Message, int, map[string]bool) {
 	kept, dropped, summary := collect(items, currentTurn)
 	idx := userIndexes(kept)
 	if len(idx) > tailPairs {
@@ -39,7 +45,17 @@ func tail(items []protocol.Item, currentTurn string, budget int) ([]llm.Message,
 		kept = trimmed
 		msgs = assemble(kept, summary)
 	}
-	return msgs, dropped
+	ids := map[string]bool{}
+	started := summary != ""
+	for _, m := range kept {
+		if m.role == llm.RoleUser {
+			started = true
+		}
+		if started && m.id != "" {
+			ids["item:"+m.id] = true
+		}
+	}
+	return msgs, dropped, ids
 }
 
 // collect keeps the conversation entries, counts the omitted tool and
@@ -52,11 +68,11 @@ func collect(items []protocol.Item, currentTurn string) (kept []turnMessage, dro
 		switch it.Kind {
 		case protocol.ItemUserMessage, protocol.ItemInboundEvent:
 			if it.Text != "" {
-				kept = append(kept, turnMessage{llm.RoleUser, it.Text})
+				kept = append(kept, turnMessage{id: it.ID, role: llm.RoleUser, text: it.Text})
 			}
 		case protocol.ItemAgentMessage:
 			if it.Text != "" && it.Status == protocol.ItemCompleted {
-				kept = append(kept, turnMessage{llm.RoleAssistant, it.Text})
+				kept = append(kept, turnMessage{id: it.ID, role: llm.RoleAssistant, text: it.Text})
 			}
 		case protocol.ItemToolCall, protocol.ItemFileChange:
 			dropped++

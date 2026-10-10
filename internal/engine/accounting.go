@@ -23,13 +23,15 @@ func nextToolReductionKey(occurrences map[string]int, callID string) toolReducti
 // RequestBreakdown estimates where one model request's input tokens go. It is
 // diagnostic only: nothing in it changes what is sent to the model.
 type RequestPackets struct {
-	Work     int `json:"work"`
-	Evidence int `json:"evidence"`
-	P0       int `json:"p0,omitempty"`
-	P1       int `json:"p1,omitempty"`
+	Retrieval int `json:"retrieval,omitempty"`
+	Work      int `json:"work"`
+	Evidence  int `json:"evidence"`
+	P0        int `json:"p0,omitempty"`
+	P1        int `json:"p1,omitempty"`
 }
 
 type RequestBreakdown struct {
+	RetrievalPacketTokens  int            `json:"retrievalPacketTokens,omitempty"`
 	Layers                 map[string]int `json:"layers"`         // tokens per system-prompt layer
 	SystemTokens           int            `json:"systemTokens"`   // sum of Layers
 	ToolSpecTokens         int            `json:"toolSpecTokens"` // tool names, descriptions and schemas
@@ -110,6 +112,7 @@ func measureRequest(layers []promptLayer, req llm.Request, packets RequestPacket
 	b.TotalTokens = b.SystemTokens + b.ToolSpecTokens + b.ConversationTokens + b.ToolResultTokens
 	b.WorkPacketTokens, b.EvidencePacketTokens = packets.Work, packets.Evidence
 	b.P0PacketTokens, b.P1PacketTokens = packets.P0, packets.P1
-	b.ConversationTokens -= packets.Work + packets.Evidence
+	b.RetrievalPacketTokens = packets.Retrieval
+	b.ConversationTokens -= packets.Work + packets.Evidence + packets.Retrieval
 	return b
 }

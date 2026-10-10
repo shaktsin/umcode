@@ -484,7 +484,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		// this turn reaches the model as a stale criterion rather than a pass.
 		packets := RequestPackets{}
 		req.Messages = msgs
-		if out, ok := e.compile(sctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems); ok {
+		if out, ok := e.compile(ctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems, p.Text, scopeRoot(ctx)); ok {
 			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
 			packets = out.packets
 		}

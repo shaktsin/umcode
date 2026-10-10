@@ -9,6 +9,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/retrieval"
 )
 
 const (
@@ -30,6 +31,8 @@ const (
 
 // Input is everything Compile needs. The caller reads it from its store.
 type Input struct {
+	Retrieval      []retrieval.Candidate
+	RetrievalQuery retrieval.Query
 	// DesignedWorkflow enables the persisted semantic graph projection.
 	DesignedWorkflow bool
 	// Detail is the thread's open work. A zero value means there is nothing to
@@ -62,15 +65,17 @@ type Drop struct {
 
 // Report explains one compilation. It is diagnostic only.
 type Report struct {
-	Criteria             int    `json:"criteria"`
-	Evidence             int    `json:"evidence"`
-	TailMessages         int    `json:"tailMessages"`
-	WorkPacketTokens     int    `json:"workPacketTokens"`
-	EvidencePacketTokens int    `json:"evidencePacketTokens"`
-	TailTokens           int    `json:"tailTokens"`
-	P0Tokens             int    `json:"p0Tokens,omitempty"`
-	P1Tokens             int    `json:"p1Tokens,omitempty"`
-	Drops                []Drop `json:"drops,omitempty"`
+	RetrievalTokens      int      `json:"retrievalTokens,omitempty"`
+	RetrievalIDs         []string `json:"retrievalIDs,omitempty"`
+	Criteria             int      `json:"criteria"`
+	Evidence             int      `json:"evidence"`
+	TailMessages         int      `json:"tailMessages"`
+	WorkPacketTokens     int      `json:"workPacketTokens"`
+	EvidencePacketTokens int      `json:"evidencePacketTokens"`
+	TailTokens           int      `json:"tailTokens"`
+	P0Tokens             int      `json:"p0Tokens,omitempty"`
+	P1Tokens             int      `json:"p1Tokens,omitempty"`
+	Drops                []Drop   `json:"drops,omitempty"`
 	// Declined names why compilation was refused, and is empty on success.
 	Declined string `json:"declined,omitempty"`
 }
@@ -180,7 +185,37 @@ func Compile(in Input) (Result, bool) {
 		head += "\n" + evidence
 	}
 	msgs := []llm.Message{llm.Text(llm.RoleUser, head)}
-	tailMsgs, tailDropped := tail(in.Items, in.TurnID, tailBudget(in.Window))
+	tailMsgs, tailDropped, excluded := tailWithIDs(in.Items, in.TurnID, tailBudget(in.Window))
+	retrievalTokens := 0
+	var retrievalIDs []string
+	if len(in.Retrieval) > 0 {
+		for _, n := range in.Detail.Nodes {
+			if strings.Contains(head, "- "+n.ID+" ") {
+				excluded["node:"+n.ID] = true
+			}
+		}
+		for _, ev := range in.Detail.Evidence {
+			if strings.Contains(head, "- "+ev.ID+" ") || ev.Summary != "" && strings.Contains(head, ev.Summary) {
+				excluded["evidence:"+ev.ID] = true
+			}
+		}
+		remaining := retrieval.MaxTokens
+		if in.Window > 0 {
+			remaining = min(remaining, share(in.Window, 0.05), packetBudget(in.Window)-textTokens(head)-1)
+		}
+		entries, _, err := retrieval.Select(in.RetrievalQuery, in.Retrieval, excluded, max(0, remaining))
+		if err == nil && len(entries) > 0 {
+			addition := "\n" + retrieval.Render(entries)
+			candidate := head + addition
+			if in.Window <= 0 || textTokens(candidate) <= packetBudget(in.Window) {
+				retrievalTokens = textTokens(candidate) - textTokens(head)
+				msgs[0] = llm.Text(llm.RoleUser, candidate)
+				for _, entry := range entries {
+					retrievalIDs = append(retrievalIDs, entry.ID)
+				}
+			}
+		}
+	}
 	msgs = append(msgs, tailMsgs...)
 	if tb := tailBudget(in.Window); tb > 0 && estimate(tailMsgs) > tb {
 		drops = append(drops, Drop{Class: "tail", Reason: "one exchange exceeds the tail budget", Count: 1})
@@ -191,6 +226,7 @@ func Compile(in Input) (Result, bool) {
 
 	rep := Report{
 		Criteria: criteria, Evidence: rows, TailMessages: len(tailMsgs),
+		RetrievalTokens: retrievalTokens, RetrievalIDs: retrievalIDs,
 		WorkPacketTokens: textTokens(work), EvidencePacketTokens: textTokens(evidence),
 		TailTokens: estimate(tailMsgs), Drops: drops,
 		P0Tokens: p0Tokens, P1Tokens: p1Tokens,

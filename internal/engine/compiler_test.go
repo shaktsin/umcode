@@ -77,7 +77,7 @@ func TestDesignedCompilerRestartReconstructsSQLitePacket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := e.compile(t.Context(), th, turn.ID, 100, 100000, items); ok {
+	if _, ok := e.compile(t.Context(), th, turn.ID, 100, 100000, items, "", ""); ok {
 		t.Fatal("P0 budget refusal must select canonical history")
 	}
 	if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err == nil || err.Error() != "workflow approval pending" {
@@ -175,7 +175,7 @@ func compiled(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, ok := e.compile(t.Context(), th, turn.ID, 200000, estimateMessageTokens(hist), items)
+	out, ok := e.compile(t.Context(), th, turn.ID, 200000, estimateMessageTokens(hist), items, "", "")
 	return out.msgs, ok
 }
 
@@ -334,7 +334,7 @@ func TestCompilerDeclinesAfterCompactionShrinksHistory(t *testing.T) {
 	runWorkTool(t, e, th, turn, &engineTestTool{name: "verification.plan", risk: tools.RiskGreen, output: testPlan})
 	// A compacted thread is small: the compiler must not replace a short
 	// history with a larger prefix.
-	if _, ok := e.compile(t.Context(), th, turn.ID, 200000, 20, nil); ok {
+	if _, ok := e.compile(t.Context(), th, turn.ID, 200000, 20, nil, "", ""); ok {
 		t.Fatal("a tiny history must make the compiler decline")
 	}
 	if e.compilerFailures.Load() == 0 {
