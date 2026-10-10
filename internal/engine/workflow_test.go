@@ -362,7 +362,7 @@ func TestWorkflowGateReadFailureAndFeatureOff(t *testing.T) {
 		t.Run(map[bool]string{true: "fail closed", false: "off skips lookup"}[enabled], func(t *testing.T) {
 			e, th, turn, st, _ := workflowEngine(t)
 			e.Cfg.Models.DesignedWorkflow = enabled
-			if _, err := st.DB.Exec(`DROP TABLE works`); err != nil {
+			if _, err := st.DB.Exec(`ALTER TABLE works RENAME TO unavailable_works`); err != nil {
 				t.Fatal(err)
 			}
 			tool := &engineTestTool{name: "file.write", risk: tools.RiskGreen, output: "ran"}

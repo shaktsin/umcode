@@ -1018,7 +1018,11 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			if sink != nil {
 				raw = sink.Text
 			}
-			_ = e.Work.Observe(sctx, th.ID, work.Observation{Tool: name, Args: call.Args, Output: output, Raw: raw, Err: toolError, Risk: riskLevel, Root: scopeRoot(ctx)})
+			var excerpts []protocol.ObservedExcerpt
+			if sink != nil && tools.IsFileObservationSource(tool) && toolError == "" {
+				excerpts = sink.Excerpts
+			}
+			_ = e.Work.Observe(sctx, th.ID, work.Observation{Excerpts: excerpts, Tool: name, Args: call.Args, Output: output, Raw: raw, Err: toolError, Risk: riskLevel, Root: scopeRoot(ctx)})
 		}
 		invocation.Event, invocation.ToolOutput, invocation.ToolError = event, output, toolError
 		outcome := e.runPluginHooks(sctx, snapshot, invocation)
@@ -1123,6 +1127,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		toolCtx = tools.WithScope(ctx, &streamScope)
 	}
 	toolCtx, sink = tools.WithRawSink(toolCtx)
+	sink.CaptureExcerpts = e.Cfg.Models.ContextRetrieval && tools.IsFileObservationSource(tool)
 	var output string
 	workflowDenied := false
 	if updater, ok := tool.(tools.WorkflowUpdateTool); ok && e.Cfg.Models.DesignedWorkflow {

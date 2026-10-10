@@ -144,7 +144,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	visuals := visualqa.NewManager(base)
 	computers := computeruse.NewManager(base)
 	execs := tools.NewExecManager()
-	workService := &work.Service{Store: o.Store, Log: o.Logger, DesignedWorkflow: o.Config.Models.DesignedWorkflow,
+	workService := &work.Service{Store: o.Store, Log: o.Logger, DesignedWorkflow: o.Config.Models.DesignedWorkflow, ContextRetrieval: o.Config.Models.ContextRetrieval,
 		Vault:    &vault.Vault{Dir: o.Config.Storage.VaultDir, MaxObjectBytes: o.Config.Storage.VaultMaxObjectBytes},
 		VaultDir: o.Config.Storage.VaultDir, ToolVersion: toolVersion}
 	ws := tools.NewWorkspaces(o.Config)

@@ -1,7 +1,12 @@
 // Package retrieval selects bounded, provenance-bearing context without I/O.
 package retrieval
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"path/filepath"
+	"time"
+)
 
 const (
 	Deadline          = 100 * time.Millisecond
@@ -40,4 +45,9 @@ type Report struct {
 	Tokens     int            `json:"tokens"`
 	Drops      map[string]int `json:"drops,omitempty"`
 	Fallback   string         `json:"fallback,omitempty"`
+}
+
+func WorkspaceHash(root string) string {
+	h := sha256.Sum256([]byte(filepath.Clean(root)))
+	return hex.EncodeToString(h[:])
 }
