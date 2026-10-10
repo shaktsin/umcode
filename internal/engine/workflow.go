@@ -26,7 +26,7 @@ func workflowDiscoveryTool(name string) bool {
 // Prospective signals must persist before any hook, policy approval, or Call.
 // Observations still perform their existing post-execution escalation.
 func (e *Engine) escalateProspectiveWorkflow(ctx context.Context, threadID string, o work.Observation) error {
-	if !e.Cfg.Models.DesignedWorkflow || workflowDiscoveryTool(o.Tool) {
+	if !e.optimizationPolicy(ctx).DesignedWorkflow || workflowDiscoveryTool(o.Tool) {
 		return nil
 	}
 	w, ok, err := e.Store.OpenWorkForThread(ctx, threadID)
@@ -50,7 +50,7 @@ func (e *Engine) escalateProspectiveWorkflow(ctx context.Context, threadID strin
 }
 
 func (e *Engine) workflowDetail(ctx context.Context, threadID, tool string) (*protocol.WorkDetail, error) {
-	if !e.Cfg.Models.DesignedWorkflow || workflowDiscoveryTool(tool) {
+	if !e.optimizationPolicy(ctx).DesignedWorkflow || workflowDiscoveryTool(tool) {
 		return nil, nil
 	}
 	w, ok, err := e.Store.OpenWorkForThread(ctx, threadID)

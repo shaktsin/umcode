@@ -150,7 +150,7 @@ func (e *Engine) refreshSelectionPermissions(ctx context.Context, s *turnSelecti
 	}
 	allowed := map[string]bool{}
 	for _, c := range s.actual {
-		allowed[c.tool.Name()] = e.permittedTool(c, p)
+		allowed[c.tool.Name()] = e.permittedToolFor(ctx, c, p)
 	}
 	if s.state != nil {
 		s.state.Restrict(allowed)
@@ -271,10 +271,13 @@ func (e *Engine) runDiscovery(ctx, sctx context.Context, turn protocol.Turn, cal
 }
 
 func (e *Engine) permittedTool(c turnTool, p *protocol.Project) bool {
+	return e.permittedToolFor(context.Background(), c, p)
+}
+func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.Project) bool {
 	if !catalogToolAllowed(c, p) {
 		return false
 	}
-	if c.tool.Name() == "work.update" && (e.Cfg == nil || !e.Cfg.Models.DesignedWorkflow) {
+	if c.tool.Name() == "work.update" && (e.Cfg == nil || !e.optimizationPolicy(ctx).DesignedWorkflow) {
 		return false
 	}
 	if !c.plugin {

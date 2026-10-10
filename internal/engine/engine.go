@@ -153,9 +153,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	reg := tools.NewRegistry()
 	sk := skills.NewRegistry(o.Config)
 	tools.RegisterBuiltins(reg, o.Config, ws, sk.EnvFor, tools.BuiltinServices{Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs})
-	if o.Config.Models.DesignedWorkflow {
-		reg.Add(tools.NewWorkUpdate(workService))
-	}
+	reg.Add(tools.NewWorkUpdate(workService))
 	sk.Register(reg)
 
 	mcpm := mcp.NewManager(o.Config.MCPServers, o.Logger)
@@ -939,7 +937,7 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 	flush(layerCore)
 	b.WriteString(fmt.Sprintf("Current time: %s (%s).\n", time.Now().Format(time.RFC1123), tasks.ZoneName(time.Local)))
 	flush(layerClock)
-	if e.Cfg.Models.DesignedWorkflow {
+	if e.optimizationPolicy(ctx).DesignedWorkflow {
 		b.WriteString("\nWorkflow: Direct work should call work.update only when semantic structure or classification changes. Before Guided or Designed implementation, call verification.plan to establish applicable criteria, inspect with discovery tools for supporting evidence, then record the first sufficient solution rung, linked criteria and evidence, the current task, and blocking unknowns. Use the canonical identity context for work/node revisions and evidence IDs. Without a project, the planned approval criterion verifies only human acceptance of its linked decision, not execution or unrelated outcomes. Keep updates compact; the engine derives readiness and enforces gates.\n")
 		flush(layerWorkflow)
 	}

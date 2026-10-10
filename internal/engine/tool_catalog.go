@@ -13,10 +13,10 @@ func (e *Engine) permittedTurnCatalog(ctx context.Context, snapshot pluginSnapsh
 	var actual []turnTool
 	var entries []toolselect.Entry
 	for _, c := range e.turnTools(snapshot) {
-		if !e.permittedTool(c, project) {
+		if !e.permittedToolFor(ctx, c, project) {
 			continue
 		}
-		if c.tool.Name() == "work.update" && (e.Cfg == nil || !e.Cfg.Models.DesignedWorkflow) {
+		if c.tool.Name() == "work.update" && (e.Cfg == nil || !e.optimizationPolicy(ctx).DesignedWorkflow) {
 			continue
 		}
 		family, origin := catalogMetadata(c)

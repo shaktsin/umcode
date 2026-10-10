@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/shaktsin/umcode/internal/optimization"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -37,8 +38,12 @@ func (*verificationPlan) Assess(json.RawMessage) (Risk, string) {
 }
 func (t *verificationPlan) Call(ctx context.Context, _ json.RawMessage) (string, error) {
 	scope := ScopeFrom(ctx)
+	designed := t.designedWorkflow
+	if p, ok := optimization.FromContext(ctx); ok {
+		designed = p.DesignedWorkflow
+	}
 	if scope == nil || scope.Root == "" {
-		if t.designedWorkflow && scope != nil && scope.ThreadID != "" {
+		if designed && scope != nil && scope.ThreadID != "" {
 			return `{"checks":[{"label":"Human acceptance of the linked proposed approach","command":"workflow:approval","kind":"approval","reason":"Only approval of the exact linked decision satisfies this criterion; this is not execution or outcome verification."}],"summary":"Link this acceptance criterion to the specific decision requiring human review. Other requirements need their own verification."}`, nil
 		}
 		return "", ErrNoProject

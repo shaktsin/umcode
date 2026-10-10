@@ -17,6 +17,7 @@ import (
 	"github.com/shaktsin/umcode/internal/hooks"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
+	"github.com/shaktsin/umcode/internal/optimization"
 	"github.com/shaktsin/umcode/internal/policy"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/router"
@@ -171,6 +172,10 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	if err := validateSelection(p.Override); err != nil {
 		return protocol.Turn{}, protocol.Errorf(protocol.CodeInvalidParams, "%v", err)
 	}
+	opt, err := e.resolveOptimizationPolicy(ctx)
+	if err != nil {
+		return protocol.Turn{}, err
+	}
 	th, err := e.Store.GetThread(ctx, p.ThreadID)
 	if err != nil {
 		return protocol.Turn{}, err
@@ -189,7 +194,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 		ID: store.NewID("trn"), ThreadID: th.ID, Status: protocol.TurnRunning,
 		Selection: p.Override, Resolved: res.sel, AutoPicked: res.auto, StartedAt: time.Now().UTC(),
 	}
-	tctx, cancel := context.WithCancel(e.baseCtx)
+	tctx, cancel := context.WithCancel(optimization.WithPolicy(e.baseCtx, opt))
 	e.threadTurns[th.ID] = turn.ID
 	e.activeTurns[turn.ID] = &activeTurn{cancel: cancel, turn: turn}
 	if p.wait != nil {
@@ -411,7 +416,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	// turnItems is this thread's transcript, read once: the compiler reuses it
 	// for every model call in the loop instead of re-reading it each time.
 	var turnItems []protocol.Item
-	if e.Cfg != nil && e.Cfg.Models.ContextCompiler {
+	if e.Cfg != nil && e.optimizationPolicy(ctx).ContextCompiler {
 		if its, ierr := e.Store.ListItems(sctx, th.ID, 0); ierr == nil {
 			turnItems = its
 		} else {
@@ -430,7 +435,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 
 	var selection *turnSelection
 	var specs []llm.ToolSpec
-	if res.meta.Tools && e.Cfg.Models.ProgressiveTools {
+	if res.meta.Tools && e.optimizationPolicy(ctx).ProgressiveTools {
 		selection = e.startToolSelection(ctx, th, snapshot, proj, p.Text)
 		if selection.fatal {
 			finish(errors.New("tool catalog unavailable"))
@@ -460,7 +465,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 
 	var turnErr error
 	var reductions ToolReductions
-	if e.Cfg != nil && e.Cfg.Models.ToolResultReducers {
+	if e.Cfg != nil && e.optimizationPolicy(ctx).ToolResultReducers {
 		reductions = make(ToolReductions)
 	}
 	toolOccurrences := make(map[string]int)
@@ -1020,7 +1025,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 				return e.runDiscovery(ctx, sctx, turn, call, discovery)
 			}
 			p, err := e.currentSelectionProject(ctx, selection)
-			if err != nil || !e.permittedTool(candidate, p) {
+			if err != nil || !e.permittedToolFor(ctx, candidate, p) {
 				return e.selectionFailure(sctx, turn, call, tool.Name(), "tool is not permitted")
 			}
 			if !e.selectionToolAvailable(candidate) {
@@ -1040,17 +1045,21 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		}
 	}
 
+	if ok && tool.Name() == "work.update" && !e.optimizationPolicy(ctx).DesignedWorkflow {
+		return e.selectionFailure(sctx, turn, call, tool.Name(), "tool is not permitted")
+	}
+
 	if ok {
 		name = tool.Name()
 	}
 	invocation := hooks.Invocation{ProjectID: th.ProjectID, ThreadID: th.ID, TurnID: turn.ID, ToolName: name, ToolArgs: call.Args}
 	result := func(output string, isError bool, contextValues ...string) toolRunResult {
-		model, reduction := e.reduceToolResult(name, call.Args, output, isError)
+		model, reduction := e.reduceToolResultFor(ctx, name, call.Args, output, isError)
 		return toolRunResult{Output: output, ModelOutput: model, Reduction: reduction, IsError: isError, HookContext: contextValues}
 	}
 	var assessedRisk tools.Risk
 	var assessedSummary string
-	if e.Cfg.Models.DesignedWorkflow && ok && !workflowDiscoveryTool(name) {
+	if e.optimizationPolicy(ctx).DesignedWorkflow && ok && !workflowDiscoveryTool(name) {
 		assessedRisk, assessedSummary = tool.Assess(call.Args)
 		if assessor, ok := tool.(tools.ContextAssessor); ok {
 			assessedRisk, assessedSummary = assessor.AssessContext(ctx, call.Args)
@@ -1161,7 +1170,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	if selection := selectionFrom(ctx); selection != nil {
 		candidate, found := resolveTurnTool(selection.actual, call.Name)
 		p, policyErr := e.currentSelectionProject(ctx, selection)
-		if policyErr != nil || !found || !e.permittedTool(candidate, p) || !e.selectionToolAvailable(candidate) {
+		if policyErr != nil || !found || !e.permittedToolFor(ctx, candidate, p) || !e.selectionToolAvailable(candidate) {
 			it.Status, it.Tool.Error = protocol.ItemDenied, "tool is no longer permitted or available"
 			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
@@ -1192,10 +1201,10 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		toolCtx = tools.WithScope(ctx, &streamScope)
 	}
 	toolCtx, sink = tools.WithRawSink(toolCtx)
-	sink.CaptureExcerpts = e.Cfg.Models.ContextRetrieval && tools.IsFileObservationSource(tool)
+	sink.CaptureExcerpts = e.optimizationPolicy(ctx).ContextRetrieval && tools.IsFileObservationSource(tool)
 	var output string
 	workflowDenied := false
-	if updater, ok := tool.(tools.WorkflowUpdateTool); ok && e.Cfg.Models.DesignedWorkflow {
+	if updater, ok := tool.(tools.WorkflowUpdateTool); ok && e.optimizationPolicy(ctx).DesignedWorkflow {
 		// Internal graph updates need thread identity, independently of project
 		// attachment. Keep this scope local so other tools retain their existing
 		// no-project filesystem behavior.
@@ -1215,7 +1224,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		// Only the workflow-aware projectless planner needs thread identity.
 		// Keep ordinary tools on nil scope so configured-workspace routing and
 		// project-required capability checks retain their existing behavior.
-		if e.Cfg.Models.DesignedWorkflow && name == "verification.plan" && tools.ScopeFrom(toolCtx) == nil {
+		if e.optimizationPolicy(ctx).DesignedWorkflow && name == "verification.plan" && tools.ScopeFrom(toolCtx) == nil {
 			toolCtx = tools.WithScope(toolCtx, &tools.Scope{ThreadID: th.ID})
 		}
 		output, err = tool.Call(toolCtx, call.Args)

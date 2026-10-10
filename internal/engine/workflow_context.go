@@ -15,7 +15,7 @@ import (
 const maxWorkflowIdentityBytes = 64 * 1024
 
 func (e *Engine) workflowIdentityLayer(ctx context.Context, threadID string) (promptLayer, error) {
-	if e.Cfg == nil || !e.Cfg.Models.DesignedWorkflow {
+	if e.Cfg == nil || !e.optimizationPolicy(ctx).DesignedWorkflow {
 		return promptLayer{}, nil
 	}
 	w, ok, err := e.Store.OpenWorkForThread(ctx, threadID)
