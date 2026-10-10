@@ -4,12 +4,14 @@
   import ComplexityTab from './settings/Complexity.svelte';
   import Engine from './settings/Engine.svelte';
   import ComputerUse from './settings/ComputerUse.svelte';
+ import TokenOptimization from './settings/TokenOptimization.svelte';
 
   const tabs = [
     { id: 'keys', label: 'API keys' },
     { id: 'models', label: 'Models' },
     { id: 'complexity', label: 'Complexity' },
     { id: 'computer-use', label: 'Computer Use' },
+ { id: 'optimization', label: 'Token optimization' },
     { id: 'engine', label: 'Engine & app' },
   ] as const;
   let tab = $state<(typeof tabs)[number]['id']>('keys');
@@ -29,5 +31,6 @@
 {:else if tab === 'models'}<Models />
 {:else if tab === 'complexity'}<ComplexityTab />
 {:else if tab === 'computer-use'}<ComputerUse />
+{:else if tab === 'optimization'}<TokenOptimization />
 {:else}<Engine />
 {/if}
