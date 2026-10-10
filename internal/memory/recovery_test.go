@@ -305,3 +305,48 @@ func TestRecoveryPanicReleasesProjectLock(t *testing.T) {
 		t.Fatal("later promotion blocked after recovery panic")
 	}
 }
+
+func TestRecoveryRejectsExistenceChanges(t *testing.T) {
+	for _, existed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "independent creation", true: "independent deletion"}[existed], func(t *testing.T) {
+			s, st, req := serviceFixture(t)
+			abs := filepath.Join(req.Project.Root, "UMCODE.md")
+			if existed {
+				if err := os.WriteFile(abs, []byte{}, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.boundary = func(at string) error {
+				if at == "rename" {
+					return errors.New("interrupt")
+				}
+				return nil
+			}
+			if r := s.PromoteCompleted(t.Context(), req); r.Pending != 1 {
+				t.Fatalf("prepare=%+v", r)
+			}
+			if existed {
+				if err := os.Remove(abs); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(abs, []byte{}, 0600); err != nil {
+				t.Fatal(err)
+			}
+			s.boundary = nil
+			if r := s.Recover(t.Context()); r.Conflicted != 1 || r.Promoted != 0 {
+				t.Fatalf("existence change accepted: %+v", r)
+			}
+			if r := s.Recover(t.Context()); !reflect.DeepEqual(r, Report{}) {
+				t.Fatalf("repeat=%+v", r)
+			}
+			b, err := os.ReadFile(abs)
+			if existed && !os.IsNotExist(err) || !existed && (err != nil || len(b) != 0) {
+				t.Fatalf("third state changed: %q %v", b, err)
+			}
+			changes, err := st.ListFileChanges(t.Context(), req.Project.ID, "", "", 100)
+			if err != nil || len(changes) != 0 {
+				t.Fatalf("history=%+v %v", changes, err)
+			}
+		})
+	}
+}

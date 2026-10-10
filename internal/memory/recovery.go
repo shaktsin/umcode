@@ -62,7 +62,9 @@ func (s *Service) Recover(ctx context.Context) Report {
 			}
 			defer target.close()
 			hash := memoryHash(target.before)
-			if hash != op.FileHashBefore && hash != op.FileHashAfter {
+			beforeMatches := hash == op.FileHashBefore && (target.before == nil) == (op.BeforeBytes == nil)
+			afterMatches := hash == op.FileHashAfter && (target.before == nil) == (op.AfterBytes == nil)
+			if !beforeMatches && !afterMatches {
 				fail(store.ErrMemoryConflict, ReasonCompareAndSwap)
 				return
 			}
@@ -70,7 +72,7 @@ func (s *Service) Recover(ctx context.Context) Report {
 				err = target.check(hash)
 			}
 			retried := false
-			if err == nil && hash == op.FileHashBefore && hash != op.FileHashAfter {
+			if err == nil && beforeMatches && !afterMatches {
 				retried = true
 				report.RecoveryRetried++
 				err = target.replace(op.AfterBytes, s.step)
