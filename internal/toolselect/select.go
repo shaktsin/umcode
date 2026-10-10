@@ -123,6 +123,9 @@ func (s *State) addSignals(signals Signals, initial bool) {
 			s.loaded[e.CanonicalName] = true
 		}
 	}
+	if !initial && s.reportLocked().Additions > 64 {
+		s.fallbackLocked("addition_cap")
+	}
 	s.phase = phase
 	sum := sha256.Sum256([]byte(phase))
 	s.report.PhaseID = hex.EncodeToString(sum[:8])

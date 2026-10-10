@@ -2,6 +2,7 @@ package toolselect
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -104,5 +105,25 @@ func TestSelectionBoundedMetadata(t *testing.T) {
 		if r.Fallback == "" || len(s.Specs()) != len(c.Entries) {
 			t.Fatal("unsafe selection did not fallback")
 		}
+	}
+}
+
+func TestSelectionPhaseAdditionsCap(t *testing.T) {
+	var entries []Entry
+	for i := 0; i < 65; i++ {
+		entries = append(entries, entry(fmt.Sprintf("browser%d.inspect", i), "browser"))
+	}
+	entries = append(entries, entry("other.action", "other"))
+	c, err := NewCatalog(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _, err := Start(c, Signals{Request: "implement parser"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := s.Advance(Signals{Request: "implement parser", PlannedCheckFamilies: []string{"browser"}})
+	if r.Fallback != "addition_cap" || !specNames(s)["other__action"] {
+		t.Fatalf("phase/session additions escaped bounded fallback: %+v", r)
 	}
 }
