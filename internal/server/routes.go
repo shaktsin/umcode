@@ -22,7 +22,8 @@ type handler func(ctx context.Context, c *conn, params json.RawMessage) (any, er
 func bind[P any](fn func(ctx context.Context, c *conn, p P) (any, error)) handler {
 	return func(ctx context.Context, c *conn, raw json.RawMessage) (any, error) {
 		var p P
-		if len(raw) > 0 && string(raw) != "null" {
+		_, strict := any(&p).(json.Unmarshaler)
+		if strict || len(raw) > 0 && string(raw) != "null" {
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return nil, protocol.Errorf(protocol.CodeInvalidParams, "invalid params: %v", err)
 			}

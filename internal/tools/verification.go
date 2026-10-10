@@ -62,7 +62,7 @@ func (t *verificationPlan) Call(ctx context.Context, _ json.RawMessage) (string,
 	}
 	if scope == nil || scope.Root == "" {
 		if automatic && scope != nil && scope.ThreadID != "" {
-			return `{"checks":[],"summary":"No executable project checks are available in this chat. Verify claims with supporting evidence; do not create an internal human approval criterion. Report execution checks as not run."}`, nil
+			return `{"checks":[{"label":"Evidence-linked approach and completed deliverable","command":"workflow:evidence","kind":"evidence","reason":"Link this non-executable criterion to the selected decision and deliverable tasks. Completion requires supporting observed evidence and completed tasks; it is neither human acceptance nor an execution test pass."}],"summary":"No executable project checks are available. Link the evidence criterion to the approach and tasks; report execution checks as not run."}`, nil
 		}
 		if designed && scope != nil && scope.ThreadID != "" {
 			return `{"checks":[{"label":"Human acceptance of the linked proposed approach","command":"workflow:approval","kind":"approval","reason":"Only approval of the exact linked decision satisfies this criterion; this is not execution or outcome verification."}],"summary":"Link this acceptance criterion to the specific decision requiring human review. Other requirements need their own verification."}`, nil

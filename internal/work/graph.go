@@ -1007,7 +1007,7 @@ func CompletionBlockers(d protocol.WorkDetail) []string {
 	filtered := d
 	filtered.Nodes = nil
 	for _, n := range d.Nodes {
-		if n.Kind == protocol.NodeCriterion && active(n) && required(n) {
+		if n.Kind != protocol.NodeCriterion || active(n) && required(n) {
 			filtered.Nodes = append(filtered.Nodes, n)
 		}
 	}

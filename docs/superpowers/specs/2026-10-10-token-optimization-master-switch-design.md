@@ -58,4 +58,4 @@ This work adds the global control and consistent runtime behavior. It does not c
 
 ## Review status
 
-Written spec accepted by the user. Implementation plan written separately and awaiting review/execution selection; product implementation has not started.
+Written spec and implementation plan accepted; user selected Native execution. All six implementation tasks are implemented. One independent whole-branch review identified three Important findings, reproduced with failing tests and fixed in one pass: projectless evidence verification and legacy criteria migration, missing/null settings parameters, and preserving commented user instructions when generated memory is omitted. Completion checks are recorded in the implementation plan. Phase 6a evaluation remains separately pending.

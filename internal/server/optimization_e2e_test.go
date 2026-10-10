@@ -35,6 +35,16 @@ func TestTokenOptimizationRPC(t *testing.T) {
 		}
 	}
 
+	h.call(protocol.MethodTokenOptimizationSet, protocol.TokenOptimizationParams{Enabled: true}, &r)
+	for _, invalid := range []any{nil, json.RawMessage(`null`)} {
+		if err := h.callErr(protocol.MethodTokenOptimizationSet, invalid); err == nil {
+			t.Fatal("null/omitted params accepted")
+		}
+	}
+	h.call(protocol.MethodTokenOptimizationGet, struct{}{}, &r)
+	if !r.Enabled {
+		t.Fatal("invalid request changed saved setting")
+	}
 }
 
 func TestOptimizationBundleAcrossChats(t *testing.T) {
@@ -228,5 +238,53 @@ func TestOptimizationPreservesActionDenial(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("action denial not recorded")
+	}
+}
+
+func TestAutomaticProjectlessWorkflow(t *testing.T) {
+	for _, resumed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh", true: "resumed"}[resumed], func(t *testing.T) {
+			h := newHarness(t, nil)
+			captureWorkflowRequests(h)
+			h.addKey("claude", "projectless", "sk-1")
+			var th protocol.Thread
+			h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{Title: "projectless"}, &th)
+			h.call(protocol.MethodThreadSetSettings, protocol.ThreadSetSettingsParams{ThreadID: th.ID, Settings: protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-5", Complexity: "standard"}}, &th)
+			if resumed {
+				h.eng.Cfg.Models.DesignedWorkflow = true
+				h.fake.push(toolReply("verification__plan", `{}`), textReply("Inspected."))
+				runWorkTurn(h, th, "design a new architecture")
+				h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, false, "") }), textReply("Approach recorded."))
+				runWorkTurn(h, th, "continue")
+			}
+			var saved protocol.TokenOptimizationResult
+			h.call(protocol.MethodTokenOptimizationSet, protocol.TokenOptimizationParams{Enabled: true}, &saved)
+			h.fake.push(toolReply("verification__plan", `{}`), textReply("Inspected."))
+			runWorkTurn(h, th, "design a new architecture")
+			if !resumed {
+				h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+					r := solutionBatch(t, d, true, "")
+					r.Nodes[1].ToStatus = "approved"
+					return r
+				}))
+			}
+			h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+				return taskTransition(t, d, "Write notes", "in_progress")
+			}), workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
+				return taskTransition(t, d, "Write notes", "completed")
+			}), textReply("Design supported by inspected evidence. Execution checks not run."))
+			turn, _ := workflowTurn(h, th, func(protocol.Approval) bool { t.Error("unexpected approval"); return false })
+			if turn.Status != protocol.TurnCompleted {
+				t.Fatal(turn)
+			}
+			d := workflowDetail(h, th.ID)
+			if d.Work.Status != protocol.WorkCompleted {
+				t.Fatalf("not completed: %+v blockers=%v", d, work.CompletionBlockers(d))
+			}
+			if len(d.Attempts) != 0 {
+				t.Fatal("manufactured execution attempt")
+			}
+
+		})
 	}
 }

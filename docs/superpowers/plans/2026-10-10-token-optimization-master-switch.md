@@ -112,4 +112,28 @@ RPC result fields: `Enabled bool`, `Source string` (`stored`, `legacy`, `default
 
 ## Execution handoff
 
-Recommend Native execution because these six tasks share the same turn-policy and graph-provenance interfaces; keeping one implementer reduces coordination cost. One independent whole-branch review is still required. User review of this plan and execution method selection are pending. The separately pending Phase 6a spec is not implicitly approved by accepting this master-switch spec.
+Recommend Native execution because these six tasks share the same turn-policy and graph-provenance interfaces; keeping one implementer reduces coordination cost. One independent whole-branch review is still required. The user accepted the plan and selected Native execution. The separately pending Phase 6a spec is not implicitly approved by accepting this master-switch spec.
+
+
+## Implementation and review record
+
+Tasks 1–6 implemented on `codex/phase6a-evaluation-design` in the existing isolated worktree. Product commits: `9e86e23`, `069461e`, `33c60c3`, `a8c9422`, `2de08d2`, `6178eea`, `8ac9cd9`, followed by the final review fixes.
+
+One independent review returned three Important findings, no Critical/Minor findings and no declined judgments. All three were reproduced RED and fixed GREEN in one pass; fresh and resumed projectless integration, missing/null RPC parameters, and user instructions with HTML comments now pass. Added a live action-approval test combining a global toggle with permission revocation; execution remains denied.
+
+Implementation rulings:
+- Recovered workflow decisions stay proposed until explicit model resolution; orphan internal requests expire with an audit reason. This avoids fabricated human authorization. Cost if wrong: an extra model round to repair readiness.
+- Register the workflow tool unconditionally and gate effective visibility/use per turn, enabling runtime toggles. Cost if wrong: a small hidden tool allocation.
+- Construct an inert memory service at startup and gate all recovery/promotion I/O. Cost if wrong: a small inert service allocation.
+- Projectless automatic plans use a non-executable evidence criterion linked to supported decisions and completed tasks; replacement reconnects legacy criterion edges. No execution attempt or human approval is fabricated. Cost if wrong: evidence obligations can keep a design chat open until repaired.
+- The broad engine/Work race run exceeded its 10-minute timeout without a data-race report. Use targeted race checks of policy snapshots, automatic workflow, settings, and live approval revocation. Cost if wrong: races outside these exercised paths are not excluded by that run.
+
+Validation results are appended after final verification. Frontend `npm run check` found 0 errors/0 warnings; `npm test` passed 16 tests across 5 files; `npm run build` passed. UI verification covered fresh-off, saved-on, failed-save retaining saved state, and legacy mixed configuration using a disposable local engine. No paid evaluations ran and rollout defaults are unchanged.
+
+Final verification (after review fixes):
+- `GOCACHE=/private/tmp/umcode-go-cache go test ./... -count=1 -timeout=10m`: PASS, all packages.
+- `GOCACHE=/private/tmp/umcode-go-cache go vet ./...`: PASS.
+- `GOCACHE=/private/tmp/umcode-go-cache go test -race ./internal/engine ./internal/server -run 'TestOptimizationTurn|TestOptimizationToggleDuringApproval|TestAutomaticWorkflow|TestTokenOptimizationRPC|TestAutomaticProjectlessWorkflow|TestOptimizationTurnAdmissionSnapshot' -count=1 -timeout=5m`: PASS (engine 47.584s; server 60.338s).
+- `git diff --check`: PASS.
+
+No deferred minor review findings. Branch retained for the user's integration choice; no publication performed.

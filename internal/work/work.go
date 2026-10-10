@@ -535,6 +535,9 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 		if c.Kind == "browser" {
 			metadata["check_type"] = "browser"
 		}
+		if c.Kind == "evidence" && c.Command == "workflow:evidence" && o.Root == "" && s.optimizationPolicy(ctx).AutomaticWorkflow {
+			metadata["check_type"] = "evidence"
+		}
 		content, _ := json.Marshal(metadata)
 		title := c.Label
 		if title == "" {
@@ -544,6 +547,24 @@ func (s *Service) recordPlan(ctx context.Context, d protocol.WorkDetail, o Obser
 			Content: content, Status: "pending", ValidFrom: now, CreatedAt: now, UpdatedAt: now})
 		if err != nil {
 			return err
+		}
+
+		// Reconnect obligations from the retired engine-owned projectless
+		// approval criterion. This never records a pass or approves a decision.
+		if c.Command == "workflow:evidence" && o.Root == "" && s.optimizationPolicy(ctx).AutomaticWorkflow {
+			old := map[string]bool{}
+			for _, prior := range d.Nodes {
+				if prior.Kind == protocol.NodeCriterion && criterionCommand(prior) == "workflow:approval" {
+					old[prior.ID] = true
+				}
+			}
+			for _, edge := range d.Edges {
+				if old[edge.FromNodeID] && edge.Relation == protocol.RelVerifies {
+					if err := s.Store.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: n.ID, Relation: protocol.RelVerifies, ToNodeID: edge.ToNodeID}); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		if hasGoal {
 			if err := s.Store.AddWorkEdge(ctx, protocol.WorkEdge{WorkID: d.Work.ID, FromNodeID: goal.ID, Relation: protocol.RelRequires, ToNodeID: n.ID}); err != nil {

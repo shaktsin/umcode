@@ -212,6 +212,10 @@ func memoryEOL(current []byte) string {
 // Parsing keeps raw offsets; only CRLF line terminators are normalized for
 // comparison. Ambiguous managed syntax is never repaired automatically.
 func parseMemorySection(current []byte) (memorySection, bool) {
+	return parseMemorySectionFor(current, false)
+}
+
+func parseMemorySectionFor(current []byte, projection bool) (memorySection, bool) {
 	s := memorySection{marker: -1}
 	heading := -1
 	var fence byte
@@ -242,7 +246,8 @@ func parseMemorySection(current []byte) (memorySection, bool) {
 		// Raw HTML can change Markdown interpretation across later blank lines.
 		// Conservatively decline these documents rather than claim ownership
 		// of headings or bullets inside an HTML example/block.
-		if strings.HasPrefix(strings.TrimSpace(text), "<") && line.text != managedMarker {
+		ordinaryComment := projection && strings.HasPrefix(strings.TrimSpace(text), "<!--") && strings.HasSuffix(strings.TrimSpace(text), "-->") && strings.Count(text, "<!--") == 1 && !strings.Contains(strings.ToLower(text), "umcode:")
+		if strings.HasPrefix(strings.TrimSpace(text), "<") && line.text != managedMarker && !ordinaryComment {
 			return memorySection{}, false
 		}
 		if len(text) > 0 && (text[0] == '`' || text[0] == '~') {
@@ -311,7 +316,7 @@ func WithoutGeneratedMemory(data []byte) []byte {
 	if !bytes.Contains(data, []byte(managedMarker)) {
 		return data
 	}
-	section, ok := parseMemorySection(data)
+	section, ok := parseMemorySectionFor(data, true)
 	if !ok {
 		return []byte("Instruction file has ambiguous generated memory boundaries; inspect it explicitly before acting.\n")
 	}
