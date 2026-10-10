@@ -43,6 +43,41 @@ func (s *Store) GetProjectMemory(ctx context.Context, id string) (protocol.Proje
 	return m, err
 }
 
+// ListProjectMemories loads all active semantic identities, across target files.
+func (s *Store) ListProjectMemories(ctx context.Context, projectID string) ([]protocol.ProjectMemory, error) {
+	return activeMemories(ctx, s.DB, projectID)
+}
+
+// GetMemoryPromotionOp supplies exact persisted snapshots to the strict recorder.
+func (s *Store) GetMemoryPromotionOp(ctx context.Context, id string) (protocol.MemoryPromotionOp, error) {
+	op, err := scanMemoryPromotionOp(s.DB.QueryRowContext(ctx, `SELECT `+memoryPromotionOpCols+` FROM memory_promotion_ops WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return op, ErrNotFound
+	}
+	return op, err
+}
+
+// SetMemoryCandidateOutcome curates only the expected pending candidate of a
+// completed Work; it cannot change a candidate reserved by a prepared operation.
+func (s *Store) SetMemoryCandidateOutcome(ctx context.Context, workID, candidateID string, revision int, status string) error {
+	if status != protocol.MemoryOutcomeRejected && status != protocol.MemoryOutcomeStale && status != protocol.MemoryOutcomeConflicted {
+		return ErrMemoryStale
+	}
+	res, err := s.DB.ExecContext(ctx, `UPDATE work_nodes SET status=?, revision=revision+1, updated_at=?
+ WHERE id=? AND work_id=? AND kind='memory_candidate' AND status='pending' AND revision=?
+ AND valid_until IS NULL AND superseded_by = ''
+ AND EXISTS (SELECT 1 FROM works WHERE id=? AND status='completed')
+ AND NOT EXISTS (SELECT 1 FROM memory_promotion_ops WHERE candidate_node_id=? AND state IN ('prepared','file_written','pending_repair'))`, status, Now(), candidateID, workID, revision, workID, candidateID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n != 1 {
+		return ErrMemoryStale
+	}
+	return err
+}
+
 // ListActiveProjectMemories returns generated entries for one project file.
 func (s *Store) ListActiveProjectMemories(ctx context.Context, projectID, targetPath string) ([]protocol.ProjectMemory, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+projectMemoryCols+` FROM project_memories

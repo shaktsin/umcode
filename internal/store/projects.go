@@ -210,6 +210,13 @@ type FileChange struct {
 
 // RecordFileChange stores one edit.
 func (s *Store) RecordFileChange(ctx context.Context, c FileChange) (int64, error) {
+	id, _, err := s.RecordFileChangeOnce(ctx, c)
+	return id, err
+}
+
+// RecordFileChangeOnce reports whether this call inserted the idempotent row.
+// Promotion recorders emit only for that first successful insertion.
+func (s *Store) RecordFileChangeOnce(ctx context.Context, c FileChange) (int64, bool, error) {
 	res, err := s.DB.ExecContext(ctx, `INSERT INTO file_changes
 		(project_id, thread_id, turn_id, item_id, path, action, before_blob, after_hash, additions, deletions, revertable, created_at, promotion_op_id)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -217,14 +224,19 @@ func (s *Store) RecordFileChange(ctx context.Context, c FileChange) (int64, erro
 		c.ProjectID, c.ThreadID, c.TurnID, c.ItemID, c.Path, c.Action, c.Before, c.AfterHash,
 		c.Additions, c.Deletions, b2i(c.Revertable), FormatTime(time.Now().UTC()), c.PromotionOpID)
 	if err != nil {
-		return 0, err
+		return 0, false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, false, err
 	}
 	if c.PromotionOpID != "" {
 		var id int64
 		err := s.DB.QueryRowContext(ctx, `SELECT id FROM file_changes WHERE promotion_op_id = ?`, c.PromotionOpID).Scan(&id)
-		return id, err
+		return id, n != 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	return id, n != 0, err
 }
 
 // ListFileChanges returns recorded edits, newest first. turnID or projectID may
