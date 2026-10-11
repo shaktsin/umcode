@@ -151,9 +151,6 @@ venv.bak/
 # Rope project settings
 .ropeproject
 
-# mkdocs documentation
-/site
-
 # mypy
 .mypy_cache/
 .dmypy.json
@@ -248,7 +245,8 @@ package-lock.json
 
 # Project-specific: keep out of version control
 CLAUDE.md
-.github/
+.github/*
+!.github/workflows/
 
 # Go engine build output
 /bin/
