@@ -1,15 +1,16 @@
 # Phase 6a: Paired Evaluation and Release Gates
 
 Date: 2026-10-10
-Status: Written design for user review; implementation is not authorized by this document.
-Base: master after merged PR #52 (`7c345cb`).
+Revised: 2026-10-11
+Status: Phase 6a harness implemented and verified on 2026-10-11. One independent review completed; material findings fixed. See `../plans/2026-10-11-phase6a-completion.md` for evidence, rulings and qualification limitations. Live release qualification, isolated specialist adapters, Phase 6b and Phase 6c remain outstanding.
+Base: master `018c069`, including merged PR #53 (`fdea0b2`).
 Parent: `2026-09-30-quality-first-token-efficiency-design.md`.
 
 ## Intent and approved understanding
 
 Prove that the merged token optimizations preserve task quality and reduce the cost of successful work before enabling defaults. The user approved one shared evaluation harness with deterministic and opt-in live-provider runners, isolated paired state, category-level comparisons and pass/fail/inconclusive verdicts. Deterministic tests provide inexpensive regression coverage; live runs provide actual provider effectiveness and usage evidence. Failures remain in cost reporting, and missing measurements or review cannot become a release pass.
 
-Phase 6 is delivered as independently reviewed slices: 6a evaluation, 6b quiet inspection/memory/storage UI, and 6c staged rollout. This spec covers 6a only. It does not enable flags, run paid experiments during implementation, modify production routing, add UI, or authorize opt-in/canary/default rollout. Normal chat remains unchanged.
+Phase 6 is delivered as independently reviewed slices: 6a evaluation, 6b quiet inspection/memory/storage UI, and 6c staged rollout. This spec covers 6a only. It does not enable flags, run paid experiments during implementation, modify production routing, add UI, or authorize opt-in/canary/default rollout. The product keeps one master switch: when enabled, all components operate automatically without individual opt-ins or internal workflow approvals. Existing action permissions and explicit user requests for review remain effective. Evaluation never changes the user’s saved switch or rollout defaults.
 
 ## Alternatives and chosen approach
 
@@ -25,12 +26,13 @@ Reuse Go, the existing engine/provider registry and numbered store migrations. A
 - `engine.New`, project/thread/turn APIs and the event bus provide the normal lifecycle. Evaluation uses the engine directly, never the user's running daemon or production store.
 - `llm.Usage` distinguishes reported from missing usage and subscription from token billing. Aggregated `UsageTotals` alone loses information needed to qualify cost gates.
 - `RequestBreakdown`, retrieval reports and progressive selection reports already estimate request layers. Their values explain changes; they cannot replace provider usage.
-- Existing config flags independently control compiler, retrieval, reducers, progressive tools, Designed workflow and memory promotion, subject to existing dependencies.
+- PR #53 resolves the persisted master setting into an immutable per-turn `optimization.Policy`, including `AutomaticWorkflow`. Legacy YAML flags remain a migration fallback only; they do not represent the complete automatic product.
+- Turn admission derives its context from the engine base context. Supplying `optimization.WithPolicy` on a caller context alone does not override the admitted turn; evaluation must use the explicit isolated adapter described below.
 
 Proposed boundaries:
 
 - `internal/evaluation`: versioned manifest/result contracts, validation, scheduling, accounting aggregation, evidence scoring, statistical gates and JSON/Markdown reports. No dependency on engine; execution is a runner interface.
-- `internal/engine/evaluation.go`: adapter to create isolated engines and run fixture sequences through normal public lifecycle. A small optional request observer records bounded accounting, usage availability, attempts and outcomes. It is absent in normal operation and cannot change request contents, permissions or dispatch.
+- `internal/engine/evaluation.go`: adapter to create isolated engines and run fixture sequences through normal public lifecycle. A private immutable policy override, available only when this adapter constructs an isolated evaluation engine, supports component ablations. Primary product comparisons instead use persisted master settings through normal engine APIs. A small optional request observer records bounded accounting, usage availability, attempts and outcomes. It is absent in normal operation and cannot change request contents, permissions or dispatch.
 - `cmd/umcode-eval`: explicit validate/run/review/report commands, signal handling and run-directory ownership. This command imports the pure package and engine adapter.
 - Checked-in fixture manifests and source trees under `internal/evaluation/testdata`; live task sets use the same schema. Run artifacts belong to an explicitly supplied output directory and are never committed automatically.
 
@@ -79,20 +81,28 @@ The ceiling is a scheduling bound based on the frozen price snapshot, not a guar
 
 ## Feature arms and attribution
 
+The primary release comparison is **explicit master-off versus explicit master-on** on the same build. Set the persisted setting in each isolated store through the normal engine API before starting a turn; do not infer these states from missing settings or legacy YAML. Master-on must resolve all six components plus automatic workflow exactly as shipped in PR #53. Record the effective policy on each admitted turn and every restart. Dedicated toggle/revocation fixtures declare their setting-change sequence and produce regression evidence; they are separate from steady-policy release comparisons.
+
 Required current-build arms:
 
-| Arm | Enabled optimizations |
+| Arm | Effective policy |
 | --- | --- |
-| history baseline | All six feature flags off |
+| history baseline | Explicit master-off; all components and automatic workflow off |
 | compiler | Compiler only |
 | retrieval | Compiler + retrieval; compare against compiler |
 | reducers | Reducers only |
 | progressive tools | Progressive tools only |
-| Designed workflow | Designed workflow only |
-| curated memory | Designed workflow + memory promotion; compare against Designed workflow |
-| complete candidate | All six flags on |
+| automatic workflow | Designed workflow + automatic workflow |
+| curated memory | Designed workflow + automatic workflow + promotion; compare against automatic workflow |
+| complete candidate | Explicit master-on; all six components + automatic workflow |
 
-Also compare the complete candidate with each component removed; removing compiler also removes retrieval, and removing Designed workflow also removes promotion. Deduplicate identical configurations and label dependency-group removals explicitly. No invalid configuration is silently repaired. Measure `work.update` and discovery schemas/calls, memory injection, preparation turns and failures inside their complete task sequences.
+Component arms are evaluation-only immutable policies. The adapter installs one validated policy for the lifetime of its isolated engine and reapplies the same value when reopening that arm's engine. Do not mutate shared config/services, add component toggles to product settings, expose an override RPC/CLI on the ordinary daemon, or temporarily change a running user engine. The private override is resolved at turn admission before the context snapshot is created. It must remain identical across all turns of a task, and persisted master state must remain unchanged during ablation. Results distinguish persisted product settings from evaluation overrides so an ablation cannot be misreported as a user-selectable product mode.
+
+Dependencies: retrieval requires compiler; promotion requires Designed workflow; automatic workflow requires Designed workflow. All evaluation arms with Designed workflow also enable automatic workflow. Legacy human-gated workflow is not a release treatment or a standalone component arm. Reject invalid combinations before staging; never repair them silently.
+
+Also compare the complete candidate with each component removed. Removing compiler also removes retrieval; removing Designed workflow also removes automatic workflow and promotion. Deduplicate identical configurations and label dependency-group removals explicitly. Measure `work.update` and discovery schemas/calls, memory injection, preparation turns, recovery and failures inside complete task sequences. Attribute automatic workflow and Designed graph behavior as one component group rather than claiming separately identified causal savings.
+
+The manifest supplies a deterministic fixture-owned response policy for ordinary action permissions, identical in both arms. This policy never auto-grants a revoked permission. Under master-on, an unexpected optimization-specific activation, design/planning approval or internal memory-promotion prompt fails the fixture rather than being automatically approved or ignored. An explicit task requirement for human review remains an intentional review boundary; do not count it as unwanted friction. Blind campaign grading is an offline evaluation step, not a product chat approval.
 
 Root/nested `UMCODE.md` loading, automatic Work recording and vault lifecycle are already unconditional in the current build. They remain constant in these comparisons. The parent spec's historical instruction/Work/evidence ablations and adaptive-routing experiment cannot honestly be produced by toggling today's flags. Record them as `unsupported` with reasons; do not add unsafe foreign-instruction loading, disable auditing, invent savings or change model routing merely to manufacture arms. A future separately approved reference runner can address those historical comparisons.
 
@@ -100,7 +110,7 @@ Reports distinguish current-candidate gates from parent-program coverage. An oth
 
 ## Task categories and quality scoring
 
-Initial fixture coverage includes repository bug fixes/features, long-context recovery, repeated multi-turn work/memory, tool-heavy specialist discovery, verification failures/stale evidence, restart/provider-fallback recovery, and permission/injection adversarial cases. Security, data-integrity and destructive-operation cases are explicitly high-risk and operate solely on disposable fixtures.
+Initial fixture coverage includes repository bug fixes/features, long-context recovery, repeated multi-turn work/memory, tool-heavy specialist discovery, verification failures/stale evidence, restart/provider-fallback recovery, and permission/injection adversarial cases. Include fresh and resumed projectless design tasks, legacy internal approval/criterion recovery, and global-setting changes while a turn is active or awaiting action approval. Security, data-integrity and destructive-operation cases are explicitly high-risk and operate solely on disposable fixtures.
 
 Each task defines acceptance checks before execution. Primary binary success requires all mandatory checks, no safety violation, no required context omission affecting the outcome, no stale evidence used as current authority and no unsupported completion claim. A completed turn or self-reported passing test is insufficient.
 
@@ -151,7 +161,10 @@ Each gate is pass, fail or inconclusive, with counts, denominators, threshold an
 Before implementation completion, test:
 
 - Strict manifest bounds, dependency validation, paired-config equality and deterministic scheduling.
-- Per-arm isolation including multi-turn memory persistence, restart and cleanup ownership.
+- Per-arm isolation including multi-turn memory persistence, restart and cleanup ownership; primary arms use persisted master settings, ablation overrides remain private and cannot write or leak into product settings.
+- All seven effective policy fields at admission/restart, dependency rejection, and stable turn snapshots under a master toggle. An action permission revoked during a live approval wait still prevents execution.
+- Zero unexpected optimization-specific prompts under master-on, preserved explicit human-review requirements, and fresh/resumed projectless completion without fabricated execution attempts or human provenance.
+- Agent decisions cannot become user-authority memory; master-off excludes generated memory while preserving user-written instructions and stops promotion. Existing stored history remains intact.
 - Real engine file-edit/verification and discovery fixtures under the declared arm matrix.
 - Stream forwarding/cancellation, every failed/retried attempt accounted, missing usage and subscription handling.
 - Budget reservation exhaustion, interruption/resume, no dispatch in validate/report or non-live mode.
@@ -172,3 +185,5 @@ This slice delivers a way to measure release readiness, not a claim that UMCode 
 ## Spec self-review
 
 Checked the selected architecture against the approved brief and current engine seams. No product code changes or live calls are part of this stage. The design explicitly distinguishes current-build flag comparisons from unsupported historical/routing arms, synthetic from reported usage, complete-task from common-success costs, and regression from release qualification. Existing dependencies remain mandatory. Increased the suite task bound to 10,000 so conservative per-stratum confidence requirements are not made unreachable by the input cap. Defined review scale, mandatory safety failure behavior and subscription preflight handling to remove ambiguous verdict/billing cases. No unresolved placeholders remain.
+
+Revision after PR #53: primary arms now exercise explicit persisted master-off/on; ablations carry a private immutable seven-field policy through turn admission and restart. Designed workflow and its automatic behavior are measured together. Added prompt-friction, projectless recovery, provenance, generated-memory exclusion, and live permission-revocation fixtures. These changes preserve the existing quality/efficiency thresholds and do not authorize live spending or product implementation.

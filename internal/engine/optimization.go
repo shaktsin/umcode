@@ -54,6 +54,9 @@ func (e *Engine) SetTokenOptimization(ctx context.Context, p protocol.TokenOptim
 	return protocol.TokenOptimizationResult{Enabled: p.Enabled, Source: "stored"}, nil
 }
 func (e *Engine) resolveOptimizationPolicy(ctx context.Context) (optimization.Policy, error) {
+	if e.evaluationPolicy != nil {
+		return *e.evaluationPolicy, nil
+	}
 	p, _, err := e.optimizationSetting(ctx)
 	return p, err
 }

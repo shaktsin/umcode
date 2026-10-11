@@ -283,7 +283,7 @@ func (o *OpenAI) Stream(ctx context.Context, cred Credential, req Request) (<-ch
 			err = streamErr
 		}
 		if err != nil {
-			ch <- Event{Type: EventError, Err: err}
+			ch <- Event{Type: EventError, Err: err, Usage: usage}
 			return
 		}
 		idx := make([]int, 0, len(calls))

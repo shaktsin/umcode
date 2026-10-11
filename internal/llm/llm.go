@@ -241,3 +241,12 @@ func (r *Registry) IDs() []string {
 
 // EstimateTokens is a rough fallback (≈4 characters per token).
 func EstimateTokens(s string) int64 { return int64(len(s)+3) / 4 }
+
+// EffectiveOutputLimit returns the maximum output sent on the provider wire.
+// Evaluation uses this before reserving a bounded dispatch.
+func EffectiveOutputLimit(provider string, req Request) int {
+	if provider == "claude" {
+		return buildAnthropicRequest(req).MaxTokens
+	}
+	return req.MaxTokens
+}

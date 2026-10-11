@@ -1,0 +1,47 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-10-11-phase6a-paired-evaluation.md
+Execution: Native approved by user proceed. Existing isolated worktree, branch codex/phase6a-evaluation-spec. Base 1bc4ae3.
+Tasks: 1–9 complete. One independent whole-branch review; nine material findings reproduced and fixed in one pass; final full suite/race/vet/diff checks pass.
+Pre-flight: 1→2 Manifest/Unit/RunInput/Runner and immutable optimization.Policy match.
+Pre-flight: 1,2→3 Attempt sink and TaskResult match; provider metadata copy requires dispatch reservation callback added in Task 4 before live dispatch.
+Pre-flight: 1,2,3→4 Schedule/Stage/Runner/Attempt match.
+Pre-flight: 1→5 Task/CheckResult; 1,4→6 Campaign/ReviewRevision match.
+Pre-flight: 1,3,4,6→7 Campaign/UsageSummary/review revision match.
+Pre-flight: 1–7→8 CLI composition; 1–8→9 actual fixture adapter integration match.
+Ruling: RunInput also carries BeforeAttempt(ctx, dispatchID, maximumUSD) callback — an after-attempt sink alone cannot durably reserve funds before paid dispatch — cost if wrong: additional adapter interface to maintain.
+Task 1: complete (commits 1bc4ae3..53da256, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./internal/evaluation -run 'TestManifest|TestArm|TestPaired' -count=1 → ok  	github.com/shaktsin/umcode/internal/evaluation	0.431s)
+
+Task 2: Ruling: deterministic providers replace a declared supported provider ID (claude/openai/gemini/openai_compatible), rather than introducing a new registry ID — normal router enumerates only these providers — cost if wrong: synthetic providers must be clearly labeled in results to avoid confusion.
+Task 2: complete (commits 53da256..7884da3, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./internal/engine ./internal/evaluation -run TestEvaluation -count=1 → ok  	github.com/shaktsin/umcode/internal/evaluation	0.172s)
+Task 3: complete (commits 7884da3..e6c0f80, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./internal/engine ./internal/evaluation -run 'TestEvaluationStream|TestEvaluationToken|TestEvaluationFailure' -count=1 → ok  	github.com/shaktsin/umcode/internal/evaluation	0.269s)
+Task 4: complete (commits e6c0f80..4310c34, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./internal/evaluation -run TestCampaign -count=1 → ok  	github.com/shaktsin/umcode/internal/evaluation	0.416s)
+Task 5: complete (commits 4310c34..cbcf88b, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./internal/evaluation -run TestVerifier -count=1 → ok  	github.com/shaktsin/umcode/internal/evaluation	1.278s)
+Task 6: complete (commits cbcf88b..b2ba7fd, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./internal/evaluation -run TestReview -count=1 → ok  	github.com/shaktsin/umcode/internal/evaluation	0.170s)
+Ruling: blinded review includes repeated runs as well as primary units; repeats remain excluded from independent quality sample counts but need review to enter live cost-per-success denominators. Cost if wrong: additional reviewer workload.
+Task 7: complete; focused statistics, gate, report and review tests pass. Markdown includes the complete JSON measurements to preserve provenance and parity.
+Task 7: complete (commits b2ba7fd..a4f07fb, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./internal/evaluation -run 'TestQuality|TestGates|TestEfficiency|TestReport' -count=1 → ok  	github.com/shaktsin/umcode/internal/evaluation	0.235s)
+Task 8: Ruling: added RecordReview(path, reader) to validate and atomically persist imported revisions; CLI needs a public persistence boundary — cost if wrong: one extra package API.
+Task 8: Ruling: preserve default engine turn dollar limit while campaign reservations enforce paid bounds; zero is interpreted as exhausted by turnBudget — cost if wrong: stricter default turn budget can make a campaign incomplete.
+Task 8: Ruling: synthetic efficiency results stay diagnostic; live verdict is inconclusive unless independently established regression failure — synthetic prices do not establish live failure or success — cost if wrong: operator must inspect individual diagnostic gates.
+Task 8: complete (commits a4f07fb..b3517d9, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./cmd/umcode-eval -count=1 → ok  	github.com/shaktsin/umcode/cmd/umcode-eval	2.152s)
+Task 9: Ruling: reuse existing actual engine integration fixtures for retrieval, memory, discovery, workflow and revocation under evaluation diagnostic tests; the new campaign matrix independently executes every deduplicated policy arm with real edits and trusted checks. This avoids duplicating complex fixture setup; cost if wrong: diagnostics are not standalone CLI campaigns and do not qualify live release.
+Task 9: Ruling: efficiency gates remain separate by model/category as well as quality; conservative interpretation of no pooling prevents savings in easy tasks masking a costly category — cost if wrong: stricter qualification than model-total thresholds, requiring more optimization or a separately approved scoring revision.
+Task 9: Ruling: timing-sensitive retrieval savings/restart benchmark aliases run in the normal suite; race instrumentation exceeds the unchanged 100ms production retrieval deadline, causing correct atomic fallback. Other evaluation tests remain under race — cost if wrong: race coverage does not assert retrieval performance savings; normal full-suite does.
+Final: fixed evaluation tool isolation — TestEvaluationConfinement RED→GREEN, TestEvaluationToolsConfined and TestEvaluationAllowsOwnedRuntime pass; strict runtime allowlist, private HOME/TMP/cache, disabled host specialists, fail closed without sandbox.
+Final: fixed copied grader tampering — TestFinalVerifierProtectsExecutedPrerequisites RED→GREEN, copied prerequisite write protection plus hash checks before/after each confined check.
+Final: fixed provider reservation mismatch — TestEvaluationWireOutputLimit RED→GREEN; effective downstream output bound, conservative serialized request/context bound, cached price <= uncached, undeclared model fallback rejected.
+Final: fixed review conflict bypass/adjudication — TestFinalReviewConflictAdjudication RED→GREEN; unresolved disputes and superseded scores cannot qualify through old favorable revisions.
+Final: fixed qualification provenance/coverage — TestFinalSyntheticEvidenceCannotQualify RED→GREEN; required arms/comparisons, complete schedule/result identity, nonsynthetic matching model/provider/price and frozen billing evidence required.
+Final: fixed partial/cancelled stream evidence — TestEvaluationCancellationDrainsTerminal and TestAnthropicErrorRetainsPartialUsage RED→GREEN; bounded cancellation drain, adapters retain partial usage, full reservation remains charged.
+Final: fixed missing evidence masking failures — TestFinalFailureDominatesMissing RED→GREEN; known trusted/human safety failures and independent tool-round failures survive missing token/check evidence.
+Final: fixed resume spending authorization — TestFinalResumeCeilingCannotExpandAuthorization RED→GREEN; reject changed effective ceiling.
+Final: fixed provider model ID/complexity validation — TestFinalModelValidation RED→GREEN; provider IDs separate from local filesystem IDs, supported complexity/provider and conservative prices checked.
+Final: minor (deferred): per-category efficiency gates are stricter than spec model totals; retained under the recorded conservative no-pooling ruling.
+Final: minor (deferred): richer gate reasons/evidence references and exploration/elapsed/response diagnostics remain future report work.
+Final: Ruling: actual invoice pricing/alias resolution remains operator-frozen input, with no paid verification in this implementation — cost if wrong: an incorrect operator price table misstates dollar comparisons and requires a new campaign.
+Final: Ruling: future sampling representativeness remains limited to the declared population/cohort; numeric gates do not establish external validity — cost if wrong: handpicked tasks can mislead rollout decisions outside that population.
+Final: Ruling: reused component diagnostics need not all become CLI campaigns in Phase 6a; real campaign arm matrix plus existing engine fixtures are regression evidence only — cost if wrong: additional standalone fixtures required before broader live claims.
+Final: Ruling: host network/browser/computer/visual/preview specialists are unavailable in evaluation until isolated adapters exist; schemas remain visible but calls fail honestly — cost if wrong: specialist campaigns remain incomplete rather than qualifying until adapters are added.
+Final verification: required focused race command `go test -race ./internal/evaluation ./internal/engine -run TestEvaluation -count=1 -timeout=10m` passed (engine 322.481s); additional final source `go test -race ./internal/evaluation ./internal/sandbox ./internal/tools -run 'TestFinal|TestEvaluation' -count=1 -timeout=2m` passed. Final `go vet ./...` and `git diff --check` passed. Confined CLI example regression=pass/live_release=inconclusive; no paid calls.
+Task 9: complete (commits b3517d9..b3c6ac3, tests: env GOCACHE=/private/tmp/umcode-go-cache go test ./... -count=1 -timeout=10m → ok  	github.com/shaktsin/umcode/internal/worktree	4.215s)
+
+Final source: b3c6ac3. Final full suite passed on the committed source; no paid calls. Worktree preserved; push/PR not performed. Phase 6b UI/storage, Phase 6c rollout, live qualification and isolated specialist adapters remain separate.

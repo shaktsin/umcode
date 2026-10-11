@@ -221,7 +221,7 @@ func (o *OpenAI) streamChatGPT(ctx context.Context, cred Credential, req Request
 			err = errors.New(o.id + " (ChatGPT sign-in): stream ended before the response completed")
 		}
 		if err != nil {
-			ch <- Event{Type: EventError, Err: err}
+			ch <- Event{Type: EventError, Err: err, Usage: usage}
 			return
 		}
 		usage.Subscription = true

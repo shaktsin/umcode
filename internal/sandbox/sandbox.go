@@ -15,6 +15,8 @@ import (
 
 // Policy describes what a sandboxed command may do.
 type Policy struct {
+	// Readable, when non-nil, restricts data reads to explicit roots.
+	Readable []string
 	// Root is the project directory: the only workspace location that is writable.
 	Root string
 	// Network allows outbound network access.
@@ -143,4 +145,19 @@ func dedupe(in []string) []string {
 		}
 	}
 	return out
+}
+
+// EvaluationPolicy confines evaluation commands to a disposable root plus OS
+// runtime files. It never grants shared temporary or package-cache writes.
+func EvaluationPolicy(root string, readonly []string) Policy {
+	p := Policy{Root: realPath(root), Network: false, Readable: []string{realPath(root)}, ReadOnlyInRoot: nil}
+	for _, path := range readonly {
+		p.ReadOnlyInRoot = append(p.ReadOnlyInRoot, realPath(path))
+	}
+	for _, path := range []string{"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/private/preboot/Cryptexes/OS/System/Library", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/bin", "/sbin", "/lib", "/lib64", "/dev", "/usr/local/go", "/opt/homebrew/Cellar", "/opt/homebrew/opt", "/opt/homebrew/bin", "/opt/homebrew/lib", "/Library/Developer/CommandLineTools"} {
+		if exists(path) {
+			p.Readable = append(p.Readable, realPath(path))
+		}
+	}
+	return p
 }
