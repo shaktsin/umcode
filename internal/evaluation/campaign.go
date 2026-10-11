@@ -31,11 +31,6 @@ type Campaign struct {
 	Reviews      []ReviewRevision `json:"reviews,omitempty"`
 }
 
-// ReviewRevision is extended with the blinded review contract in Task 6.
-type ReviewRevision struct {
-	ID string `json:"id"`
-}
-
 func saveCampaign(path string, c Campaign) error {
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
