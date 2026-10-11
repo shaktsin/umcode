@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>UMCode: a local-first AI workbench for Mac</title>
-<meta name="description" content="UMCode keeps each project's chats and instructions together, lets you pick or pool models from the providers you configure, and asks before it does anything sensitive. Free and open source for macOS.">
+<title>UMCode: a coding agent for Mac that survives rate limits</title>
+<meta name="description" content="A Mac coding agent for any LLM, hosted or local (Ollama, llama.cpp). Model pools switch to the next model when one hits a rate limit, and token optimization keeps context lean. Free and open source.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <meta property="og:type" content="website">
-<meta property="og:title" content="UMCode: a local-first AI workbench for Mac">
-<meta property="og:description" content="Project-scoped AI chats, model pools with quota fallback, and approvals for sensitive actions. Free and open source.">
+<meta property="og:title" content="UMCode: a coding agent for Mac that survives rate limits">
+<meta property="og:description" content="Works with hosted and local models. Model pools fail over on rate limits. Token optimization trims context. Free and open source.">
 <meta property="og:url" content="https://umcode.dev/">
 <meta property="og:image" content="https://umcode.dev/og.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -214,6 +214,7 @@ footer a { color: var(--ink-soft); }
     <a class="brand" href="/"><img src="favicon.svg" alt="" width="28" height="28">UMCode</a>
     <nav class="site-nav" aria-label="Primary">
       <a class="hide-sm" href="#pools">Model pools</a>
+      <a class="hide-sm" href="#tokens">Token savings</a>
       <a class="hide-sm" href="#install">Install</a>
       <a href="https://github.com/shaktsin/umcode">GitHub</a>
     </nav>
@@ -222,8 +223,8 @@ footer a { color: var(--ink-soft); }
 
 <main>
   <section class="hero wrap">
-    <h1>AI chats that live in your project folder.</h1>
-    <p class="lede">UMCode is a Mac app that keeps each project's chats and instructions together, lets you pick or pool models from the providers you set up, and asks before it does anything sensitive.</p>
+    <h1>A coding agent that doesn't stop at rate limits.</h1>
+    <p class="lede">UMCode is a Mac app for coding tasks with the models you choose: hosted providers, or local models running in Ollama or llama.cpp. Put models in a pool and it moves to the next one when a model hits its limit, while token optimization keeps each task's context lean.</p>
     <div class="actions">
       <a class="btn" id="dl" href="https://github.com/shaktsin/umcode/releases/latest/download/UMCode.dmg">Download for Mac</a>
       <a class="link-quiet" href="https://github.com/shaktsin/umcode">View the source on GitHub</a>
@@ -231,21 +232,21 @@ footer a { color: var(--ink-soft); }
     <p class="fine" id="dl-note">Free and open source (MIT). Needs macOS 14 or later. Apple Silicon and Intel.</p>
 
     <figure class="shot">
-      <img src="app.webp" width="2000" height="1256" alt="The UMCode window: a project list in the sidebar, a chat about a llama.cpp folder with a work log, and a message box with model and effort selectors.">
+      <img src="app.webp" width="2000" height="1256" alt="The UMCode window: a project list in the sidebar, a chat about a llama.cpp project folder with a work log and a token and cost line under the reply, and a message box with model and effort selectors.">
     </figure>
   </section>
 
   <section class="section wrap" id="what">
-    <h2>Chats stay with the project they belong to.</h2>
-    <p class="intro">Choose a folder and UMCode keeps its conversations and its instructions in one place. Your chats and settings are stored on your Mac, and prompts go only to the model providers you configure.</p>
+    <h2>Bring any model, hosted or local.</h2>
+    <p class="intro">Connect the providers you already use, or point UMCode at a model on your own machine through Ollama or llama.cpp. Chats and settings are stored on your Mac, and prompts go only to the models you configure.</p>
     <dl class="facts">
       <div>
-        <dt>Project-aware chats</dt>
-        <dd>Work inside a selected folder with its <code>UMCODE.md</code> instructions. Start a clean chat or a side chat with context.</dd>
+        <dt>Built for coding in a project</dt>
+        <dd>Pick a folder and work inside it with its <code>UMCODE.md</code> instructions. Chats stay with the project, and you can open a clean chat or a side chat with context.</dd>
       </div>
       <div>
-        <dt>Your choice of models</dt>
-        <dd>Use any provider and model ID you have configured, local models included, or combine several into an ordered pool.</dd>
+        <dt>Hosted or local</dt>
+        <dd>Use any provider and model ID you have configured, or a local model served by Ollama or llama.cpp. Switch models per chat, or combine several into an ordered pool.</dd>
       </div>
       <div>
         <dt>Actions you can see</dt>
@@ -259,18 +260,14 @@ footer a { color: var(--ink-soft); }
         <dt>Plugins you can inspect</dt>
         <dd>Install Agent Plugins, or Codex and Claude plugin folders with skills, MCP servers and hooks. See what a plugin can do before you install it.</dd>
       </div>
-      <div>
-        <dt>Token optimization, one switch</dt>
-        <dd>Turn on token optimization once and it applies across chats: context compilation, retrieval and result reduction.</dd>
-      </div>
     </dl>
   </section>
 
   <section class="section wrap" id="pools">
     <div class="pool-grid">
       <div class="copy">
-        <h2>When one model hits its limit, the next one picks up.</h2>
-        <p>Put models in order. If a provider reports a quota or rate limit, UMCode continues with the next model in the pool, so a long task doesn't stop halfway.</p>
+        <h2>When a model hits its limit, the next one picks up.</h2>
+        <p>Put models in order, hosted and local together if you like. If a provider reports a quota or rate limit, UMCode continues with the next model in the pool, so a long task doesn't stop halfway.</p>
       </div>
       <div class="pool" id="pool" aria-label="Example of a model pool falling back to the next model">
         <div class="pool-head"><span>pool: daily-driver</span><button type="button" id="replay">Replay</button></div>
@@ -282,6 +279,38 @@ footer a { color: var(--ink-soft); }
         <p class="pool-note">Illustration with example names. You choose the models and their order.</p>
       </div>
     </div>
+  </section>
+
+  <section class="section wrap" id="tokens">
+    <h2>Spend fewer tokens on every task.</h2>
+    <p class="intro">A coding agent re-sends a lot: the whole conversation, every tool definition, every long log. UMCode's token optimization trims that, and it doesn't do it by asking the model to think less.</p>
+    <dl class="facts">
+      <div>
+        <dt>Context built from the work, not the transcript</dt>
+        <dd>Each model call gets a compact record of the goal, what is done and what is still unproven, instead of a replay of the whole chat.</dd>
+      </div>
+      <div>
+        <dt>Long tool output, shortened</dt>
+        <dd>Big shell logs, repeated passing checks and search results are reduced for the model. The full output stays in your chat and the work log.</dd>
+      </div>
+      <div>
+        <dt>Tools loaded when needed</dt>
+        <dd>Core coding tools are always there. Specialist tools are added when a task calls for them, so each call carries fewer tool definitions.</dd>
+      </div>
+      <div>
+        <dt>Checks that stay honest</dt>
+        <dd>A passing test counts only while it is still true. Edit a file after the tests passed and UMCode marks them as needing a re-run.</dd>
+      </div>
+      <div>
+        <dt>Project memory you can read</dt>
+        <dd>Verified, lasting notes about the project go in <code>UMCODE.md</code>, so the agent doesn't rediscover your commands and conventions every time.</dd>
+      </div>
+      <div>
+        <dt>Cost you can see</dt>
+        <dd>Tokens in, tokens out and cost appear under every reply, so you can tell what a task actually used.</dd>
+      </div>
+    </dl>
+    <p class="fine">Token optimization is off in a fresh install. Turn it on in Settings under Token optimization and it applies to new turns in every chat. Measured comparisons are still in progress, so there are no savings figures on this page yet.</p>
   </section>
 
   <section class="section wrap" id="install">
