@@ -13,7 +13,7 @@ help: ## Show this help
 # ---------------------------------------------------------------------------
 # Go engine + Mac app (see GO_ENGINE.md)
 # ---------------------------------------------------------------------------
-.PHONY: go-build go-test go-vet go-engine go-universal app-dev app-check app-build app-build-universal
+.PHONY: go-build go-test go-test-race go-vet go-engine go-universal app-dev app-check app-build app-build-universal
 
 GO         ?= go
 GO_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -25,8 +25,16 @@ go-build: ## Build the Go engine + CLI → bin/umcode
 	@mkdir -p bin
 	$(GO) build -trimpath -ldflags '$(GO_LDFLAGS)' -o bin/umcode ./cmd/umcode
 
-go-test: ## Run Go tests with the race detector
-	$(GO) test -race ./...
+# SQLite runs in Wazero's interpreter (see internal/store/store.go), so each
+# store.Open(":memory:") replays every migration in about 2s, and the race
+# detector slows that down roughly 8x. The store and work packages exceed go
+# test's default 10m timeout under -race, so go-test skips the race detector
+# and go-test-race raises the timeout.
+go-test: ## Run Go tests (no race detector; see go-test-race)
+	$(GO) test -timeout 20m ./...
+
+go-test-race: ## Run Go tests with the race detector (very slow)
+	$(GO) test -race -timeout 90m ./...
 
 go-vet: ## gofmt check + go vet
 	@test -z "$$(gofmt -l cmd internal)" || (gofmt -l cmd internal; echo "run gofmt -w"; exit 1)
