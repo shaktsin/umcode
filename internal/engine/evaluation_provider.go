@@ -77,7 +77,18 @@ func (p *evaluationProvider) Stream(ctx context.Context, c llm.Credential, req l
 			}
 			p.record(a)
 		}()
-		for event := range ch {
+		for {
+			var event llm.Event
+			select {
+			case <-ctx.Done():
+				a.Outcome = "cancelled"
+				return
+			case next, ok := <-ch:
+				if !ok {
+					return
+				}
+				event = next
+			}
 			if event.Type == llm.EventToolCall {
 				a.ToolRounds = 1
 			}
@@ -103,9 +114,6 @@ func (p *evaluationProvider) Stream(ctx context.Context, c llm.Credential, req l
 				a.Outcome = "cancelled"
 				return
 			}
-		}
-		if ctx.Err() != nil {
-			a.Outcome = "cancelled"
 		}
 	}()
 	return out, nil

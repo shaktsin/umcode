@@ -54,6 +54,11 @@ func Aggregate(results []TaskResult) (UsageSummary, error) {
 	cost := 0.
 	seen := map[string]bool{}
 	for _, r := range results {
+		if len(r.Attempts) == 0 {
+			s.MissingUsage++
+			s.MissingCost++
+			s.Reasons = append(s.Reasons, r.Unit.ID+": no attempt accounting")
+		}
 		if r.Status == "success" {
 			s.Successes++
 		}

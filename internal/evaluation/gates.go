@@ -305,6 +305,13 @@ func Evaluate(c Campaign, review ReviewRevision) Report {
 				s.CommonTreatment, _ = Aggregate(commonT)
 				report.Strata = append(report.Strata, s)
 				if required {
+					gates := efficiencyGates(model.ID+"/"+category, baseline, treatment)
+					report.Efficiency = append(report.Efficiency, gates...)
+					for _, g := range gates {
+						report.LiveRelease = combine(report.LiveRelease, g.Verdict)
+					}
+				}
+				if required {
 					report.LiveRelease = combine(report.LiveRelease, s.Quality.Verdict)
 				}
 				for _, r := range append(baseline, treatment...) {
@@ -322,36 +329,6 @@ func Evaluate(c Campaign, review ReviewRevision) Report {
 						}
 					}
 				}
-			}
-			if required {
-				var b, t []TaskResult
-				for _, r := range c.Results {
-					if r.Unit.ModelID != model.ID {
-						continue
-					}
-					passed, _ := success(r)
-					if passed {
-						r.Status = "success"
-					}
-					if r.Unit.ArmID == pair.Baseline {
-						b = append(b, r)
-					} else if r.Unit.ArmID == pair.Treatment {
-						t = append(t, r)
-					}
-				}
-				bs, be := Aggregate(b)
-				ts, te := Aggregate(t)
-				gates := []Gate{{Name: model.ID + " uncached input", Threshold: .30, Verdict: efficiencyGate(float64(bs.UncachedInput), float64(ts.UncachedInput), .30)}, {Name: model.ID + " tool rounds", Threshold: .15, Verdict: efficiencyGate(float64(bs.ToolRounds), float64(ts.ToolRounds), .15)}, {Name: model.ID + " cost per successful task", Threshold: .25, Verdict: Inconclusive}}
-				if bs.CostPerSuccess != nil && ts.CostPerSuccess != nil {
-					gates[2].Verdict = efficiencyGate(*bs.CostPerSuccess, *ts.CostPerSuccess, .25)
-				}
-				for i := range gates {
-					if be != nil || te != nil || bs.MissingUsage > 0 || ts.MissingUsage > 0 {
-						gates[i].Verdict = Inconclusive
-					}
-					report.LiveRelease = combine(report.LiveRelease, gates[i].Verdict)
-				}
-				report.Efficiency = append(report.Efficiency, gates...)
 			}
 		}
 	}
@@ -372,4 +349,19 @@ func Evaluate(c Campaign, review ReviewRevision) Report {
 		}
 	}
 	return report
+}
+
+func efficiencyGates(name string, baseline, treatment []TaskResult) []Gate {
+	bs, be := Aggregate(baseline)
+	ts, te := Aggregate(treatment)
+	gates := []Gate{{Name: name + " uncached input", Threshold: .30, Verdict: efficiencyGate(float64(bs.UncachedInput), float64(ts.UncachedInput), .30)}, {Name: name + " tool rounds", Threshold: .15, Verdict: efficiencyGate(float64(bs.ToolRounds), float64(ts.ToolRounds), .15)}, {Name: name + " cost per successful task", Threshold: .25, Verdict: Inconclusive}}
+	if bs.CostPerSuccess != nil && ts.CostPerSuccess != nil {
+		gates[2].Verdict = efficiencyGate(*bs.CostPerSuccess, *ts.CostPerSuccess, .25)
+	}
+	for i := range gates {
+		if be != nil || te != nil || bs.MissingUsage > 0 || ts.MissingUsage > 0 || len(baseline) == 0 || len(treatment) == 0 {
+			gates[i].Verdict = Inconclusive
+		}
+	}
+	return gates
 }

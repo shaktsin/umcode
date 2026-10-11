@@ -6,6 +6,7 @@ import (
 	"github.com/shaktsin/umcode/internal/evaluation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"testing"
+	"time"
 )
 
 type evalStreamFixture struct {
@@ -53,5 +54,34 @@ func TestEvaluationStreamForwarding(t *testing.T) {
 				t.Fatal(n, attempts)
 			}
 		})
+	}
+}
+
+type evalSilentFixture struct{ evalStreamFixture }
+
+func (*evalSilentFixture) Stream(context.Context, llm.Credential, llm.Request) (<-chan llm.Event, error) {
+	return make(chan llm.Event), nil
+}
+func TestEvaluationStreamSilentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	recorded := make(chan evaluation.Attempt, 1)
+	p := &evaluationProvider{inner: &evalSilentFixture{}, model: evaluation.Model{MaxOutput: 10}, synthetic: true, sink: func(a evaluation.Attempt) error { recorded <- a; return nil }}
+	ch, err := p.Stream(ctx, llm.Credential{}, llm.Request{MaxTokens: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("silent provider ignored cancellation")
+	}
+	select {
+	case a := <-recorded:
+		if a.Outcome != "cancelled" || a.Reported {
+			t.Fatal(a)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing terminal attempt")
 	}
 }
