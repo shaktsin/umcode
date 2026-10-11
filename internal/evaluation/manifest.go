@@ -14,6 +14,7 @@ import (
 )
 
 type Manifest struct {
+	BaseDir        string            `json:"-"`
 	Version        int               `json:"version"`
 	ID             string            `json:"id"`
 	SourceRevision string            `json:"source_revision"`
