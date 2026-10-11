@@ -43,8 +43,20 @@ func (p *evaluationProvider) Stream(ctx context.Context, c llm.Credential, req l
 	schemas, _ := json.Marshal(req.Tools)
 	a.SchemaTokens = llm.EstimateTokens(string(schemas))
 	a.LayerEstimates = map[string]int64{"system": llm.EstimateTokens(req.System), "input": estimateInput(req)}
-	if req.MaxTokens <= 0 || int64(req.MaxTokens) > p.model.MaxOutput {
+	if req.MaxTokens <= 0 || int64(llm.EffectiveOutputLimit(p.ID(), req)) > p.model.MaxOutput {
 		return nil, errors.New("evaluation request exceeds declared output limit")
+	}
+	if !p.synthetic {
+		if req.Model != p.model.ID {
+			return nil, errors.New("live evaluation cannot fall back to an undeclared model")
+		}
+		body, err := json.Marshal(req)
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(body))+1024+p.model.MaxOutput > p.model.Window {
+			return nil, errors.New("evaluation request exceeds conservative declared context bound")
+		}
 	}
 	maximum := (float64(p.model.Window)*p.model.Price.Input + float64(p.model.MaxOutput)*p.model.Price.Output) / 1e6
 	a.ReservedUSD = maximum
@@ -82,6 +94,7 @@ func (p *evaluationProvider) Stream(ctx context.Context, c llm.Credential, req l
 			select {
 			case <-ctx.Done():
 				a.Outcome = "cancelled"
+				p.drainCancelled(ch, &a)
 				return
 			case next, ok := <-ch:
 				if !ok {
@@ -107,14 +120,49 @@ func (p *evaluationProvider) Stream(ctx context.Context, c llm.Credential, req l
 			}
 			if event.Type == llm.EventError {
 				a.Outcome = "error"
+				a.Partial = a.Reported
 			}
 			select {
 			case out <- event:
 			case <-ctx.Done():
 				a.Outcome = "cancelled"
+				p.drainCancelled(ch, &a)
 				return
 			}
 		}
 	}()
 	return out, nil
+}
+
+// A bounded drain lets cancellation-aware providers deliver their terminal
+// accounting without stranding a producer blocked on its final send.
+func (p *evaluationProvider) drainCancelled(ch <-chan llm.Event, a *evaluation.Attempt) {
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			a.Partial = a.Reported
+			return
+		case event, ok := <-ch:
+			if !ok {
+				a.Partial = a.Reported
+				return
+			}
+			if event.Type == llm.EventToolCall {
+				a.ToolRounds = 1
+			}
+			if event.Usage.Reported {
+				u := event.Usage
+				a.Reported = true
+				a.Partial = true
+				a.Subscription = a.Subscription || u.Subscription
+				input, cached, output, reasoning := u.InputTokens, u.CachedInputTokens, u.OutputTokens, u.ReasoningTokens
+				a.Input = &input
+				a.Cached = &cached
+				a.Output = &output
+				a.Reasoning = &reasoning
+			}
+		}
+	}
 }

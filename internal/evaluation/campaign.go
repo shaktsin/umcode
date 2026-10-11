@@ -81,7 +81,7 @@ func PreflightLive(m Manifest, ceiling float64, credentials map[string]string) e
 		return errors.New("finite live spending ceiling required")
 	}
 	for _, model := range m.Models {
-		if model.CredentialRef == "" || model.CredentialKind != "api_key" || model.Price.ID == "" || model.Price.Input <= 0 || model.Price.Output <= 0 || credentials != nil && credentials[model.CredentialRef] == "" {
+		if model.CredentialRef == "" || model.CredentialKind != "api_key" || model.Price.ID == "" || model.Price.Input <= 0 || model.Price.Output <= 0 || credentials[model.CredentialRef] == "" {
 			return errors.New("live model credentials/pricing unavailable")
 		}
 		maximum := MaximumCost(model)
@@ -108,6 +108,15 @@ func RunCampaign(ctx context.Context, m Manifest, runner Runner, o CampaignOptio
 	if e != nil {
 		return c, e
 	}
+	base, e = filepath.EvalSymlinks(base)
+	if e != nil {
+		return c, e
+	}
+	parent, e := filepath.EvalSymlinks(filepath.Dir(out))
+	if e != nil {
+		return c, e
+	}
+	out = filepath.Join(parent, filepath.Base(out))
 	if out == base || strings.HasPrefix(out, base+string(os.PathSeparator)) {
 		return c, errors.New("campaign output must be outside fixture source tree")
 	}
@@ -116,7 +125,7 @@ func RunCampaign(ctx context.Context, m Manifest, runner Runner, o CampaignOptio
 		if err != nil {
 			return
 		}
-		if c.ManifestHash != Hash(m) || c.Live != o.Live {
+		if c.ManifestHash != Hash(m) || c.Live != o.Live || o.Live && c.Budget.Ceiling != min(o.MaxCostUSD, m.MaxCostUSD) {
 			return c, errors.New("resume configuration mismatch")
 		}
 		for i := range c.Results {

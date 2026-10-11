@@ -85,3 +85,37 @@ func TestEvaluationStreamSilentCancellation(t *testing.T) {
 		t.Fatal("missing terminal attempt")
 	}
 }
+
+type evalLateTerminal struct {
+	evalStreamFixture
+	exited chan struct{}
+}
+
+func (p *evalLateTerminal) Stream(ctx context.Context, _ llm.Credential, _ llm.Request) (<-chan llm.Event, error) {
+	ch := make(chan llm.Event)
+	p.exited = make(chan struct{})
+	go func() {
+		defer close(p.exited)
+		defer close(ch)
+		<-ctx.Done()
+		ch <- llm.Event{Type: llm.EventError, Err: ctx.Err()}
+	}()
+	return ch, nil
+}
+func TestEvaluationCancellationDrainsTerminal(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	inner := &evalLateTerminal{}
+	p := &evaluationProvider{inner: inner, synthetic: true, model: evaluation.Model{MaxOutput: 10}}
+	ch, err := p.Stream(ctx, llm.Credential{}, llm.Request{MaxTokens: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	for range ch {
+	}
+	select {
+	case <-inner.exited:
+	case <-time.After(time.Second):
+		t.Fatal("provider stranded sending terminal event")
+	}
+}

@@ -43,3 +43,17 @@ go run ./cmd/umcode-eval report --out /tmp/live-evaluation --review-revision rev
 JSON and Markdown contain the same complete measurements and provenance. Exit 2 means invalid input/preflight, exit 1 means execution/known regression failure or a nonpassing `--require-pass` gate. A normal report may represent inconclusive evidence with exit 0.
 
 Quality is paired by independent cluster within model/category, with simultaneous conservative exact-binomial bounds. Thirty independent units per stratum is a minimum, not a power guarantee. Release requires nondecreasing point quality, lower bound at least −2 percentage points, high-risk parity, no safety regression, and efficiency reductions of 30% uncached input, 25% total cost per successful task and 15% tool rounds. Failures and retries remain in cost totals; common-success views are diagnostic. Missing usage, scores or incomplete endpoints cannot pass. Historical instruction/Work/evidence and adaptive-routing comparisons remain unsupported, so parent-program coverage is inconclusive. Phase 6b UI/storage and Phase 6c rollout remain separate.
+
+## Confinement and current qualification limits
+
+Evaluation shells use an OS runtime read allowlist, with fixture-only writes and private HOME, TMPDIR and cache locations. Shared temporary folders and other campaign units are inaccessible. An unavailable OS sandbox fails execution closed. Trusted checks use a separate confined disposable root; copied prerequisite files are protected and rehashed before and after each check. The normal app sandbox is unchanged.
+
+Host web, browser, computer, visual and preview tools retain their catalog schemas but return unavailable in evaluation. They need isolated adapters before specialist campaigns can complete. Existing engine specialist fixtures remain regression diagnostics; they are not live qualification evidence.
+
+Live output admission checks the effective provider wire limit, including Claude thinking expansion. A conservative serialized-request byte bound plus output/overhead must fit the declared context window before reservation. Unsupported complexity presets or explicit fallback routes are rejected. Partial usage is retained as partial evidence, never treated as a complete bill or refunded reservation. Resume requires the same effective spending ceiling; use a new campaign for changed authorization.
+
+Live qualification requires the complete component/removal comparison matrix, the complete declared schedule and matching nonsynthetic provider/model/frozen-price evidence. Smaller diagnostic campaigns remain inconclusive. Unresolved review disputes and superseded favorable scores cannot bypass adjudication through an older selected revision.
+
+The deterministic matrix, real action/revocation tests and trusted-grader tampering regressions run without paid calls. Timing-sensitive retrieval savings assertions run in the normal suite; race instrumentation can exceed the unchanged 100 ms retrieval deadline, so those two performance diagnostics are excluded from the race aliases. Cancellation, policy, accounting and arm-matrix integrity remain covered under race testing.
+
+Current reports conservatively require efficiency thresholds in each model/category rather than only model totals. Richer gate evidence references and exploration/elapsed/response diagnostics remain follow-up work. No live campaign or rollout qualification is claimed by this implementation.

@@ -28,6 +28,17 @@ func (s seatbelt) Wrap(cmd *exec.Cmd, p Policy) error {
 func seatbeltProfile(p Policy) (string, error) {
 	var b strings.Builder
 	b.WriteString("(version 1)\n(allow default)\n")
+	if p.Readable != nil {
+		b.WriteString("(deny file-read-data)\n(allow file-read-data (literal \"/\"))\n(allow file-read-data\n")
+		for _, r := range p.Readable {
+			q, err := sbplQuote(r)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&b, "  (subpath %s)\n", q)
+		}
+		b.WriteString(")\n")
+	}
 	if !p.Network {
 		b.WriteString("(deny network*)\n")
 	}

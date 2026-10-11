@@ -1,3 +1,5 @@
+//go:build darwin || linux
+
 package engine
 
 import (
@@ -91,8 +93,12 @@ func TestEvaluationToggleRevocation(t *testing.T) {
 	t.Run("mcp-revocation", TestProgressiveMCPRevocationDuringApproval)
 }
 func TestEvaluationComponentDiagnostics(t *testing.T) {
-	t.Run("long-context", TestRetrievalRecoversEarlierContextWithoutQualityLoss)
-	t.Run("restart", TestRetrievalRestartAndEdit)
+	if !evaluationRaceInstrumented {
+		t.Run("long-context", TestRetrievalRecoversEarlierContextWithoutQualityLoss)
+		t.Run("restart", TestRetrievalRestartAndEdit)
+	} else {
+		t.Log("retrieval timing/savings diagnostics run in normal suite; race instrumentation triggers bounded fallback")
+	}
 	t.Run("repeated-memory", TestCuratedMemoryReducesRepeatedDiscoveryWithoutQualityLoss)
 	t.Run("specialist-discovery", TestProgressiveSpecialistDirectAndDiscovery)
 	t.Run("fallback", TestProgressiveFallbackAndPairing)

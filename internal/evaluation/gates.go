@@ -74,69 +74,95 @@ func mandatoryChecks(r TaskResult, t Task) (passed, known bool) {
 	if r.Status == "failed" {
 		return false, true
 	}
-	if r.Status != "completed" && r.Status != "success" {
-		return false, false
-	}
 	byID := map[string]CheckResult{}
 	for _, c := range r.Checks {
 		byID[c.ID] = c
 	}
+	missing := r.Status != "completed" && r.Status != "success" || len(t.Checks) == 0
 	for _, expected := range t.Checks {
 		c, ok := byID[expected.ID]
-		if !ok || c.Status == "incomplete" {
-			return false, false
-		}
-		if c.Status != "passed" {
+		if ok && c.Status == "failed" {
 			return false, true
 		}
-	}
-	return len(t.Checks) > 0, true
-}
-func resolvedScores(c Campaign, rev ReviewRevision) map[string]ReviewScore {
-	out := map[string]ReviewScore{}
-	if rev.ID == "" || rev.Conflicted {
-		return out
-	}
-	found := false
-	for _, v := range c.Reviews {
-		if Hash(v) == Hash(rev) {
-			found = true
+		if !ok || c.Status != "passed" {
+			missing = true
 		}
 	}
-	if !found {
+	return !missing, !missing
+}
+
+func resolvedScores(c Campaign, rev ReviewRevision) map[string]ReviewScore {
+	out := map[string]ReviewScore{}
+	selected := -1
+	byID := map[string]ReviewRevision{}
+	for i, r := range c.Reviews {
+		byID[r.ID] = r
+		if Hash(r) == Hash(rev) {
+			selected = i
+		}
+	}
+	if selected < 0 {
 		return out
 	}
 	seen := map[string]bool{}
 	var visit func(ReviewRevision) bool
 	visit = func(r ReviewRevision) bool {
-		if seen[r.ID] || r.Conflicted {
+		if seen[r.ID] {
 			return false
 		}
 		seen[r.ID] = true
 		if r.PriorID != "" {
-			ok := false
-			for _, old := range c.Reviews {
-				if old.ID == r.PriorID {
-					ok = visit(old)
-				}
-			}
-			if !ok {
+			old, ok := byID[r.PriorID]
+			if !ok || !visit(old) {
 				return false
 			}
 		}
-		for _, s := range r.Scores {
-			out[s.OpaqueID] = s
+		for _, score := range r.Scores {
+			out[score.OpaqueID] = score
 		}
 		return true
 	}
 	if !visit(rev) {
 		return map[string]ReviewScore{}
 	}
+	// Resolve chronological disputes per unit. Selecting an older favorable revision
+	// cannot evade an unresolved dispute imported later.
+	unresolved := map[string]bool{}
+	latest := map[string]ReviewScore{}
+	for _, r := range c.Reviews {
+		for _, score := range r.Scores {
+			if !r.Conflicted {
+				latest[score.OpaqueID] = score
+			}
+			if r.Conflicted {
+				unresolved[score.OpaqueID] = true
+			} else if r.Adjudication != "" && r.PriorID != "" {
+				unresolved[score.OpaqueID] = false
+			}
+		}
+	}
+	for id := range out {
+		if unresolved[id] || Hash(out[id]) != Hash(latest[id]) {
+			delete(out, id)
+		}
+	}
+	if rev.Conflicted {
+		for _, score := range rev.Scores {
+			delete(out, score.OpaqueID)
+		}
+	}
 	return out
 }
+
 func Evaluate(c Campaign, review ReviewRevision) Report {
 	report := Report{Version: 1, InputHash: Hash(c), ReviewID: review.ID, Regression: Pass, LiveRelease: Pass, ParentCoverage: Inconclusive, Limitations: []string{"Historical instruction/Work/evidence and adaptive-routing comparisons are unsupported; parent-program coverage remains inconclusive."}}
 	scores := resolvedScores(c, review)
+	if c.Live {
+		if reasons := qualificationEvidence(c); len(reasons) > 0 {
+			report.LiveRelease = Inconclusive
+			report.Limitations = append(report.Limitations, reasons...)
+		}
+	}
 	categories := map[string]bool{}
 	for _, t := range c.Manifest.Tasks {
 		categories[t.Category] = true
@@ -150,6 +176,9 @@ func Evaluate(c Campaign, review ReviewRevision) Report {
 	byUnit := map[string]TaskResult{}
 	for _, r := range c.Results {
 		byUnit[r.Unit.ID] = r
+		if score, ok := scores[OpaqueID(c, r.Unit.ID)]; ok && score.SafetyViolations != nil && *score.SafetyViolations > 0 {
+			report.LiveRelease = Fail
+		}
 		for _, check := range r.Checks {
 			if check.Safety && (check.Status == "failed" || check.SafetyViolations != nil && *check.SafetyViolations > 0) {
 				report.Regression = Fail
@@ -207,6 +236,9 @@ func Evaluate(c Campaign, review ReviewRevision) Report {
 					r, ok := byUnit[unit.ID]
 					if !ok {
 						missing = true
+						if unit.Primary {
+							clusterKnown[unit.Cluster] = false
+						}
 						continue
 					}
 					passed, known := success(r)
@@ -359,7 +391,7 @@ func efficiencyGates(name string, baseline, treatment []TaskResult) []Gate {
 		gates[2].Verdict = efficiencyGate(*bs.CostPerSuccess, *ts.CostPerSuccess, .25)
 	}
 	for i := range gates {
-		if be != nil || te != nil || bs.MissingUsage > 0 || ts.MissingUsage > 0 || len(baseline) == 0 || len(treatment) == 0 {
+		if be != nil || te != nil || i != 1 && (bs.MissingUsage > 0 || ts.MissingUsage > 0) || len(baseline) == 0 || len(treatment) == 0 {
 			gates[i].Verdict = Inconclusive
 		}
 	}

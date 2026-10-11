@@ -34,6 +34,9 @@ func ValidateUsage(a Attempt) error {
 	return nil
 }
 func AttemptCost(a Attempt, p Price) (*float64, string, error) {
+	if a.Partial {
+		return nil, "partial provider usage; full reservation retained", nil
+	}
 	if !a.Reported {
 		return nil, "usage not reported", nil
 	}
@@ -72,6 +75,9 @@ func Aggregate(results []TaskResult) (UsageSummary, error) {
 				return s, errors.New("negative tool rounds")
 			}
 			s.ToolRounds += a.ToolRounds
+			if a.Partial {
+				s.MissingUsage++
+			}
 			if a.Reported {
 				if e := ValidateUsage(a); e != nil {
 					return s, e
@@ -84,7 +90,7 @@ func Aggregate(results []TaskResult) (UsageSummary, error) {
 			} else {
 				s.MissingUsage++
 			}
-			if a.ObservedUSD == nil || a.Subscription || !a.Reported {
+			if a.ObservedUSD == nil || a.Subscription || !a.Reported || a.Partial {
 				s.MissingCost++
 				s.Reasons = append(s.Reasons, a.ID+": "+a.MissingReason)
 			} else {

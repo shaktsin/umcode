@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/shaktsin/umcode/internal/procutil"
+	"github.com/shaktsin/umcode/internal/sandbox"
 	"github.com/shaktsin/umcode/internal/vault"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,10 +75,58 @@ func Verify(ctx context.Context, t Task, artifactDir, verifierRoot string) ([]Ch
 			return nil, closeErr
 		}
 	}
+	// Protect the actual executed copies, not just the original source.
+	readonly := []string{}
+	expected := map[string]string{}
+	err = filepath.WalkDir(t.TrustedRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(t.TrustedRoot, path)
+		if err != nil {
+			return err
+		}
+		copy := filepath.Join(verifierRoot, rel)
+		b, err := os.ReadFile(copy)
+		if err != nil {
+			return err
+		}
+		h := sha256.Sum256(b)
+		expected[rel] = hex.EncodeToString(h[:])
+		readonly = append(readonly, copy)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	verifyCopies := func() error {
+		for rel, want := range expected {
+			path, err := SafeJoin(verifierRoot, rel)
+			if err != nil {
+				return err
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			h := sha256.Sum256(b)
+			if hex.EncodeToString(h[:]) != want {
+				return errors.New("executed verifier prerequisites changed")
+			}
+		}
+		return nil
+	}
+	sb := sandbox.Detect()
 	var results []CheckResult
 	for _, check := range t.Checks {
 		if len(check.Argv) == 0 || check.Seconds <= 0 {
 			return nil, errors.New("invalid verifier command")
+		}
+		if err := verifyCopies(); err != nil {
+			return results, err
 		}
 		cctx, cancel := context.WithTimeout(ctx, time.Duration(check.Seconds)*time.Second)
 		cmd := exec.CommandContext(cctx, check.Argv[0], check.Argv[1:]...)
@@ -86,7 +136,16 @@ func Verify(ctx context.Context, t Task, artifactDir, verifierRoot string) ([]Ch
 		var output boundedOutput
 		cmd.Stdout = &output
 		cmd.Stderr = &output
-		err := cmd.Run()
+		var err error
+		if sb == nil {
+			err = errors.New("trusted verification requires OS confinement")
+		} else if err = sb.Wrap(cmd, sandbox.EvaluationPolicy(verifierRoot, readonly)); err == nil {
+			err = cmd.Run()
+		}
+		if integrityErr := verifyCopies(); integrityErr != nil {
+			cancel()
+			return results, integrityErr
+		}
 		status := "passed"
 		if err != nil {
 			status = "failed"

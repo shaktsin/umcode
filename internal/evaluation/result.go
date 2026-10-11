@@ -30,6 +30,7 @@ type TaskResult struct {
 	ArtifactDir       string                `json:"artifact_dir"`
 }
 type Attempt struct {
+	Partial        bool             `json:"partial,omitempty"`
 	ID             string           `json:"id"`
 	Provider       string           `json:"provider"`
 	Model          string           `json:"model"`

@@ -100,6 +100,7 @@ func (*evaluationRunner) Run(ctx context.Context, in evaluation.RunInput) (resul
 			st.Close()
 			return err
 		}
+		tools.ConstrainEvaluation(e.Tools, result.ArtifactDir, in.Manifest.BaseDir)
 		if arm.Mode == "override" {
 			p, _ := evaluation.EffectivePolicy(arm)
 			e.evaluationPolicy = &p
