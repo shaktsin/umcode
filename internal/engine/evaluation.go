@@ -53,6 +53,14 @@ func (*evaluationRunner) Run(ctx context.Context, in evaluation.RunInput) (resul
 	script := &evaluationScript{id: model.Provider, steps: task.Script}
 	var e *Engine
 	var st *store.Store
+	var observer *evaluationProvider
+	var attemptMu sync.Mutex
+	defer func() {
+		if observer != nil && observer.diagnostic() != nil {
+			result.Status = "incomplete"
+			result.IncompleteReasons = append(result.IncompleteReasons, observer.diagnostic().Error())
+		}
+	}()
 	open := func() error {
 		home := filepath.Join(in.Workspace, "home")
 		if err := os.MkdirAll(home, 0700); err != nil {
@@ -64,6 +72,7 @@ func (*evaluationRunner) Run(ctx context.Context, in evaluation.RunInput) (resul
 			return err
 		}
 		cfg := config.Default(home)
+		cfg.Models.Complexity = map[string]config.ComplexityPreset{model.Reasoning: {MaxOutputTokens: int(model.MaxOutput)}}
 		cfg.Models.Configured = []config.ConfiguredModel{{ID: "evaluation", Provider: model.Provider, Model: model.ID}}
 		cfg.Models.ExecutionLimits = config.ExecutionLimits{MaxDurationMinutes: max(1, (task.Limits.Seconds+59)/60), MaxTokens: task.Limits.Tokens, MaxToolRounds: task.Limits.ToolRounds}
 		cfg.Tools.Workspaces = []config.WorkspaceConfig{{Name: "evaluation", Path: result.ArtifactDir, Default: true}}
@@ -71,6 +80,20 @@ func (*evaluationRunner) Run(ctx context.Context, in evaluation.RunInput) (resul
 		if !in.Live {
 			registry.Register(script)
 		}
+		inner, found := registry.Get(model.Provider)
+		if !found {
+			return errors.New("unsupported provider")
+		}
+		observer = &evaluationProvider{inner: inner, model: model, synthetic: !in.Live, before: in.BeforeAttempt, sink: func(a evaluation.Attempt) error {
+			attemptMu.Lock()
+			result.Attempts = append(result.Attempts, a)
+			attemptMu.Unlock()
+			if in.AttemptSink != nil {
+				return in.AttemptSink(a)
+			}
+			return nil
+		}}
+		registry.Register(observer)
 		secretStore := secrets.NewMemoryStore()
 		e, err = New(ctx, Options{Config: cfg, Store: st, Secrets: secretStore, LLMs: registry, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), DisableScheduler: true, DisableMCP: true})
 		if err != nil {
