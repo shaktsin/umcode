@@ -43,7 +43,7 @@ fi
 # but cannot obtain an Apple timestamp.
 if [[ "$SIGN_ID" == "Developer ID Application:"* ]]; then
     TIMESTAMP_ARG="--timestamp"
-    RUNTIME_ARG="--options runtime"
+    RUNTIME_ARG="--options=runtime"   # one token: it is passed quoted below
 fi
 
 echo "==> Frontend"
