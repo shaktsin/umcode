@@ -2,7 +2,7 @@
 
 Date: 2026-10-10
 Revised: 2026-10-11
-Status: Written design for user review; implementation is not authorized by this document.
+Status: Revised written design approved by the user on 2026-10-11; implementation plan review remains pending.
 Base: master `018c069`, including merged PR #53 (`fdea0b2`).
 Parent: `2026-09-30-quality-first-token-efficiency-design.md`.
 
