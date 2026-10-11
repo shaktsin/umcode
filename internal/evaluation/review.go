@@ -37,9 +37,6 @@ func ExportReview(c Campaign, destination string) error {
 		return err
 	}
 	for _, r := range c.Results {
-		if r.Unit.Repeat != 0 {
-			continue
-		}
 		task, ok := c.Manifest.Task(r.Unit.TaskID)
 		if !ok {
 			return errors.New("unknown review task")
@@ -113,9 +110,7 @@ func ImportReview(c Campaign, input io.Reader) (ReviewRevision, error) {
 	}
 	byID := map[string]TaskResult{}
 	for _, r := range c.Results {
-		if r.Unit.Primary {
-			byID[OpaqueID(c, r.Unit.ID)] = r
-		}
+		byID[OpaqueID(c, r.Unit.ID)] = r
 	}
 	seen := map[string]bool{}
 	for _, score := range rev.Scores {
