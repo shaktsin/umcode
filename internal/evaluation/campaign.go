@@ -208,6 +208,22 @@ func RunCampaign(ctx context.Context, m Manifest, runner Runner, o CampaignOptio
 			return saveCampaign(out, c)
 		}
 		r, runErr := runner.Run(ctx, input)
+		if runErr == nil && r.Status == "completed" {
+			task, _ := m.Task(unit.TaskID)
+			if task.TrustedRoot != "" {
+				trusted, e := SafeJoin(m.BaseDir, task.TrustedRoot)
+				if e != nil {
+					runErr = e
+				} else {
+					task.TrustedRoot = trusted
+					r.Checks, runErr = Verify(ctx, task, filepath.Join(workspace, "workspace"), filepath.Join(workspace, "verifier"))
+				}
+			} else {
+				r.Status = "incomplete"
+				r.IncompleteReasons = append(r.IncompleteReasons, "trusted verifier is not configured")
+			}
+		}
+
 		mu.Lock()
 		durable := c.Results[idx].Attempts
 		r.Unit = unit
