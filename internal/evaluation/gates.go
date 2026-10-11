@@ -360,7 +360,7 @@ func Evaluate(c Campaign, review ReviewRevision) Report {
 		report.Limitations = append(report.Limitations, "Explicit product master-off/on comparison missing.")
 	}
 	if !c.Live {
-		report.LiveRelease = combine(report.LiveRelease, Inconclusive)
+		report.LiveRelease = Inconclusive
 		report.Limitations = append(report.Limitations, "Synthetic deterministic runs provide regression evidence, not live release qualification.")
 	}
 	if report.Regression == Fail {

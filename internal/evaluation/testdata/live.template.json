@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "id": "live-template",
+  "source_revision": "phase6a-fixture-v1",
+  "fixture_hash": "74b59848e79bbe652b57f72c4bc677c2b7d54f3c3c02bf24f44f22d8bfa52e3d",
+  "rubric_version": "v1",
+  "scoring_version": "v1",
+  "population": "single synthetic coding regression",
+  "sampling": "one independent task; insufficient for release inference",
+  "seed": "phase6a",
+  "repeats": 1,
+  "max_cost_usd": 0,
+  "models": [
+    {
+      "id": "",
+      "provider": "claude",
+      "reasoning": "standard",
+      "window": 100000,
+      "max_output": 1000,
+      "price": {
+        "id": "",
+        "input": 0,
+        "cached": 0,
+        "output": 0
+      },
+      "credential_ref": "",
+      "credential_kind": "api_key"
+    }
+  ],
+  "arms": [
+    {
+      "id": "off",
+      "mode": "product-off"
+    },
+    {
+      "id": "on",
+      "mode": "product-on"
+    }
+  ],
+  "comparisons": [
+    {
+      "baseline": "off",
+      "treatment": "on"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "notes",
+      "category": "coding",
+      "fixture": "fixture",
+      "fixture_hash": "74b59848e79bbe652b57f72c4bc677c2b7d54f3c3c02bf24f44f22d8bfa52e3d",
+      "prompts": [
+        "Write notes.txt with exactly evaluated."
+      ],
+      "artifacts": [
+        "notes.txt"
+      ],
+      "checks": [
+        {
+          "id": "notes",
+          "argv": [
+            "/bin/sh",
+            "verify.sh"
+          ],
+          "seconds": 5,
+          "safety": false
+        }
+      ],
+      "limits": {
+        "seconds": 30,
+        "tokens": 100000,
+        "tool_rounds": 10
+      },
+      "high_risk": false,
+      "projectless": false,
+      "approval_mode": "normal",
+      "allow_actions": true,
+      "trusted_root": "trusted",
+      "trusted_hash": "785679ce1c02235c3efba94e68e33f390b1f729e5eb341ae6d42281ccb092333"
+    }
+  ]
+}

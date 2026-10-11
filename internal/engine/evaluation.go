@@ -74,7 +74,7 @@ func (*evaluationRunner) Run(ctx context.Context, in evaluation.RunInput) (resul
 		cfg := config.Default(home)
 		cfg.Models.Complexity = map[string]config.ComplexityPreset{model.Reasoning: {MaxOutputTokens: int(model.MaxOutput)}}
 		cfg.Models.Configured = []config.ConfiguredModel{{ID: "evaluation", Provider: model.Provider, Model: model.ID}}
-		cfg.Models.ExecutionLimits = config.ExecutionLimits{MaxDurationMinutes: max(1, (task.Limits.Seconds+59)/60), MaxTokens: task.Limits.Tokens, MaxToolRounds: task.Limits.ToolRounds}
+		cfg.Models.ExecutionLimits = config.ExecutionLimits{MaxDurationMinutes: max(1, (task.Limits.Seconds+59)/60), MaxTokens: task.Limits.Tokens, MaxCostUSD: cfg.Models.ExecutionLimits.MaxCostUSD, MaxToolRounds: task.Limits.ToolRounds}
 		cfg.Tools.Workspaces = []config.WorkspaceConfig{{Name: "evaluation", Path: result.ArtifactDir, Default: true}}
 		registry := llm.NewRegistry()
 		if !in.Live {

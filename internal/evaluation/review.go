@@ -142,3 +142,18 @@ func ImportReview(c Campaign, input io.Reader) (ReviewRevision, error) {
 	}
 	return rev, nil
 }
+
+// RecordReview validates a revision against durable artifacts before saving it.
+func RecordReview(path string, input io.Reader) (ReviewRevision, error) {
+	c, err := LoadCampaign(path)
+	if err != nil {
+		return ReviewRevision{}, err
+	}
+	rev, err := ImportReview(c, input)
+	if err != nil {
+		return rev, err
+	}
+	c.Reviews = append(c.Reviews, rev)
+	c.Phase = "scored"
+	return rev, saveCampaign(path, c)
+}
