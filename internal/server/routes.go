@@ -196,6 +196,9 @@ func (s *Server) routes() map[string]handler {
 		}),
 
 		// turns
+		protocol.MethodTurnDetails: bind(func(ctx context.Context, c *conn, p protocol.TurnDetailsParams) (any, error) {
+			return e.TurnDetails(ctx, p)
+		}),
 		protocol.MethodTurnStart: bind(func(ctx context.Context, c *conn, p protocol.TurnStartParams) (any, error) {
 			c.follow(p.ThreadID)
 			t, err := e.StartTurn(ctx, p)

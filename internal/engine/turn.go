@@ -222,6 +222,8 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 		abort()
 		return protocol.Turn{}, err
 	}
+	recorder := newTurnRecorder(e, turn.ID, opt, "admission")
+	tctx = withTurnRecorder(tctx, recorder)
 	e.Bus.Publish(th.ID, protocol.NotifyTurnStarted, protocol.TurnEvent{Turn: turn})
 
 	userItem, err := e.newItem(ctx, turn, protocol.ItemUserMessage)
@@ -285,6 +287,7 @@ func (e *Engine) saveAndPublish(ctx context.Context, it protocol.Item, method st
 
 // runTurn is the agent loop.
 func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.Turn, res resolved, p protocol.TurnStartParams, release func()) {
+	defer recorderFrom(ctx).finish()
 	budget := newTurnBudget(res.limits)
 	ctx, cancelTurn := context.WithTimeout(ctx, time.Duration(res.limits.MaxDurationMinutes)*time.Minute)
 	defer cancelTurn()
@@ -520,6 +523,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			breakdown.ToolSelection = &report
 		}
 		log.Debug("context accounting", "turn", turn.ID, "breakdown", breakdown)
+		diagnostic := protocol.RequestDiagnostics{Estimates: map[string]int{"system": breakdown.SystemTokens, "toolSchemas": breakdown.ToolSpecTokens, "conversation": breakdown.ConversationTokens, "retrieval": breakdown.RetrievalPacketTokens, "work": breakdown.WorkPacketTokens, "evidence": breakdown.EvidencePacketTokens, "toolResults": breakdown.ToolResultTokens, "reducedResults": breakdown.ToolResultsReduced}}
+		for _, spec := range req.Tools {
+			diagnostic.ToolNames = append(diagnostic.ToolNames, spec.Name)
+		}
+		recorderFrom(ctx).prepare(diagnostic)
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
 			if reason := budget.stopReason(); reason != "" {
@@ -809,6 +817,27 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 			CachedInputTokens: totals.CachedInputTokens, OutputTokens: totals.OutputTokens,
 			Subscription: cred.Material.Kind == llm.KindChatGPT})
 		budget.addUsage(totals)
+		diagnostic := recorderFrom(ctx).template()
+		diagnostic.Phase, diagnostic.Provider, diagnostic.Model = role, res.sel.Provider, res.sel.Model
+		diagnostic.InputTokens, diagnostic.CachedInputTokens = &totals.InputTokens, &totals.CachedInputTokens
+		diagnostic.OutputTokens, diagnostic.ReasoningTokens = &totals.OutputTokens, &totals.ReasoningTokens
+		diagnostic.MeasurementOrigin = "provider"
+		if totals.Estimated {
+			diagnostic.MeasurementOrigin = "estimated"
+		}
+		diagnostic.CostState = "unavailable"
+		if !res.meta.PriceUnknown && cred.Material.Kind != llm.KindChatGPT {
+			diagnostic.CostState = "known"
+			diagnostic.CostUSD = &totals.CostUSD
+		}
+		diagnostic.ToolCalls = map[string]int{}
+		for _, call := range out.calls {
+			diagnostic.ToolCalls[call.Name]++
+		}
+		if status != "ok" {
+			diagnostic.Fallback = status
+		}
+		recorderFrom(ctx).recordRequest(diagnostic)
 		if err := e.Store.InsertUsage(sctx, store.UsageRecord{CredentialID: cred.Record.ID, Provider: res.sel.Provider,
 			Model: res.sel.Model, ThreadID: turn.ThreadID, TurnID: turn.ID, Role: role, Usage: totals,
 			LatencyMs: time.Since(start).Milliseconds(), Status: status}); err != nil {
@@ -1289,9 +1318,11 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 	e.publishThread(ctx, th.ID)
 	if th.Title == "" && turn.Status == protocol.TurnCompleted {
 		// Titles are generated in the background so the thread is free for the next turn.
+		recorderFrom(ctx).retain()
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()
+			defer recorderFrom(ctx).finish()
 			e.generateTitle(ctx, th.ID, turn)
 			e.publishThread(ctx, th.ID)
 		}()

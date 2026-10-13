@@ -84,6 +84,15 @@ func (e *Engine) llmTitle(ctx context.Context, turn protocol.Turn, first, reply 
 	if !ok {
 		status = "error"
 	}
+	diagnostic := protocol.RequestDiagnostics{Phase: "title", Provider: provider, Model: model, InputTokens: &totals.InputTokens, CachedInputTokens: &totals.CachedInputTokens, OutputTokens: &totals.OutputTokens, ReasoningTokens: &totals.ReasoningTokens, MeasurementOrigin: "provider", CostState: "unavailable"}
+	if totals.Estimated {
+		diagnostic.MeasurementOrigin = "estimated"
+	}
+	if !meta.PriceUnknown && cred.Material.Kind != llm.KindChatGPT {
+		diagnostic.CostState = "known"
+		diagnostic.CostUSD = &totals.CostUSD
+	}
+	recorderFrom(ctx).recordRequest(diagnostic)
 	_ = e.Store.InsertUsage(ctx, store.UsageRecord{CredentialID: cred.Record.ID, Provider: provider, Model: model,
 		ThreadID: turn.ThreadID, TurnID: turn.ID, Role: "title", Usage: totals,
 		LatencyMs: time.Since(start).Milliseconds(), Status: status})
