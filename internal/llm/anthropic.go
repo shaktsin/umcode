@@ -46,7 +46,7 @@ type anthBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
-	Thinking  string          `json:"thinking,omitempty"`
+	Thinking  *string         `json:"thinking,omitempty"`
 	Signature string          `json:"signature,omitempty"`
 	Data      string          `json:"data,omitempty"`
 }
@@ -128,7 +128,7 @@ func buildAnthropicRequest(req Request) anthRequest {
 				if th.Redacted != "" {
 					blocks = append(blocks, anthBlock{Type: "redacted_thinking", Data: th.Redacted})
 				} else if th.Signature != "" {
-					blocks = append(blocks, anthBlock{Type: "thinking", Thinking: th.Text, Signature: th.Signature})
+					blocks = append(blocks, anthBlock{Type: "thinking", Thinking: &th.Text, Signature: th.Signature})
 				}
 			}
 			if txt := m.JoinedText(); txt != "" {

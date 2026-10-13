@@ -149,6 +149,9 @@
       </div>
     {/if}
     <textarea
+      {...{ autocorrect: 'off' }}
+      autocapitalize="off"
+      spellcheck={false}
       bind:this={input}
       bind:value={text}
       onkeydown={onKeydown}
