@@ -392,9 +392,17 @@ func (s *Server) routes() map[string]handler {
 		}),
 
 		// skills
-		protocol.MethodSkillList: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
+		protocol.MethodSkillList: bind(func(ctx context.Context, c *conn, p protocol.SkillListParams) (any, error) {
+			if e.Plugins != nil {
+				snapshot, err := e.Plugins.Acquire(ctx, p.ProjectID)
+				if err != nil {
+					return nil, err
+				}
+				defer snapshot.Release()
+				ctx = skills.WithSnapshot(ctx, snapshot.SkillSnapshot())
+			}
 			res := protocol.SkillListResult{Skills: []protocol.SkillInfo{}, Dirs: e.Skills.Dirs()}
-			for _, sk := range e.Skills.List() {
+			for _, sk := range e.Skills.ListContext(ctx) {
 				res.Skills = append(res.Skills, skillInfo(e.Skills, sk))
 			}
 			return res, nil

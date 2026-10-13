@@ -38,6 +38,35 @@ func TestPluginInspectInstallListGet(t *testing.T) {
 	}
 }
 
+func TestSkillListIncludesOnlyEnabledProjectPlugins(t *testing.T) {
+	h := newHarness(t, nil)
+	installed := installServerPlugin(t, h, writeServerPlugin(t, "1.0.0"), plugins.InstallManaged)
+	var list protocol.SkillListResult
+	h.call(protocol.MethodSkillList, map[string]string{"projectId": h.proj.ID}, &list)
+	found := false
+	for _, skill := range list.Skills {
+		if skill.Name == "server-plugin:greet" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("enabled project skill missing: %#v", list.Skills)
+	}
+	h.call(protocol.MethodSkillList, nil, &list)
+	for _, skill := range list.Skills {
+		if skill.Name == "server-plugin:greet" {
+			t.Fatal("project plugin leaked into projectless chat")
+		}
+	}
+	h.call(protocol.MethodPluginSetEnabled, protocol.PluginSetEnabledParams{PluginID: installed.ID, ProjectID: h.proj.ID, Enabled: false}, nil)
+	h.call(protocol.MethodSkillList, map[string]string{"projectId": h.proj.ID}, &list)
+	for _, skill := range list.Skills {
+		if skill.Name == "server-plugin:greet" {
+			t.Fatal("disabled plugin skill listed")
+		}
+	}
+}
+
 func TestPluginGetIncludesHealthAndHookFailures(t *testing.T) {
 	h := newHarness(t, nil)
 	installed := installServerPlugin(t, h, writeServerPlugin(t, "1.0.0"), plugins.InstallManaged)

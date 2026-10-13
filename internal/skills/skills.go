@@ -420,6 +420,17 @@ func init() {
 
 var tokenRE = regexp.MustCompile(`[a-z0-9]+`)
 
+var invocationRE = regexp.MustCompile(`^/([a-z0-9][a-z0-9._-]*(?::[a-z0-9][a-z0-9._-]*)?)(?:\s|$)`)
+
+// Invocation identifies a leading /skill or /plugin:skill command, excluding paths.
+func Invocation(text string) (string, bool) {
+	match := invocationRE.FindStringSubmatch(text)
+	if match == nil {
+		return "", false
+	}
+	return match[1], true
+}
+
 // Match returns the skill whose description shares the most keywords with
 // text (at least one), like the Python app's trigger matching.
 func (r *Registry) Match(text string) (*Skill, bool) {
