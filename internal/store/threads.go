@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/vault"
 )
 
 const threadCols = `id, title, project_id, workspace_mode, channel, pinned, archived, provider, model, complexity, credential_id, approval_mode, forked_from, created_at, updated_at`
@@ -186,6 +187,8 @@ func (s *Store) RememberedThreadDecision(ctx context.Context, threadID, tool, si
 
 // DeleteThread removes a thread, its turns, items and search entries.
 func (s *Store) DeleteThread(ctx context.Context, id string) error {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err

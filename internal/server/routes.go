@@ -196,6 +196,9 @@ func (s *Server) routes() map[string]handler {
 		}),
 
 		// turns
+		protocol.MethodTurnDetails: bind(func(ctx context.Context, c *conn, p protocol.TurnDetailsParams) (any, error) {
+			return e.TurnDetails(ctx, p)
+		}),
 		protocol.MethodTurnStart: bind(func(ctx context.Context, c *conn, p protocol.TurnStartParams) (any, error) {
 			c.follow(p.ThreadID)
 			t, err := e.StartTurn(ctx, p)
@@ -225,6 +228,15 @@ func (s *Server) routes() map[string]handler {
 			}
 			return protocol.ApprovalListResult{Approvals: list}, err
 		}),
+		protocol.MethodProjectMemoryList: bind(func(ctx context.Context, c *conn, p protocol.MemoryListParams) (any, error) {
+			return e.ListProjectMemory(ctx, p)
+		}),
+		protocol.MethodProjectMemoryCorrect: bind(func(ctx context.Context, c *conn, p protocol.MemoryChangeParams) (any, error) {
+			return e.CorrectProjectMemory(ctx, p)
+		}),
+		protocol.MethodProjectMemoryRetire: bind(func(ctx context.Context, c *conn, p protocol.MemoryChangeParams) (any, error) {
+			return e.RetireProjectMemory(ctx, p)
+		}),
 		protocol.MethodWorkList: bind(func(ctx context.Context, c *conn, p protocol.WorkListParams) (any, error) {
 			return e.ListWorks(ctx, p.ThreadID)
 		}),
@@ -233,6 +245,15 @@ func (s *Server) routes() map[string]handler {
 		}),
 		protocol.MethodVaultStats: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
 			return e.VaultStats(ctx)
+		}),
+		protocol.MethodStorageSettingsGet: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
+			return e.StorageSettings(ctx)
+		}),
+		protocol.MethodStorageSetRetention: bind(func(ctx context.Context, c *conn, p protocol.RetentionDays) (any, error) {
+			return e.SetStorageRetention(ctx, p)
+		}),
+		protocol.MethodStorageCleanup: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
+			return e.CleanupStorage(ctx)
 		}),
 		protocol.MethodApprovalRespond: bind(func(ctx context.Context, c *conn, p protocol.ApprovalRespondParams) (any, error) {
 			if !c.IsAdmin() {

@@ -54,11 +54,16 @@ func (e *Engine) SetTokenOptimization(ctx context.Context, p protocol.TokenOptim
 	return protocol.TokenOptimizationResult{Enabled: p.Enabled, Source: "stored"}, nil
 }
 func (e *Engine) resolveOptimizationPolicy(ctx context.Context) (optimization.Policy, error) {
-	if e.evaluationPolicy != nil {
-		return *e.evaluationPolicy, nil
-	}
-	p, _, err := e.optimizationSetting(ctx)
+	p, _, err := e.resolveOptimizationSnapshot(ctx)
 	return p, err
+}
+
+func (e *Engine) resolveOptimizationSnapshot(ctx context.Context) (optimization.Policy, string, error) {
+	if e.evaluationPolicy != nil {
+		return *e.evaluationPolicy, "evaluation", nil
+	}
+	p, setting, err := e.optimizationSetting(ctx)
+	return p, setting.Source, err
 }
 func (e *Engine) optimizationPolicy(ctx context.Context) optimization.Policy {
 	if p, ok := optimization.FromContext(ctx); ok {

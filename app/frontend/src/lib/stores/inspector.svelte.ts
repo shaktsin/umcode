@@ -1,8 +1,9 @@
 import { app } from './app.svelte';
 import { projects } from './projects.svelte';
 import type { BrowserArtifact, BrowserVerificationResult, FileChangeData, PreviewEvent, PreviewSession, ProjectArtifactContent, ProjectFileContent, RevertResult } from '$lib/types';
+import type { TurnDetailsResult } from '$lib/turnDetails';
 
-export type TabKind = 'file' | 'diff' | 'output' | 'preview' | 'browser' | 'artifact';
+export type TabKind = 'turnDetails' | 'file' | 'diff' | 'output' | 'preview' | 'browser' | 'artifact';
 
 export interface InspectorTab {
   id: string;
@@ -11,6 +12,7 @@ export interface InspectorTab {
   path?: string;
   projectId?: string;
   threadId?: string;
+  turnDetails?: TurnDetailsResult;
   /** file */
   content?: string;
   truncated?: boolean;
@@ -68,6 +70,18 @@ class Inspector {
   closeAll() {
     this.tabs = [];
     this.activeId = null;
+  }
+
+  async openTurnDetails(threadId: string, turnId: string): Promise<void> {
+    const id = `turn-details:${turnId}`;
+    const existing = this.tabs.find((tab) => tab.id === id);
+    this.show({ ...existing, id, kind: 'turnDetails', title: 'Turn details', threadId, loading: true, error: undefined });
+    const result = await app.try<TurnDetailsResult>('turn/details', { threadId, turnId });
+    // Closing the tab while the request is in flight must not resurrect it.
+    if (!this.tabs.some((tab) => tab.id === id)) return;
+    this.tabs = this.tabs.map((tab) => tab.id !== id ? tab : result
+      ? { ...tab, loading: false, error: undefined, turnDetails: result }
+      : { ...tab, loading: false, error: 'Turn details are unavailable. Retry to reload this turn.' });
   }
 
   /** Open a file from the project, at whatever it says on disk now. */

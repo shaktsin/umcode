@@ -281,7 +281,9 @@ Types are in `internal/protocol`. Methods:
 | Session | `initialize`, `engine/status`, `events/subscribe` (`{all: true}` or `{threadIds: [...]}`) |
 | Projects | `project/list`, `project/create`, `project/open`, `project/update`, `project/delete`, `project/instructions`, `project/files`, `project/readFile`, `project/diff`, `project/revertTurn` |
 | Threads | `thread/start` (`projectId`), `thread/list`, `thread/read`, `thread/rename`, `thread/pin`, `thread/archive`, `thread/delete`, `thread/fork`, `thread/search`, `thread/export`, `thread/setSettings` |
-| Turns | `turn/start` (`text`, `attachments`, `override`), `turn/interrupt` |
+| Turns | `turn/start` (`text`, `attachments`, `override`), `turn/interrupt`, `turn/details` |
+| Project memory | `project/memory/list`, `project/memory/correct`, `project/memory/retire` |
+| Vault storage | `vault/stats`, `settings/storage/get`, `settings/storage/setRetention`, `storage/cleanup` |
 | Approvals | `approval/list`, `approval/respond` |
 | Providers, models | `provider/list`, `model/list`, `model/setHidden`, `model/setPrice`, `model/refresh` |
 | API keys | `credential/list`, `credential/add`, `credential/test`, `credential/update`, `credential/rotate`, `credential/delete` |

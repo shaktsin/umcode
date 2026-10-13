@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/vault"
 )
 
 func upsertVaultObject(ctx context.Context, x execer, o protocol.VaultObjectRow) error {
@@ -119,6 +120,8 @@ func insertFingerprint(ctx context.Context, x execer, f protocol.Fingerprint) (p
 
 // MarkEvidenceStale sets stale_at on the given evidence rows (those not already stale).
 func (s *Store) MarkEvidenceStale(ctx context.Context, ids []string, at time.Time) error {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	for _, id := range ids {
 		if _, err := s.DB.ExecContext(ctx, `UPDATE evidence SET stale_at = ? WHERE id = ? AND stale_at IS NULL`, FormatTime(at), id); err != nil {
 			return err
@@ -130,8 +133,24 @@ func (s *Store) MarkEvidenceStale(ctx context.Context, ids []string, at time.Tim
 // ReferencedVaultHashes returns the vault hashes that GC must keep: evidence of
 // works that are still open, and active (not stale) evidence of any work.
 func (s *Store) ReferencedVaultHashes(ctx context.Context) (map[string]bool, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT e.vault_hash FROM evidence e JOIN works w ON w.id = e.work_id
-		WHERE e.vault_hash != '' AND (w.status = 'open' OR e.stale_at IS NULL)`)
+	unlock := vault.LockLifecycle()
+	defer unlock()
+	return s.referencedVaultHashes(ctx)
+}
+
+// ReferencedVaultHashesDuringGC is for the collector while it owns the shared
+// vault lifecycle lock. Other callers must use ReferencedVaultHashes.
+func (s *Store) ReferencedVaultHashesDuringGC(ctx context.Context) (map[string]bool, error) {
+	return s.referencedVaultHashes(ctx)
+}
+
+func (s *Store) referencedVaultHashes(ctx context.Context) (map[string]bool, error) {
+	// Retry the backfill here as well as in the schema migration. This covers
+	// memories whose historical evidence was indexed after the migration ran.
+	if _, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO memory_vault_refs(memory_id,vault_hash) SELECT m.id,e.vault_hash FROM project_memories m, json_each(CASE WHEN json_valid(m.evidence_json) THEN m.evidence_json ELSE '[]' END) ids JOIN evidence e ON e.id=ids.value WHERE m.status IN ('active','pending_repair') AND e.vault_hash<>''`); err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT vault_hash FROM (SELECT e.vault_hash FROM evidence e JOIN works w ON w.id=e.work_id WHERE e.vault_hash != '' AND (w.status='open' OR e.stale_at IS NULL) UNION SELECT r.vault_hash FROM memory_vault_refs r JOIN project_memories m ON m.id=r.memory_id WHERE m.status IN ('active','pending_repair'))`)
 	if err != nil {
 		return nil, err
 	}
@@ -167,6 +186,8 @@ type RecordAttemptInput struct {
 // RecordAttempt writes the vault row, fingerprint, evidence, attempt and criterion
 // update in one transaction. Nothing is written when any part fails.
 func (s *Store) RecordAttempt(ctx context.Context, in RecordAttemptInput) (protocol.VerificationAttempt, error) {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return protocol.VerificationAttempt{}, err
