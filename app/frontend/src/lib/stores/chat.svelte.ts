@@ -272,14 +272,15 @@ class ChatState {
     if (projects.activeId !== loadedProject) await projects.open(loadedProject);
   }
 
-  newChat() {
+  newChat(projectId: string | null = null) {
+    if (projects.activeId !== projectId) void projects.open(projectId);
     app.view = 'chat';
     this.main.reset();
   }
 
   async newChatFor(projectId: string | null) {
     if (projects.activeId !== projectId) await projects.open(projectId);
-    this.newChat();
+    this.newChat(projectId);
   }
 
   /** Send in the main chat, creating the thread in the open project on first send. */
