@@ -16,6 +16,7 @@ import (
 	"github.com/shaktsin/umcode/internal/fingerprint"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/memory"
+	"github.com/shaktsin/umcode/internal/optimization"
 	"github.com/shaktsin/umcode/internal/projects"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/secrets"
@@ -614,6 +615,52 @@ func TestCuratedMemoryE2EPlacementAndNextPrompt(t *testing.T) {
 				t.Fatalf("unexpected total provider calls=%d want=%d", len(provider.requests), wantCalls)
 			}
 		})
+	}
+}
+
+func TestMemoryCorrectionAndRetirementUpdateSubsequentContextWithOptimizationOff(t *testing.T) {
+	e, th, turn, p, workID, _ := memoryEngine(t)
+	installMemoryProvider(t, e)
+	e.initMemory(t.Context())
+	runMemoryTurn(t, e, th, turn)
+	entries, err := e.ListProjectMemory(t.Context(), protocol.MemoryListParams{ProjectID: p.ID})
+	if err != nil || len(entries.Entries) != 1 {
+		t.Fatalf("memory entries=%+v err=%v", entries, err)
+	}
+	if _, err := e.SetTokenOptimization(t.Context(), protocol.TokenOptimizationParams{Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	entry := entries.Entries[0]
+	correction := "Prefer the package test command while iterating"
+	corrected, err := e.CorrectProjectMemory(t.Context(), protocol.MemoryChangeParams{ProjectID: p.ID, MemoryID: entry.ID, ExpectedTextHash: entry.TextHash, ExpectedTargetHash: entry.TargetHash, Text: correction})
+	if err != nil || !corrected.Entry.UserOwned {
+		t.Fatalf("correction=%+v err=%v", corrected, err)
+	}
+	policy := optimization.WithPolicy(t.Context(), optimization.All(true))
+	prompt := e.systemPrompt(policy, "next task", &p, "", nil)
+	if !strings.Contains(prompt, correction) || strings.Contains(prompt, memoryCommandText) {
+		t.Fatalf("subsequent prompt did not use corrected knowledge: %s", prompt)
+	}
+	updated, err := e.ListProjectMemory(t.Context(), protocol.MemoryListParams{ProjectID: p.ID})
+	if err != nil || len(updated.Entries) != 1 {
+		t.Fatalf("corrected review=%+v err=%v", updated, err)
+	}
+	retired, err := e.RetireProjectMemory(t.Context(), protocol.MemoryChangeParams{ProjectID: p.ID, MemoryID: corrected.Entry.ID, ExpectedTextHash: corrected.Entry.TextHash, ExpectedTargetHash: updated.Entries[0].TargetHash})
+	if err != nil || !retired.InstructionRemains {
+		t.Fatalf("retirement=%+v err=%v", retired, err)
+	}
+	prompt = e.systemPrompt(policy, "next task", &p, "", nil)
+	if !strings.Contains(prompt, correction) {
+		t.Fatalf("retirement hid a remaining user-owned instruction: %s", prompt)
+	}
+	// The project review and explicit mutations remain usable after the global
+	// optimization switch is turned off.
+	page, err := e.ListProjectMemory(t.Context(), protocol.MemoryListParams{ProjectID: p.ID})
+	if err != nil || len(page.Entries) != 0 {
+		t.Fatalf("retired review with optimization off=%+v err=%v", page, err)
+	}
+	if _, err := e.Store.GetWorkDetail(t.Context(), workID); err != nil {
+		t.Fatal(err)
 	}
 }
 

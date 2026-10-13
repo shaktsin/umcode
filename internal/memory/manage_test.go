@@ -67,3 +67,27 @@ func TestManageMemoryExternalEdit(t *testing.T) {
 		t.Fatalf("result=%+v file=%s", result, readTarget(t, req.Project))
 	}
 }
+
+func TestManageMemoryRetirePreservesUserOwnedCorrection(t *testing.T) {
+	svc, st, req := serviceFixture(t)
+	svc.PromoteCompleted(t.Context(), req)
+	rows, err := st.ListProjectMemories(t.Context(), req.Project.ID)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	corrected, err := svc.Correct(t.Context(), protocol.MemoryChangeParams{ProjectID: req.Project.ID, MemoryID: rows[0].ID, ExpectedTextHash: rows[0].TextHash, ExpectedTargetHash: rows[0].FileHashAfter, Text: "Prefer the package tests while iterating"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.List(t.Context(), protocol.MemoryListParams{ProjectID: req.Project.ID})
+	if err != nil || len(page.Entries) != 1 || !page.Entries[0].UserOwned {
+		t.Fatalf("corrected entry=%+v err=%v", page, err)
+	}
+	retired, err := svc.Retire(t.Context(), protocol.MemoryChangeParams{ProjectID: req.Project.ID, MemoryID: corrected.Entry.ID, ExpectedTextHash: corrected.Entry.TextHash, ExpectedTargetHash: page.Entries[0].TargetHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retired.InstructionRemains || !strings.Contains(readTarget(t, req.Project), "- Prefer the package tests while iterating") {
+		t.Fatalf("retirement removed explicit user correction: result=%+v file=%s", retired, readTarget(t, req.Project))
+	}
+}

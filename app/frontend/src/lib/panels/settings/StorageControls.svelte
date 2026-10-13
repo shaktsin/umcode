@@ -32,7 +32,7 @@
 
   {#if view.result}
     <p class="text-xs text-muted mb-3">Settings source: {view.result.source}</p>
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {#each [['raw', 'Raw output'], ['stale', 'Stale output'], ['blob', 'Large blobs'], ['redacted', 'Redacted output']] as [key, label]}
         <label class="text-xs text-muted">{label}
           <span class="mt-1 flex items-center gap-2">

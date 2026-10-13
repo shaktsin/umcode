@@ -172,7 +172,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	if err := validateSelection(p.Override); err != nil {
 		return protocol.Turn{}, protocol.Errorf(protocol.CodeInvalidParams, "%v", err)
 	}
-	opt, err := e.resolveOptimizationPolicy(ctx)
+	opt, optSource, err := e.resolveOptimizationSnapshot(ctx)
 	if err != nil {
 		return protocol.Turn{}, err
 	}
@@ -222,7 +222,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 		abort()
 		return protocol.Turn{}, err
 	}
-	recorder := newTurnRecorder(e, turn.ID, opt, "admission")
+	recorder := newTurnRecorder(e, turn.ID, opt, optSource)
 	tctx = withTurnRecorder(tctx, recorder)
 	e.Bus.Publish(th.ID, protocol.NotifyTurnStarted, protocol.TurnEvent{Turn: turn})
 

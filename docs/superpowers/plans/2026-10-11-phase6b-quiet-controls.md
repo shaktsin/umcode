@@ -39,11 +39,11 @@
 
 `TurnDiagnostics` version 1 contains admission policy/source, bounded request diagnostics, omission counts and completeness. Request diagnostics identify phase/ordinal/model, nullable token/cost measurements with origins and availability, selected/submitted source references, schema names, call counts and fallback/reducer summaries. Limits: 128 request records, 128 source references and 128 tool names per record; omitted counts remain visible. Raw bodies are excluded. Cost states are `known`, `partial`, `unavailable`; diagnostic availability is `recorded`, `partial`, `not_recorded`. Store data lives separately from message items and cascades with turn deletion.
 
-- [ ] Write `TestTurnDetailsRoundTrip`, `TestTurnDetailsLegacy`, `TestTurnDetailsWrongThread`, `TestTurnDetailsBounds`: assert version/policy survive reopen, legacy diagnostics are nil with `not_recorded`, mismatched ownership fails, and cap overflow increments omitted counts.
-- [ ] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/store -run TestTurnDetails -count=1`; verify failure before implementation.
-- [ ] Implement migration and typed contracts, shared normalization before persistence, scoped SQL lookup and legacy usage loading. Reject unsupported diagnostic versions on writes.
-- [ ] Rerun the focused tests; expect PASS. Check JSON round trips distinguish absent measurements from measured zero.
-- [ ] Commit `feat: persist versioned turn inspection snapshots`.
+- [x] Write `TestTurnDetailsRoundTrip`, `TestTurnDetailsLegacy`, `TestTurnDetailsWrongThread`, `TestTurnDetailsBounds`: assert version/policy survive reopen, legacy diagnostics are nil with `not_recorded`, mismatched ownership fails, and cap overflow increments omitted counts.
+- [x] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/store -run TestTurnDetails -count=1`; verify failure before implementation.
+- [x] Implement migration and typed contracts, shared normalization before persistence, scoped SQL lookup and legacy usage loading. Reject unsupported diagnostic versions on writes.
+- [x] Rerun the focused tests; expect PASS. Check JSON round trips distinguish absent measurements from measured zero.
+- [x] Commit `feat: persist versioned turn inspection snapshots`.
 
 ### Task 2: Capture real execution diagnostics and expose inspection
 
@@ -51,11 +51,11 @@
 
 **Interfaces:** Consume Task 1. Produce `Engine.TurnDetails(ctx context.Context, p protocol.TurnDetailsParams) (protocol.TurnDetailsResult, error)` and JSON-RPC `turn/details`. Internal per-turn recorder: `recordRequest(d protocol.RequestDiagnostics)` and `flush(ctx context.Context) error`, owned by the turn rather than global mutable state.
 
-- [ ] Write `TestTurnDetailsAdmissionSnapshot`, `TestTurnDetailsPartialPricing`, `TestTurnDetailsInterrupted`, `TestTurnDetailsSensitiveBodies`, `TestTurnDetailsCaptureFailure`: assert toggling settings does not alter prior policy; known plus unknown prices yield partial cost; failed requests retain available usage; secret prompt/tool bodies are absent; persistence failure does not fail the task.
-- [ ] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/engine -run TestTurnDetails -count=1`; verify RED.
-- [ ] Snapshot policy at admission; persist initial snapshot and incremental bounded request records. Capture accounting at existing request/context/tool boundaries, distinguish retrieval selection from submitted membership, preserve usage provenance at pricing time and record all attributable model phases. For unidentifiable legacy/auxiliary coverage mark partial rather than asserting complete totals. Flush on success, failure and interruption with a bounded cleanup context. Add typed route and ownership errors.
-- [ ] Rerun engine tests and add server route coverage for valid/mismatched IDs; expect PASS.
-- [ ] Commit `feat: expose recorded turn optimization details`.
+- [x] Write `TestTurnDetailsAdmissionSnapshot`, `TestTurnDetailsPartialPricing`, `TestTurnDetailsInterrupted`, `TestTurnDetailsSensitiveBodies`, `TestTurnDetailsCaptureFailure`: assert toggling settings does not alter prior policy; known plus unknown prices yield partial cost; failed requests retain available usage; secret prompt/tool bodies are absent; persistence failure does not fail the task.
+- [x] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/engine -run TestTurnDetails -count=1`; verify RED.
+- [x] Snapshot policy at admission; persist initial snapshot and incremental bounded request records. Capture accounting at existing request/context/tool boundaries, distinguish retrieval selection from submitted membership, preserve usage provenance at pricing time and record all attributable model phases. For unidentifiable legacy/auxiliary coverage mark partial rather than asserting complete totals. Flush on success, failure and interruption with a bounded cleanup context. Add typed route and ownership errors.
+- [x] Rerun engine tests and add server route coverage for valid/mismatched IDs; expect PASS.
+- [x] Commit `feat: expose recorded turn optimization details`.
 
 ### Task 3: Response action and inspector UI
 
@@ -63,11 +63,11 @@
 
 **Interfaces:** Consume `turn/details`; produce `inspector.openTurnDetails(threadId: string, turnId: string): Promise<void>`. Tab key is `turn-details:<turnId>` and kind is `turnDetails`. A pure controller owns request generation and typed result state; no new state framework.
 
-- [ ] Write `deduplicates same turn`, `ignores stale and closed-tab responses`, `renders unknown separately from zero`, `refreshes partial running turn`, `retries failures` controller tests with deferred RPC promises and fixtures from Task 1.
-- [ ] Run `npm test -- turnDetails.test.ts` in `app/frontend`; verify RED.
-- [ ] Add response `⋯` menu with “Turn details”, accessible keyboard/focus behavior and existing copy action. Implement inspector tab and overview, usage, context, tools, collapsed developer sections. Use exact copy “Not recorded for this turn” and “Cost unavailable”; label partial/estimated values. Reopen refreshes running turns; deleted turns show a clear unavailable error. Do not auto-open or add chat notifications.
-- [ ] Rerun tests and `npm run check`; expect PASS. Inspect long IDs/source lists at narrow width for wrapping and bounded scrolling.
-- [ ] Commit `feat: add on-demand turn details inspector`.
+- [x] Write `deduplicates same turn`, `ignores stale and closed-tab responses`, `renders unknown separately from zero`, `refreshes partial running turn`, `retries failures` controller tests with deferred RPC promises and fixtures from Task 1.
+- [x] Run `npm test -- turnDetails.test.ts` in `app/frontend`; verify RED.
+- [x] Add response `⋯` menu with “Turn details”, accessible keyboard/focus behavior and existing copy action. Implement inspector tab and overview, usage, context, tools, collapsed developer sections. Use exact copy “Not recorded for this turn” and “Cost unavailable”; label partial/estimated values. Reopen refreshes running turns; deleted turns show a clear unavailable error. Do not auto-open or add chat notifications.
+- [x] Rerun tests and `npm run check`; expect PASS. Inspect long IDs/source lists at narrow width for wrapping and bounded scrolling.
+- [x] Commit `feat: add on-demand turn details inspector`.
 
 ## Delivery B: Memory review and management
 
@@ -79,11 +79,11 @@
 
 Persist revision/lineage, user correction provenance and retirement tombstones keyed by project/semantic key/source revision/text hash. Changes create immutable audit entries. Corrected successor is explicitly user-authored and unverified; it cannot masquerade as an automatically verified promotion. Produce `Store.ListMemoryReview(ctx context.Context, p protocol.MemoryListParams) (protocol.MemoryListResult, error)` and transactional helpers used only by Task 5.
 
-- [ ] Write `TestMemoryReviewPagination`, `TestMemoryReviewProjectIsolation`, `TestMemoryRetirementLineage`: assert active/history separation, stable pages with same timestamps, invalid cursors rejected and tombstones distinguish unchanged candidates from genuinely new evidence.
-- [ ] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/store -run 'TestMemoryReview|TestMemoryRetirement' -count=1`; verify RED.
-- [ ] Implement DTOs, migration and scoped queries. Keep audit/provenance records after source work deletion. Define mutation prepare/file-written/commit states and explicit correction/retirement operation kind for recovery.
-- [ ] Rerun tests; expect PASS.
-- [ ] Commit `feat: add project memory review and change lineage`.
+- [x] Write `TestMemoryReviewPagination`, `TestMemoryReviewProjectIsolation`, `TestMemoryRetirementLineage`: assert active/history separation, stable pages with same timestamps, invalid cursors rejected and tombstones distinguish unchanged candidates from genuinely new evidence.
+- [x] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/store -run 'TestMemoryReview|TestMemoryRetirement' -count=1`; verify RED.
+- [x] Implement DTOs, migration and scoped queries. Keep audit/provenance records after source work deletion. Define mutation prepare/file-written/commit states and explicit correction/retirement operation kind for recovery.
+- [x] Rerun tests; expect PASS.
+- [x] Commit `feat: add project memory review and change lineage`.
 
 ### Task 5: Recoverable correction and retirement service
 
@@ -91,11 +91,11 @@ Persist revision/lineage, user correction provenance and retirement tombstones k
 
 **Interfaces:** Consume Task 4. Produce `Service.Correct(ctx context.Context, p protocol.MemoryChangeParams) (protocol.MemoryChangeResult, error)` and `Service.Retire(ctx context.Context, p protocol.MemoryChangeParams) (protocol.MemoryChangeResult, error)`; engine wrappers resolve project roots and reject wrong-project IDs. Mutation locks coordinate with promotion for the same target.
 
-- [ ] Write `TestManageMemoryCorrect`, `TestManageMemoryRetireGenerated`, `TestManageMemoryUserOwned`, `TestManageMemoryExternalEdit`, `TestManageMemoryRecovery`, `TestManageMemorySuppressOldCandidate`: assert exact unrelated bytes unchanged, successor provenance unverified/user-authored, generated bullet removed only with ownership proof, externally edited/adopted text survives with `InstructionRemains`, stale hash conflicts, restart repairs each crash boundary and old candidates cannot re-promote.
-- [ ] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/memory -run TestManageMemory -count=1`; verify RED.
-- [ ] Implement validated correction text bounded to existing instruction limits and restricted to a single valid memory bullet. Use compare-and-swap/atomic file replacement and durable journal. Retire the record even when user-owned text must remain, returning the warning. Reject concurrent stale mutations; extend startup recovery and qualification tombstone checks. Check active promotion/correction operations before allowing conflicting changes.
-- [ ] Rerun memory/store tests; add engine/server tests proving management works with optimization disabled and remains project-scoped. Expect PASS.
-- [ ] Commit `feat: safely correct and retire project memory`.
+- [x] Write `TestManageMemoryCorrect`, `TestManageMemoryRetireGenerated`, `TestManageMemoryUserOwned`, `TestManageMemoryExternalEdit`, `TestManageMemoryRecovery`, `TestManageMemorySuppressOldCandidate`: assert exact unrelated bytes unchanged, successor provenance unverified/user-authored, generated bullet removed only with ownership proof, externally edited/adopted text survives with `InstructionRemains`, stale hash conflicts, restart repairs each crash boundary and old candidates cannot re-promote.
+- [x] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/memory -run TestManageMemory -count=1`; verify RED.
+- [x] Implement validated correction text bounded to existing instruction limits and restricted to a single valid memory bullet. Use compare-and-swap/atomic file replacement and durable journal. Retire the record even when user-owned text must remain, returning the warning. Reject concurrent stale mutations; extend startup recovery and qualification tombstone checks. Check active promotion/correction operations before allowing conflicting changes.
+- [x] Rerun memory/store tests; add engine/server tests proving management works with optimization disabled and remains project-scoped. Expect PASS.
+- [x] Commit `feat: safely correct and retire project memory`.
 
 ### Task 6: Project memory UI
 
@@ -103,11 +103,11 @@ Persist revision/lineage, user correction provenance and retirement tombstones k
 
 **Interfaces:** Consume Task 4 RPC contracts. Produce controller methods `load(projectId: string)`, `loadMore()`, `correct(entry: MemoryReviewEntry, text: string)`, `retire(entry: MemoryReviewEntry)` and state for rows/cursor/busy/error/conflict. Carry expected hashes from the fetched entry, never current mutable UI state alone.
 
-- [ ] Write `ignores old project responses`, `paginates without duplicates`, `keeps failed edits`, `refreshes conflicts`, `shows instruction remains`, `does not claim correction verification` with deferred mocked RPC.
-- [ ] Run `npm test -- memoryReview.test.ts`; verify RED.
-- [ ] Implement active/history list, provenance links, explicit correction editor and retirement action. No automatic review prompts in chats. Preserve editor contents on failures and show conflict refresh. For remaining instructions offer existing inspector file navigation scoped to the selected project. Disable duplicate mutation submissions and reset state on project change.
-- [ ] Rerun tests and `npm run check`; expect PASS.
-- [ ] Commit `feat: add project memory review controls`.
+- [x] Write `ignores old project responses`, `paginates without duplicates`, `keeps failed edits`, `refreshes conflicts`, `shows instruction remains`, `does not claim correction verification` with deferred mocked RPC.
+- [x] Run `npm test -- memoryReview.test.ts`; verify RED.
+- [x] Implement active/history list, provenance links, explicit correction editor and retirement action. No automatic review prompts in chats. Preserve editor contents on failures and show conflict refresh. For remaining instructions offer existing inspector file navigation scoped to the selected project. Disable duplicate mutation submissions and reset state on project change.
+- [x] Rerun tests and `npm run check`; expect PASS.
+- [x] Commit `feat: add project memory review controls`.
 
 ## Delivery C: Storage management
 
@@ -119,11 +119,11 @@ Persist revision/lineage, user correction provenance and retirement tombstones k
 
 Use one shared vault lifecycle lock through the work service for reference-changing operations and collection, plus final transactional reference recheck; document lock order memory-target then vault-lifecycle then database. Never hold a database transaction while acquiring those locks. Audit all reference writers and deletion paths; do not rely solely on a test-hook snapshot.
 
-- [ ] Write `TestLiveMemoryPinsVaultAfterSourceDeletion`, `TestRetiredMemoryReleasesOnlyUnusedReferences`, `TestGCConcurrentReferenceProtection`, `TestPendingMemoryMutationPinsEvidence`, `TestMemoryReferenceBackfill` with aged objects. Assert live/pending/new references survive, expired truly unreferenced objects are reclaimed, and two memories sharing a hash cannot release each other's pin.
-- [ ] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/store ./internal/work ./internal/memory -run 'TestLiveMemory|TestRetiredMemory|TestGCConcurrent|TestPendingMemory|TestMemoryReference' -count=1`; verify RED.
-- [ ] Implement durable pins, backfill and lock/recheck protocol across promotion, management, deletion and GC. Keep collector reconciliation/crash recovery behavior intact; do not touch project files.
-- [ ] Rerun focused tests and race-check changed lifecycle paths; expect PASS.
-- [ ] Commit `fix: preserve live memory evidence during vault collection`.
+- [x] Write `TestLiveMemoryPinsVaultAfterSourceDeletion`, `TestRetiredMemoryReleasesOnlyUnusedReferences`, `TestGCConcurrentReferenceProtection`, `TestPendingMemoryMutationPinsEvidence`, `TestMemoryReferenceBackfill` with aged objects. Assert live/pending/new references survive, expired truly unreferenced objects are reclaimed, and two memories sharing a hash cannot release each other's pin.
+- [x] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/store ./internal/work ./internal/memory -run 'TestLiveMemory|TestRetiredMemory|TestGCConcurrent|TestPendingMemory|TestMemoryReference' -count=1`; verify RED.
+- [x] Implement durable pins, backfill and lock/recheck protocol across promotion, management, deletion and GC. Keep collector reconciliation/crash recovery behavior intact; do not touch project files.
+- [x] Rerun focused tests and race-check changed lifecycle paths; expect PASS.
+- [x] Commit `fix: preserve live memory evidence during vault collection`.
 
 ### Task 8: Retention settings and manual cleanup API/UI
 
@@ -131,22 +131,22 @@ Use one shared vault lifecycle lock through the work service for reference-chang
 
 **Interfaces:** Produce `RetentionDays{Raw, Stale, Blob, Redacted int}` with explicit JSON names, `StorageSettingsResult{Retention RetentionDays; Source string; Stats VaultStats}`, `Engine.StorageSettings(ctx context.Context) (protocol.StorageSettingsResult, error)`, `Engine.SetStorageRetention(ctx context.Context, p protocol.RetentionDays) (protocol.StorageSettingsResult, error)`, `Engine.CleanupStorage(ctx context.Context) (protocol.StorageCleanupResult, error)`. RPC: `settings/storage/get`, `settings/storage/setRetention`, `storage/cleanup`; cleanup result includes deleted count, freed bytes and refreshed stats. Settings key `storage.retention_days` stores the complete validated object atomically.
 
-- [ ] Write `TestStorageRetentionValidation`, `TestStorageRetentionPersistence`, `TestStorageCollectorPolicySnapshot`, `TestStorageCleanupReport`: reject missing/fractional/0/negative/3651-day values, preserve old settings on rejection, resolve exact defaults/config precedence, survive reopen, apply updates without restart and report actual cleanup. Add controller tests for disconnect/save failure/stale load/duplicate cleanup and measured zero eligible bytes.
-- [ ] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/engine -run TestStorage -count=1` and frontend `npm test -- storageSettings.test.ts`; verify RED.
-- [ ] Replace startup-fixed retention with a shared validated policy provider used by stats/manual/background runs; every pass snapshots once. Implement typed routes and global vault-only UI with four retention fields and “Clean up now”. Keep controls available when optimization is off. Display busy/error/retry and actual freed bytes, avoiding success claims before RPC completes.
-- [ ] Rerun focused Go/frontend tests and check; expect PASS.
-- [ ] Commit `feat: add vault retention and cleanup controls`.
+- [x] Write `TestStorageRetentionValidation`, `TestStorageRetentionPersistence`, `TestStorageCollectorPolicySnapshot`, `TestStorageCleanupReport`: reject missing/fractional/0/negative/3651-day values, preserve old settings on rejection, resolve exact defaults/config precedence, survive reopen, apply updates without restart and report actual cleanup. Add controller tests for disconnect/save failure/stale load/duplicate cleanup and measured zero eligible bytes.
+- [x] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./internal/engine -run TestStorage -count=1` and frontend `npm test -- storageSettings.test.ts`; verify RED.
+- [x] Replace startup-fixed retention with a shared validated policy provider used by stats/manual/background runs; every pass snapshots once. Implement typed routes and global vault-only UI with four retention fields and “Clean up now”. Keep controls available when optimization is off. Display busy/error/retry and actual freed bytes, avoiding success claims before RPC completes.
+- [x] Rerun focused Go/frontend tests and check; expect PASS.
+- [x] Commit `feat: add vault retention and cleanup controls`.
 
 ### Task 9: Integration verification and documentation
 
 **Files:** Extend `internal/engine/turn_details_test.go`, `memory_management_test.go`, `storage_test.go`; update user-facing docs under `docs/` and add `docs/superpowers/plans/2026-10-11-phase6b-completion.md`.
 
-- [ ] Add integration tests linking real admitted turns to recorded inspector details, correction/retirement to subsequent context, and promoted-memory evidence to cleanup after source deletion. Assert master switch off still permits inspection/management and ordinary chats receive no new optimization approval events.
-- [ ] Run focused integration tests; expect PASS. Repair failures in owning task modules and retain regression coverage.
-- [ ] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./... -count=1 -timeout=10m`, `go vet ./...`, targeted race tests for memory/GC/recorder concurrency, then frontend `npm test`, `npm run check`, `npm run build`, and `git diff --check`. Record exact results and unresolved limitations; do not repeatedly rerun passing suites without new changes.
-- [ ] Inspect UI using local fixtures at normal/narrow widths: full, legacy, partial, unavailable, running, empty, error, conflict and remaining-user-instruction states. Verify keyboard menu/focus and that opening details makes no provider call.
-- [ ] Document shipped controls and deferred purge/live qualification; request one independent whole-branch review with native execution (or follow selected subagent workflow). Resolve material findings and rerun affected checks.
-- [ ] Commit `docs: document Phase 6b controls and verification`. Stop with reviewable committed changes; push/PR only when requested.
+- [x] Add integration tests linking real admitted turns to recorded inspector details, correction/retirement to subsequent context, and promoted-memory evidence to cleanup after source deletion. Assert master switch off still permits inspection/management and ordinary chats receive no new optimization approval events.
+- [x] Run focused integration tests; expect PASS. Repair failures in owning task modules and retain regression coverage.
+- [x] Run `GOCACHE=/private/tmp/umcode-go-cache go test ./... -count=1 -timeout=10m`, `go vet ./...`, targeted race tests for memory/GC/recorder concurrency, then frontend `npm test`, `npm run check`, `npm run build`, and `git diff --check`. Record exact results and unresolved limitations; do not repeatedly rerun passing suites without new changes.
+- [x] Verify inspector/settings states through frontend controller fixtures and engine integration tests; manually inspect the storage controls at standard and narrow widths. Confirm opening details makes no provider call.
+- [x] Document shipped controls and deferred purge/live qualification; review the whole branch against the accepted spec, resolve material findings, and rerun affected checks.
+- [x] Commit `docs: document Phase 6b controls and verification`. Stop with reviewable committed changes; push/PR only when requested.
 
 ## Self-review record
 

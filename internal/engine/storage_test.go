@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,5 +139,69 @@ func TestStorageCleanupReport(t *testing.T) {
 	result, err = e.CleanupStorage(t.Context())
 	if err != nil || result.Deleted != 0 || result.FreedBytes != 0 || result.Stats.EligibleBytes != 0 {
 		t.Fatalf("empty cleanup=%+v err=%v", result, err)
+	}
+}
+
+func TestCleanupPreservesEvidenceOfPromotedMemoryAfterSourceDeletion(t *testing.T) {
+	e, th, turn, project, workID, _ := memoryEngine(t)
+	provider := installMemoryProvider(t, e)
+	e.Work.Vault = &vault.Vault{Dir: filepath.Join(t.TempDir(), "objects")}
+	if _, err := e.SetStorageRetention(t.Context(), protocol.RetentionDays{Raw: 1, Stale: 1, Blob: 1, Redacted: 1}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := e.Store.GetWorkDetail(t.Context(), workID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidenceID string
+	for _, node := range detail.Nodes {
+		if node.Kind == protocol.NodeMemoryCandidate && len(node.EvidenceIDs) > 0 {
+			evidenceID = node.EvidenceIDs[0]
+			break
+		}
+	}
+	if evidenceID == "" {
+		t.Fatal("memory candidate has no evidence")
+	}
+	proof, err := e.Work.Vault.Put([]byte("promoted memory proof"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if _, err := e.Store.DB.Exec(`UPDATE evidence SET vault_hash=? WHERE id=?`, proof.Hash, evidenceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.UpsertVaultObject(t.Context(), protocol.VaultObjectRow{Hash: proof.Hash, Class: proof.Class, Size: proof.Size, OriginalSize: proof.OriginalSize, CreatedAt: old, LastReferencedAt: old}); err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := e.Work.Vault.Put([]byte("unreferenced expired output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.UpsertVaultObject(t.Context(), protocol.VaultObjectRow{Hash: orphan.Hash, Class: orphan.Class, Size: orphan.Size, OriginalSize: orphan.OriginalSize, CreatedAt: old, LastReferencedAt: old}); err != nil {
+		t.Fatal(err)
+	}
+	e.initMemory(t.Context())
+	runMemoryTurn(t, e, th, turn)
+	rows := memoryRows(t, e, project.ID)
+	if len(rows) != 1 || !strings.Contains(rows[0].EvidenceJSON, evidenceID) {
+		t.Fatalf("promoted memory did not retain source evidence: %+v", rows)
+	}
+	if err := e.Store.DeleteThread(t.Context(), th.ID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := e.CleanupStorage(t.Context())
+	if err != nil || result.Deleted != 1 || result.FreedBytes != int64(len("unreferenced expired output")) {
+		t.Fatalf("cleanup=%+v err=%v", result, err)
+	}
+	if !e.Work.Vault.Has(proof.Hash) || e.Work.Vault.Has(orphan.Hash) {
+		t.Fatalf("vault after cleanup proof=%t orphan=%t", e.Work.Vault.Has(proof.Hash), e.Work.Vault.Has(orphan.Hash))
+	}
+	refs, err := e.Store.ReferencedVaultHashes(t.Context())
+	if err != nil || !refs[proof.Hash] {
+		t.Fatalf("promoted evidence pin lost: refs=%v err=%v", refs, err)
+	}
+	if len(provider.requests) < 1 {
+		t.Fatalf("turn provider was not called: %d", len(provider.requests))
 	}
 }

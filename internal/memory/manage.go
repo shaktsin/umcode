@@ -75,9 +75,14 @@ func (s *Service) Retire(ctx context.Context, p protocol.MemoryChangeParams) (pr
 	if err = target.check(memoryHash(target.before)); err != nil {
 		return protocol.MemoryChangeResult{}, err
 	}
-	after, removed, valid := removeGeneratedMemory(target.before, m.Text)
-	if !valid {
-		return protocol.MemoryChangeResult{}, store.ErrMemoryConflict
+	var after []byte
+	removed := false
+	if !m.UserOwned {
+		var valid bool
+		after, removed, valid = removeGeneratedMemory(target.before, m.Text)
+		if !valid {
+			return protocol.MemoryChangeResult{}, store.ErrMemoryConflict
+		}
 	}
 	if removed && bytes.Equal(after, target.before) {
 		return protocol.MemoryChangeResult{}, errors.New("memory file unchanged")

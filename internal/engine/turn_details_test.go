@@ -3,11 +3,83 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"github.com/shaktsin/umcode/internal/config"
+	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/optimization"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/secrets"
+	"github.com/shaktsin/umcode/internal/store"
+	"io"
+	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+type turnDetailsProvider struct{ *memoryScriptProvider }
+
+func (*turnDetailsProvider) ID() string { return "claude" }
+
+func TestTurnDetailsFromAdmittedTurnAndReadDoesNotCallProvider(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Default(home)
+	cfg.LLM.Provider, cfg.LLM.Model = "claude", "deterministic"
+	st, err := store.Open(t.Context(), filepath.Join(home, "details.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	provider := &turnDetailsProvider{memoryScriptProvider: &memoryScriptProvider{script: memoryAnswer}}
+	registry := llm.NewRegistry()
+	registry.Register(provider)
+	e, err := New(t.Context(), Options{Config: cfg, Store: st, Secrets: secrets.NewMemoryStore(), LLMs: registry,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), DisableScheduler: true, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Shutdown(context.Background()) })
+	if _, err := e.Creds.Add(t.Context(), protocol.CredentialAddParams{Provider: "claude", Label: "test", Secret: "test-secret", IsDefault: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.SetTokenOptimization(t.Context(), protocol.TokenOptimizationParams{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	th, err := st.CreateThread(t.Context(), protocol.Thread{Title: "details integration"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := make(chan protocol.Turn, 1)
+	started, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Tell me a short greeting.", Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityStandard}}, wait: wait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-wait:
+		if completed.ID != started.ID || completed.Status != protocol.TurnCompleted {
+			t.Fatalf("completed turn=%+v started=%+v", completed, started)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("admitted turn did not complete")
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider calls=%d", len(provider.requests))
+	}
+	if _, err := e.SetTokenOptimization(t.Context(), protocol.TokenOptimizationParams{Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	details, err := e.TurnDetails(t.Context(), protocol.TurnDetailsParams{ThreadID: th.ID, TurnID: started.ID})
+	if err != nil || details.Diagnostics == nil || !details.Diagnostics.Policy.ContextCompiler || details.Diagnostics.Policy.Source != "stored" || len(details.Diagnostics.Requests) == 0 {
+		t.Fatalf("admitted details=%+v err=%v", details, err)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("opening turn details made another model call: %d", len(provider.requests))
+	}
+	approvals, err := st.ListApprovals(t.Context(), "")
+	if err != nil || len(approvals) != 0 {
+		t.Fatalf("ordinary optimized chat created approval events: %+v err=%v", approvals, err)
+	}
+}
 
 func TestTurnDetailsAdmissionSnapshot(t *testing.T) {
 	e, th, tr, st := pluginHookEngine(t)
