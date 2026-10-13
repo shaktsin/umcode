@@ -228,6 +228,15 @@ func (s *Server) routes() map[string]handler {
 			}
 			return protocol.ApprovalListResult{Approvals: list}, err
 		}),
+		protocol.MethodProjectMemoryList: bind(func(ctx context.Context, c *conn, p protocol.MemoryListParams) (any, error) {
+			return e.ListProjectMemory(ctx, p)
+		}),
+		protocol.MethodProjectMemoryCorrect: bind(func(ctx context.Context, c *conn, p protocol.MemoryChangeParams) (any, error) {
+			return e.CorrectProjectMemory(ctx, p)
+		}),
+		protocol.MethodProjectMemoryRetire: bind(func(ctx context.Context, c *conn, p protocol.MemoryChangeParams) (any, error) {
+			return e.RetireProjectMemory(ctx, p)
+		}),
 		protocol.MethodWorkList: bind(func(ctx context.Context, c *conn, p protocol.WorkListParams) (any, error) {
 			return e.ListWorks(ctx, p.ThreadID)
 		}),

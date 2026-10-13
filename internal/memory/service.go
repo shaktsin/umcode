@@ -167,6 +167,19 @@ func (s *Service) promoteCandidate(ctx context.Context, req Request, project pro
 		report.Pending++
 		return
 	}
+	if decoded, decodeErr := work.DecodeMemoryCandidate(candidate); decodeErr == nil {
+		retired, checkErr := s.st.MemoryCandidateRetired(ctx, project.ID, decoded.SemanticKey, decoded.SourceRevision, memoryHash([]byte(decoded.Text)))
+		if checkErr != nil {
+			report.Pending++
+			diag.Reason = ReasonStorage
+			return
+		}
+		if retired {
+			out := s.curate(ctx, candidate, Outcome{protocol.MemoryOutcomeStale, ReasonCandidateRetired}, report)
+			diag.Status, diag.Reason = out.Status, out.Reason
+			return
+		}
+	}
 	in := QualifyInput{Detail: d, Candidate: candidate, ProjectRoot: project.Root, FinalRevision: finalRevision(d), ActiveMemories: rows}
 	proposal, duplicate, out := promotionProposal(in)
 	if out.Status != "" {

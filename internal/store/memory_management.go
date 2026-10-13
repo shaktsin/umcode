@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,3 +115,77 @@ func (s *Store) MemoryCandidateRetired(ctx context.Context, projectID, key, revi
 	}
 	return true, nil
 }
+
+// RetireProjectMemory performs status and tombstone changes atomically.
+func (s *Store) RetireProjectMemory(ctx context.Context, id, expectedHash string) error {
+	tx, e := s.DB.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	var project, key, revision, hash string
+	e = tx.QueryRowContext(ctx, `SELECT project_id,semantic_key,source_revision,text_hash FROM project_memories WHERE id=? AND status='active'`, id).Scan(&project, &key, &revision, &hash)
+	if errors.Is(e, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if e != nil {
+		return e
+	}
+	if hash != expectedHash {
+		return ErrMemoryStale
+	}
+	if _, e = tx.ExecContext(ctx, `UPDATE project_memories SET status='superseded',superseded_by='user_retired' WHERE id=? AND status='active' AND text_hash=?`, id, expectedHash); e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO memory_retirements(id,project_id,semantic_key,source_revision,text_hash,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(project_id,semantic_key,source_revision,text_hash) DO NOTHING`, NewID("ret"), project, key, revision, hash, Now()); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
+
+// CorrectProjectMemory atomically retires the active record and creates an
+// explicitly user-owned successor with preserved immutable provenance.
+func (s *Store) CorrectProjectMemory(ctx context.Context, old protocol.ProjectMemory, text string, remains bool) (protocol.ProjectMemory, error) {
+	tx, e := s.DB.BeginTx(ctx, nil)
+	if e != nil {
+		return protocol.ProjectMemory{}, e
+	}
+	defer tx.Rollback()
+	res, e := tx.ExecContext(ctx, `UPDATE project_memories SET status='superseded',superseded_by='user_corrected' WHERE id=? AND project_id=? AND status='active' AND text_hash=?`, old.ID, old.ProjectID, old.TextHash)
+	if e != nil {
+		return protocol.ProjectMemory{}, e
+	}
+	n, e := res.RowsAffected()
+	if e != nil || n != 1 {
+		if e != nil {
+			return protocol.ProjectMemory{}, e
+		}
+		return protocol.ProjectMemory{}, ErrMemoryStale
+	}
+	m := old
+	m.ID = NewID("mem")
+	m.Text = text
+	m.TextHash = memoryTextHash(text)
+	m.UserOwned = true
+	m.Status = protocol.MemoryStatusActive
+	m.SupersededBy = ""
+	m.FileHashBefore = ""
+	m.FileHashAfter = ""
+	m.CreatedAt = time.Now().UTC()
+	m.PromotedAt = nil
+	if remains {
+		m.TargetPath = old.TargetPath
+	}
+	_, e = tx.ExecContext(ctx, `INSERT INTO project_memories(id,project_id,work_id,candidate_node_id,semantic_key,category,target_path,text,text_hash,user_owned,status,source_revision,evidence_json,file_hash_before,file_hash_after,superseded_by,created_at,promoted_at) VALUES(?,?,?,?,?,?,?,?,?,1,'active',?,?, '', '', '', ?,NULL)`, m.ID, m.ProjectID, m.WorkID, m.CandidateNodeID, m.SemanticKey, m.Category, m.TargetPath, m.Text, m.TextHash, m.SourceRevision, m.EvidenceJSON, FormatTime(m.CreatedAt))
+	if e != nil {
+		return protocol.ProjectMemory{}, e
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT INTO memory_retirements(id,project_id,semantic_key,source_revision,text_hash,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(project_id,semantic_key,source_revision,text_hash) DO NOTHING`, NewID("ret"), old.ProjectID, old.SemanticKey, old.SourceRevision, old.TextHash, Now()); e != nil {
+		return protocol.ProjectMemory{}, e
+	}
+	if e = tx.Commit(); e != nil {
+		return protocol.ProjectMemory{}, e
+	}
+	return m, nil
+}
+func memoryTextHash(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }

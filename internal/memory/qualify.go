@@ -40,6 +40,7 @@ const (
 	ReasonProjectRequired     = "project_required"
 	ReasonCandidateInvalid    = "candidate_invalid"
 	ReasonCandidateInactive   = "candidate_inactive"
+	ReasonCandidateRetired    = "candidate_retired"
 	ReasonSourceStale         = "source_stale"
 	ReasonSourceAmbiguous     = "source_ambiguous"
 	ReasonSourceUnsupported   = "source_unsupported"
