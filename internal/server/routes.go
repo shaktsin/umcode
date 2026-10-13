@@ -246,6 +246,15 @@ func (s *Server) routes() map[string]handler {
 		protocol.MethodVaultStats: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
 			return e.VaultStats(ctx)
 		}),
+		protocol.MethodStorageSettingsGet: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
+			return e.StorageSettings(ctx)
+		}),
+		protocol.MethodStorageSetRetention: bind(func(ctx context.Context, c *conn, p protocol.RetentionDays) (any, error) {
+			return e.SetStorageRetention(ctx, p)
+		}),
+		protocol.MethodStorageCleanup: bind(func(ctx context.Context, c *conn, _ empty) (any, error) {
+			return e.CleanupStorage(ctx)
+		}),
 		protocol.MethodApprovalRespond: bind(func(ctx context.Context, c *conn, p protocol.ApprovalRespondParams) (any, error) {
 			if !c.IsAdmin() {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only admin clients can answer approvals")

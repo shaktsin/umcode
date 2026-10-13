@@ -35,6 +35,9 @@ const (
 	MethodWorkList             = "work/list"
 	MethodWorkGet              = "work/get"
 	MethodVaultStats           = "vault/stats"
+	MethodStorageSettingsGet   = "settings/storage/get"
+	MethodStorageSetRetention  = "settings/storage/setRetention"
+	MethodStorageCleanup       = "storage/cleanup"
 	MethodApprovalRespond      = "approval/respond"
 
 	MethodProviderList   = "provider/list"

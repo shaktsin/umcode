@@ -187,13 +187,18 @@ func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, 
 
 // StartGC runs RunGC once and then daily until ctx is done. It never blocks
 // the caller and never prompts; failures are logged and counted.
-func (s *Service) StartGC(ctx context.Context, ret Retention) {
+func (s *Service) StartGC(ctx context.Context, policy func(context.Context) (Retention, error)) {
 	if s.Vault == nil {
 		return
 	}
 	run := func() {
 		c, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
+		ret, err := policy(c)
+		if err != nil {
+			s.count("gc", err)
+			return
+		}
 		if _, err := RunGC(c, s.Store, s.Vault, ret, s.now()); err != nil && !errors.Is(err, context.Canceled) {
 			s.count("gc", err)
 		}

@@ -24,6 +24,11 @@ export interface UsageTotals {
   estimated?: boolean;
 }
 
+export interface RetentionDays { raw: number; stale: number; blob: number; redacted: number }
+export interface VaultStats { objects: number; bytes: number; eligibleBytes: number }
+export interface StorageSettingsResult { retention: RetentionDays; source: 'stored' | 'config' | 'default'; stats: VaultStats }
+export interface StorageCleanupResult { deleted: number; freedBytes: number; stats: VaultStats }
+
 export interface ProjectTools {
   network?: boolean;
   compute?: boolean;
