@@ -16,6 +16,7 @@ type MemoryReviewEntry struct {
 	TargetPath     string     `json:"targetPath"`
 	Text           string     `json:"text"`
 	TextHash       string     `json:"textHash"`
+	TargetHash     string     `json:"targetHash"`
 	Status         string     `json:"status"`
 	SourceRevision string     `json:"sourceRevision"`
 	EvidenceIDs    []string   `json:"evidenceIds"`

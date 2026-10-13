@@ -168,5 +168,32 @@ func managedMemoryReview(m protocol.ProjectMemory) protocol.MemoryReviewEntry {
 	if ids == nil {
 		ids = []string{}
 	}
-	return protocol.MemoryReviewEntry{ID: m.ID, ProjectID: m.ProjectID, SemanticKey: m.SemanticKey, Category: m.Category, TargetPath: m.TargetPath, Text: m.Text, TextHash: m.TextHash, Status: m.Status, SourceRevision: m.SourceRevision, EvidenceIDs: ids, UserOwned: m.UserOwned, CreatedAt: m.CreatedAt, PromotedAt: m.PromotedAt, Revision: 1}
+	return protocol.MemoryReviewEntry{ID: m.ID, ProjectID: m.ProjectID, SemanticKey: m.SemanticKey, Category: m.Category, TargetPath: m.TargetPath, Text: m.Text, TextHash: m.TextHash, TargetHash: m.FileHashAfter, Status: m.Status, SourceRevision: m.SourceRevision, EvidenceIDs: ids, UserOwned: m.UserOwned, CreatedAt: m.CreatedAt, PromotedAt: m.PromotedAt, Revision: 1}
+}
+
+func (s *Service) List(ctx context.Context, p protocol.MemoryListParams) (protocol.MemoryListResult, error) {
+	project, err := s.projects.Get(ctx, p.ProjectID)
+	if err != nil {
+		return protocol.MemoryListResult{}, err
+	}
+	result, err := s.st.ListMemoryReview(ctx, p)
+	if err != nil {
+		return result, err
+	}
+	hashes := map[string]string{}
+	for i := range result.Entries {
+		target := result.Entries[i].TargetPath
+		hash, ok := hashes[target]
+		if !ok {
+			opened, openErr := openTarget(project.Root, target)
+			if openErr != nil {
+				return protocol.MemoryListResult{}, openErr
+			}
+			hash = memoryHash(opened.before)
+			opened.close()
+			hashes[target] = hash
+		}
+		result.Entries[i].TargetHash = hash
+	}
+	return result, nil
 }

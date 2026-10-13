@@ -10,7 +10,10 @@ func (e *Engine) ListProjectMemory(ctx context.Context, p protocol.MemoryListPar
 	if _, err := e.project(ctx, p.ProjectID); err != nil {
 		return protocol.MemoryListResult{}, err
 	}
-	return e.Store.ListMemoryReview(ctx, p)
+	if e.Memory == nil {
+		return protocol.MemoryListResult{}, protocol.Errorf(protocol.CodeInternal, "memory service unavailable")
+	}
+	return e.Memory.List(ctx, p)
 }
 func (e *Engine) CorrectProjectMemory(ctx context.Context, p protocol.MemoryChangeParams) (protocol.MemoryChangeResult, error) {
 	if _, err := e.project(ctx, p.ProjectID); err != nil {
