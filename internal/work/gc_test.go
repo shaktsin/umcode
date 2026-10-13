@@ -265,3 +265,90 @@ func TestGCRechecksBeforeDelete(t *testing.T) {
 		t.Fatal("an object refreshed after GC's snapshot was deleted")
 	}
 }
+
+func TestGCKeepsVaultEvidenceOfLiveMemoryAfterSourceDeletion(t *testing.T) {
+	g := newGC(t)
+	hash := g.object(t, "memory proof", 120)
+	ctx := context.Background()
+	p, err := g.st.CreateProject(ctx, protocol.Project{Root: t.TempDir(), Name: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := g.st.CreateThread(ctx, protocol.Thread{ProjectID: p.ID, Title: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := g.st.CreateWork(ctx, protocol.Work{ProjectID: p.ID, ThreadID: th.ID, Status: protocol.WorkCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := g.st.AddEvidence(ctx, protocol.Evidence{WorkID: w.ID, Kind: "discovery", VaultHash: hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = g.st.DB.Exec(`INSERT INTO project_memories(id,project_id,work_id,candidate_node_id,semantic_key,category,target_path,text,text_hash,status,source_revision,evidence_json,created_at,user_owned) VALUES('live',?,?,?,'k','convention','UMCODE.md','- fact','h','active','r',?, ?,0)`, p.ID, w.ID, "candidate", fmt.Sprintf("[%q]", ev.ID), store.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = g.st.PinMemoryEvidence(ctx, "live", []string{ev.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err = g.st.DeleteThread(ctx, th.ID); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := RunGC(ctx, g.st, g.v, DefaultRetention(), gcNow)
+	if err != nil || rep.Deleted != 0 || !g.v.Has(hash) {
+		t.Fatalf("report=%+v exists=%t err=%v", rep, g.v.Has(hash), err)
+	}
+}
+
+func TestGCConcurrentReferenceProtection(t *testing.T) {
+	g := newGC(t)
+	hash := g.object(t, "memory proof", 120)
+	ctx := context.Background()
+	p, err := g.st.CreateProject(ctx, protocol.Project{Root: t.TempDir(), Name: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := g.st.CreateThread(ctx, protocol.Thread{ProjectID: p.ID, Title: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := g.st.CreateWork(ctx, protocol.Work{ProjectID: p.ID, ThreadID: th.ID, Status: protocol.WorkCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := g.st.AddEvidence(ctx, protocol.Evidence{WorkID: w.ID, Kind: "discovery", VaultHash: hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = g.st.DB.Exec(`INSERT INTO project_memories(id,project_id,work_id,candidate_node_id,semantic_key,category,target_path,text,text_hash,status,source_revision,evidence_json,created_at,user_owned) VALUES('live',?,?,?,'k','convention','UMCODE.md','- fact','h','active','r',?, ?,0)`, p.ID, w.ID, "candidate", fmt.Sprintf("[%q]", ev.ID), store.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err = g.st.PinMemoryEvidence(ctx, "live", []string{ev.ID}); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	deleteResult := make(chan error, 1)
+	gcResult := make(chan error, 1)
+	go func() {
+		<-start
+		deleteResult <- g.st.DeleteThread(ctx, th.ID)
+	}()
+	go func() {
+		<-start
+		_, err := RunGC(ctx, g.st, g.v, DefaultRetention(), gcNow)
+		gcResult <- err
+	}()
+	close(start)
+	if err := <-deleteResult; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-gcResult; err != nil {
+		t.Fatal(err)
+	}
+	report, err := RunGC(ctx, g.st, g.v, DefaultRetention(), gcNow)
+	if err != nil || report.Deleted != 0 || !g.v.Has(hash) {
+		t.Fatalf("concurrent source deletion lost memory evidence: report=%+v exists=%t err=%v", report, g.v.Has(hash), err)
+	}
+}

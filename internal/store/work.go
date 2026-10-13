@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/vault"
 )
 
 // WorkUpdateConflictError classifies stale or mismatched persistence predicates
@@ -365,6 +366,8 @@ func insertEvidence(ctx context.Context, x execer, e protocol.Evidence) (protoco
 
 // AddEvidence inserts an immutable observation.
 func (s *Store) AddEvidence(ctx context.Context, e protocol.Evidence) (protocol.Evidence, error) {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return e, err

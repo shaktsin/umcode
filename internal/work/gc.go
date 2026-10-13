@@ -72,6 +72,8 @@ var gcBeforeDelete func(hash string)
 // objects. It only touches vault files and index rows, never project files. It
 // is safe to interrupt: the next run finishes whatever was left.
 func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, now time.Time) (GCReport, error) {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	var rep GCReport
 	if err := ctx.Err(); err != nil {
 		return rep, err
@@ -130,7 +132,7 @@ func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, 
 		}
 	}
 	// Collect.
-	refs, err := st.ReferencedVaultHashes(ctx)
+	refs, err := st.ReferencedVaultHashesDuringGC(ctx)
 	if err != nil {
 		return rep, err
 	}
@@ -161,7 +163,7 @@ func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, 
 		if cur, err := st.GetVaultObject(ctx, hash); err == nil && now.Sub(cur.LastReferencedAt) <= ret.forObject(cur) {
 			continue
 		}
-		if live, err := st.ReferencedVaultHashes(ctx); err != nil {
+		if live, err := st.ReferencedVaultHashesDuringGC(ctx); err != nil {
 			return rep, err
 		} else if live[hash] {
 			continue

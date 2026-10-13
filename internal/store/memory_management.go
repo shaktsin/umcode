@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/vault"
 	"strings"
 	"time"
 )
@@ -118,6 +119,8 @@ func (s *Store) MemoryCandidateRetired(ctx context.Context, projectID, key, revi
 
 // RetireProjectMemory performs status and tombstone changes atomically.
 func (s *Store) RetireProjectMemory(ctx context.Context, id, expectedHash string) error {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	tx, e := s.DB.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -137,6 +140,9 @@ func (s *Store) RetireProjectMemory(ctx context.Context, id, expectedHash string
 	if _, e = tx.ExecContext(ctx, `UPDATE project_memories SET status='superseded',superseded_by='user_retired' WHERE id=? AND status='active' AND text_hash=?`, id, expectedHash); e != nil {
 		return e
 	}
+	if _, e = tx.ExecContext(ctx, `DELETE FROM memory_vault_refs WHERE memory_id=?`, id); e != nil {
+		return e
+	}
 	if _, e = tx.ExecContext(ctx, `INSERT INTO memory_retirements(id,project_id,semantic_key,source_revision,text_hash,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(project_id,semantic_key,source_revision,text_hash) DO NOTHING`, NewID("ret"), project, key, revision, hash, Now()); e != nil {
 		return e
 	}
@@ -146,6 +152,8 @@ func (s *Store) RetireProjectMemory(ctx context.Context, id, expectedHash string
 // CorrectProjectMemory atomically retires the active record and creates an
 // explicitly user-owned successor with preserved immutable provenance.
 func (s *Store) CorrectProjectMemory(ctx context.Context, old protocol.ProjectMemory, text string, remains bool) (protocol.ProjectMemory, error) {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	tx, e := s.DB.BeginTx(ctx, nil)
 	if e != nil {
 		return protocol.ProjectMemory{}, e
@@ -178,6 +186,12 @@ func (s *Store) CorrectProjectMemory(ctx context.Context, old protocol.ProjectMe
 	}
 	_, e = tx.ExecContext(ctx, `INSERT INTO project_memories(id,project_id,work_id,candidate_node_id,semantic_key,category,target_path,text,text_hash,user_owned,status,source_revision,evidence_json,file_hash_before,file_hash_after,superseded_by,created_at,promoted_at) VALUES(?,?,?,?,?,?,?,?,?,1,'active',?,?, '', '', '', ?,NULL)`, m.ID, m.ProjectID, m.WorkID, m.CandidateNodeID, m.SemanticKey, m.Category, m.TargetPath, m.Text, m.TextHash, m.SourceRevision, m.EvidenceJSON, FormatTime(m.CreatedAt))
 	if e != nil {
+		return protocol.ProjectMemory{}, e
+	}
+	if _, e = tx.ExecContext(ctx, `DELETE FROM memory_vault_refs WHERE memory_id=?`, old.ID); e != nil {
+		return protocol.ProjectMemory{}, e
+	}
+	if e = pinMemoryEvidence(ctx, tx, m.ID, m.EvidenceJSON); e != nil {
 		return protocol.ProjectMemory{}, e
 	}
 	if _, e = tx.ExecContext(ctx, `INSERT INTO memory_retirements(id,project_id,semantic_key,source_revision,text_hash,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(project_id,semantic_key,source_revision,text_hash) DO NOTHING`, NewID("ret"), old.ProjectID, old.SemanticKey, old.SourceRevision, old.TextHash, Now()); e != nil {
