@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain, Inbox, FilePlus2, FilePen, FileX2, Copy, Check } from '@lucide/svelte';
+  import { Brain, Inbox, FilePlus2, FilePen, FileX2, Copy, Check, MoreHorizontal } from '@lucide/svelte';
   import type { Item, FileChangeData } from '$lib/types';
   import { app } from '$lib/stores/app.svelte';
   import { renderMarkdown } from '$lib/markdown';
@@ -12,6 +12,7 @@
   let showThinking = $state(false);
   let showSummary = $state(false);
   let copied = $state(false);
+  let actionsOpen = $state(false);
 
   const html = $derived(item.kind === 'agentMessage' ? renderMarkdown(item.text || '') : '');
   const change = $derived(item.kind === 'fileChange' ? (item.data as FileChangeData) : null);
@@ -26,6 +27,11 @@
     }
   }
 </script>
+
+<style>
+  .menu-item { display:flex; width:100%; min-height:2rem; align-items:center; padding:.4rem .75rem; text-align:left; color:var(--color-ink-soft); }
+  .menu-item:hover,.menu-item:focus-visible { background:var(--color-raised); }
+</style>
 
 <div
   id={`item-${item.id}`}
@@ -45,10 +51,20 @@
         {#if item.status === 'inProgress'}<span class="inline-block w-1.5 h-4 bg-clay animate-pulse align-text-bottom"></span>{/if}
       </div>
       {#if item.text?.trim()}
-        <div class="flex justify-end mt-1">
+        <div class="flex justify-end mt-1 gap-1">
           <button class="p-1 text-faint hover:text-ink opacity-70 sm:opacity-0 group-hover/item:opacity-100 focus:opacity-100 transition-opacity" aria-label={copied ? 'Copied message' : 'Copy message'} title={copied ? 'Copied' : 'Copy message'} onclick={copyMessage}>
             {#if copied}<Check class="w-3.5 h-3.5 text-sage" />{:else}<Copy class="w-3.5 h-3.5" />{/if}
           </button>
+          {#if item.turnId && view?.id}
+            <div class="relative">
+              <button class="p-1 text-faint hover:text-ink opacity-70 sm:opacity-0 group-hover/item:opacity-100 focus:opacity-100" aria-label="Response actions" aria-haspopup="menu" aria-expanded={actionsOpen} onclick={() => (actionsOpen = !actionsOpen)}><MoreHorizontal class="w-3.5 h-3.5" /></button>
+              {#if actionsOpen}
+                <div class="absolute right-0 bottom-full z-30 w-40 popover py-1 text-xs" role="menu">
+                  <button class="menu-item" role="menuitem" onclick={() => { actionsOpen = false; void inspector.openTurnDetails(view!.id!, item.turnId); }}>Turn details</button>
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
