@@ -22,6 +22,7 @@ const (
 	MethodThreadSetApproval = "thread/setApprovalMode"
 	MethodThreadCompact     = "thread/compact"
 
+	MethodTurnDetails   = "turn/details"
 	MethodTurnStart     = "turn/start"
 	MethodTurnInterrupt = "turn/interrupt"
 	MethodPreviewList   = "preview/list"
