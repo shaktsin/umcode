@@ -43,15 +43,20 @@ func (t *getInstructions) Call(ctx context.Context, args json.RawMessage) (strin
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
 	}
-	s, ok := t.r.GetContext(ctx, strings.TrimSpace(a.SkillName))
+	return t.r.InstructionsContext(ctx, strings.TrimSpace(a.SkillName))
+}
+
+// InstructionsContext loads the exact skill from the turn's active snapshot.
+func (r *Registry) InstructionsContext(ctx context.Context, name string) (string, error) {
+	s, ok := r.GetContext(ctx, name)
 	if !ok {
 		var names []string
-		for _, x := range t.r.ListContext(ctx) {
+		for _, x := range r.ListContext(ctx) {
 			if x.Error == "" {
 				names = append(names, x.Name)
 			}
 		}
-		return "", fmt.Errorf("skill %q not found; installed skills: %s", a.SkillName, strings.Join(names, ", "))
+		return "", fmt.Errorf("skill %q not found; installed skills: %s", name, strings.Join(names, ", "))
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Skill: %s\nDirectory: %s\nRuntime: %s\n\n%s\n", s.Name, s.Dir, s.Runtime.Type, s.Body)

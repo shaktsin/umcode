@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { ArrowUp, Square, Paperclip, X } from '@lucide/svelte';
   import { chat, type ThreadView } from '$lib/stores/chat.svelte';
   import { app } from '$lib/stores/app.svelte';
   import { projects } from '$lib/stores/projects.svelte';
   import ModelPicker from './ModelPicker.svelte';
-  import type { Attachment } from '$lib/types';
+  import type { Attachment, SkillInfo } from '$lib/types';
+  import { errMsg } from '$lib/format';
+  import { filterSkills, selectSkill, slashQuery } from '$lib/skillPicker';
 
   let { view, compact = false }: { view: ThreadView; compact?: boolean } = $props();
 
@@ -12,11 +15,72 @@
   let files = $state<Attachment[]>([]);
   let input: HTMLTextAreaElement | undefined = $state();
   let fileInput: HTMLInputElement | undefined = $state();
+  const pickerId = $props.id();
+  let caret = $state(0);
+  let focused = $state(false);
+  let dismissed = $state(false);
+  let skills = $state<SkillInfo[]>([]);
+  let skillsLoading = $state(false);
+  let skillsError = $state('');
+  let activeSkill = $state(0);
+  let retry = $state(0);
 
   const MAX_FILE = 15 * 1024 * 1024;
   const busy = $derived(view.sending || !!view.running);
   const offline = $derived(app.conn !== 'open');
   const isMain = $derived(view === chat.main);
+  const projectId = $derived(view.id ? view.thread?.projectId ?? null : isMain ? projects.activeId : null);
+  const query = $derived(slashQuery(text, caret));
+  const pickerOpen = $derived(focused && query !== null && !dismissed && !offline && !busy);
+  const matches = $derived(filterSkills(skills, query ?? ''));
+
+  $effect(() => {
+    void query;
+    void skills;
+    activeSkill = 0;
+  });
+
+  $effect(() => {
+    const project = projectId;
+    void retry;
+    if (!pickerOpen) return;
+    let cancelled = false;
+    skillsLoading = true;
+    skillsError = '';
+    skills = [];
+    app.call<{ skills: SkillInfo[] }>('skill/list', { projectId: project ?? undefined }).then((result) => {
+      if (!cancelled) skills = result.skills ?? [];
+    }).catch((error) => {
+      if (!cancelled) skillsError = errMsg(error);
+    }).finally(() => {
+      if (!cancelled) skillsLoading = false;
+    });
+    return () => { cancelled = true; };
+  });
+
+  function updateCaret(e: Event) {
+    caret = (e.currentTarget as HTMLTextAreaElement).selectionStart;
+  }
+
+  function onInput(e: Event) {
+    updateCaret(e);
+    dismissed = false;
+  }
+
+  function retrySkills() {
+    input?.focus();
+    retry++;
+  }
+
+  async function chooseSkill(skill: SkillInfo) {
+    const selected = selectSkill(text, caret, skill.name);
+    text = selected.text;
+    caret = selected.caret;
+    dismissed = true;
+    await tick();
+    input?.focus();
+    input?.setSelectionRange(caret, caret);
+  }
 
   // A side chat can hand its answer to the main composer.
   $effect(() => {
@@ -42,6 +106,29 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
+    if (e.isComposing) return;
+    if (pickerOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        dismissed = true;
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (matches.length) {
+          activeSkill = (activeSkill + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length;
+          void tick().then(() => document.getElementById(`${pickerId}-${activeSkill}`)?.scrollIntoView({ block: 'nearest' }));
+        }
+        return;
+      }
+      const canSelect = !skillsLoading && !skillsError && !!matches[activeSkill];
+      if ((e.key === 'Tab' && !e.shiftKey && canSelect) || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault();
+        if (canSelect) void chooseSkill(matches[activeSkill]);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       submit();
@@ -130,12 +217,47 @@
 
 <div class="px-4 pb-4 pt-2 shrink-0">
   <div
-    class="{compact ? '' : 'max-w-3xl'} mx-auto bg-surface border border-line rounded-2xl focus-within:border-line-strong transition-colors"
+    class="relative {compact ? '' : 'max-w-3xl'} mx-auto bg-surface border border-line rounded-2xl focus-within:border-line-strong transition-colors"
     role="region"
     aria-label="Message composer"
     ondragover={(e) => e.preventDefault()}
     ondrop={onDrop}
+    onfocusout={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focused = false; }}
   >
+    {#if pickerOpen}
+      <div class="absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-xl border border-line bg-surface shadow-xl">
+        <div class="flex items-center justify-between border-b border-line px-3 py-2 text-xs text-muted">
+          <span>Skills</span><span>↑↓ navigate · Enter select · Esc close</span>
+        </div>
+        {#if skillsLoading}
+          <div class="px-3 py-4 text-sm text-muted" role="status">Loading skills…</div>
+        {:else if skillsError}
+          <div class="px-3 py-3 text-sm text-muted" role="alert">
+            Couldn’t load skills: {skillsError}
+            <button class="btn-ghost btn-sm mt-2" onmousedown={(e) => e.preventDefault()} onclick={retrySkills}>Retry</button>
+          </div>
+        {:else if matches.length === 0}
+          <div class="px-3 py-4 text-sm text-muted" role="status">{skills.some((skill) => !skill.error) ? 'No matching skills.' : 'No skills available. Enable a plugin in Plugins.'}</div>
+        {:else}
+          <div id={pickerId} role="listbox" aria-label="Available skills" class="max-h-64 overflow-y-auto p-1">
+            {#each matches as skill, index (skill.name)}
+              <button
+                id={`${pickerId}-${index}`}
+                role="option"
+                aria-selected={index === activeSkill}
+                tabindex="-1"
+                class="block w-full rounded-lg px-3 py-2 text-left {index === activeSkill ? 'bg-raised' : 'hover:bg-raised'}"
+                onmousedown={(e) => e.preventDefault()}
+                onclick={() => chooseSkill(skill)}
+              >
+                <span class="block text-sm font-medium text-ink">/{skill.name}</span>
+                <span class="block truncate text-xs text-muted">{skill.description}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
     {#if files.length}
       <div class="flex flex-wrap gap-1.5 px-3 pt-2.5">
         {#each files as f, i}
@@ -155,9 +277,18 @@
       bind:this={input}
       bind:value={text}
       onkeydown={onKeydown}
+      oninput={onInput}
+      onkeyup={updateCaret}
+      onclick={updateCaret}
+      onselect={updateCaret}
+      onfocus={() => focused = true}
+      aria-label="Message"
+      aria-autocomplete="list"
+      aria-controls={pickerOpen && matches.length && !skillsLoading && !skillsError ? pickerId : undefined}
+      aria-activedescendant={pickerOpen && matches[activeSkill] && !skillsLoading && !skillsError ? `${pickerId}-${activeSkill}` : undefined}
       onpaste={onPaste}
       rows="1"
-      {placeholder}
+      placeholder={`${placeholder} · / for skills`}
       class="w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint max-h-60"
       style="field-sizing: content; min-height: 2.75rem"
     ></textarea>

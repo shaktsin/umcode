@@ -50,6 +50,12 @@ umcode plugin remove SOURCE_ID/PLUGIN --disable-projects
 
 Legacy standalone `skill` commands, `skill_dirs`, and `mcp_servers` remain backend-compatible during the migration window, but they are not separate sections in the desktop Plugins screen.
 
+In a main or side chat, type `/` at the start of a message to find available skills
+by name or description. Use ↑/↓ and Enter or Tab, or click a skill, to insert its
+command. Add your instructions before sending; selecting a skill does not send
+the message. Escape closes the picker. Sending `/plugin:skill your request`
+loads that exact skill's instructions from the chat project's enabled plugins.
+
 ### Token optimization
 
 Open **Settings → Token optimization** to enable the complete optimization system globally: context compilation and retrieval, progressive tools, result reduction, internal workflow tracking and verified memory promotion. All components operate automatically across chats, without separate opt-ins or internal design/planning approval prompts. Chat action permissions still apply.

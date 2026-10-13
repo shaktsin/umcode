@@ -951,9 +951,15 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 
 	if cat := e.Skills.CatalogContext(ctx); cat != "" {
 		b.WriteString("\n" + cat)
-		if sk, ok := e.Skills.MatchContext(ctx, userText); ok && userText != "" {
-			b.WriteString(fmt.Sprintf("The current request may match the %q skill; read its instructions before acting.\n", sk.Name))
+	}
+	if name, explicit := skills.Invocation(userText); explicit {
+		if instructions, err := e.Skills.InstructionsContext(ctx, name); err == nil {
+			b.WriteString("\n# Explicitly requested skill\nThe user selected this skill. Follow its instructions for the current request.\n" + instructions)
+		} else {
+			b.WriteString(fmt.Sprintf("\nThe requested skill %q is unavailable. Tell the user and do not substitute another skill.\n", name))
 		}
+	} else if sk, ok := e.Skills.MatchContext(ctx, userText); ok && userText != "" {
+		b.WriteString(fmt.Sprintf("The current request may match the %q skill; read its instructions before acting.\n", sk.Name))
 	}
 	flush(layerSkills)
 	if len(hookContext) > 0 {

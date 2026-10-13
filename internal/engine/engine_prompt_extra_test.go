@@ -8,6 +8,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/projects"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/skills"
 )
 
 // extraPromptCases pin the prompt for inputs the base golden cases miss: the
@@ -59,5 +60,27 @@ func TestSystemPromptGoldenExtra(t *testing.T) {
 		if got != string(want) {
 			t.Fatalf("%s: prompt drifted from golden\n--- got ---\n%s", name, got)
 		}
+	}
+}
+
+func TestSystemPromptLoadsExplicitSkill(t *testing.T) {
+	e, _, _, _ := pluginHookEngine(t)
+	extraPromptCases(t, e)
+	prompt := e.systemPrompt(t.Context(), "/greet write a message", nil, "", nil)
+	if !strings.Contains(prompt, "Say hello.") {
+		t.Fatal("explicit skill instructions not loaded")
+	}
+	prompt = e.systemPrompt(t.Context(), "/missing greet someone", nil, "", nil)
+	if !strings.Contains(prompt, "unavailable") || strings.Contains(prompt, "may match") {
+		t.Fatal("unknown explicit skill must not silently select another skill")
+	}
+	snapshot, errs := skills.CompileSnapshot([]skills.Root{{PluginID: "demo", Paths: []string{filepath.Join(e.Cfg.SkillDirs[0], "greet")}}})
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	ctx := skills.WithSnapshot(t.Context(), snapshot)
+	prompt = e.systemPrompt(ctx, "/demo:greet write a message", nil, "", nil)
+	if !strings.Contains(prompt, "Skill: demo:greet") || !strings.Contains(prompt, "Say hello.") {
+		t.Fatal("namespaced skill instructions not loaded from snapshot")
 	}
 }
