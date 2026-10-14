@@ -426,3 +426,13 @@ html, body, #app { overflow: hidden; }
 @media(max-width:959px) { .page-content { padding: 16px; } }
 
 .auxiliary-panel[hidden] { display: none; }
+
+.composer-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; padding: 8px 12px 12px; }
+.composer-toolbar > .model-picker-controls { flex: 1; min-width: 0; }
+.model-picker-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; }
+.composer-toolbar .select { height: var(--ui-compact); }
+.complexity-control { height: var(--ui-compact); flex: none; }
+.complexity-control button { font-size: 13px; line-height: 20px; min-width: 28px; }
+.composer-input { max-height: min(240px, 30dvh); overflow-y: auto; }
+.composer-error { font-size: 12px; line-height: 16px; color: var(--color-rust); max-width: 160px; }
+[data-composer] { border-radius: var(--ui-composer-radius); }

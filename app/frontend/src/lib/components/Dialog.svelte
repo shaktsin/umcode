@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modalFocus } from '$lib/ui/modalFocus';
   import { dialog } from '$lib/stores/dialog.svelte';
   import { app } from '$lib/stores/app.svelte';
 
@@ -20,7 +21,7 @@
   function onKey(e: KeyboardEvent) {
     if (!dialog.current) return;
     if (e.key === 'Escape') dialog.close(false);
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !(e.target instanceof HTMLButtonElement)) {
       if (dialog.current.kind === 'project' && (!dialog.current.value.trim() || !dialog.current.path.trim())) return;
       e.preventDefault();
       dialog.close(true);
@@ -32,8 +33,8 @@
 
 {#if dialog.current}
   {@const d = dialog.current}
-  <div class="fixed inset-0 z-40 bg-ink/30 flex items-center justify-center p-6" role="presentation" onclick={() => dialog.close(false)}>
-    <div class="card w-full max-w-md p-5 shadow-2xl" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
+  <div class="fixed inset-0 z-[100] bg-ink/30 flex items-center justify-center p-6" role="presentation" onclick={() => dialog.close(false)}>
+    <div class="card w-full max-w-md p-4 shadow-2xl max-h-full overflow-y-auto" data-app-dialog role="dialog" use:modalFocus={() => dialog.close(false)} aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
       <p class="text-sm text-ink whitespace-pre-wrap">{d.message}</p>
       {#if d.kind === 'prompt'}
         <!-- svelte-ignore a11y_autofocus -->

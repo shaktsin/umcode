@@ -113,7 +113,7 @@
 
 </script>
 
-<div class="flex items-center gap-1.5 flex-wrap">
+<div class="model-picker-controls">
   <div class="relative" data-model-picker>
     <button bind:this={trigger} class="select inline-flex items-center gap-2 max-w-56" title="Provider and model" aria-expanded={open} onclick={() => (open = !open)}>
       {#if value.provider === 'pool'}<Layers3 class="w-3.5 h-3.5 shrink-0" />{/if}
@@ -160,11 +160,11 @@
     </PopupSurface>
   </div>
 
-  <div class="inline-flex rounded-md border border-line-strong overflow-hidden" role="group" aria-label="Complexity">
+  <div class="complexity-control inline-flex rounded-lg border border-line-strong overflow-hidden" role="group" aria-label="Complexity">
     {#each levels as level}
       {@const on = (value.complexity || '') === level.id}
       {@const inherited = !value.complexity && defaultComplexity === level.id}
-      <button class="px-2 py-1 text-xs transition-colors {on ? 'bg-clay text-white' : inherited ? 'bg-raised text-ink' : 'text-muted hover:bg-raised'}" title={`${level.hint}${inherited ? ' (default)' : ''}`} aria-pressed={on} onclick={() => setComplexity(level.id)}>
+      <button class="px-2 py-0 text-xs transition-colors {on ? 'bg-clay text-white' : inherited ? 'bg-raised text-ink' : 'text-muted hover:bg-raised'}" title={`${level.hint}${inherited ? ' (default)' : ''}`} aria-pressed={on} onclick={() => setComplexity(level.id)}>
         {compact ? level.label[0] : level.label}
       </button>
     {/each}
