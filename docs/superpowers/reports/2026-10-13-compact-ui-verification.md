@@ -20,7 +20,9 @@ with Details disclosures. Native default 1180×780; minimum 760×520.
   localhost test servers; the complete run with those enabled passed.
 - Screenshots inspected for compact, short, and wide windows in both themes.
 - Developer ID signed local Apple Silicon bundle is built and signature verified.
-  Local build is not notarized or published.
+  Local build is signed without a timestamp, and is not notarized or published. Optional libkrun and bundled Chromium
+  runtimes are not staged, so isolated compute and the app’s opt-in Visual QA
+  plugin are unavailable in this local bundle.
 - Native launch/resizing was not run: this bundle shares app and background
   service identity with the user's running app. Renderer resizing is verified;
   native window behavior remains a manual check in the local build.
@@ -56,6 +58,9 @@ this scope. Native behavior is recorded separately above.
    presentation only. Cost: reliance on prerequisite and backend tests.
 6. Keep the mini overlay outside this desktop scope. Cost: its density remains
    unchanged.
+
+7. Finalize local signing without a network timestamp after the timestamp wait.
+   Cost: distribution still needs separate signing/notarization.
 
 ## Deferred minor review findings
 
