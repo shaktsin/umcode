@@ -14,14 +14,14 @@ export async function startUiFixtureServer() {
   import { inspector } from '/src/lib/stores/inspector.svelte';
   const mode = new URLSearchParams(location.search).get('scenario');
   const state = window.uiTest = { calls: [], skillMode: 'normal' };
-  const plugin = { id:'source/superpowers', name:'Superpowers with a deliberately long package name', version:'6.4.2', format:'codex', mode:'managed', health:'healthy', enabled:false, source:'/very/long/source/'.repeat(12), schema:[], diagnostics:[], hookFailures:[], components:Array.from({length:15},(_,i)=>({kind:'skill', name:'skill-'+i, path:'skills/skill-'+i, supported:true, health:'available'})) };
+  let plugin = { id:'source/superpowers', name:'Superpowers with a deliberately long package name', version:'6.4.2', format:'codex', mode:'managed', health:'healthy', enabled:false, source:'/very/long/source/'.repeat(12), schema:[], diagnostics:[], hookFailures:[], components:Array.from({length:15},(_,i)=>({kind:'skill', name:'skill-'+i, path:'skills/skill-'+i, supported:true, health:'available'})) };
   app.call = async (method, params) => {
     state.calls.push({method,params});
     if (method === 'skill/list') {
       if (state.skillMode === 'error') throw new Error('Fixture skill failure');
       return {skills:Array.from({length:15},(_,i)=>({name:'superpowers:skill-'+i,description:'A description for the installed skill '+i}))};
     }
-    if (method === 'plugin/list') return {plugins:[plugin]};
+    if (method === 'plugin/list') return {plugins:[structuredClone(plugin)]};
     if (method === 'thread/start') return {id:'new-main',title:'New chat',settings:{},updatedAt:'',projectId:params.projectId};
     if (method === 'turn/start') chat.main.sending = false;
     if (method === 'routing/get') return app.routing;
@@ -40,6 +40,11 @@ export async function startUiFixtureServer() {
     inspector.openOutput('Test output','A retained inspector tab','fixture-tab');
   };
   state.plugins = () => { app.view='extensions'; };
+  state.projectless = () => {chat.main.reset();projects.activeId=null;};
+  state.existing = () => {chat.main.id='existing';chat.main.thread={id:'existing',projectId:'demo',settings:{},workspaceMode:'worktree'};chat.main.workspaceMode='worktree';};
+  state.workspace = () => chat.main.workspaceMode;
+  state.blocked = () => {chat.main.route={chosen:null,reason:'No credentials available',alternatives:[]};};
+  state.pluginFailure = () => {plugin={...plugin,health:'configuration_required',diagnostics:[{severity:'error',message:'Configuration is required to connect this integration. '+('Long diagnostic '.repeat(20)),remediation:'Configure the plugin.'}]};};
   state.refreshPlugins = () => window.dispatchEvent(new CustomEvent('fixture:refresh'));
   if(mode==='controls') {
     document.getElementById('app').innerHTML='<main style="padding:24px"><div id="control-row" style="display:flex;align-items:center;gap:8px"><button class="btn-primary" id="standard">Standard</button><input class="input" id="field" style="width:160px" aria-label="Field"><select class="select" id="select" aria-label="Select"><option>Choose</option></select><button class="icon-button" id="icon" aria-label="Action"><svg width="16" height="16"></svg></button></div><p id="help">Help</p><button class="btn-ghost btn-sm" id="compact">Compact</button><button class="icon-button compact" id="compact-icon" aria-label="Compact action"><svg width="16" height="16"></svg></button><textarea class="input" rows="3" aria-label="Multiline"></textarea></main>';
