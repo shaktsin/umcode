@@ -5,6 +5,22 @@
 /* Desktop workbench palette: quiet cool neutrals and one cobalt accent. */
 @theme {
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+  --ui-control: 32px;
+  --ui-compact: 28px;
+  --ui-icon: 16px;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-6: 24px;
+  --ui-space-8: 32px;
+  --ui-control-font: 13px;
+  --ui-control-line: 20px;
+  --ui-secondary-font: 12px;
+  --ui-secondary-line: 16px;
+  --ui-control-radius: 8px;
+  --ui-surface-radius: 12px;
+  --ui-composer-radius: 16px;
   --font-mono: 'SF Mono', ui-monospace, Menlo, 'JetBrains Mono', monospace;
 
   --color-paper: #f7f8fa;
@@ -115,7 +131,10 @@
 }
 
 @utility btn {
-  @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all duration-150 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98];
+  height: var(--ui-control);
+  font-size: var(--ui-control-font);
+  line-height: var(--ui-control-line);
+  @apply inline-flex items-center justify-center gap-2 px-3 py-0 font-medium rounded-lg transition-all duration-150 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98];
 }
 @utility btn-primary {
   @apply btn bg-clay text-white hover:brightness-110;
@@ -130,7 +149,8 @@
   @apply btn text-rust hover:bg-rust-soft;
 }
 @utility btn-sm {
-  @apply px-2 py-1 text-xs rounded-md;
+  height: var(--ui-compact);
+  @apply px-2 py-0 rounded-lg;
 }
 @utility card {
   @apply bg-surface border border-line rounded-xl shadow-[0_1px_2px_rgba(23,32,51,0.04)];
@@ -208,8 +228,9 @@
 }
 .brand-name { color: var(--color-ink); font-size: 14px; font-weight: 680; letter-spacing: -0.015em; }
 .icon-button {
-  width: 30px;
-  height: 30px;
+  width: var(--ui-control);
+  height: var(--ui-control);
+  flex-shrink: 0;
   display: inline-grid;
   place-items: center;
   border-radius: 8px;
@@ -363,3 +384,15 @@
 .syntax-keyword { color: var(--color-accent-strong); font-weight: 600; }
 .syntax-number { color: var(--color-amber-warm); }
 .syntax-tag { color: var(--color-clay); }
+
+/* Shared compact geometry: content boxes grow, single-line controls align. */
+*, *::before, *::after { box-sizing: border-box; }
+.input:not(textarea), .select { height: var(--ui-control); padding-block: 0; font-size: var(--ui-control-font); line-height: var(--ui-control-line); border-radius: var(--ui-control-radius); }
+textarea.input { height: auto; }
+.icon-button.compact { width: var(--ui-compact); height: var(--ui-compact); }
+.icon-button svg { width: var(--ui-icon); height: var(--ui-icon); flex-shrink: 0; }
+.page-title { line-height: 24px; }
+.card { border-radius: var(--ui-surface-radius); }
+.rail-nav-item, .new-chat-button, .rail-search, .footer-button { min-height: var(--ui-control); }
+.rail-nav-item { gap: 8px; padding-inline: 8px; }
+.rail-nav { gap: 4px; padding: 8px; }
