@@ -403,3 +403,26 @@ textarea.input { height: auto; }
 .popup-list [role=option] { min-height: 48px; }
 .model-options button, .model-options label { min-height: 32px; font-size: 13px; line-height: 20px; gap: 8px; border-radius: 8px; }
 .model-options label { margin: 0; }
+
+html, body, #app { overflow: hidden; }
+.app-rail { width: 280px; transition: none; }
+.app-rail.is-collapsed { width: 64px; }
+.app-rail.is-collapsed .brand-mark { display: none; }
+.app-rail.is-collapsed .rail-brand { justify-content: center; padding: 8px; }
+.app-rail.is-collapsed .rail-brand button { margin: 0; }
+.rail-brand { flex-shrink: 0; gap: 8px; padding-inline: 12px; }
+.rail-nav { flex-shrink: 0; }
+.rail-footer { flex-shrink: 0; }
+.page-content { padding: 24px; }
+.panel-switcher { display: flex; flex: none; justify-content: flex-end; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--color-line); }
+.auxiliary-panel { display: flex; flex: none; min-height: 0; border-left: 1px solid var(--color-line); background: var(--color-paper); overflow: hidden; }
+.auxiliary-panel.is-overlay { position: absolute; top: 8px; right: 8px; bottom: 8px; z-index: 60; border: 1px solid var(--color-line-strong); border-radius: 12px; box-shadow: 0 12px 32px #17203333; }
+.panel-backdrop { position: absolute; inset: 0; background: #17203340; z-index: 50; }
+.panel-divider { width: 4px; flex: none; cursor: col-resize; margin-left: -1px; }
+.panel-divider:hover { background: var(--color-accent-soft); }
+.overlay-heading { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--color-line); font-size: 13px; flex-shrink: 0; }
+.navigation-backdrop { position: fixed; inset: 0; background: #17203340; z-index: 50; }
+.navigation-drawer { position: fixed; left: 8px; top: 8px; bottom: 8px; width: 280px; z-index: 60; background: var(--color-surface); border: 1px solid var(--color-line-strong); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; }
+@media(max-width:959px) { .page-content { padding: 16px; } }
+
+.auxiliary-panel[hidden] { display: none; }

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { tick } from 'svelte';
+  import { resolveShellLayout, type Auxiliary } from '$lib/ui/shellLayout';
+  import { modalFocus } from '$lib/ui/modalFocus';
   import Rail from '$lib/components/Rail.svelte';
   import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
   import Splash from '$lib/components/Splash.svelte';
@@ -22,7 +25,16 @@
   const KEY = 'umcode.columns';
   let sideWidth = $state(380);
   let inspectorWidth = $state(460);
-  let narrow = $state(false);
+  let viewportWidth = $state(window.innerWidth);
+  let viewportHeight = $state(window.innerHeight);
+  let railCollapsedPreference = $state(false);
+  try { railCollapsedPreference = localStorage.getItem('umcode.railCollapsed') === '1'; } catch { /* optional storage */ }
+  let activeAuxiliary = $state<Auxiliary | null>(null);
+  const layout = $derived(resolveShellLayout({width:viewportWidth,height:viewportHeight,railCollapsedPreference,sideRequested:chat.sides.length>0,inspectorRequested:inspector.open,sidePreferredWidth:sideWidth,inspectorPreferredWidth:inspectorWidth,activeAuxiliary}));
+  $effect(() => { void chat.activeSideId; if(chat.activeSideId) activeAuxiliary='side'; });
+  $effect(() => { void inspector.activeId; if(inspector.activeId) activeAuxiliary='inspector'; });
+  $effect(() => { try { localStorage.setItem('umcode.railCollapsed',railCollapsedPreference?'1':'0'); } catch { /* optional */ } });
+  function showPanel(panel:Auxiliary) { activeAuxiliary=panel; void tick().then(()=>document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus()); }
 
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
@@ -60,7 +72,8 @@
   }
 
   function onResize() {
-    narrow = window.innerWidth < 1100;
+    viewportWidth = window.innerWidth;
+    viewportHeight = window.innerHeight;
   }
 
   function onKey(e: KeyboardEvent) {
@@ -96,17 +109,23 @@
   <Splash />
 {:else}
 <div class="flex h-full overflow-hidden">
-  <Rail />
+  <Rail bind:collapsedPreference={railCollapsedPreference} autoCollapsed={viewportWidth < 960} />
   <div class="flex flex-col flex-1 min-w-0">
     <ConnectionBanner />
-    <div class="flex-1 min-h-0 flex">
+    {#if showChat && (chat.sides.length || inspector.open)}
+      <div class="panel-switcher">
+        {#if chat.sides.length}<button class="btn-ghost btn-sm" aria-label="Show side chats" onclick={() => showPanel('side')}>Side chats <span class="text-faint">{chat.sides.length}</span></button>{/if}
+        {#if inspector.open}<button class="btn-ghost btn-sm" aria-label="Show inspector" onclick={() => showPanel('inspector')}>Inspector</button>{/if}
+      </div>
+    {/if}
+    <div class="flex-1 min-h-0 flex relative">
       <!-- Column 1: the conversation, or a full-width panel -->
-      <div class="flex-1 min-w-0 flex flex-col">
+      <div class="flex-1 min-w-0 flex flex-col" data-main-region>
         {#if showChat}
           <ChatColumn view={chat.main} variant="main" />
         {:else}
           <main class="flex-1 overflow-y-auto">
-            <div class="max-w-5xl mx-auto px-5 py-5">
+            <div class="page-content max-w-5xl mx-auto">
               {#if app.view === 'approvals'}<Approvals />
               {:else if app.view === 'tasks'}<Tasks />
               {:else if app.view === 'extensions'}<Extensions />
@@ -119,35 +138,22 @@
         {/if}
       </div>
 
-      <!-- Column 2: side chats -->
-      {#if showChat && chat.sides.length > 0}
-        <div
-          class="shrink-0 border-l border-line flex"
-          style="width: {narrow && inspector.open ? 320 : sideWidth}px"
-        >
-          <button
-            class="w-1 cursor-col-resize hover:bg-clay/40 shrink-0"
-            aria-label="Resize side chats"
-            onpointerdown={(e) => drag('side', e)}
-          ></button>
-          <div class="flex-1 min-w-0"><SideChats /></div>
-        </div>
-      {/if}
-
-      <!-- Column 3: the inspector -->
-      {#if inspector.open}
-        <div
-          class="shrink-0 border-l border-line flex {narrow ? 'absolute right-0 top-12 bottom-0 z-30 shadow-2xl bg-paper' : ''}"
-          style="width: {inspectorWidth}px"
-        >
-          <button
-            class="w-1 cursor-col-resize hover:bg-clay/40 shrink-0"
-            aria-label="Resize inspector"
-            onpointerdown={(e) => drag('inspector', e)}
-          ></button>
-          <div class="flex-1 min-w-0"><Inspector /></div>
-        </div>
-      {/if}
+      {#each ['side','inspector'] as name}
+        {@const panel = name as Auxiliary}
+        {@const requested = panel === 'side' ? showChat && chat.sides.length > 0 : inspector.open}
+        {@const inlineWidth = layout.inline[panel]}
+        {@const overlaid = layout.overlay?.panel === panel && (panel !== 'side' || showChat)}
+        {#if requested}
+          {#if overlaid}<div class="panel-backdrop" role="presentation" onclick={() => activeAuxiliary = null}></div>{/if}
+          <div data-panel={panel} hidden={inlineWidth === null && !overlaid} class="auxiliary-panel {overlaid ? 'is-overlay' : ''}" style:width={`${overlaid ? layout.overlay!.width : (inlineWidth ?? 280) + 1}px`} role={overlaid ? 'dialog' : 'region'} aria-modal={overlaid ? 'true' : undefined} aria-label={panel === 'side' ? 'Side chats panel' : 'Inspector panel'} tabindex="-1" use:modalFocus={overlaid ? () => activeAuxiliary = null : undefined}>
+            {#if !overlaid}<button class="panel-divider" aria-label={panel === 'side' ? 'Resize side chats' : 'Resize inspector'} onpointerdown={(e) => drag(panel,e)}></button>{/if}
+            <div class="flex-1 min-w-0 min-h-0 flex flex-col">
+              {#if overlaid}<div class="overlay-heading"><span>{panel === 'side' ? 'Side chats' : 'Inspector'}</span><button class="icon-button compact" aria-label="Close panel" onclick={() => activeAuxiliary = null}>✕</button></div>{/if}
+              <div class="flex-1 min-h-0">{#if panel === 'side'}<SideChats />{:else}<Inspector />{/if}</div>
+            </div>
+          </div>
+        {/if}
+      {/each}
     </div>
   </div>
 </div>

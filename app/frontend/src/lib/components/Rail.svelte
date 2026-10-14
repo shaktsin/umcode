@@ -9,13 +9,14 @@
     Settings,
     ShieldCheck,
   } from '@lucide/svelte';
+  import { modalFocus } from '$lib/ui/modalFocus';
   import { app, type View } from '$lib/stores/app.svelte';
   import { chat } from '$lib/stores/chat.svelte';
   import ThreadList from './ThreadList.svelte';
 
-  const KEY = 'umcode.railCollapsed';
-  let collapsed = $state(false);
-  try { collapsed = localStorage.getItem(KEY) === '1'; } catch { /* use default */ }
+  let { collapsedPreference = $bindable(false), autoCollapsed = false }: {collapsedPreference?:boolean; autoCollapsed?:boolean} = $props();
+  const collapsed = $derived(autoCollapsed || collapsedPreference);
+  let drawer = $state(false);
 
   const nav: { id: View; label: string; icon: typeof MessageCircle }[] = [
     { id: 'chat', label: 'Chat', icon: MessageCircle },
@@ -25,9 +26,10 @@
   ];
 
   function toggleRail() {
-    collapsed = !collapsed;
-    try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch { /* storage is optional */ }
+    if (autoCollapsed) drawer = !drawer;
+    else collapsedPreference = !collapsedPreference;
   }
+
 </script>
 
 <aside class="app-rail {collapsed ? 'is-collapsed' : ''}">
@@ -70,3 +72,11 @@
     {/if}
   </div>
 </aside>
+
+{#if drawer && autoCollapsed}
+  <div class="navigation-backdrop" role="presentation" onclick={() => drawer = false}></div>
+  <div class="navigation-drawer" role="dialog" aria-modal="true" aria-label="Projects and chats" tabindex="-1" use:modalFocus={() => drawer = false}>
+    <div class="overlay-heading"><span>Projects and chats</span><button class="icon-button" aria-label="Close navigation" onclick={() => drawer = false}>✕</button></div>
+    <ThreadList />
+  </div>
+{/if}
