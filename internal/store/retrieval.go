@@ -7,12 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/shaktsin/umcode/internal/protocol"
-	"github.com/shaktsin/umcode/internal/retrieval"
-	"github.com/shaktsin/umcode/internal/vault"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/retrieval"
+	"github.com/shaktsin/umcode/internal/vault"
 )
 
 func retrievalText(text string) string { b, _ := vault.Redact([]byte(text)); return string(b) }
@@ -166,6 +167,8 @@ func (s *Store) SearchRetrieval(ctx context.Context, scope retrieval.Scope, q re
 
 // RecordDiscoveryObservation atomically persists only bounded typed provenance.
 func (s *Store) RecordDiscoveryObservation(ctx context.Context, e protocol.Evidence, excerpts []protocol.ObservedExcerpt) (protocol.Evidence, error) {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	if len(excerpts) > retrieval.MaxCandidates {
 		return protocol.Evidence{}, errors.New("too many observed excerpts")
 	}

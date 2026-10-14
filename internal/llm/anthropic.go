@@ -244,6 +244,9 @@ func (a *Anthropic) Stream(ctx context.Context, cred Credential, req Request) (<
 				u := m.Message.Usage
 				inputBase, cacheRead, cacheWrite = u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens
 				usage.OutputTokens = u.OutputTokens
+				usage.InputTokens = inputBase + cacheRead + cacheWrite
+				usage.CachedInputTokens = cacheRead
+				usage.Reported = true
 			case "content_block_start":
 				blocks[m.Index] = &block{kind: m.ContentBlock.Type, id: m.ContentBlock.ID, name: m.ContentBlock.Name, redacted: m.ContentBlock.Data}
 			case "content_block_delta":
@@ -297,7 +300,7 @@ func (a *Anthropic) Stream(ctx context.Context, cred Credential, req Request) (<
 			err = streamErr
 		}
 		if err != nil {
-			ch <- Event{Type: EventError, Err: err}
+			ch <- Event{Type: EventError, Err: err, Usage: usage}
 			return
 		}
 		usage.InputTokens = inputBase + cacheRead + cacheWrite

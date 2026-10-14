@@ -241,7 +241,7 @@ func (g *Gemini) Stream(ctx context.Context, cred Credential, req Request) (<-ch
 			err = streamErr
 		}
 		if err != nil {
-			ch <- Event{Type: EventError, Err: err}
+			ch <- Event{Type: EventError, Err: err, Usage: usage}
 			return
 		}
 		ch <- Event{Type: EventDone, Usage: usage, StopReason: stop}

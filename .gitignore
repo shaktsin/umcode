@@ -151,9 +151,6 @@ venv.bak/
 # Rope project settings
 .ropeproject
 
-# mkdocs documentation
-/site
-
 # mypy
 .mypy_cache/
 .dmypy.json
@@ -245,10 +242,14 @@ package-lock.json
 # Exception: the startup splash's logo is a real source asset, not a
 # generated screenshot or artifact.
 !app/frontend/src/lib/assets/appicon.png
+# Landing page images are source assets.
+!site/*.png
+!site/*.webp
 
 # Project-specific: keep out of version control
 CLAUDE.md
-.github/
+.github/*
+!.github/workflows/
 
 # Go engine build output
 /bin/

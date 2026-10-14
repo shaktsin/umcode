@@ -26,3 +26,15 @@ routing tests force a switch.
 Each script leaves the engine's state behind (cooled-down keys, configured
 models, chat history), and each starts by putting back what it needs, so they
 can be run repeatedly in any order.
+
+The skill picker test runs independently of the engine. It serves the real
+composer with a fake RPC boundary and checks keyboard and mouse selection,
+insert-before-send behavior, project scoping, and loading/error/empty states:
+
+```sh
+node e2e/skills.mjs
+```
+
+It requires `playwright-core` and defaults to Chrome's macOS application path.
+Use `PLAYWRIGHT_MODULE` to point to an installed module, `CHROME_PATH` for a
+different browser executable, and `SCREENSHOT_PATH` to save the final picker.

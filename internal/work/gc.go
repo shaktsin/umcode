@@ -72,6 +72,8 @@ var gcBeforeDelete func(hash string)
 // objects. It only touches vault files and index rows, never project files. It
 // is safe to interrupt: the next run finishes whatever was left.
 func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, now time.Time) (GCReport, error) {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	var rep GCReport
 	if err := ctx.Err(); err != nil {
 		return rep, err
@@ -130,7 +132,7 @@ func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, 
 		}
 	}
 	// Collect.
-	refs, err := st.ReferencedVaultHashes(ctx)
+	refs, err := st.ReferencedVaultHashesDuringGC(ctx)
 	if err != nil {
 		return rep, err
 	}
@@ -161,7 +163,7 @@ func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, 
 		if cur, err := st.GetVaultObject(ctx, hash); err == nil && now.Sub(cur.LastReferencedAt) <= ret.forObject(cur) {
 			continue
 		}
-		if live, err := st.ReferencedVaultHashes(ctx); err != nil {
+		if live, err := st.ReferencedVaultHashesDuringGC(ctx); err != nil {
 			return rep, err
 		} else if live[hash] {
 			continue
@@ -185,13 +187,18 @@ func RunGC(ctx context.Context, st *store.Store, v *vault.Vault, ret Retention, 
 
 // StartGC runs RunGC once and then daily until ctx is done. It never blocks
 // the caller and never prompts; failures are logged and counted.
-func (s *Service) StartGC(ctx context.Context, ret Retention) {
+func (s *Service) StartGC(ctx context.Context, policy func(context.Context) (Retention, error)) {
 	if s.Vault == nil {
 		return
 	}
 	run := func() {
 		c, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
+		ret, err := policy(c)
+		if err != nil {
+			s.count("gc", err)
+			return
+		}
 		if _, err := RunGC(c, s.Store, s.Vault, ret, s.now()); err != nil && !errors.Is(err, context.Canceled) {
 			s.count("gc", err)
 		}

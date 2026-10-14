@@ -7,6 +7,7 @@
   import ModelPicker from '$lib/components/ModelPicker.svelte';
   import type { ModelSelection } from '$lib/types';
   import { createProject, editProject } from '$lib/createProject';
+  import ProjectMemory from './ProjectMemory.svelte';
 
   const p = $derived(projects.active);
   let computerUseDefault = $state(true);
@@ -190,4 +191,5 @@
     </div>
   </section>
 
+  <ProjectMemory projectId={p.id} />
 {/if}

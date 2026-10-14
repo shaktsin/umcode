@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from '$lib/stores/app.svelte';
   import { OptimizationSettings, type OptimizationView } from '$lib/optimizationSettings';
+  import StorageControls from './StorageControls.svelte';
   let view = $state<OptimizationView>({busy: false, error: ''});
   const settings = new OptimizationSettings((method, params) => app.call(method, params), (next) => { view = next; });
   $effect(() => { if (app.conn === 'open') void settings.load(); });
@@ -26,3 +27,5 @@
     <button class="text-xs underline mt-2" disabled={view.busy} onclick={() => settings.load()}>Reload saved setting</button>
   {/if}
 </section>
+
+<StorageControls />

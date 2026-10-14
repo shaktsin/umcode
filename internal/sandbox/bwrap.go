@@ -27,6 +27,14 @@ func (b bwrap) Wrap(cmd *exec.Cmd, p Policy) error {
 func bwrapArgs(p Policy, dir string) []string {
 	args := []string{"--die-with-parent", "--new-session", "--unshare-pid",
 		"--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"}
+	if p.Readable != nil {
+		args = []string{"--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc"}
+		for _, r := range p.Readable {
+			if r != "/dev" && exists(r) {
+				args = append(args, "--ro-bind", r, r)
+			}
+		}
+	}
 	if !p.Network {
 		args = append(args, "--unshare-net")
 	}

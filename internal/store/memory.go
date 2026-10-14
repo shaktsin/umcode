@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/vault"
 )
 
 const projectMemoryCols = `id, project_id, work_id, candidate_node_id, semantic_key, category, target_path,
@@ -209,6 +210,8 @@ func canonicalMemoryCandidateText(text string) string {
 // PrepareMemoryPromotion reserves the semantic identity before any file write.
 // BEGIN IMMEDIATE serializes both reservation checks and provisional inserts.
 func (s *Store) PrepareMemoryPromotion(ctx context.Context, in PrepareMemoryPromotion) (protocol.MemoryPromotionOp, error) {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	var zero protocol.MemoryPromotionOp
 	m := in.Memory
 	if in.Validate == nil || m.ProjectID == "" || m.WorkID == "" || m.CandidateNodeID == "" || m.SemanticKey == "" || m.Text == "" || m.SourceRevision == "" || in.TurnID == "" || len(in.BeforeBytes) > 32<<10 || len(in.AfterBytes) > 32<<10 || memoryHash(in.BeforeBytes) != m.FileHashBefore || memoryHash(in.AfterBytes) != m.FileHashAfter || memoryHash([]byte(m.Text)) != m.TextHash {
@@ -321,6 +324,9 @@ func (s *Store) PrepareMemoryPromotion(ctx context.Context, in PrepareMemoryProm
 		if err != nil {
 			return zero, err
 		}
+		if err = pinMemoryEvidence(ctx, tx, m.ID, m.EvidenceJSON); err != nil {
+			return zero, err
+		}
 	}
 	op := protocol.MemoryPromotionOp{ID: NewID("mpo"), ProjectID: m.ProjectID, WorkID: m.WorkID, CandidateNodeID: m.CandidateNodeID, MemoryID: m.ID, ThreadID: in.ThreadID, TurnID: in.TurnID, TargetPath: m.TargetPath, State: protocol.MemoryOpPrepared, FileHashBefore: m.FileHashBefore, FileHashAfter: m.FileHashAfter, BeforeBytes: bytes.Clone(in.BeforeBytes), AfterBytes: bytes.Clone(in.AfterBytes), CreatedAt: at, UpdatedAt: at}
 	var before, after any
@@ -366,6 +372,8 @@ func (s *Store) MarkMemoryFileWritten(ctx context.Context, opID string) error {
 }
 
 func (s *Store) CommitMemoryPromotion(ctx context.Context, opID string, promotedAt time.Time) error {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
@@ -424,6 +432,9 @@ func (s *Store) CommitMemoryPromotion(ctx context.Context, opID string, promoted
 			if _, err := tx.ExecContext(ctx, `UPDATE project_memories SET status='superseded',superseded_by=? WHERE id=? AND status='active'`, m.ID, current.ID); err != nil {
 				return err
 			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM memory_vault_refs WHERE memory_id=?`, current.ID); err != nil {
+				return err
+			}
 		} else if err == nil {
 			return ErrMemoryConflict
 		}
@@ -443,6 +454,8 @@ func (s *Store) CommitMemoryPromotion(ctx context.Context, opID string, promoted
 // FailMemoryPromotion changes only lifecycle fields, preserving all immutable
 // provenance and exact recovery snapshots. Active duplicate rows are untouched.
 func (s *Store) FailMemoryPromotion(ctx context.Context, opID, state, candidateStatus, errorClass string) error {
+	unlock := vault.LockLifecycle()
+	defer unlock()
 	if state != protocol.MemoryOpConflicted && state != protocol.MemoryOpPendingRepair || state == protocol.MemoryOpConflicted && candidateStatus != protocol.StatusConflicted || state == protocol.MemoryOpPendingRepair && candidateStatus != protocol.StatusPending {
 		return ErrMemoryConflict
 	}
@@ -468,6 +481,11 @@ func (s *Store) FailMemoryPromotion(ctx context.Context, opID, state, candidateS
 	if _, err := tx.ExecContext(ctx, `UPDATE project_memories SET status=? WHERE id=? AND status='pending_repair' AND work_id=? AND candidate_node_id=?`, state, op.MemoryID, op.WorkID, op.CandidateNodeID); err != nil {
 		return err
 	}
+	if state == protocol.MemoryOpConflicted {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_vault_refs WHERE memory_id=?`, op.MemoryID); err != nil {
+			return err
+		}
+	}
 	if err := transitionMemoryCandidate(ctx, tx, op, candidateStatus, at); err != nil {
 		return err
 	}
@@ -475,4 +493,38 @@ func (s *Store) FailMemoryPromotion(ctx context.Context, opID, state, candidateS
 		return err
 	}
 	return tx.Commit()
+}
+
+// PinMemoryEvidence durably retains the vault objects supporting a live memory row.
+func (s *Store) PinMemoryEvidence(ctx context.Context, memoryID string, evidenceIDs []string) error {
+	unlock := vault.LockLifecycle()
+	defer unlock()
+	raw, err := json.Marshal(evidenceIDs)
+	if err != nil {
+		return err
+	}
+	return pinMemoryEvidence(ctx, s.DB, memoryID, string(raw))
+}
+func pinMemoryEvidence(ctx context.Context, x interface {
+	execer
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, memoryID, evidenceJSON string) error {
+	var ids []string
+	if err := json.Unmarshal([]byte(evidenceJSON), &ids); err != nil {
+		return ErrMemoryStale
+	}
+	for _, id := range ids {
+		var hash string
+		err := x.QueryRowContext(ctx, `SELECT vault_hash FROM evidence WHERE id=? AND vault_hash<>''`, id).Scan(&hash)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, err = x.ExecContext(ctx, `INSERT OR IGNORE INTO memory_vault_refs(memory_id,vault_hash) VALUES(?,?)`, memoryID, hash); err != nil {
+			return err
+		}
+	}
+	return nil
 }

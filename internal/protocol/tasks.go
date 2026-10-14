@@ -132,6 +132,10 @@ type SkillListResult struct {
 	Dirs   []string    `json:"dirs"`
 }
 
+type SkillListParams struct {
+	ProjectID string `json:"projectId,omitempty"`
+}
+
 type SkillNameParams struct {
 	Name string `json:"name"`
 }

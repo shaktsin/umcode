@@ -2,11 +2,12 @@
   import { X, FileText, GitCompare, Terminal, Undo2, RefreshCw, Monitor, Square, FlaskConical, Image } from '@lucide/svelte';
   import { inspector } from '$lib/stores/inspector.svelte';
   import DiffView from './DiffView.svelte';
+  import TurnDetails from './TurnDetails.svelte';
   import { highlightSource } from '$lib/highlight';
 
   const tab = $derived(inspector.active);
 
-  const icon = { file: FileText, diff: GitCompare, output: Terminal, preview: Monitor, browser: FlaskConical, artifact: Image } as const;
+  const icon = { file: FileText, diff: GitCompare, output: Terminal, preview: Monitor, browser: FlaskConical, artifact: Image, turnDetails: Terminal } as const;
 
 </script>
 
@@ -122,6 +123,8 @@
           </section>
           {#if tab.browser.output}<details><summary class="cursor-pointer text-muted">Command output</summary><pre class="mt-2 font-mono whitespace-pre-wrap selectable">{tab.browser.output}</pre></details>{/if}
         </div>
+      {:else if tab.kind === 'turnDetails' && tab.threadId && tab.turnDetails}
+        <TurnDetails details={tab.turnDetails} />
       {:else if tab.kind === 'artifact' && tab.artifact}
         {#if tab.dataUrl}
           <div class="h-full p-3 flex items-center justify-center bg-raised"><img src={tab.dataUrl} alt={tab.artifact.path} class="max-w-full max-h-full object-contain" /></div>

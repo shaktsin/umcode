@@ -50,8 +50,22 @@ umcode plugin remove SOURCE_ID/PLUGIN --disable-projects
 
 Legacy standalone `skill` commands, `skill_dirs`, and `mcp_servers` remain backend-compatible during the migration window, but they are not separate sections in the desktop Plugins screen.
 
+In a main or side chat, type `/` at the start of a message to find available skills
+by name or description. Use ↑/↓ and Enter or Tab, or click a skill, to insert its
+command. Add your instructions before sending; selecting a skill does not send
+the message. Escape closes the picker. Sending `/plugin:skill your request`
+loads that exact skill's instructions from the chat project's enabled plugins.
+
 ### Token optimization
 
 Open **Settings → Token optimization** to enable the complete optimization system globally: context compilation and retrieval, progressive tools, result reduction, internal workflow tracking and verified memory promotion. All components operate automatically across chats, without separate opt-ins or internal design/planning approval prompts. Chat action permissions still apply.
 
 The saved switch survives restarts and applies to new turns; active turns keep their current settings. Fresh installations start with it off until rollout qualification. Existing YAML feature flags remain effective until you save an explicit global choice; the settings panel identifies legacy or mixed configuration. Saving on enables the whole bundle, and saving off overrides all legacy component flags. Turning it off retains history and stored memory but omits generated memory from subsequent optimized prompt retrieval and stops new promotion. User-written project instructions remain available. Projectless design chats use evidence-linked decisions and completed deliverable tasks; they do not report an execution test pass or human acceptance.
+
+For isolated token optimization regression campaigns and explicit live qualification, see [Paired evaluation](docs/evaluation.md).
+
+Open **Turn details** from a response menu to inspect the settings captured when a turn started, its recorded token and cost measurements, context sources, and tool diagnostics. Values the provider or engine did not measure are shown as unavailable; opening the inspector does not make another model call. Legacy turns may not have detailed measurements.
+
+For project knowledge, open **Project settings → Memory** to review generated and corrected entries. Corrections become user-owned instructions. Retirement removes an unchanged generated bullet when ownership is clear; an edited or user-owned instruction stays in `UMCODE.md` and remains ordinary project guidance.
+
+The **Vault storage** controls on **Settings → Token optimization** show indexed vault objects and bytes, set retention for raw, stale, large, and redacted unreferenced objects, and run **Clean up now**. Statistics count shared vault objects once and are not total application disk usage. Cleanup reports what it actually deleted and freed; active work evidence and evidence supporting live project memory remain protected. Project-wide purge and forced deletion of referenced evidence are not available. Live paid rollout qualification remains a separate opt-in evaluation.

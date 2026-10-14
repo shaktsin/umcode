@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UMCode: a coding agent for Mac that survives rate limits</title>
+<meta name="description" content="A Mac coding agent for any LLM, hosted or local (Ollama, llama.cpp). Model pools switch to the next model when one hits a rate limit, and token optimization keeps context lean. Free and open source.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:title" content="UMCode: a coding agent for Mac that survives rate limits">
+<meta property="og:description" content="Works with hosted and local models. Model pools fail over on rate limits. Token optimization trims context. Free and open source.">
+<meta property="og:url" content="https://umcode.dev/">
+<meta property="og:image" content="https://umcode.dev/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root {
+  --paper: #f7f8fa;
+  --surface: #eef1f5;
+  --ink: #172033;
+  --ink-soft: #344157;
+  --muted: #5d6a80;
+  --line: #d9dee7;
+  --accent: #3569d4;
+  --accent-strong: #2454b5;
+  --on-accent: #ffffff;
+  --warn: #bd4b51;
+  --ok: #2f7a5c;
+  --shadow: 0 1px 2px rgba(23,32,51,.06), 0 24px 60px -24px rgba(23,32,51,.28);
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #11151d;
+    --surface: #171c26;
+    --ink: #edf1f7;
+    --ink-soft: #c8d0dc;
+    --muted: #9aa5b8;
+    --line: #2b3342;
+    --accent: #79a3ff;
+    --accent-strong: #a8c3ff;
+    --on-accent: #0d1320;
+    --warn: #ef8f94;
+    --ok: #78bd9f;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 24px 60px -24px rgba(0,0,0,.7);
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 1.0625rem/1.6 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent-strong); text-underline-offset: .18em; text-decoration-thickness: .08em; }
+a:hover { text-decoration-thickness: .14em; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+code, kbd, pre { font-family: var(--font-mono); font-size: .9em; }
+code { background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: .08em .35em; }
+
+.wrap { width: min(1080px, 100% - 48px); margin-inline: auto; }
+
+/* header */
+.site-header { padding-block: 22px; }
+.site-header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-weight: 650; letter-spacing: -.01em; }
+.brand img { width: 28px; height: 28px; display: block; }
+.site-nav { display: flex; gap: 22px; font-size: .97rem; }
+.site-nav a { color: var(--ink-soft); text-decoration: none; }
+.site-nav a:hover { color: var(--ink); text-decoration: underline; }
+
+/* hero */
+.hero { padding-top: clamp(40px, 8vw, 96px); }
+.hero h1 {
+  margin: 0;
+  max-width: 14.5ch;
+  font-size: clamp(2.7rem, 7.4vw, 5.25rem);
+  line-height: 1;
+  font-weight: 720;
+  letter-spacing: -.045em;
+  text-wrap: balance;
+}
+.hero .lede {
+  margin: 28px 0 0;
+  max-width: 38em;
+  font-size: clamp(1.1rem, 2.2vw, 1.3rem);
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; margin-top: 34px; }
+.btn {
+  display: inline-flex; align-items: center; min-height: 52px; padding: 0 26px;
+  border-radius: 12px; font: inherit; font-weight: 650; text-decoration: none;
+  background: var(--accent); color: var(--on-accent);
+  transition: background-color .15s ease, transform .15s ease;
+}
+.btn:hover { background: var(--accent-strong); color: var(--on-accent); text-decoration: none; }
+.btn:active { transform: translateY(1px); }
+.link-quiet { color: var(--ink-soft); font-weight: 550; }
+.fine { margin: 14px 0 0; font-size: .92rem; color: var(--muted); }
+
+.shot { margin: clamp(44px, 7vw, 76px) 0 0; }
+.shot img {
+  display: block; width: 100%; height: auto;
+  border-radius: 14px; border: 1px solid var(--line); box-shadow: var(--shadow);
+  background: var(--surface);
+}
+
+/* sections */
+.section { padding-top: clamp(72px, 11vw, 132px); }
+.section h2 {
+  margin: 0 0 14px;
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  line-height: 1.1; letter-spacing: -.03em; font-weight: 700;
+  text-wrap: balance;
+}
+.section .intro { margin: 0; max-width: 40em; color: var(--ink-soft); }
+
+.facts { margin: 44px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 56px; }
+.facts > div { border-top: 1px solid var(--line); padding-top: 18px; }
+.facts dt { font-weight: 650; letter-spacing: -.01em; }
+.facts dd { margin: 6px 0 0; color: var(--ink-soft); max-width: 30em; }
+
+/* model pool demo */
+.pool-grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 40px 64px; align-items: center; }
+.pool-grid .copy p { margin: 0; color: var(--ink-soft); max-width: 28em; }
+.pool {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  padding: 22px 22px 18px; font-family: var(--font-mono); font-size: .92rem;
+}
+.pool-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--muted); margin-bottom: 14px; }
+.pool-head button {
+  font: inherit; font-family: var(--font-sans); font-size: .9rem; color: var(--accent-strong);
+  background: none; border: 0; padding: 4px 6px; cursor: pointer; border-radius: 6px;
+}
+.pool-head button:hover { text-decoration: underline; }
+.pool ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.row {
+  position: relative; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px;
+  padding: 13px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper);
+  overflow: hidden;
+}
+.row::before { /* active marker */
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--accent); opacity: 0;
+}
+.row .name { color: var(--ink); }
+.state { position: relative; display: block; text-align: right; min-width: 10.5em; height: 1.4em; }
+.state > span { position: absolute; inset: 0 0 auto auto; white-space: nowrap; }
+.state .was { opacity: 0; }
+.tone-ok { color: var(--accent-strong); }
+.tone-warn { color: var(--warn); }
+.tone-idle { color: var(--muted); }
+.pool-note { margin: 14px 2px 0; font-family: var(--font-sans); font-size: .9rem; color: var(--muted); }
+
+/* final (no-JS / reduced motion) state: first model limited, second answering */
+.row.r1 .was { opacity: 0; } .row.r1 .now { opacity: 1; }
+.row.r2::before { opacity: 1; }
+.row.r2 { border-color: var(--accent); }
+.row.r1 { opacity: .7; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .pool.play .r1 .was { animation: fade-out .3s ease 2.1s forwards; opacity: 1; }
+  .pool.play .r1 .now { animation: fade-in .3s ease 2.2s forwards; opacity: 0; }
+  .pool.play .r1 { animation: dim .5s ease 2.2s forwards; opacity: 1; }
+  .pool.play .r1::before { opacity: 1; animation: marker-off .3s ease 2.2s forwards; }
+  .pool.play .r2 .was { animation: fade-out .3s ease 2.6s forwards; opacity: 1; }
+  .pool.play .r2 .now { animation: fade-in .3s ease 2.7s forwards; opacity: 0; }
+  .pool.play .r2::before { animation: marker-on .35s ease 2.7s forwards; opacity: 0; }
+  .pool.play .r2 { animation: ring .35s ease 2.7s forwards; border-color: var(--line); }
+}
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes fade-in { to { opacity: 1; } }
+@keyframes dim { to { opacity: .7; } }
+@keyframes marker-off { to { opacity: 0; } }
+@keyframes marker-on { to { opacity: 1; } }
+@keyframes ring { to { border-color: var(--accent); } }
+
+/* install */
+.install { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 56px; margin-top: 40px; }
+.install h3 { margin: 0 0 8px; font-size: 1.05rem; letter-spacing: -.01em; }
+.install p { margin: 0 0 14px; color: var(--ink-soft); max-width: 30em; }
+pre {
+  margin: 0; padding: 16px 18px; overflow-x: auto; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--line); line-height: 1.55; font-size: .88rem;
+}
+
+footer { margin-top: clamp(72px, 11vw, 132px); border-top: 1px solid var(--line); padding-block: 32px 56px; color: var(--muted); font-size: .95rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 28px; justify-content: space-between; }
+footer .links { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+footer a { color: var(--ink-soft); }
+
+@media (max-width: 820px) {
+  .facts, .install { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .pool-grid { grid-template-columns: minmax(0, 1fr); }
+  .site-nav .hide-sm { display: none; }
+}
+@media (max-width: 480px) {
+  .wrap { width: calc(100% - 32px); }
+  .btn { width: 100%; justify-content: center; }
+  .state { min-width: 0; }
+  .row { grid-template-columns: 1fr; gap: 2px; }
+  .state { text-align: left; }
+  .state > span { inset: 0 auto auto 0; }
+}
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/"><img src="favicon.svg" alt="" width="28" height="28">UMCode</a>
+    <nav class="site-nav" aria-label="Primary">
+      <a class="hide-sm" href="#pools">Model pools</a>
+      <a class="hide-sm" href="#tokens">Token savings</a>
+      <a class="hide-sm" href="#install">Install</a>
+      <a href="https://github.com/shaktsin/umcode">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero wrap">
+    <h1>A coding agent that doesn't stop at rate limits.</h1>
+    <p class="lede">UMCode is a Mac app for coding tasks with the models you choose: hosted providers, or local models running in Ollama or llama.cpp. Put models in a pool and it moves to the next one when a model hits its limit, while token optimization keeps each task's context lean.</p>
+    <div class="actions">
+      <a class="btn" id="dl" href="https://github.com/shaktsin/umcode/releases/latest/download/UMCode.dmg">Download for Mac</a>
+      <a class="link-quiet" href="https://github.com/shaktsin/umcode">View the source on GitHub</a>
+    </div>
+    <p class="fine" id="dl-note">Free and open source (MIT). Needs macOS 14 or later. Apple Silicon and Intel.</p>
+
+    <figure class="shot">
+      <img src="app.webp" width="2000" height="1256" alt="The UMCode window: a project list in the sidebar, a chat about a llama.cpp project folder with a work log and a token and cost line under the reply, and a message box with model and effort selectors.">
+    </figure>
+  </section>
+
+  <section class="section wrap" id="what">
+    <h2>Bring any model, hosted or local.</h2>
+    <p class="intro">Connect the providers you already use, or point UMCode at a model on your own machine through Ollama or llama.cpp. Chats and settings are stored on your Mac, and prompts go only to the models you configure.</p>
+    <dl class="facts">
+      <div>
+        <dt>Built for coding in a project</dt>
+        <dd>Pick a folder and work inside it with its <code>UMCODE.md</code> instructions. Chats stay with the project, and you can open a clean chat or a side chat with context.</dd>
+      </div>
+      <div>
+        <dt>Hosted or local</dt>
+        <dd>Use any provider and model ID you have configured, or a local model served by Ollama or llama.cpp. Switch models per chat, or combine several into an ordered pool.</dd>
+      </div>
+      <div>
+        <dt>Actions you can see</dt>
+        <dd>Tool actions are visible in the chat. Sensitive operations wait for your approval before they run.</dd>
+      </div>
+      <div>
+        <dt>Keys in the Keychain</dt>
+        <dd>Provider API keys are stored in the macOS Keychain, not in project files or chat history.</dd>
+      </div>
+      <div>
+        <dt>Plugins you can inspect</dt>
+        <dd>Install Agent Plugins, or Codex and Claude plugin folders with skills, MCP servers and hooks. See what a plugin can do before you install it.</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="section wrap" id="pools">
+    <div class="pool-grid">
+      <div class="copy">
+        <h2>When a model hits its limit, the next one picks up.</h2>
+        <p>Put models in order, hosted and local together if you like. If a provider reports a quota or rate limit, UMCode continues with the next model in the pool, so a long task doesn't stop halfway.</p>
+      </div>
+      <div class="pool" id="pool" aria-label="Example of a model pool falling back to the next model">
+        <div class="pool-head"><span>pool: daily-driver</span><button type="button" id="replay">Replay</button></div>
+        <ol>
+          <li class="row r1"><span class="name">large-model</span><span class="state"><span class="was tone-ok">answering</span><span class="now tone-warn">rate limit reached</span></span></li>
+          <li class="row r2"><span class="name">mid-model</span><span class="state"><span class="was tone-idle">next in pool</span><span class="now tone-ok">answering</span></span></li>
+          <li class="row r3"><span class="name">local-model</span><span class="state"><span class="tone-idle">standby</span></span></li>
+        </ol>
+        <p class="pool-note">Illustration with example names. You choose the models and their order.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap" id="tokens">
+    <h2>Spend fewer tokens on every task.</h2>
+    <p class="intro">A coding agent re-sends a lot: the whole conversation, every tool definition, every long log. UMCode's token optimization trims that, and it doesn't do it by asking the model to think less.</p>
+    <dl class="facts">
+      <div>
+        <dt>Context built from the work, not the transcript</dt>
+        <dd>Each model call gets a compact record of the goal, what is done and what is still unproven, instead of a replay of the whole chat.</dd>
+      </div>
+      <div>
+        <dt>Long tool output, shortened</dt>
+        <dd>Big shell logs, repeated passing checks and search results are reduced for the model. The full output stays in your chat and the work log.</dd>
+      </div>
+      <div>
+        <dt>Tools loaded when needed</dt>
+        <dd>Core coding tools are always there. Specialist tools are added when a task calls for them, so each call carries fewer tool definitions.</dd>
+      </div>
+      <div>
+        <dt>Checks that stay honest</dt>
+        <dd>A passing test counts only while it is still true. Edit a file after the tests passed and UMCode marks them as needing a re-run.</dd>
+      </div>
+      <div>
+        <dt>Project memory you can read</dt>
+        <dd>Verified, lasting notes about the project go in <code>UMCODE.md</code>, so the agent doesn't rediscover your commands and conventions every time.</dd>
+      </div>
+      <div>
+        <dt>Cost you can see</dt>
+        <dd>Tokens in, tokens out and cost appear under every reply, so you can tell what a task actually used.</dd>
+      </div>
+    </dl>
+    <p class="fine">Token optimization is off in a fresh install. Turn it on in Settings under Token optimization and it applies to new turns in every chat. Measured comparisons are still in progress, so there are no savings figures on this page yet.</p>
+  </section>
+
+  <section class="section wrap" id="install">
+    <h2>Install it in a minute.</h2>
+    <p class="intro">The app is signed with an Apple Developer ID and notarized, so macOS opens it without a security warning.</p>
+    <div class="install">
+      <div>
+        <h3>Download the app</h3>
+        <p>Open the disk image and drag UMCode to Applications. Then add a provider key in Settings and pick a project folder.</p>
+        <a class="btn" href="https://github.com/shaktsin/umcode/releases/latest/download/UMCode.dmg">Download UMCode.dmg</a>
+        <p class="fine"><span id="ver">All versions and checksums are on the</span> <a href="https://github.com/shaktsin/umcode/releases">releases page</a>.</p>
+      </div>
+      <div>
+        <h3>Build it from source</h3>
+        <p>You need Go 1.24 or later, plus Node.js for the desktop app.</p>
+<pre><code>git clone https://github.com/shaktsin/umcode
+cd umcode
+make app-build</code></pre>
+        <p class="fine">The <a href="https://github.com/shaktsin/umcode/blob/master/GO_ENGINE.md">engine guide</a> covers every make target.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section wrap" id="contribute">
+    <h2>Early, open, and ready for contributors.</h2>
+    <p class="intro">UMCode is MIT-licensed and young. Bug reports, plugins and pull requests are welcome. If something in the app surprised you, <a href="https://github.com/shaktsin/umcode/issues">open an issue</a> and say what you expected.</p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>UMCode, MIT License</span>
+    <span class="links">
+      <a href="https://github.com/shaktsin/umcode">Source</a>
+      <a href="https://github.com/shaktsin/umcode/releases">Releases</a>
+      <a href="https://github.com/shaktsin/umcode/issues">Issues</a>
+      <a href="https://github.com/shaktsin/umcode/blob/master/SECURITY.md">Security</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var pool = document.getElementById('pool');
+  var replay = document.getElementById('replay');
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function play() {
+    if (reduce) return;
+    pool.classList.remove('play');
+    void pool.offsetWidth;
+    pool.classList.add('play');
+  }
+  if (!reduce && 'IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      if (entries[0].isIntersecting) { play(); io.disconnect(); }
+    }, { threshold: 0.6 });
+    io.observe(pool);
+  }
+  replay.addEventListener('click', play);
+
+  // Show the latest version next to the download if GitHub answers.
+  try {
+    fetch('https://api.github.com/repos/shaktsin/umcode/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.tag_name) return;
+        document.getElementById('ver').textContent = 'Latest version: ' + j.tag_name.replace(/^v/, '') + '. Older versions and checksums are on the';
+      })
+      .catch(function () {});
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>

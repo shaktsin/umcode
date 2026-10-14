@@ -46,37 +46,37 @@ import (
 
 // Engine is the UMCode core.
 type Engine struct {
-	selectionHook func() // instance-local failure seam, set before use
-	discoveryHook func()
-	Cfg           *config.Config
-	Store         *store.Store
-	LLMs          *llm.Registry
-	Catalog       *models.Catalog
-	Creds         *credentials.Service
-	Secrets       secrets.Store
-	Tools         *tools.Registry
-	Skills        *skills.Registry
-	MCP           *mcp.Manager
-	Plugins       *plugins.Manager
-	Installer     *plugins.Installer
-	Hooks         *hooks.Runner
-	Projects      *projects.Service
-	Router        *router.Router
-	Tasks         *tasks.Service
-	Worktrees     *worktree.Manager
-	Previews      *preview.Manager
-	VisualQA      *visualqa.Manager
-	ComputerUse   *computeruse.Manager
-	Exec          *tools.ExecManager
-	Bus           *Bus
-	Log           *slog.Logger
-	Work          *work.Service
-	Memory        *memory.Service
+	evaluationPolicy *optimization.Policy
+	selectionHook    func() // instance-local failure seam, set before use
+	discoveryHook    func()
+	Cfg              *config.Config
+	Store            *store.Store
+	LLMs             *llm.Registry
+	Catalog          *models.Catalog
+	Creds            *credentials.Service
+	Secrets          secrets.Store
+	Tools            *tools.Registry
+	Skills           *skills.Registry
+	MCP              *mcp.Manager
+	Plugins          *plugins.Manager
+	Installer        *plugins.Installer
+	Hooks            *hooks.Runner
+	Projects         *projects.Service
+	Router           *router.Router
+	Tasks            *tasks.Service
+	Worktrees        *worktree.Manager
+	Previews         *preview.Manager
+	VisualQA         *visualqa.Manager
+	ComputerUse      *computeruse.Manager
+	Exec             *tools.ExecManager
+	Bus              *Bus
+	Log              *slog.Logger
+	Work             *work.Service
+	Memory           *memory.Service
 
 	gate      *policy.Gate
 	started   time.Time
 	baseCtx   context.Context
-	retention work.Retention
 	cancelAll context.CancelFunc
 
 	memoryPromotionFailures atomic.Int64 // promotion failures, isolated from Work completion
@@ -183,14 +183,12 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		Worktrees: worktree.New(o.Config.Home), Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs,
 		Bus: bus, Log: o.Logger,
 		Work: workService,
-		retention: work.RetentionFromDays(o.Config.Storage.RetentionRawDays, o.Config.Storage.RetentionStaleDays,
-			o.Config.Storage.RetentionBlobDays, o.Config.Storage.RetentionRedactedDays),
 		gate: policy.New(), started: time.Now(), baseCtx: base, cancelAll: cancel,
 		activeTurns: map[string]*activeTurn{}, threadTurns: map[string]string{},
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
-	e.Work.StartGC(base, e.retention) // best-effort, background, never prompts
+	e.Work.StartGC(base, e.storageRetention) // best-effort, background, never prompts
 	e.Creds.OnSignIn = func(r protocol.ChatGPTSignInResult) { e.Bus.PublishAdmin(protocol.NotifyChatGPTSignIn, r) }
 	e.Router = router.New(o.Store, e.Creds, cat, o.LLMs, o.Config, o.Logger)
 	e.Tasks = tasks.NewService(o.Store, o.Logger, e.runTask, func(t protocol.Task) {
@@ -434,7 +432,11 @@ func (e *Engine) verifyVaultEvidence(ctx context.Context, d *protocol.WorkDetail
 
 // VaultStats reports what the vault holds and how much of it GC may reclaim now.
 func (e *Engine) VaultStats(ctx context.Context) (protocol.VaultStats, error) {
-	return work.Stats(ctx, e.Store, e.retention, time.Now().UTC())
+	retention, err := e.storageRetention(ctx)
+	if err != nil {
+		return protocol.VaultStats{}, err
+	}
+	return work.Stats(ctx, e.Store, retention, time.Now().UTC())
 }
 
 // markPaused records that a turn stopped on a budget pause, which still ends
@@ -949,9 +951,15 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 
 	if cat := e.Skills.CatalogContext(ctx); cat != "" {
 		b.WriteString("\n" + cat)
-		if sk, ok := e.Skills.MatchContext(ctx, userText); ok && userText != "" {
-			b.WriteString(fmt.Sprintf("The current request may match the %q skill; read its instructions before acting.\n", sk.Name))
+	}
+	if name, explicit := skills.Invocation(userText); explicit {
+		if instructions, err := e.Skills.InstructionsContext(ctx, name); err == nil {
+			b.WriteString("\n# Explicitly requested skill\nThe user selected this skill. Follow its instructions for the current request.\n" + instructions)
+		} else {
+			b.WriteString(fmt.Sprintf("\nThe requested skill %q is unavailable. Tell the user and do not substitute another skill.\n", name))
 		}
+	} else if sk, ok := e.Skills.MatchContext(ctx, userText); ok && userText != "" {
+		b.WriteString(fmt.Sprintf("The current request may match the %q skill; read its instructions before acting.\n", sk.Name))
 	}
 	flush(layerSkills)
 	if len(hookContext) > 0 {
