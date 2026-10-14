@@ -408,7 +408,15 @@ func (s *Server) routes() map[string]handler {
 			return res, nil
 		}),
 		protocol.MethodSkillGet: bind(func(ctx context.Context, c *conn, p protocol.SkillNameParams) (any, error) {
-			sk, ok := e.Skills.Get(p.Name)
+			if e.Plugins != nil {
+				snapshot, err := e.Plugins.Acquire(ctx, p.ProjectID)
+				if err != nil {
+					return nil, err
+				}
+				defer snapshot.Release()
+				ctx = skills.WithSnapshot(ctx, snapshot.SkillSnapshot())
+			}
+			sk, ok := e.Skills.GetContext(ctx, p.Name)
 			if !ok {
 				return nil, protocol.Errorf(protocol.CodeNotFound, "skill %q is not installed", p.Name)
 			}

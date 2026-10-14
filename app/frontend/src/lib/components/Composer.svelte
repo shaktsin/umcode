@@ -237,7 +237,7 @@
             <button class="btn-ghost btn-sm mt-2" onmousedown={(e) => e.preventDefault()} onclick={retrySkills}>Retry</button>
           </div>
         {:else if matches.length === 0}
-          <div class="px-3 py-4 text-sm text-muted" role="status">{skills.some((skill) => !skill.error) ? 'No matching skills.' : 'No skills available. Enable a plugin in Plugins.'}</div>
+          <div class="px-3 py-4 text-sm text-muted" role="status">{skills.some((skill) => !skill.error) ? 'No matching skills.' : 'No skills available. Install a plugin in Plugins.'}</div>
         {:else}
           <div id={pickerId} role="listbox" aria-label="Available skills" class="max-h-64 overflow-y-auto p-1">
             {#each matches as skill, index (skill.name)}

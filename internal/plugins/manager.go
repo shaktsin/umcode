@@ -139,6 +139,18 @@ func (m *Manager) BeginLifecycleMutation() (func(context.Context, []string) erro
 }
 
 func (m *Manager) activateManyLocked(ctx context.Context, projectIDs []string) error {
+	// Global skill changes also affect cached projectless and unrelated-project
+	// generations. Keep active turns on their retained snapshots.
+	requested := map[string]bool{}
+	for _, id := range projectIDs {
+		requested[id] = true
+	}
+	projectIDs = append(append([]string(nil), projectIDs...), "")
+	m.mu.Lock()
+	for id := range m.projects {
+		projectIDs = append(projectIDs, id)
+	}
+	m.mu.Unlock()
 	preparedSnapshots := make([]preparedSnapshot, 0, len(projectIDs))
 	seen := map[string]bool{}
 	for _, projectID := range projectIDs {
@@ -150,6 +162,13 @@ func (m *Manager) activateManyLocked(ctx context.Context, projectIDs []string) e
 		if err != nil {
 			releasePrepared(preparedSnapshots)
 			return err
+		}
+		m.mu.Lock()
+		state := m.projects[projectID]
+		unchanged := state != nil && !state.dirty && state.snapshot.generation == generation
+		m.mu.Unlock()
+		if !requested[projectID] && unchanged {
+			continue
 		}
 		candidate, err := m.buildSnapshot(inputs, generation)
 		if err != nil {
@@ -325,25 +344,33 @@ func (m *Manager) loadInputs(ctx context.Context, projectID string) ([]snapshotI
 	}
 	var inputs []snapshotInput
 	var generationParts []string
+	byPlugin := make(map[string]store.ProjectPlugin, len(projectPlugins))
 	for _, projectPlugin := range projectPlugins {
-		if !projectPlugin.Enabled {
+		byPlugin[projectPlugin.PluginID] = projectPlugin
+	}
+	installed, err := m.st.ListPluginInstallations(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, installation := range installed {
+		if !installation.Active {
 			continue
 		}
-		installation, err := m.st.GetPluginInstallation(ctx, projectPlugin.PluginID)
-		if err != nil {
-			return nil, "", err
-		}
+		projectPlugin := byPlugin[installation.ID]
 		pkg, err := LoadPackage(installation.Root)
 		if err != nil {
 			return nil, "", fmt.Errorf("load installed plugin %s: %w", installation.ID, err)
 		}
-		runtime, err := m.loadRuntimeValues(installation.ID, pkg, projectPlugin.Settings)
+		if !projectPlugin.Enabled && len(pkg.Skills) == 0 {
+			continue
+		}
+		runtime, err := m.loadRuntimeValues(installation.ID, pkg, projectPlugin.Settings, projectPlugin.Enabled)
 		if err != nil {
 			return nil, "", err
 		}
 		inputs = append(inputs, snapshotInput{installation: installation, project: projectPlugin, pkg: pkg, runtime: runtime})
 		settings, _ := json.Marshal(projectPlugin.Settings)
-		generationParts = append(generationParts, installation.ID+"\x00"+installation.Digest+"\x00"+string(settings)+"\x00"+runtime.digest)
+		generationParts = append(generationParts, installation.ID+"\x00"+installation.Digest+"\x00"+string(settings)+"\x00"+runtime.digest+fmt.Sprintf("\x00%t", projectPlugin.Enabled))
 	}
 	sort.Slice(inputs, func(i, j int) bool { return inputs[i].installation.ID < inputs[j].installation.ID })
 	sort.Strings(generationParts)
@@ -362,6 +389,12 @@ func (m *Manager) buildSnapshot(inputs []snapshotInput, generation string) (*Sna
 		secretValues                    []string
 	}
 	mcpOwners := map[string]mcpOwner{}
+	skillNameCounts := map[string]int{}
+	for _, input := range inputs {
+		if len(input.pkg.Skills) > 0 {
+			skillNameCounts[input.pkg.Name]++
+		}
+	}
 	for _, input := range inputs {
 		installations = append(installations, input.installation)
 		componentHealth[input.installation.ID] = map[string]ComponentHealth{}
@@ -374,7 +407,16 @@ func (m *Manager) buildSnapshot(inputs []snapshotInput, generation string) (*Sna
 			paths = append(paths, path)
 			componentHealth[input.installation.ID]["skill:"+component.Name] = ComponentHealth{Status: "available"}
 		}
-		skillRoots = append(skillRoots, skills.Root{PluginID: input.pkg.Name, Paths: paths, Config: input.project.Settings, RuntimeValues: input.runtime.replacements, SecretValues: input.runtime.secretValues})
+		skillNamespace := input.pkg.Name
+		if skillNameCounts[skillNamespace] > 1 {
+			// Two globally installed sources may share a package name. Keep both
+			// selectable with a source-qualified namespace valid in / commands.
+			skillNamespace = strings.ReplaceAll(input.installation.ID, "/", ".")
+		}
+		skillRoots = append(skillRoots, skills.Root{PluginID: skillNamespace, Paths: paths, Config: input.project.Settings, RuntimeValues: input.runtime.replacements, SecretValues: input.runtime.secretValues, AllowUnconfigured: !input.project.Enabled})
+		if !input.project.Enabled {
+			continue
+		}
 		for _, component := range input.pkg.MCPServers {
 			cfg, err := resolvePluginMCPConfig(component.Config, input.runtime)
 			if err != nil {
@@ -470,7 +512,7 @@ type runtimeValues struct {
 	digest       string
 }
 
-func (m *Manager) loadRuntimeValues(pluginID string, pkg Package, settings map[string]any) (runtimeValues, error) {
+func (m *Manager) loadRuntimeValues(pluginID string, pkg Package, settings map[string]any, requireSecrets bool) (runtimeValues, error) {
 	result := runtimeValues{replacements: map[string]string{}}
 	var digestParts []string
 	for _, setting := range pkg.Settings {
@@ -483,7 +525,7 @@ func (m *Manager) loadRuntimeValues(pluginID string, pkg Package, settings map[s
 				err = secrets.ErrNotFound
 			}
 			if err != nil {
-				if setting.Required {
+				if setting.Required && requireSecrets {
 					return runtimeValues{}, fmt.Errorf("plugin %s requires secret %s", pluginID, setting.Name)
 				}
 				continue

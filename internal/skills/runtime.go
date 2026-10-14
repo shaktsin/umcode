@@ -238,6 +238,9 @@ func (r *Registry) RunScript(ctx context.Context, skill, script string, argsJSON
 	if !ok {
 		return "", fmt.Errorf("skill %q is not installed", skill)
 	}
+	if s.RuntimeError != "" {
+		return "", fmt.Errorf("skill %q: %s", skill, s.RuntimeError)
+	}
 	sc, ok := s.Scripts[script]
 	if !ok {
 		names := make([]string, 0, len(s.Scripts))
@@ -317,6 +320,9 @@ func (r *Registry) EnvFor(ctx context.Context, skill string) ([]string, error) {
 	s, ok := r.GetContext(ctx, skill)
 	if !ok {
 		return nil, fmt.Errorf("skill %q is not installed", skill)
+	}
+	if s.RuntimeError != "" {
+		return nil, fmt.Errorf("skill %q: %s", skill, s.RuntimeError)
 	}
 	if snapshot := snapshotFromContext(ctx); snapshot != nil && len(snapshot.secrets[s.Name]) > 0 {
 		return nil, fmt.Errorf("plugin skill %q uses protected secrets; run its declared scripts with skill.run_script", skill)

@@ -62,16 +62,17 @@ type Script struct {
 
 // Skill is a loaded skill.
 type Skill struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	License     string            `json:"license,omitempty"`
-	Version     string            `json:"version,omitempty"`
-	RiskLevel   string            `json:"riskLevel"`
-	Runtime     Runtime           `json:"runtime"`
-	Scripts     map[string]Script `json:"scripts,omitempty"`
-	Body        string            `json:"-"`
-	Dir         string            `json:"dir"`
-	Error       string            `json:"error,omitempty"` // set for invalid skills (listed, not usable)
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	License      string            `json:"license,omitempty"`
+	Version      string            `json:"version,omitempty"`
+	RiskLevel    string            `json:"riskLevel"`
+	Runtime      Runtime           `json:"runtime"`
+	Scripts      map[string]Script `json:"scripts,omitempty"`
+	Body         string            `json:"-"`
+	Dir          string            `json:"dir"`
+	Error        string            `json:"error,omitempty"`        // set for invalid skills (listed, not usable)
+	RuntimeError string            `json:"runtimeError,omitempty"` // instructions remain readable when runtime configuration is missing
 }
 
 type frontmatter struct {
@@ -159,11 +160,12 @@ type Registry struct {
 
 // Root contributes one plugin's skill directories and non-secret settings.
 type Root struct {
-	PluginID      string
-	Paths         []string
-	Config        map[string]any
-	RuntimeValues map[string]string
-	SecretValues  []string
+	PluginID          string
+	Paths             []string
+	Config            map[string]any
+	RuntimeValues     map[string]string
+	SecretValues      []string
+	AllowUnconfigured bool
 }
 
 // Snapshot is an immutable set of namespaced plugin skills for one project
@@ -199,7 +201,12 @@ func CompileSnapshot(roots []Root) (*Snapshot, []error) {
 					value = strings.ReplaceAll(value, token, replacement)
 				}
 				if strings.Contains(value, "{{secret:") || strings.Contains(value, "{{setting:") {
-					errs = append(errs, fmt.Errorf("plugin %s skill %s runtime references an undeclared or unset plugin setting", root.PluginID, skillPath))
+					if root.AllowUnconfigured {
+						copy.RuntimeError = "skill runtime configuration is required: an environment value references an unset plugin setting"
+						delete(copy.Runtime.Env, key)
+					} else {
+						errs = append(errs, fmt.Errorf("plugin %s skill %s runtime references an undeclared or unset plugin setting", root.PluginID, skillPath))
+					}
 					continue
 				}
 				copy.Runtime.Env[key] = value

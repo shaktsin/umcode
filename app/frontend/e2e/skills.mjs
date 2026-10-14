@@ -16,6 +16,7 @@ import { app } from '/src/lib/stores/app.svelte';
 import { chat, ThreadView } from '/src/lib/stores/chat.svelte';
 import { projects } from '/src/lib/stores/projects.svelte';
 const state = window.skillTest = { calls: [], mode: 'normal', delay: 0 };
+state.projectless = () => { chat.main.reset(); projects.activeId = null; };
 projects.activeId = 'main-project';
 app.conn = 'open';
 app.call = async (method, params) => {
@@ -112,6 +113,15 @@ try {
   await options.first().click();
   assert.equal(await side.inputValue(), '/tools:review ');
   console.log('ok side chat uses its own project');
+
+  await page.evaluate(() => window.skillTest.projectless());
+  await main.fill('/');
+  await options.first().waitFor();
+  assert.equal(await options.count(), 2, 'globally installed skills must appear without a project');
+  assert.equal(await page.evaluate(() => window.skillTest.calls.filter(c => c.method === 'skill/list').at(-1).params.projectId), undefined);
+  await options.first().click();
+  assert.equal(await main.inputValue(), '/tools:review ');
+  console.log('ok global skills appear and can be selected without a project');
 
   await page.evaluate(() => { window.skillTest.mode = 'empty'; });
   await main.fill('/');

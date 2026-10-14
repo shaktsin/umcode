@@ -60,6 +60,9 @@ func (r *Registry) InstructionsContext(ctx context.Context, name string) (string
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Skill: %s\nDirectory: %s\nRuntime: %s\n\n%s\n", s.Name, s.Dir, s.Runtime.Type, s.Body)
+	if s.RuntimeError != "" {
+		fmt.Fprintf(&b, "\nRuntime unavailable: %s. Configure the plugin before running scripts.\n", s.RuntimeError)
+	}
 	if len(s.Scripts) > 0 {
 		b.WriteString("\n## Scripts (run with skill.run_script)\n")
 		names := make([]string, 0, len(s.Scripts))
