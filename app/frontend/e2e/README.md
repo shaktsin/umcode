@@ -38,3 +38,20 @@ node e2e/skills.mjs
 It requires `playwright-core` and defaults to Chrome's macOS application path.
 Use `PLAYWRIGHT_MODULE` to point to an installed module, `CHROME_PATH` for a
 different browser executable, and `SCREENSHOT_PATH` to save the final picker.
+
+The compact UI contract runs the real Svelte application against a deterministic
+RPC fixture, without changing your engine state:
+
+```sh
+node e2e/ui-contract.mjs                 # all 60 size/theme/case combinations
+node e2e/ui-contract.mjs --case shell    # controls, popups, shell, composer, plugins
+```
+
+It checks six window sizes in both themes: 760×520, 960×640, 1180×780,
+1440×900, 1920×1080, and 1180×520. Assertions cover control geometry,
+popup bounds and keyboard behavior, panel resizing and draft retention,
+composer routing/feedback, and plugin disclosures/errors. Screenshots and
+`report.json` are saved to `/tmp/umcode-ui-contract`; set `UI_ARTIFACT_DIR`
+to preserve them elsewhere. `PLAYWRIGHT_MODULE` and `CHROME_PATH` work as
+above. Browser fixtures verify renderer behavior, not native macOS window
+constraints or signing.

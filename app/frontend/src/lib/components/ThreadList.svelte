@@ -2,6 +2,7 @@
   import {
     Archive, ChevronDown, ChevronRight, Folder, MessageSquarePlus, MoreHorizontal, Pin, Plus, Search, X, LoaderCircle,
   } from '@lucide/svelte';
+  import PopupSurface from './PopupSurface.svelte';
   import { chat } from '$lib/stores/chat.svelte';
   import { app } from '$lib/stores/app.svelte';
   import { projects } from '$lib/stores/projects.svelte';
@@ -9,6 +10,8 @@
   import { relTime } from '$lib/format';
   import type { Project, Thread } from '$lib/types';
 
+  let menuAnchor: HTMLButtonElement | undefined = $state();
+  let projectMenuAnchor: HTMLButtonElement | undefined = $state();
   let q = $state('');
   let timer: ReturnType<typeof setTimeout> | undefined;
   let menuFor = $state<string | null>(null);
@@ -72,7 +75,7 @@
   }
 </script>
 
-<svelte:window onclick={() => { menuFor = null; projectMenuFor = null; }} />
+
 
 {#snippet threadRow(t: Thread)}
   {@const active = chat.main.id === t.id}
@@ -104,18 +107,20 @@
       <button
         class="absolute right-1.5 top-1.5 p-1 rounded-md text-faint hover:text-ink hover:bg-line opacity-0 group-hover/thread:opacity-100 {menuFor === t.id ? 'opacity-100' : ''}"
         aria-label="Chat actions"
-        onclick={(e) => { e.stopPropagation(); menuFor = menuFor === t.id ? null : t.id; }}
+        onclick={(e) => { e.stopPropagation(); menuAnchor=e.currentTarget; projectMenuFor=null; menuFor = menuFor === t.id ? null : t.id; }}
       ><MoreHorizontal class="w-3.5 h-3.5" /></button>
       {#if menuFor === t.id}
-        <div class="absolute right-1 top-8 z-20 w-48 max-w-[calc(100vw-3rem)] popover py-1 text-xs" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
-          <button class="menu-item" onclick={() => { menuFor = null; chat.pin(t); }}><Pin class="w-3.5 h-3.5" />{t.pinned ? 'Unpin' : 'Pin'}</button>
-          <button class="menu-item" onclick={async () => { menuFor = null; if (chat.main.id !== t.id) await chat.open(t.id); void chat.startSide(''); }}><MessageSquarePlus class="w-3.5 h-3.5" />Start side chat</button>
-          <button class="menu-item" onclick={() => startRename(t)}>Rename</button>
-          <button class="menu-item" onclick={() => { menuFor = null; chat.fork(t); }}>Fork</button>
-          <button class="menu-item" onclick={() => doExport(t)}>Copy as Markdown</button>
-          <button class="menu-item" onclick={() => { menuFor = null; chat.archive(t); }}><Archive class="w-3.5 h-3.5" />{t.archived ? 'Unarchive' : 'Archive'}</button>
-          <button class="menu-item text-rust" onclick={() => confirmDelete(t)}>Delete</button>
+        <PopupSurface open={true} anchor={menuAnchor} kind="menu" onclose={() => menuFor=null}>
+        <div class="popup-list py-1 text-xs" role="menu" aria-label="Chat actions" tabindex="-1" onclick={(e) => {e.stopPropagation();if(!menuFor&&!renaming)menuAnchor?.focus();}} onkeydown={() => {}}>
+          <button role="menuitem" class="menu-item" onclick={() => { menuFor = null; chat.pin(t); }}><Pin class="w-3.5 h-3.5" />{t.pinned ? 'Unpin' : 'Pin'}</button>
+          <button role="menuitem" class="menu-item" onclick={async () => { menuFor = null; if (chat.main.id !== t.id) await chat.open(t.id); void chat.startSide(''); }}><MessageSquarePlus class="w-3.5 h-3.5" />Start side chat</button>
+          <button role="menuitem" class="menu-item" onclick={() => startRename(t)}>Rename</button>
+          <button role="menuitem" class="menu-item" onclick={() => { menuFor = null; chat.fork(t); }}>Fork</button>
+          <button role="menuitem" class="menu-item" onclick={() => doExport(t)}>Copy as Markdown</button>
+          <button role="menuitem" class="menu-item" onclick={() => { menuFor = null; chat.archive(t); }}><Archive class="w-3.5 h-3.5" />{t.archived ? 'Unarchive' : 'Archive'}</button>
+          <button role="menuitem" class="menu-item text-rust" onclick={() => confirmDelete(t)}>Delete</button>
         </div>
+        </PopupSurface>
       {/if}
     {/if}
   </div>
@@ -171,11 +176,13 @@
             {/if}
             <span class="text-[10px] text-faint">{group.threads.length}</span>
             <button class="p-1.5 text-faint hover:text-accent opacity-0 group-hover/project:opacity-100" aria-label={`Start a new chat in ${group.project.name}`} title="Start a new chat" onclick={() => chat.newChatFor(group.project.id)}><MessageSquarePlus class="w-3.5 h-3.5" /></button>
-            <button class="p-1.5 text-faint hover:text-ink opacity-0 group-hover/project:opacity-100 {projectMenuFor === group.project.id ? 'opacity-100' : ''}" aria-label={`Project actions for ${group.project.name}`} title="Project actions" onclick={(e) => { e.stopPropagation(); projectMenuFor = projectMenuFor === group.project.id ? null : group.project.id; }}><MoreHorizontal class="w-3.5 h-3.5" /></button>
+            <button class="p-1.5 text-faint hover:text-ink opacity-0 group-hover/project:opacity-100 {projectMenuFor === group.project.id ? 'opacity-100' : ''}" aria-label={`Project actions for ${group.project.name}`} title="Project actions" onclick={(e) => { e.stopPropagation(); projectMenuAnchor=e.currentTarget; menuFor=null; projectMenuFor = projectMenuFor === group.project.id ? null : group.project.id; }}><MoreHorizontal class="w-3.5 h-3.5" /></button>
             {#if projectMenuFor === group.project.id}
-              <div class="absolute right-1 top-8 z-20 w-64 max-w-[calc(100vw-3rem)] popover py-1 text-xs" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
-                <button class="menu-item" onclick={() => { projectMenuFor = null; void openProject(group.project); }}>Project settings</button>
+              <PopupSurface open={true} anchor={projectMenuAnchor} kind="menu" onclose={() => projectMenuFor=null}>
+              <div class="popup-list py-1 text-xs" role="menu" aria-label="Project actions" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
+                <button role="menuitem" class="menu-item" onclick={() => { projectMenuFor = null; void openProject(group.project); }}>Project settings</button>
               </div>
+              </PopupSurface>
             {/if}
           </div>
           {#if isExpanded(group.project.id)}
