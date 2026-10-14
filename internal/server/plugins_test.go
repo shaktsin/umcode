@@ -38,7 +38,7 @@ func TestPluginInspectInstallListGet(t *testing.T) {
 	}
 }
 
-func TestSkillListIncludesOnlyEnabledProjectPlugins(t *testing.T) {
+func TestSkillListIncludesInstalledSkillsRegardlessOfProject(t *testing.T) {
 	h := newHarness(t, nil)
 	installed := installServerPlugin(t, h, writeServerPlugin(t, "1.0.0"), plugins.InstallManaged)
 	var list protocol.SkillListResult
@@ -53,17 +53,30 @@ func TestSkillListIncludesOnlyEnabledProjectPlugins(t *testing.T) {
 		t.Fatalf("enabled project skill missing: %#v", list.Skills)
 	}
 	h.call(protocol.MethodSkillList, nil, &list)
+	found = false
 	for _, skill := range list.Skills {
 		if skill.Name == "server-plugin:greet" {
-			t.Fatal("project plugin leaked into projectless chat")
+			found = true
 		}
+	}
+	if !found {
+		t.Fatal("installed skill missing from projectless chat")
+	}
+	var detail protocol.SkillGetResult
+	h.call(protocol.MethodSkillGet, protocol.SkillNameParams{Name: "server-plugin:greet"}, &detail)
+	if !strings.Contains(detail.Instructions, "Use this skill to greet.") {
+		t.Fatal("global skill instructions unavailable through skill/get")
 	}
 	h.call(protocol.MethodPluginSetEnabled, protocol.PluginSetEnabledParams{PluginID: installed.ID, ProjectID: h.proj.ID, Enabled: false}, nil)
 	h.call(protocol.MethodSkillList, map[string]string{"projectId": h.proj.ID}, &list)
+	found = false
 	for _, skill := range list.Skills {
 		if skill.Name == "server-plugin:greet" {
-			t.Fatal("disabled plugin skill listed")
+			found = true
 		}
+	}
+	if !found {
+		t.Fatal("project disable hid globally installed skill")
 	}
 }
 
@@ -202,8 +215,8 @@ func TestPluginSetEnabledInvalidatesProjectSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fresh.Release()
-	if _, ok := h.eng.Skills.GetContext(skills.WithSnapshot(h.ctx, fresh.SkillSnapshot()), "server-plugin:greet"); ok {
-		t.Fatal("disabled plugin remained in a newly acquired snapshot")
+	if _, ok := h.eng.Skills.GetContext(skills.WithSnapshot(h.ctx, fresh.SkillSnapshot()), "server-plugin:greet"); !ok {
+		t.Fatal("project disable hid globally installed skill")
 	}
 	if _, ok := h.eng.Skills.GetContext(skills.WithSnapshot(h.ctx, old.SkillSnapshot()), "server-plugin:greet"); !ok {
 		t.Fatal("disable mutated the active snapshot")

@@ -5,6 +5,22 @@
 /* Desktop workbench palette: quiet cool neutrals and one cobalt accent. */
 @theme {
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+  --ui-control: 32px;
+  --ui-compact: 28px;
+  --ui-icon: 16px;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-6: 24px;
+  --ui-space-8: 32px;
+  --ui-control-font: 13px;
+  --ui-control-line: 20px;
+  --ui-secondary-font: 12px;
+  --ui-secondary-line: 16px;
+  --ui-control-radius: 8px;
+  --ui-surface-radius: 12px;
+  --ui-composer-radius: 16px;
   --font-mono: 'SF Mono', ui-monospace, Menlo, 'JetBrains Mono', monospace;
 
   --color-paper: #f7f8fa;
@@ -115,7 +131,10 @@
 }
 
 @utility btn {
-  @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-all duration-150 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98];
+  height: var(--ui-control);
+  font-size: var(--ui-control-font);
+  line-height: var(--ui-control-line);
+  @apply inline-flex items-center justify-center gap-2 px-3 py-0 font-medium rounded-lg transition-all duration-150 disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98];
 }
 @utility btn-primary {
   @apply btn bg-clay text-white hover:brightness-110;
@@ -130,7 +149,8 @@
   @apply btn text-rust hover:bg-rust-soft;
 }
 @utility btn-sm {
-  @apply px-2 py-1 text-xs rounded-md;
+  height: var(--ui-compact);
+  @apply px-2 py-0 rounded-lg;
 }
 @utility card {
   @apply bg-surface border border-line rounded-xl shadow-[0_1px_2px_rgba(23,32,51,0.04)];
@@ -208,8 +228,9 @@
 }
 .brand-name { color: var(--color-ink); font-size: 14px; font-weight: 680; letter-spacing: -0.015em; }
 .icon-button {
-  width: 30px;
-  height: 30px;
+  width: var(--ui-control);
+  height: var(--ui-control);
+  flex-shrink: 0;
   display: inline-grid;
   place-items: center;
   border-radius: 8px;
@@ -363,3 +384,55 @@
 .syntax-keyword { color: var(--color-accent-strong); font-weight: 600; }
 .syntax-number { color: var(--color-amber-warm); }
 .syntax-tag { color: var(--color-clay); }
+
+/* Shared compact geometry: content boxes grow, single-line controls align. */
+*, *::before, *::after { box-sizing: border-box; }
+.input:not(textarea), .select { height: var(--ui-control); padding-block: 0; font-size: var(--ui-control-font); line-height: var(--ui-control-line); border-radius: var(--ui-control-radius); }
+textarea.input { height: auto; }
+.icon-button.compact { width: var(--ui-compact); height: var(--ui-compact); }
+.icon-button svg { width: var(--ui-icon); height: var(--ui-icon); flex-shrink: 0; }
+.page-title { line-height: 24px; }
+.card { border-radius: var(--ui-surface-radius); }
+.rail-nav-item, .new-chat-button, .rail-search, .footer-button { min-height: var(--ui-control); }
+.rail-nav-item { gap: 8px; padding-inline: 8px; }
+.rail-nav { gap: 4px; padding: 8px; }
+
+.popup-surface { position: fixed; z-index: 80; overflow: hidden; border: 1px solid var(--color-line-strong); border-radius: var(--ui-surface-radius); background: var(--color-surface); color: var(--color-ink); box-shadow: 0 12px 32px #17203326; }
+.popup-list { max-height: var(--popup-list-height,320px); overflow-y: auto; overscroll-behavior: contain; }
+.popup-header { min-height: 32px; gap: 8px; }
+.popup-list [role=option] { min-height: 48px; }
+.model-options button, .model-options label { min-height: 32px; font-size: 13px; line-height: 20px; gap: 8px; border-radius: 8px; }
+.model-options label { margin: 0; }
+
+html, body, #app { overflow: hidden; }
+.app-rail { width: 280px; transition: none; }
+.app-rail.is-collapsed { width: 64px; }
+.app-rail.is-collapsed .brand-mark { display: none; }
+.app-rail.is-collapsed .rail-brand { justify-content: center; padding: 8px; }
+.app-rail.is-collapsed .rail-brand button { margin: 0; }
+.rail-brand { flex-shrink: 0; gap: 8px; padding-inline: 12px; }
+.rail-nav { flex-shrink: 0; }
+.rail-footer { flex-shrink: 0; }
+.page-content { padding: 24px; }
+.panel-switcher { display: flex; flex: none; justify-content: flex-end; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--color-line); }
+.auxiliary-panel { display: flex; flex: none; min-height: 0; border-left: 1px solid var(--color-line); background: var(--color-paper); overflow: hidden; }
+.auxiliary-panel.is-overlay { position: absolute; top: 8px; right: 8px; bottom: 8px; z-index: 60; border: 1px solid var(--color-line-strong); border-radius: 12px; box-shadow: 0 12px 32px #17203333; }
+.panel-backdrop { position: absolute; inset: 0; background: #17203340; z-index: 50; }
+.panel-divider { width: 4px; flex: none; cursor: col-resize; margin-left: -1px; }
+.panel-divider:hover { background: var(--color-accent-soft); }
+.overlay-heading { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--color-line); font-size: 13px; flex-shrink: 0; }
+.navigation-backdrop { position: fixed; inset: 0; background: #17203340; z-index: 50; }
+.navigation-drawer { position: fixed; left: 8px; top: 8px; bottom: 8px; width: 280px; z-index: 60; background: var(--color-surface); border: 1px solid var(--color-line-strong); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; }
+@media(max-width:959px) { .page-content { padding: 16px; } }
+
+.auxiliary-panel[hidden] { display: none; }
+
+.composer-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; padding: 8px 12px 12px; }
+.composer-toolbar > .model-picker-controls { flex: 1; min-width: 0; }
+.model-picker-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; }
+.composer-toolbar .select { height: var(--ui-compact); }
+.complexity-control { height: var(--ui-compact); flex: none; }
+.complexity-control button { font-size: 13px; line-height: 20px; min-width: 28px; }
+.composer-input { max-height: min(240px, 30dvh); overflow-y: auto; }
+.composer-error { font-size: 12px; line-height: 16px; color: var(--color-rust); max-width: 160px; }
+[data-composer] { border-radius: var(--ui-composer-radius); }

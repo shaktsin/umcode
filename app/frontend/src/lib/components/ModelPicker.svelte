@@ -1,10 +1,12 @@
 <script lang="ts">
   import { Check, ChevronDown, Layers3 } from '@lucide/svelte';
+  import PopupSurface from './PopupSurface.svelte';
   import { app } from '$lib/stores/app.svelte';
   import type { Complexity, ConfiguredModel, ModelPool, ModelSelection, RoutingConfig } from '$lib/types';
 
   let { value, onchange, compact = false }: { value: ModelSelection; onchange: (v: ModelSelection) => void; compact?: boolean } = $props();
   let open = $state(false);
+  let trigger: HTMLButtonElement | undefined = $state();
   let busy = $state(false);
   let selected = $state<string[]>([]);
 
@@ -108,26 +110,18 @@
     syncSelected();
   });
 
-  $effect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (!target.closest('[data-model-picker]')) open = false;
-    };
-    window.addEventListener('click', close);
-    return () => window.removeEventListener('click', close);
-  });
+
 </script>
 
-<div class="flex items-center gap-1.5 flex-wrap">
+<div class="model-picker-controls">
   <div class="relative" data-model-picker>
-    <button class="select inline-flex items-center gap-2 max-w-56" title="Provider and model" aria-expanded={open} onclick={() => (open = !open)}>
+    <button bind:this={trigger} class="select inline-flex items-center gap-2 max-w-56" title="Provider and model" aria-expanded={open} onclick={() => (open = !open)}>
       {#if value.provider === 'pool'}<Layers3 class="w-3.5 h-3.5 shrink-0" />{/if}
       <span class="truncate">{compact ? modelLabel : `Model · ${modelLabel}`}</span>
       <ChevronDown class="w-3 h-3 shrink-0" />
     </button>
-    {#if open}
-      <div class="absolute bottom-full left-0 z-40 mb-2 w-80 max-h-[min(28rem,70vh)] overflow-y-auto card p-2 shadow-xl" role="group" aria-label="Choose models">
+    <PopupSurface {open} anchor={trigger} kind="menu" preferredSide="above" onclose={() => open = false}>
+      <div class="popup-list p-2 model-options" role="dialog" aria-label="Choose models">
         <div class="px-2 py-1.5 flex items-center">
           <span class="text-[10px] font-semibold uppercase tracking-wider text-muted">Provider · model</span>
           {#if busy}<span class="ml-auto text-[10px] text-muted">Saving pool…</span>{/if}
@@ -163,14 +157,14 @@
         {#if configuredByProvider.length === 0}<p class="px-2 py-3 text-xs text-muted">Add models in Settings → Models to choose them here.</p>{/if}
         {#if selected.length > 1}<p class="px-2 pt-2 text-[10px] text-muted">{selected.length} selected · UMCode will try them in pool order if a quota is reached.</p>{/if}
       </div>
-    {/if}
+    </PopupSurface>
   </div>
 
-  <div class="inline-flex rounded-md border border-line-strong overflow-hidden" role="group" aria-label="Complexity">
+  <div class="complexity-control inline-flex rounded-lg border border-line-strong overflow-hidden" role="group" aria-label="Complexity">
     {#each levels as level}
       {@const on = (value.complexity || '') === level.id}
       {@const inherited = !value.complexity && defaultComplexity === level.id}
-      <button class="px-2 py-1 text-xs transition-colors {on ? 'bg-clay text-white' : inherited ? 'bg-raised text-ink' : 'text-muted hover:bg-raised'}" title={`${level.hint}${inherited ? ' (default)' : ''}`} aria-pressed={on} onclick={() => setComplexity(level.id)}>
+      <button class="px-2 py-0 text-xs transition-colors {on ? 'bg-clay text-white' : inherited ? 'bg-raised text-ink' : 'text-muted hover:bg-raised'}" title={`${level.hint}${inherited ? ' (default)' : ''}`} aria-pressed={on} onclick={() => setComplexity(level.id)}>
         {compact ? level.label[0] : level.label}
       </button>
     {/each}

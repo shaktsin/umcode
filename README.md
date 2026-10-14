@@ -32,7 +32,7 @@ make help                     # list all targets
 
 Plugins are the only extension unit shown in the desktop app. Open **Plugins**, enter a local folder or Git URL, and choose **Inspect** before **Install**. Inspection shows the package identity, compatibility diagnostics, executable capabilities, requested settings, and whether additional trust is required. UMCode accepts the portable Agent Plugins `plugin.json` format, Codex `.codex-plugin/plugin.json` folders, and Claude `.claude-plugin/plugin.json` folders.
 
-Managed installs copy verified bytes into `~/.umcode/plugins/cache/<source-id>/<plugin>/<version-or-digest>/`, so they keep working if the source disappears. Linked installs track a local source folder and add an explicit **Reload** workflow for development; each active generation still runs from an immutable cached snapshot, and source edits take effect on reload. Installations are user-global; enablement and non-secret settings are per project. Secret settings live in the Keychain or protected secrets file, never SQLite. Mutable plugin data belongs under `~/.umcode/plugins/data/<source-id>/<plugin>/` and is retained on uninstall.
+Managed installs copy verified bytes into `~/.umcode/plugins/cache/<source-id>/<plugin>/<version-or-digest>/`, so they keep working if the source disappears. Linked installs track a local source folder and add an explicit **Reload** workflow for development; each active generation still runs from an immutable cached snapshot, and source edits take effect on reload. Installations and skills are user-global; MCP integrations, hooks, and non-secret settings are per project. Secret settings live in the Keychain or protected secrets file, never SQLite. Mutable plugin data belongs under `~/.umcode/plugins/data/<source-id>/<plugin>/` and is retained on uninstall.
 
 Runtime declarations reference configuration explicitly with `{{setting:name}}` and protected values with `{{secret:name}}`. Plugin MCP servers cannot forward arbitrary host environment variables, and sensitive HTTP headers must use a declared secret reference. Skill-script output and hook diagnostics redact resolved secret values. A plugin with required configuration installs disabled for the selected project; configure it, then enable it after its required components activate successfully.
 
@@ -54,7 +54,9 @@ In a main or side chat, type `/` at the start of a message to find available ski
 by name or description. Use ↑/↓ and Enter or Tab, or click a skill, to insert its
 command. Add your instructions before sending; selecting a skill does not send
 the message. Escape closes the picker. Sending `/plugin:skill your request`
-loads that exact skill's instructions from the chat project's enabled plugins.
+loads that exact installed skill's instructions in any chat, including chats without a project.
+If multiple installed sources share a plugin name, their skill commands include
+the source ID (for example, `/sourceid.plugin:skill`) to distinguish them.
 
 ### Token optimization
 

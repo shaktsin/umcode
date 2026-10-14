@@ -87,8 +87,11 @@ func TestPluginEndToEndInstallUseDisableUninstall(t *testing.T) {
 
 	h.call(protocol.MethodPluginSetEnabled, protocol.PluginSetEnabledParams{PluginID: installed.ID, ProjectID: h.proj.ID, Enabled: false}, nil)
 	h.fake.push(func(req llm.Request, _ string) ([]llm.Event, error) {
-		if strings.Contains(req.System, "FULL_PLUGIN_HOOK_CONTEXT") || strings.Contains(req.System, "full-plugin:greet") {
-			t.Errorf("disabled plugin remained in prompt")
+		if strings.Contains(req.System, "FULL_PLUGIN_HOOK_CONTEXT") {
+			t.Errorf("disabled project hooks remained in prompt")
+		}
+		if !strings.Contains(req.System, "full-plugin:greet") {
+			t.Errorf("globally installed skill disappeared after disabling project integrations")
 		}
 		for _, tool := range req.Tools {
 			if tool.Name == mcpWire {
@@ -110,6 +113,27 @@ func TestPluginEndToEndInstallUseDisableUninstall(t *testing.T) {
 	}
 	if data, err := os.ReadFile(dataMarker); err != nil || string(data) != "retain" {
 		t.Fatalf("plugin data = %q, %v", data, err)
+	}
+}
+
+func TestProjectlessTurnLoadsGloballyInstalledSkill(t *testing.T) {
+	h := newHarness(t, nil)
+	installed := installServerPlugin(t, h, writeServerPlugin(t, "1.0.0"), plugins.InstallManaged)
+	h.call(protocol.MethodPluginSetEnabled, protocol.PluginSetEnabledParams{PluginID: installed.ID, ProjectID: h.proj.ID, Enabled: false}, nil)
+	h.addKey("claude", "global-skill", "sk-global-skill")
+	h.fake.push(func(req llm.Request, key string) ([]llm.Event, error) {
+		if !strings.Contains(req.System, "Skill: server-plugin:greet") || !strings.Contains(req.System, "Use this skill to greet.") {
+			t.Error("projectless turn did not load the exact global skill instructions")
+		}
+		return textReply("Hello from the global skill.")(req, key)
+	})
+	var thread protocol.Thread
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{Title: "global skill", ApprovalMode: "auto_all"}, &thread)
+	var start protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: thread.ID, Text: "/server-plugin:greet greet someone"}, &start)
+	turn, _, _ := h.waitTurn(start.Turn.ID, nil)
+	if turn.Status != protocol.TurnCompleted {
+		t.Fatalf("projectless turn failed: %#v", turn)
 	}
 }
 

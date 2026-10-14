@@ -4,6 +4,7 @@
   import { chat, type ThreadView } from '$lib/stores/chat.svelte';
   import { app } from '$lib/stores/app.svelte';
   import { projects } from '$lib/stores/projects.svelte';
+  import PopupSurface from './PopupSurface.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import type { Attachment, SkillInfo } from '$lib/types';
   import { errMsg } from '$lib/format';
@@ -123,6 +124,10 @@
         return;
       }
       const canSelect = !skillsLoading && !skillsError && !!matches[activeSkill];
+      if (e.key === 'Tab' && e.shiftKey && skillsError) {
+        const retryButton = document.querySelector<HTMLButtonElement>(`[data-skill-popup="${pickerId}"] button`);
+        if (retryButton) { e.preventDefault(); retryButton.focus(); return; }
+      }
       if ((e.key === 'Tab' && !e.shiftKey && canSelect) || (e.key === 'Enter' && !e.shiftKey)) {
         e.preventDefault();
         if (canSelect) void chooseSkill(matches[activeSkill]);
@@ -171,38 +176,7 @@
     void addFiles(e.dataTransfer?.files ?? null);
   }
 
-  const route = $derived(view.route?.chosen ?? null);
-  const fallbacks = $derived((view.route?.alternatives ?? []).filter((a) => !a.unavailable));
-  const routeChip = $derived(
-    route ? `${route.displayName || route.model}${fallbacks.length ? ` +${fallbacks.length}` : ''}` : '',
-  );
-  // With nothing to run on, the chip says so rather than vanishing: this is
-  // exactly the moment the reason matters.
   const blockedReason = $derived(view.route && !view.route.chosen ? view.route.reason || 'No model is available' : '');
-  const routeTitle = $derived(
-    !route
-      ? [
-          blockedReason,
-          ...(view.route?.alternatives ?? [])
-            .slice(0, 4)
-            .map((a) => `${a.displayName || a.model} (${a.credentialLabel || 'no key'}): ${a.unavailable}`),
-        ]
-          .filter(Boolean)
-          .join('\n')
-      : [
-          `Runs on ${route.displayName || route.model} (${route.credentialLabel || 'default key'})`,
-          fallbacks.length
-            ? `Falls back to ${fallbacks
-                .slice(0, 3)
-                .map((f) => `${f.displayName || f.model} (${f.credentialLabel || 'default key'})`)
-                .join(', ')}${fallbacks.length > 3 ? '…' : ''}`
-            : 'No fallback is available',
-          ...(view.route?.alternatives ?? [])
-            .filter((a) => a.unavailable)
-            .slice(0, 3)
-            .map((a) => `${a.displayName || a.model}: ${a.unavailable}`),
-        ].join('\n'),
-  );
 
   const placeholder = $derived(
     offline
@@ -222,13 +196,15 @@
     aria-label="Message composer"
     ondragover={(e) => e.preventDefault()}
     ondrop={onDrop}
-    onfocusout={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focused = false; }}
+    onfocusout={(e) => { const target = e.relatedTarget as HTMLElement | null; if (!e.currentTarget.contains(target) && target?.closest('[data-skill-popup]')?.getAttribute('data-skill-popup') !== pickerId) focused = false; }}
+    data-composer
   >
-    {#if pickerOpen}
-      <div class="absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-xl border border-line bg-surface shadow-xl">
-        <div class="flex items-center justify-between border-b border-line px-3 py-2 text-xs text-muted">
+    <PopupSurface open={pickerOpen} anchor={input} kind="skills" preferredSide="above" onclose={() => dismissed = true}>
+      <div data-skill-popup={pickerId}>
+        <div class="popup-header flex items-center justify-between border-b border-line px-3 py-2 text-xs text-muted">
           <span>Skills</span><span>↑↓ navigate · Enter select · Esc close</span>
         </div>
+        <div class="popup-list">
         {#if skillsLoading}
           <div class="px-3 py-4 text-sm text-muted" role="status">Loading skills…</div>
         {:else if skillsError}
@@ -237,9 +213,9 @@
             <button class="btn-ghost btn-sm mt-2" onmousedown={(e) => e.preventDefault()} onclick={retrySkills}>Retry</button>
           </div>
         {:else if matches.length === 0}
-          <div class="px-3 py-4 text-sm text-muted" role="status">{skills.some((skill) => !skill.error) ? 'No matching skills.' : 'No skills available. Enable a plugin in Plugins.'}</div>
+          <div class="px-3 py-4 text-sm text-muted" role="status">{skills.some((skill) => !skill.error) ? 'No matching skills.' : 'No skills available. Install a plugin in Plugins.'}</div>
         {:else}
-          <div id={pickerId} role="listbox" aria-label="Available skills" class="max-h-64 overflow-y-auto p-1">
+          <div id={pickerId} role="listbox" aria-label="Available skills" class="p-1">
             {#each matches as skill, index (skill.name)}
               <button
                 id={`${pickerId}-${index}`}
@@ -256,8 +232,9 @@
             {/each}
           </div>
         {/if}
+        </div>
       </div>
-    {/if}
+    </PopupSurface>
     {#if files.length}
       <div class="flex flex-wrap gap-1.5 px-3 pt-2.5">
         {#each files as f, i}
@@ -289,10 +266,10 @@
       onpaste={onPaste}
       rows="1"
       placeholder={`${placeholder} · / for skills`}
-      class="w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint max-h-60"
+      class="composer-input w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint"
       style="field-sizing: content; min-height: 2.75rem"
     ></textarea>
-    <div class="flex items-center gap-2 px-2.5 pb-2.5">
+    <div class="composer-toolbar">
       <button class="btn-ghost btn-sm" title="Attach files" aria-label="Attach files" onclick={() => fileInput?.click()}>
         <Paperclip class="w-4 h-4" />
       </button>
@@ -307,28 +284,13 @@
         }}
       />
       <ModelPicker value={view.selection} onchange={(v) => view.setSelection(v)} compact={compact} />
-      {#if !compact && projects.active && view.id === null}
-        <label class="inline-flex items-center gap-1.5 text-[11px] text-muted" title="Choose whether this chat edits the project folder or works in an isolated Git copy">
-          <span>Workspace</span>
-          <select class="select h-7 max-w-36 px-2 text-[11px]" bind:value={view.workspaceMode}>
-            <option value="local">Project folder</option>
-            {#if projects.active.vcs?.kind === 'git' && projects.active.vcs.hasCommit}<option value="worktree">Isolated worktree</option>{/if}
-          </select>
-        </label>
-      {/if}
-      {#if route}
-        <span class="text-[11px] text-faint truncate {compact ? 'hidden sm:inline' : ''}" title={routeTitle}>
-          {routeChip}
-        </span>
-      {:else if blockedReason}
-        <span class="text-[11px] text-rust truncate {compact ? 'hidden sm:inline' : ''}" title={routeTitle}>
-          Nothing available
-        </span>
+      {#if blockedReason}
+        <span class="composer-error" role="status" title={blockedReason}>No model available</span>
       {/if}
       <div class="ml-auto">
         {#if busy}
           <button
-            class="w-8 h-8 rounded-full bg-ink text-paper flex items-center justify-center hover:brightness-110"
+            class="icon-button compact rounded-full bg-ink text-paper hover:brightness-110"
             title="Stop"
             aria-label="Stop"
             onclick={() => view.interrupt()}
@@ -337,7 +299,7 @@
           </button>
         {:else}
           <button
-            class="w-8 h-8 rounded-full bg-clay text-white flex items-center justify-center hover:brightness-110 disabled:opacity-30"
+            class="icon-button compact rounded-full bg-clay text-white hover:brightness-110 disabled:opacity-30"
             title="Send (Enter)"
             aria-label="Send"
             disabled={offline || (!text.trim() && files.length === 0)}

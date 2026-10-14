@@ -2,7 +2,7 @@
   import { ArrowUpCircle, Download, PackageOpen, RefreshCw, RotateCw, Search, Settings2, ShieldCheck, Trash2 } from '@lucide/svelte';
   import PluginInventory from '$lib/components/PluginInventory.svelte';
   import { errMsg } from '$lib/format';
-  import { convertPluginSettings, createPluginClient } from '$lib/plugins';
+  import { convertPluginSettings, createPluginClient, groupPluginComponents } from '$lib/plugins';
   import { app } from '$lib/stores/app.svelte';
   import { dialog } from '$lib/stores/dialog.svelte';
   import { projects } from '$lib/stores/projects.svelte';
@@ -11,6 +11,7 @@
   const client = createPluginClient((method, params) => app.call(method, params, 300_000));
   let plugins = $state<PluginInfo[]>([]);
   let source = $state('');
+  let expanded = $state<Record<string, boolean>>({});
   let mode = $state<'managed' | 'linked'>('managed');
   let inspection = $state<PluginInspection | null>(null);
   let updateTarget = $state<string | null>(null);
@@ -119,7 +120,7 @@
 </script>
 
 <div class="mb-5 flex items-start justify-between gap-4">
-  <div><h1 class="page-title">Plugins</h1><p class="mt-1 max-w-2xl text-xs text-muted">Install one package that can carry skills, MCP integrations, hooks, and compatibility metadata.</p></div>
+  <div><h1 class="page-title">Plugins</h1><p class="mt-1 max-w-2xl text-xs text-muted">Installed skills are available in every chat. Enable MCP integrations and hooks per project.</p></div>
   <button class="btn-ghost btn-sm" aria-label="Refresh plugins" onclick={load}><RefreshCw class="h-3.5 w-3.5" />Refresh</button>
 </div>
 
@@ -156,18 +157,35 @@
   <div class="grid gap-3">
     {#each plugins as plugin (plugin.id)}
       {@const state = health(plugin)}
-      <article class="card overflow-hidden">
-        <div class="flex flex-wrap items-start gap-3 p-4">
-          <div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><h3 class="text-sm font-semibold text-ink">{plugin.name}</h3>{#if plugin.version}<span class="text-xs text-muted">v{plugin.version}</span>{/if}<span class="pill bg-raised text-muted">{plugin.format}</span><span class="pill bg-raised text-muted">{plugin.mode}</span><span class="pill {state.style}">{state.label}</span></div><p class="mt-1 truncate font-mono text-[10px] text-faint" title={plugin.source}>{plugin.source}</p></div>
-          <label class="flex items-center gap-2 text-xs text-muted" title={projects.activeId ? 'Enable for the current project' : 'Open a project first'}><input type="checkbox" checked={plugin.enabled} disabled={!projects.activeId || busy === plugin.id} onchange={(event) => setEnabled(plugin, event.currentTarget.checked)} /> Enabled</label>
-          {#if plugin.schema.length}<button class="btn-ghost btn-sm" disabled={!projects.activeId} onclick={() => beginConfigure(plugin)}><Settings2 class="h-3.5 w-3.5" />Configure</button>{/if}
-          {#if plugin.mode === 'linked'}<button class="btn-ghost btn-sm" disabled={busy === plugin.id} onclick={() => reload(plugin)}><RotateCw class="h-3.5 w-3.5" />Reload</button>{/if}
-					{#if plugin.mode === 'managed'}<button class="btn-ghost btn-sm" disabled={busy === plugin.id} onclick={() => update(plugin)}><ArrowUpCircle class="h-3.5 w-3.5" />Update</button>{/if}
-          <button class="btn-danger btn-sm" aria-label={`Remove ${plugin.name}`} disabled={busy === plugin.id} onclick={() => remove(plugin)}><Trash2 class="h-3.5 w-3.5" /></button>
+      {@const groups = groupPluginComponents(plugin)}
+      <article class="card plugin-card overflow-hidden">
+        <div class="flex flex-wrap items-start gap-4 p-4">
+          <div class="min-w-0 flex-1 basis-48">
+            <div class="flex flex-wrap items-center gap-2"><h3 class="text-sm font-semibold text-ink break-words">{plugin.name}</h3>{#if plugin.version}<span class="text-xs text-muted">v{plugin.version}</span>{/if}<span class="pill {state.style}">{state.label}</span></div>
+            <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted">
+              {#if groups.skills.length}<span>{groups.skills.length} skills</span>{/if}
+              {#if groups.mcpServers.length}<span>{groups.mcpServers.length} MCP integrations</span>{/if}
+              {#if groups.hooks.length}<span>{groups.hooks.length} hooks</span>{/if}
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            {#if groups.mcpServers.length || groups.hooks.length}<label class="flex items-center gap-2 text-xs text-muted" title={projects.activeId ? 'Enable integrations and hooks for the current project' : 'Open a project to enable integrations and hooks'}><input type="checkbox" checked={plugin.enabled} disabled={!projects.activeId || busy === plugin.id} onchange={(event) => setEnabled(plugin, event.currentTarget.checked)} /> Project integrations</label>{/if}
+            {#if plugin.schema.length}<button class="btn-ghost btn-sm" disabled={!projects.activeId} onclick={() => beginConfigure(plugin)}><Settings2 class="h-4 w-4" />Configure</button>{/if}
+            {#if plugin.mode === 'linked'}<button class="btn-ghost btn-sm" disabled={busy === plugin.id} onclick={() => reload(plugin)}><RotateCw class="h-4 w-4" />Reload</button>{/if}
+            {#if plugin.mode === 'managed'}<button class="btn-ghost btn-sm" disabled={busy === plugin.id} onclick={() => update(plugin)}><ArrowUpCircle class="h-4 w-4" />Update</button>{/if}
+            <button class="btn-ghost btn-sm" aria-expanded={!!expanded[plugin.id]} aria-controls={`${plugin.id}-details`} onclick={() => expanded[plugin.id] = !expanded[plugin.id]}>Details</button>
+            <button class="icon-button compact text-rust" aria-label={`Remove ${plugin.name}`} disabled={busy === plugin.id} onclick={() => remove(plugin)}><Trash2 class="h-4 w-4" /></button>
+          </div>
         </div>
-        <div class="border-t border-line bg-raised/25 p-3"><PluginInventory {plugin} /></div>
-        {#if plugin.diagnostics.length}<div class="divide-y divide-line border-t border-line px-4">{#each plugin.diagnostics as diagnostic}<div class="py-2 text-xs"><span class={diagnostic.severity === 'error' ? 'text-rust' : 'text-amber-warm'}>{diagnostic.message}</span>{#if diagnostic.remediation}<span class="text-muted"> — {diagnostic.remediation}</span>{/if}</div>{/each}</div>{/if}
-				{#if plugin.hookFailures.length}<div class="border-t border-line px-4 py-3"><div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-rust">Recent hook failures</div>{#each plugin.hookFailures as failure}<div class="text-xs text-ink"><span class="font-medium">{failure.event}</span>{#if failure.pluginVersion}<span class="text-muted"> · v{failure.pluginVersion}</span>{/if}<span class="text-muted"> — {failure.error}</span></div>{/each}</div>{/if}
+        {#each plugin.diagnostics.filter((item) => item.severity === 'error') as diagnostic}<p class="px-4 pb-3 text-xs text-rust break-words" role="alert">{diagnostic.message}</p>{/each}
+        {#if plugin.hookFailures.length}<p class="px-4 pb-3 text-xs text-rust" role="alert">{plugin.hookFailures.length} recent hook failures. Open Details to review.</p>{/if}
+        <div id={`${plugin.id}-details`} hidden={!expanded[plugin.id]} class="border-t border-line p-4 space-y-4">
+          <div class="flex flex-wrap items-center gap-2 text-xs text-muted"><span>{plugin.format}</span><span>{plugin.mode}</span></div>
+          <p class="font-mono text-xs text-muted break-all selectable">{plugin.source}</p>
+          <PluginInventory {plugin} />
+          {#each plugin.diagnostics as diagnostic}<div class="text-xs break-words"><span class={diagnostic.severity === 'error' ? 'text-rust' : 'text-amber-warm'}>{diagnostic.message}</span>{#if diagnostic.remediation}<span class="text-muted"> — {diagnostic.remediation}</span>{/if}</div>{/each}
+          {#if plugin.hookFailures.length}<div><div class="mb-1 text-xs font-semibold text-rust">Recent hook failures</div>{#each plugin.hookFailures as failure}<div class="text-xs text-ink break-words"><span class="font-medium">{failure.event}</span>{#if failure.pluginVersion}<span class="text-muted"> · v{failure.pluginVersion}</span>{/if}<span class="text-muted"> — {failure.error}</span></div>{/each}</div>{/if}
+        </div>
         {#if editing === plugin.id}
           <div class="border-t border-line p-4">
             <div class="grid gap-3 md:grid-cols-2">{#each plugin.schema as setting}<div><label class="label" for={`${plugin.id}-${setting.name}`}>{setting.name}{setting.required ? ' · required' : ''}</label>{#if setting.secret}<input id={`${plugin.id}-${setting.name}`} class="input" type="password" bind:value={secretDraft[setting.name]} placeholder="Enter a new secret" />{:else}<input id={`${plugin.id}-${setting.name}`} class="input" bind:value={settingsDraft[setting.name]} placeholder={setting.description} />{/if}</div>{/each}</div>
