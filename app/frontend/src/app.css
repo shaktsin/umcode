@@ -396,3 +396,10 @@ textarea.input { height: auto; }
 .rail-nav-item, .new-chat-button, .rail-search, .footer-button { min-height: var(--ui-control); }
 .rail-nav-item { gap: 8px; padding-inline: 8px; }
 .rail-nav { gap: 4px; padding: 8px; }
+
+.popup-surface { position: fixed; z-index: 80; overflow: hidden; border: 1px solid var(--color-line-strong); border-radius: var(--ui-surface-radius); background: var(--color-surface); color: var(--color-ink); box-shadow: 0 12px 32px #17203326; }
+.popup-list { max-height: var(--popup-list-height,320px); overflow-y: auto; overscroll-behavior: contain; }
+.popup-header { min-height: 32px; gap: 8px; }
+.popup-list [role=option] { min-height: 48px; }
+.model-options button, .model-options label { min-height: 32px; font-size: 13px; line-height: 20px; gap: 8px; border-radius: 8px; }
+.model-options label { margin: 0; }

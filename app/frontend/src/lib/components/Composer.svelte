@@ -4,6 +4,7 @@
   import { chat, type ThreadView } from '$lib/stores/chat.svelte';
   import { app } from '$lib/stores/app.svelte';
   import { projects } from '$lib/stores/projects.svelte';
+  import PopupSurface from './PopupSurface.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import type { Attachment, SkillInfo } from '$lib/types';
   import { errMsg } from '$lib/format';
@@ -123,6 +124,10 @@
         return;
       }
       const canSelect = !skillsLoading && !skillsError && !!matches[activeSkill];
+      if (e.key === 'Tab' && e.shiftKey && skillsError) {
+        const retryButton = document.querySelector<HTMLButtonElement>(`[data-skill-popup="${pickerId}"] button`);
+        if (retryButton) { e.preventDefault(); retryButton.focus(); return; }
+      }
       if ((e.key === 'Tab' && !e.shiftKey && canSelect) || (e.key === 'Enter' && !e.shiftKey)) {
         e.preventDefault();
         if (canSelect) void chooseSkill(matches[activeSkill]);
@@ -222,11 +227,12 @@
     aria-label="Message composer"
     ondragover={(e) => e.preventDefault()}
     ondrop={onDrop}
-    onfocusout={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focused = false; }}
+    onfocusout={(e) => { const target = e.relatedTarget as HTMLElement | null; if (!e.currentTarget.contains(target) && target?.closest('[data-skill-popup]')?.getAttribute('data-skill-popup') !== pickerId) focused = false; }}
+    data-composer
   >
-    {#if pickerOpen}
-      <div class="absolute bottom-full left-0 right-0 z-40 mb-2 overflow-hidden rounded-xl border border-line bg-surface shadow-xl">
-        <div class="flex items-center justify-between border-b border-line px-3 py-2 text-xs text-muted">
+    <PopupSurface open={pickerOpen} anchor={input} kind="skills" preferredSide="above" onclose={() => dismissed = true}>
+      <div data-skill-popup={pickerId}>
+        <div class="popup-header flex items-center justify-between border-b border-line px-3 py-2 text-xs text-muted">
           <span>Skills</span><span>↑↓ navigate · Enter select · Esc close</span>
         </div>
         {#if skillsLoading}
@@ -239,7 +245,7 @@
         {:else if matches.length === 0}
           <div class="px-3 py-4 text-sm text-muted" role="status">{skills.some((skill) => !skill.error) ? 'No matching skills.' : 'No skills available. Install a plugin in Plugins.'}</div>
         {:else}
-          <div id={pickerId} role="listbox" aria-label="Available skills" class="max-h-64 overflow-y-auto p-1">
+          <div id={pickerId} role="listbox" aria-label="Available skills" class="popup-list p-1">
             {#each matches as skill, index (skill.name)}
               <button
                 id={`${pickerId}-${index}`}
@@ -257,7 +263,7 @@
           </div>
         {/if}
       </div>
-    {/if}
+    </PopupSurface>
     {#if files.length}
       <div class="flex flex-wrap gap-1.5 px-3 pt-2.5">
         {#each files as f, i}
