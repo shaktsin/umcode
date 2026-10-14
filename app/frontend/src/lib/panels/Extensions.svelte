@@ -119,7 +119,7 @@
 </script>
 
 <div class="mb-5 flex items-start justify-between gap-4">
-  <div><h1 class="page-title">Plugins</h1><p class="mt-1 max-w-2xl text-xs text-muted">Install one package that can carry skills, MCP integrations, hooks, and compatibility metadata.</p></div>
+  <div><h1 class="page-title">Plugins</h1><p class="mt-1 max-w-2xl text-xs text-muted">Installed skills are available in every chat. Enable MCP integrations and hooks per project.</p></div>
   <button class="btn-ghost btn-sm" aria-label="Refresh plugins" onclick={load}><RefreshCw class="h-3.5 w-3.5" />Refresh</button>
 </div>
 

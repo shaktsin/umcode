@@ -137,7 +137,8 @@ type SkillListParams struct {
 }
 
 type SkillNameParams struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	ProjectID string `json:"projectId,omitempty"`
 }
 
 type SkillGetResult struct {
