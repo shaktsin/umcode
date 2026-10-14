@@ -7,21 +7,13 @@
   const groups = $derived(groupPluginComponents(plugin));
 </script>
 
-<div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-  <div class="rounded-lg bg-paper/70 p-2.5">
-    <div class="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted"><Braces class="h-3.5 w-3.5" /> Skills <span class="text-faint">{groups.skills.length}</span></div>
-    {#each groups.skills as item}<div class="truncate text-xs text-ink" title={item.path}>{item.name} <span class="text-faint">· {item.health}</span></div>{:else}<div class="text-xs text-faint">None</div>{/each}
-  </div>
-  <div class="rounded-lg bg-paper/70 p-2.5">
-    <div class="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted"><PlugZap class="h-3.5 w-3.5" /> MCP <span class="text-faint">{groups.mcpServers.length}</span></div>
-    {#each groups.mcpServers as item}<div class="truncate text-xs text-ink" title={item.error || item.path}>{item.name} <span class={item.health === 'failed' ? 'text-rust' : 'text-faint'}>· {item.health}</span></div>{:else}<div class="text-xs text-faint">None</div>{/each}
-  </div>
-  <div class="rounded-lg bg-paper/70 p-2.5">
-    <div class="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted"><Boxes class="h-3.5 w-3.5" /> Hooks <span class="text-faint">{groups.hooks.length}</span></div>
-    {#each groups.hooks as item}<div class="truncate text-xs text-ink">{item.name} <span class="text-faint">· {item.health}</span></div>{:else}<div class="text-xs text-faint">None</div>{/each}
-  </div>
-  <div class="rounded-lg bg-paper/70 p-2.5">
-    <div class="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted"><TriangleAlert class="h-3.5 w-3.5" /> Unsupported <span class="text-faint">{groups.unsupported.length}</span></div>
-    {#each groups.unsupported as item}<div class="truncate text-xs text-amber-warm">{item.kind}: {item.name}</div>{:else}<div class="text-xs text-faint">None</div>{/each}
-  </div>
+<div class="grid gap-4 sm:grid-cols-2">
+  {#each [{label:'Skills',items:groups.skills,icon:Braces},{label:'MCP integrations',items:groups.mcpServers,icon:PlugZap},{label:'Hooks',items:groups.hooks,icon:Boxes},{label:'Unsupported',items:groups.unsupported,icon:TriangleAlert}] as group}
+    {#if group.items.length}
+      <div class="min-w-0 rounded-lg bg-paper/70 p-3">
+        <div class="mb-2 flex items-center gap-2 text-xs font-semibold text-muted"><group.icon class="h-4 w-4" />{group.label}<span class="text-faint">{group.items.length}</span></div>
+        {#each group.items as item}<div class="flex min-w-0 items-center gap-2 py-1 text-xs"><span class="min-w-0 flex-1 truncate text-ink" title={item.path || item.name}>{item.name}</span><span class={item.health === 'failed' ? 'text-rust' : 'text-faint'}>{item.health}</span></div>{/each}
+      </div>
+    {/if}
+  {/each}
 </div>
