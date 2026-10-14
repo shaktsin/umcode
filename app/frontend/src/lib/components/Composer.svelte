@@ -204,6 +204,7 @@
         <div class="popup-header flex items-center justify-between border-b border-line px-3 py-2 text-xs text-muted">
           <span>Skills</span><span>↑↓ navigate · Enter select · Esc close</span>
         </div>
+        <div class="popup-list">
         {#if skillsLoading}
           <div class="px-3 py-4 text-sm text-muted" role="status">Loading skills…</div>
         {:else if skillsError}
@@ -214,7 +215,7 @@
         {:else if matches.length === 0}
           <div class="px-3 py-4 text-sm text-muted" role="status">{skills.some((skill) => !skill.error) ? 'No matching skills.' : 'No skills available. Install a plugin in Plugins.'}</div>
         {:else}
-          <div id={pickerId} role="listbox" aria-label="Available skills" class="popup-list p-1">
+          <div id={pickerId} role="listbox" aria-label="Available skills" class="p-1">
             {#each matches as skill, index (skill.name)}
               <button
                 id={`${pickerId}-${index}`}
@@ -231,6 +232,7 @@
             {/each}
           </div>
         {/if}
+        </div>
       </div>
     </PopupSurface>
     {#if files.length}

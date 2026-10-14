@@ -55,7 +55,7 @@
   function drag(which: 'side' | 'inspector', e: PointerEvent) {
     e.preventDefault();
     const startX = e.clientX;
-    const start = which === 'side' ? sideWidth : inspectorWidth;
+    const start = layout.inline[which] ?? (which === 'side' ? sideWidth : inspectorWidth);
     const move = (ev: PointerEvent) => {
       const delta = which === 'side' ? startX - ev.clientX : startX - ev.clientX;
       const next = Math.min(720, Math.max(280, start + delta));

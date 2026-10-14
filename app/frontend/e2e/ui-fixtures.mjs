@@ -11,6 +11,7 @@ export async function startUiFixtureServer() {
   import { app } from '/src/lib/stores/app.svelte';
   import { chat, ThreadView } from '/src/lib/stores/chat.svelte';
   import { projects } from '/src/lib/stores/projects.svelte';
+  import { dialog } from '/src/lib/stores/dialog.svelte';
   import { inspector } from '/src/lib/stores/inspector.svelte';
   const mode = new URLSearchParams(location.search).get('scenario');
   const state = window.uiTest = { calls: [], skillMode: 'normal' };
@@ -18,7 +19,7 @@ export async function startUiFixtureServer() {
   app.call = async (method, params) => {
     state.calls.push({method,params});
     if (method === 'skill/list') {
-      if (state.skillMode === 'error') throw new Error('Fixture skill failure');
+      if (state.skillMode === 'error') throw new Error(state.skillError || 'Fixture skill failure');
       return {skills:Array.from({length:15},(_,i)=>({name:'superpowers:skill-'+i,description:'A description for the installed skill '+i}))};
     }
     if (method === 'plugin/list') return {plugins:[structuredClone(plugin)]};
@@ -39,6 +40,8 @@ export async function startUiFixtureServer() {
     chat.sides=[side];chat.activeSideId=side.id;
     inspector.openOutput('Test output','A retained inspector tab','fixture-tab');
   };
+  state.menuThreads = () => {chat.threads=[{id:'menu-thread',title:'Menu regression',projectId:'demo',settings:{},updatedAt:new Date().toISOString()}];};
+  state.confirm = () => {void dialog.confirm('Keep underlying panel open?');};
   state.plugins = () => { app.view='extensions'; };
   state.projectless = () => {chat.main.reset();projects.activeId=null;};
   state.existing = () => {chat.main.id='existing';chat.main.thread={id:'existing',projectId:'demo',settings:{},workspaceMode:'worktree'};chat.main.workspaceMode='worktree';};

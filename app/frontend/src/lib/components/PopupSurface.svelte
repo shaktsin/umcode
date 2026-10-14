@@ -9,11 +9,13 @@
     if(!open||!anchor||!surface)return;
     const trigger=anchor,node=surface;
     let frame=0;
+    let needsInitialFocus=kind==='menu';
     const measure=()=>{
       const header=node.querySelector<HTMLElement>('.popup-header');
       const list=node.querySelector<HTMLElement>('.popup-list');
       const rect=trigger.getBoundingClientRect();
       geometry=placePopup({trigger:rect,viewport:{width:window.innerWidth,height:window.innerHeight},preferredWidth:kind==='skills'?trigger.closest('[data-composer]')?.getBoundingClientRect().width??rect.width:320,headerHeight:header?.getBoundingClientRect().height??0,contentHeight:list?.scrollHeight??node.scrollHeight,kind,preferredSide});
+      if(needsInitialFocus){needsInitialFocus=false;void tick().then(()=>node.querySelector<HTMLElement>('button:not(:disabled),input:not(:disabled)')?.focus());}
     };
     const schedule=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(measure);};
     const outside=(e:PointerEvent)=>{if(!node.contains(e.target as Node)&&!trigger.contains(e.target as Node))onclose('outside');};
@@ -31,7 +33,7 @@
     const observer=new ResizeObserver(schedule);observer.observe(trigger);observer.observe(node);
     window.addEventListener('resize',schedule);window.addEventListener('scroll',schedule,true);
     document.addEventListener('pointerdown',outside,true);document.addEventListener('keydown',key,true);node.addEventListener('focusout',focusout);
-    schedule();if(kind==='menu')void tick().then(()=>node.querySelector<HTMLElement>('button:not(:disabled),input:not(:disabled)')?.focus());
+    schedule();
     return()=>{cancelAnimationFrame(frame);observer.disconnect();window.removeEventListener('resize',schedule);window.removeEventListener('scroll',schedule,true);document.removeEventListener('pointerdown',outside,true);document.removeEventListener('keydown',key,true);node.removeEventListener('focusout',focusout);};
   });
 </script>
