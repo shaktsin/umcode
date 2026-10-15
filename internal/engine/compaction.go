@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/hooks"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
@@ -129,21 +130,32 @@ func (e *Engine) compactConversation(ctx context.Context, thread protocol.Thread
 	compactCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	started := time.Now()
-	events, err := provider.Stream(compactCtx, selection.cred.Material, request)
-	if err != nil {
-		return fmt.Errorf("compact chat context: %w", err)
-	}
 	var summary strings.Builder
 	var usage llm.Usage
-	for event := range events {
-		switch event.Type {
-		case llm.EventTextDelta:
-			summary.WriteString(event.Text)
-		case llm.EventDone:
-			usage = event.Usage
-		case llm.EventError:
-			if event.Err != nil {
-				return fmt.Errorf("compact chat context: %w", event.Err)
+	shared := delegation.BudgetFromContext(ctx)
+	if shared != nil {
+		budget := newTurnBudget(selection.limits)
+		budget.shared = shared
+		out, err := e.streamOnce(compactCtx, context.WithoutCancel(ctx), turns[len(turns)-1], selection, selection.cred, provider, request, "compaction", budget)
+		if err != nil {
+			return fmt.Errorf("compact chat context: %w", err)
+		}
+		summary.WriteString(out.text)
+	} else {
+		events, err := provider.Stream(compactCtx, selection.cred.Material, request)
+		if err != nil {
+			return fmt.Errorf("compact chat context: %w", err)
+		}
+		for event := range events {
+			switch event.Type {
+			case llm.EventTextDelta:
+				summary.WriteString(event.Text)
+			case llm.EventDone:
+				usage = event.Usage
+			case llm.EventError:
+				if event.Err != nil {
+					return fmt.Errorf("compact chat context: %w", event.Err)
+				}
 			}
 		}
 	}
@@ -165,23 +177,25 @@ func (e *Engine) compactConversation(ctx context.Context, thread protocol.Thread
 	if err := e.Store.SaveItem(ctx, item); err != nil {
 		return err
 	}
-	if !usage.Reported {
-		usage.InputTokens = llm.EstimateTokens(request.System + transcript)
-		usage.OutputTokens = llm.EstimateTokens(text)
-		usage.Reported = false
-	}
-	totals := protocol.UsageTotals{
-		InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens,
-		OutputTokens: usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens,
-		Requests: 1, Estimated: !usage.Reported,
-	}
-	totals.CostUSD = models.Cost(selection.meta, usage)
-	if err := e.Store.InsertUsage(ctx, store.UsageRecord{
-		CredentialID: selection.cred.Record.ID, Provider: selection.sel.Provider, Model: selection.sel.Model,
-		ThreadID: threadID, TurnID: turn.ID, Role: "compaction", Usage: totals,
-		LatencyMs: time.Since(started).Milliseconds(), Status: "ok",
-	}); err != nil {
-		e.Log.Warn("record compaction usage", "err", err)
+	if shared == nil {
+		if !usage.Reported {
+			usage.InputTokens = llm.EstimateTokens(request.System + transcript)
+			usage.OutputTokens = llm.EstimateTokens(text)
+			usage.Reported = false
+		}
+		totals := protocol.UsageTotals{
+			InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens,
+			OutputTokens: usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens,
+			Requests: 1, Estimated: !usage.Reported,
+		}
+		totals.CostUSD = models.Cost(selection.meta, usage)
+		if err := e.Store.InsertUsage(ctx, store.UsageRecord{
+			CredentialID: selection.cred.Record.ID, Provider: selection.sel.Provider, Model: selection.sel.Model,
+			ThreadID: threadID, TurnID: turn.ID, Role: "compaction", Usage: totals,
+			LatencyMs: time.Since(started).Milliseconds(), Status: "ok",
+		}); err != nil {
+			e.Log.Warn("record compaction usage", "err", err)
+		}
 	}
 	e.Bus.Publish(threadID, protocol.NotifyItemCompleted, protocol.ItemEvent{Item: item})
 	return nil

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
 type turnBudget struct {
+	shared       *delegation.Budget
 	limits       protocol.ExecutionLimits
 	started      time.Time
 	tokens       int64
@@ -30,6 +32,9 @@ func (b *turnBudget) addUsage(usage protocol.UsageTotals) {
 }
 
 func (b *turnBudget) stopReason() string {
+	if b.shared != nil && time.Since(b.started) < time.Duration(b.limits.MaxDurationMinutes)*time.Minute {
+		return b.shared.StopReason()
+	}
 	switch {
 	case time.Since(b.started) >= time.Duration(b.limits.MaxDurationMinutes)*time.Minute:
 		return fmt.Sprintf("the %d-minute time budget", b.limits.MaxDurationMinutes)

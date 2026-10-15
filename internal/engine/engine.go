@@ -20,6 +20,7 @@ import (
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/credentials"
+	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/hooks"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/mcp"
@@ -85,6 +86,8 @@ type Engine struct {
 	toolReducerFailures     atomic.Int64 // recovered tool-result reducer panics
 	reduceHook              func()       // instance-local panic test seam; set before use
 
+	DelegationCoordinator *delegation.Coordinator
+
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
 	shuttingDown     bool                       // protected by mu
@@ -103,6 +106,7 @@ type Engine struct {
 }
 
 type activeTurn struct {
+	taskID string
 	cancel context.CancelFunc
 	turn   protocol.Turn
 }
@@ -191,6 +195,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
+	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store)
 	e.Work.StartGC(base, e.storageRetention) // best-effort, background, never prompts
 	e.Creds.OnSignIn = func(r protocol.ChatGPTSignInResult) { e.Bus.PublishAdmin(protocol.NotifyChatGPTSignIn, r) }
 	e.Router = router.New(o.Store, e.Creds, cat, o.LLMs, o.Config, o.Logger)
