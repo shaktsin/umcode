@@ -60,7 +60,7 @@
               <button class="p-1 text-faint hover:text-ink opacity-70 sm:opacity-0 group-hover/item:opacity-100 focus:opacity-100" aria-label="Response actions" aria-haspopup="menu" aria-expanded={actionsOpen} onclick={() => (actionsOpen = !actionsOpen)}><MoreHorizontal class="w-3.5 h-3.5" /></button>
               {#if actionsOpen}
                 <div class="absolute right-0 bottom-full z-30 w-40 popover py-1 text-xs" role="menu">
-                  <button class="menu-item" role="menuitem" onclick={() => { actionsOpen = false; void inspector.openTurnDetails(view!.id!, item.turnId); }}>Turn details</button>
+                  <button class="menu-item" role="menuitem" onclick={() => { actionsOpen = false; void inspector.openTurnDetails(view!.id!, item.turnId, view?.thread?.projectId); }}>Turn details</button>
                 </div>
               {/if}
             </div>
@@ -89,7 +89,7 @@
       {#if showSummary}<p class="mt-2 whitespace-pre-wrap selectable text-ink-soft">{item.text}</p>{/if}
     </section>
   {:else if item.kind === 'toolCall' && item.tool}
-    <ToolCall {item} />
+    <ToolCall {item} projectId={view?.thread?.projectId} />
   {:else if change}
     <div class="rounded-lg border border-line bg-surface/60 text-xs overflow-hidden">
       <div class="flex items-center gap-2 px-3 py-1.5 min-w-0">
@@ -105,7 +105,7 @@
         </button>
         <span class="text-sage shrink-0">+{change.additions}</span>
         <span class="text-rust shrink-0">−{change.deletions}</span>
-        <button class="text-faint hover:text-ink shrink-0" onclick={() => inspector.openDiff(change)}>Diff</button>
+        <button class="text-faint hover:text-ink shrink-0" onclick={() => inspector.openDiff(change, item.threadId, view?.thread?.projectId)}>Diff</button>
       </div>
     </div>
   {:else if item.kind === 'inboundEvent'}

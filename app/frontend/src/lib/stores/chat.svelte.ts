@@ -4,6 +4,11 @@ import { errMsg } from '$lib/format';
 import { inspector } from './inspector.svelte';
 import type { Attachment, BrowserVerificationResult, Item, ModelRouteResult, ModelSelection, RouteChangedEvent, SearchHit, Thread, Turn } from '$lib/types';
 
+function verificationRole(item: Item): string | undefined {
+  const name = item.tool?.name;
+  return name === 'verification.run' || name === 'verification.plan' || name === 'browser.verify' || name?.startsWith('visual.') ? name : undefined;
+}
+
 function sortThreads(list: Thread[]): Thread[] {
   return [...list].sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -184,32 +189,37 @@ class ChatState {
     });
     r.on('item/started', (p: { item: Item }) => {
       this.each((v) => v.applyItem(p.item));
-      if (p.item.tool?.name === 'verification.run' || p.item.tool?.name === 'verification.plan') inspector.openOutput(p.item.tool.name === 'verification.plan' ? 'Verification plan' : 'Test output', p.item.tool.output || '', `verification:${p.item.id}`, true);
-      if (p.item.tool?.name === 'browser.verify' || p.item.tool?.name.startsWith('visual.')) inspector.openOutput('Browser verification', p.item.tool.output || '', `browser-output:${p.item.id}`, true);
+      const role = verificationRole(p.item);
+      if (role) inspector.openVerificationOutput(role, p.item.tool?.output || '', p.item.id, p.item.threadId, this.itemProject(p.item));
     });
     r.on('item/completed', (p: { item: Item }) => {
       this.each((v) => v.applyItem(p.item));
-      if (p.item.tool?.name === 'verification.run' || p.item.tool?.name === 'verification.plan') inspector.updateOutput(`verification:${p.item.id}`, p.item.tool.output || p.item.tool.error || '');
-      if (p.item.tool?.name === 'browser.verify' || p.item.tool?.name.startsWith('visual.')) {
-        inspector.updateOutput(`browser-output:${p.item.id}`, p.item.tool.output || p.item.tool.error || '');
-        try {
-          const report = JSON.parse(p.item.tool.output || '') as BrowserVerificationResult;
-          const view = [this.main, ...this.sides].find((candidate) => candidate.id === p.item.threadId);
-          inspector.openBrowserReport(report, p.item.id, p.item.threadId, view?.thread?.projectId, true);
-        } catch { /* Keep the raw output tab when a blocked call has no report. */ }
+      const role = verificationRole(p.item);
+      if (!role) return;
+      let report: BrowserVerificationResult | undefined;
+      if (role === 'browser.verify' || role.startsWith('visual.')) {
+        try { report = JSON.parse(p.item.tool?.output || '') as BrowserVerificationResult; }
+        catch { /* Keep raw output when a blocked call has no report. */ }
       }
+      inspector.updateVerificationOutput(role, p.item.tool?.output || p.item.tool?.error || '', p.item.id, p.item.threadId, this.itemProject(p.item), report);
     });
     r.on('item/delta', (p: { threadId: string; itemId: string; text?: string; output?: string }) => {
       this.each((v) => {
         if (v.id === p.threadId) v.applyDelta(p.itemId, p.text, p.output);
       });
-      const verification = this.main.items.find((item) => item.id === p.itemId) ?? this.sides.flatMap((view) => view.items).find((item) => item.id === p.itemId);
-      if (verification?.tool?.name === 'verification.run' || verification?.tool?.name === 'verification.plan') inspector.updateOutput(`verification:${p.itemId}`, verification.tool.output || '');
-      if (verification?.tool?.name === 'browser.verify' || verification?.tool?.name.startsWith('visual.')) inspector.updateOutput(`browser-output:${p.itemId}`, verification.tool.output || '');
+      const view = [this.main, ...this.sides].find((candidate) => candidate.id === p.threadId);
+      const item = view?.items.find((candidate) => candidate.id === p.itemId);
+      const role = item && verificationRole(item);
+      if (item && role) inspector.updateVerificationOutput(role, item.tool?.output || '', item.id, item.threadId, this.itemProject(item));
     });
     app.onConnected(() => this.reload());
     // The approved models changed under us: re-ask what each chat would use.
     window.addEventListener('umcode:routing', () => this.each((v) => void v.loadRoute()));
+  }
+
+  private itemProject(item: Item): string | undefined {
+    return [this.main, ...this.sides].find((view) => view.id === item.threadId)?.thread?.projectId
+      ?? this.threads.find((thread) => thread.id === item.threadId)?.projectId;
   }
 
   private each(fn: (v: ThreadView) => void) {

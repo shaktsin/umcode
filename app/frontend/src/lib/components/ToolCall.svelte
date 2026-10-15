@@ -6,7 +6,7 @@
   import { prettyJSON } from '$lib/format';
   import ApprovalCard from './ApprovalCard.svelte';
 
-  let { item }: { item: Item } = $props();
+  let { item, projectId }: { item: Item; projectId?: string } = $props();
   let open = $state(false);
 
   const tool = $derived(item.tool!);
@@ -59,7 +59,7 @@
             {#if longOutput}
               <button
                 class="ml-auto normal-case font-normal text-faint hover:text-ink flex items-center gap-1"
-                onclick={() => inspector.openOutput(tool.name, tool.output!)}
+                onclick={() => inspector.openToolOutput(tool.name, tool.output!, item.id, item.threadId, projectId)}
               >
                 <Maximize2 class="w-3 h-3" />open in inspector
               </button>
