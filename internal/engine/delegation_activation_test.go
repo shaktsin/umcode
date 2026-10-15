@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -324,9 +325,8 @@ func TestDelegationAdmissionFailureRelease(t *testing.T) {
 	if len(turns) != 1 || turns[0].Status != protocol.TurnFailed {
 		t.Fatalf("admission left live root: %+v", turns)
 	}
-	task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, turns[0].ID)
-	if err != nil || task.State != protocol.AgentStateFailed {
-		t.Fatalf("admission left live task: %+v %v", task, err)
+	if task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, turns[0].ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("failed item persistence admitted task: %+v %v", task, err)
 	}
 	if _, err = e.Store.DB.Exec(`DROP TRIGGER fail_admitted_user_item`); err != nil {
 		t.Fatal(err)
@@ -421,5 +421,160 @@ func TestDelegationAdmissionRejectsChangedRootAtSameRevision(t *testing.T) {
 	}
 	if _, err = e.StartTurn(t.Context(), protocol.TurnStartParams{ThreadID: th.ID, Text: "continue", DelegationTaskID: taskID}); err == nil {
 		t.Fatal("same-revision project root change accepted")
+	}
+}
+
+// Rejecting cleanup UPDATEs must not strand an admitted task after item INSERT fails.
+func TestDelegationAdmissionFailedCleanupDoesNotStrandTask(t *testing.T) {
+	e, th, _, provider := delegationFixture(t)
+	token, err := e.PrepareDelegation(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TRIGGER fail_admission_item BEFORE INSERT ON items BEGIN SELECT RAISE(ABORT,'user item failed'); END`,
+		`CREATE TRIGGER fail_admission_task_cleanup BEFORE UPDATE ON agent_tasks BEGIN SELECT RAISE(ABORT,'task cleanup failed'); END`,
+	} {
+		if _, err = e.Store.DB.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = e.StartTurn(t.Context(), protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: token.ActivationToken})
+	if err == nil || !strings.Contains(err.Error(), "user item failed") {
+		t.Fatalf("original persistence error not returned: %v", err)
+	}
+	if provider.calls() != 0 {
+		t.Fatal("failed admission executed provider")
+	}
+	var tasks int
+	if err = e.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks`).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 0 {
+		t.Fatalf("failed submission stranded %d admitted tasks", tasks)
+	}
+	if _, err = e.StartTurn(t.Context(), protocol.TurnStartParams{ThreadID: th.ID, Text: "replay", DelegationActivationToken: token.ActivationToken}); err == nil {
+		t.Fatal("failed submission token reused")
+	}
+	for _, name := range []string{"fail_admission_item", "fail_admission_task_cleanup"} {
+		if _, err = e.Store.DB.Exec(`DROP TRIGGER ` + name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	token, err = e.PrepareDelegation(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "retry", DelegationActivationToken: token.ActivationToken})
+}
+
+// A durable cleanup failure is returned with the original error and root ID;
+// the persisted root remains available for existing startup reconciliation.
+func TestDelegationAdmissionRootCleanupFailureIsVisibleAndRecoverable(t *testing.T) {
+	e, th, _, provider := delegationFixture(t)
+	token, err := e.PrepareDelegation(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TRIGGER fail_admission_task_insert BEFORE INSERT ON agent_tasks BEGIN SELECT RAISE(ABORT,'task insert failed'); END`,
+		`CREATE TRIGGER fail_admission_root_cleanup BEFORE UPDATE ON turns BEGIN SELECT RAISE(ABORT,'root cleanup failed'); END`,
+	} {
+		if _, err = e.Store.DB.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, admissionErr := e.StartTurn(t.Context(), protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: token.ActivationToken})
+	if admissionErr == nil || !strings.Contains(admissionErr.Error(), "task insert failed") || !strings.Contains(admissionErr.Error(), "root cleanup failed") {
+		t.Fatalf("cleanup error discarded: %v", admissionErr)
+	}
+	turns, err := e.Store.ListTurns(t.Context(), th.ID)
+	if err != nil || len(turns) != 1 {
+		t.Fatalf("root missing: %+v %v", turns, err)
+	}
+	if !strings.Contains(admissionErr.Error(), turns[0].ID) {
+		t.Fatalf("cleanup error lacks recovery identity: %v", admissionErr)
+	}
+	if provider.calls() != 0 {
+		t.Fatal("failed admission executed provider")
+	}
+	e.mu.Lock()
+	reserved := len(e.activeTurns) + len(e.threadTurns) + len(e.turnWaiters)
+	e.mu.Unlock()
+	if reserved != 0 {
+		t.Fatalf("failed cleanup retained %d live reservations", reserved)
+	}
+	if _, err = e.StartTurn(t.Context(), protocol.TurnStartParams{ThreadID: th.ID, Text: "replay", DelegationActivationToken: token.ActivationToken}); err == nil {
+		t.Fatal("failed admission token reused")
+	}
+	for _, name := range []string{"fail_admission_task_insert", "fail_admission_root_cleanup"} {
+		if _, err = e.Store.DB.Exec(`DROP TRIGGER ` + name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Engine.New uses this exact persisted-root recovery path before execution.
+	recovered, err := e.Store.MarkStaleTurns(t.Context())
+	if err != nil || recovered != 1 {
+		t.Fatalf("root recovery failed: %d %v", recovered, err)
+	}
+	turns, err = e.Store.ListTurns(t.Context(), th.ID)
+	if err != nil || turns[0].Status == protocol.TurnRunning {
+		t.Fatalf("root still live after recovery: %+v %v", turns, err)
+	}
+	token, err = e.PrepareDelegation(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "retry", DelegationActivationToken: token.ActivationToken})
+}
+
+func TestOrdinaryTurnDoesNotWaitForDelegationAdmission(t *testing.T) {
+	e, th, _, _ := delegationFixture(t)
+	e.delegationMu.Lock()
+	defer e.delegationMu.Unlock()
+	submitted := make(chan error, 1)
+	go func() {
+		_, err := e.StartTurn(t.Context(), protocol.TurnStartParams{ThreadID: th.ID, Text: "ordinary message"})
+		submitted <- err
+	}()
+	select {
+	case err := <-submitted:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ordinary turn blocked behind unrelated delegation admission")
+	}
+}
+
+func TestDelegationAdmissionFailedFollowupPreservesTask(t *testing.T) {
+	e, th, _, provider := delegationFixture(t)
+	token, err := e.PrepareDelegation(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: token.ActivationToken})
+	id := provider.last()
+	original, err := e.Store.AgentTask(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Store.DB.Exec(`CREATE TRIGGER fail_followup_item BEFORE INSERT ON items BEGIN SELECT RAISE(ABORT,'followup item failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.StartTurn(t.Context(), protocol.TurnStartParams{ThreadID: th.ID, Text: "continue", DelegationTaskID: id})
+	if err == nil {
+		t.Fatal("failed followup accepted")
+	}
+	task, err := e.Store.AgentTask(t.Context(), id)
+	if err != nil || task.State != original.State || task.RootTurnID != original.RootTurnID || task.UpdatedAt != original.UpdatedAt {
+		t.Fatalf("failed followup changed admitted task: %+v %v", task, err)
+	}
+	if _, err = e.Store.DB.Exec(`DROP TRIGGER fail_followup_item`); err != nil {
+		t.Fatal(err)
+	}
+	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "retry followup", DelegationTaskID: id})
+	if provider.last() != id {
+		t.Fatal("unfinished original task lost after failed followup")
 	}
 }

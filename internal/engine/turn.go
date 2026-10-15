@@ -180,9 +180,13 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	if err != nil {
 		return protocol.Turn{}, err
 	}
-	// Serialize admission checks through persistence, including concurrent token delivery.
-	e.delegationMu.Lock()
-	defer e.delegationMu.Unlock()
+	// Serialize activation/resumption through persistence, including token replay.
+	// Ordinary turns in other chats must not wait for Git/plugin preflight.
+	skillName, _ := skills.Invocation(p.Text)
+	if p.DelegationActivationToken != "" || p.DelegationTaskID != "" || skillName == delegationSkillID {
+		e.delegationMu.Lock()
+		defer e.delegationMu.Unlock()
+	}
 	admission, err := e.prepareDelegationAdmission(ctx, p.TurnStartParams)
 	if err != nil {
 		return protocol.Turn{}, err
@@ -220,21 +224,26 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 
 	var releaseOnce sync.Once
 	persisted := false
-	abort := func(admissionErr error) {
+	abort := func(admissionErr error) error {
 		if persisted {
 			now := time.Now().UTC()
 			turn.Status, turn.Error, turn.FinishedAt = protocol.TurnFailed, admissionErr.Error(), &now
-			_ = e.Store.FinishTurn(context.WithoutCancel(ctx), turn)
-			e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
+			if cleanupErr := e.Store.FinishTurn(context.WithoutCancel(ctx), turn); cleanupErr != nil {
+				// The durable root remains available to MarkStaleTurns on restart. There
+				// is no admitted task until all other synchronous persistence succeeds.
+				e.Log.Error("failed to record admission cleanup", "thread", th.ID, "turn", turn.ID, "admission_error", admissionErr, "cleanup_error", cleanupErr)
+				admissionErr = protocol.Errorf(protocol.CodeInternal, "turn %s admission failed: %v; failed to record cleanup: %v; unfinished turn will be reconciled on restart", turn.ID, admissionErr, cleanupErr)
+			} else {
+				e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
+			}
 		}
 		e.mu.Lock()
 		delete(e.turnWaiters, turn.ID)
 		e.mu.Unlock()
-		if task, ok := DelegationTaskFromContext(tctx); ok && task.RootTurnID == turn.ID {
-			_ = e.Store.UpdateAgentTaskState(context.WithoutCancel(ctx), task.ID, task.ThreadID, task.ProjectID, task.State, protocol.AgentStateFailed)
-		}
 		e.wg.Done()
+		return admissionErr
 	}
+
 	release := func() {
 		releaseOnce.Do(func() {
 			e.mu.Lock()
@@ -246,29 +255,16 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	}
 	if err := e.Store.CreateTurn(ctx, turn); err != nil {
 		release()
-		abort(err)
-		return protocol.Turn{}, err
+		return protocol.Turn{}, abort(err)
 	}
 	persisted = true
-	// The real root exists before permission can be persisted. Tokens are consumed
-	// once even if a later admission write fails; the user can prepare another.
-	if admission != nil {
-		if p.DelegationActivationToken != "" {
-			e.mu.Lock()
-			delete(e.delegationTokens, p.DelegationActivationToken)
-			e.mu.Unlock()
-		}
-		task := admission.Task
-		if task.ID == "" {
-			task, err = e.EnableDelegation(context.WithValue(ctx, delegationAuthorizationKey{}, admission), th.ID, turn.ID)
-		}
-		if err != nil {
-			release()
-			abort(err)
-			return protocol.Turn{}, err
-		}
-		tctx = withDelegationTask(tctx, task)
+	// Consume once when the real root is persisted, including failed submissions.
+	if p.DelegationActivationToken != "" {
+		e.mu.Lock()
+		delete(e.delegationTokens, p.DelegationActivationToken)
+		e.mu.Unlock()
 	}
+
 	recorder := newTurnRecorder(e, turn.ID, opt, optSource)
 	tctx = withTurnRecorder(tctx, recorder)
 	e.Bus.Publish(th.ID, protocol.NotifyTurnStarted, protocol.TurnEvent{Turn: turn})
@@ -276,8 +272,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	userItem, err := e.newItem(ctx, turn, protocol.ItemUserMessage)
 	if err != nil {
 		release()
-		abort(err)
-		return protocol.Turn{}, err
+		return protocol.Turn{}, abort(err)
 	}
 	userItem.Text = p.Text
 	userItem.Status = protocol.ItemCompleted
@@ -290,8 +285,21 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	}
 	if err := e.saveAndPublish(ctx, userItem, protocol.NotifyItemCompleted); err != nil {
 		release()
-		abort(err)
-		return protocol.Turn{}, err
+		return protocol.Turn{}, abort(err)
+	}
+
+	// Persist delegation permission last: failed user-item persistence cannot
+	// strand an active task that then needs a separate fallible rollback.
+	if admission != nil {
+		task := admission.Task
+		if task.ID == "" {
+			task, err = e.EnableDelegation(context.WithValue(ctx, delegationAuthorizationKey{}, admission), th.ID, turn.ID)
+		}
+		if err != nil {
+			release()
+			return protocol.Turn{}, abort(err)
+		}
+		tctx = withDelegationTask(tctx, task)
 	}
 
 	go func() {
