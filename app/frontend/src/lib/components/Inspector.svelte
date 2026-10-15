@@ -21,8 +21,8 @@
           <Icon class="w-3.5 h-3.5 shrink-0" />
           <span class="truncate">{t.title}</span>
         </button>
-        <button class="text-faint hover:text-ink" aria-label="Close tab" onclick={() => inspector.close(t.id)}>
-          <X class="w-3 h-3" />
+        <button class="icon-button compact text-faint hover:text-ink" aria-label="Close tab" onclick={() => inspector.close(t.id)}>
+          <X class="w-4 h-4" />
         </button>
       </div>
     {/each}

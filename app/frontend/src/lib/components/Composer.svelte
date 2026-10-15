@@ -221,13 +221,14 @@
                 id={`${pickerId}-${index}`}
                 role="option"
                 aria-selected={index === activeSkill}
+                aria-describedby={`${pickerId}-${index}-description`}
                 tabindex="-1"
                 class="block w-full rounded-lg px-3 py-2 text-left {index === activeSkill ? 'bg-raised' : 'hover:bg-raised'}"
                 onmousedown={(e) => e.preventDefault()}
                 onclick={() => chooseSkill(skill)}
               >
                 <span class="block text-sm font-medium text-ink">/{skill.name}</span>
-                <span class="block truncate text-xs text-muted">{skill.description}</span>
+                <span id={`${pickerId}-${index}-description`} class="block truncate text-xs text-muted" title={skill.description}>{skill.description}</span>
               </button>
             {/each}
           </div>
