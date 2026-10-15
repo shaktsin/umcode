@@ -21,24 +21,34 @@ type TaskStore interface {
 }
 
 type taskRuntime struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	budget *Budget
+	ctx      context.Context
+	cancel   context.CancelFunc
+	budget   *Budget
+	admitted protocol.AgentTask
 }
 
-// Coordinator owns task lifetimes and accounting only. Runner/Service own child
-// scheduling and must retain active slots until cancellation is durably saved
-// and the runner has exited. Task contexts inherit engine shutdown, never an RPC.
+// Coordinator owns task lifetimes, accounting, and child scheduling. Active
+// slots remain occupied until execution exits and cancellation is durable.
+// Task contexts inherit engine shutdown, never an RPC.
 type Coordinator struct {
-	mu        sync.Mutex
-	base      context.Context
-	store     TaskStore
-	tasks     map[string]*taskRuntime
-	cancelled map[string]bool
+	mu          sync.Mutex
+	base        context.Context
+	store       TaskStore
+	tasks       map[string]*taskRuntime
+	cancelled   map[string]bool
+	lifecycleMu sync.Mutex
+	runner      Runner
+	events      EventSink
+	slots       map[string]*childRun
+	changed     map[string]chan struct{}
 }
 
-func NewCoordinator(base context.Context, s TaskStore) *Coordinator {
-	return &Coordinator{base: base, store: s, tasks: map[string]*taskRuntime{}, cancelled: map[string]bool{}}
+func NewCoordinator(base context.Context, s TaskStore, options ...CoordinatorOption) *Coordinator {
+	c := &Coordinator{base: base, store: s, tasks: map[string]*taskRuntime{}, cancelled: map[string]bool{}, slots: map[string]*childRun{}, changed: map[string]chan struct{}{}}
+	for _, option := range options {
+		option(c)
+	}
+	return c
 }
 func active(state protocol.AgentState) bool {
 	return state == protocol.AgentStateQueued || state == protocol.AgentStateRunning || state == protocol.AgentStateWaitingApproval
@@ -80,7 +90,7 @@ func (c *Coordinator) Task(ctx context.Context, admitted protocol.AgentTask, lim
 		owned, cancel = context.WithCancel(WithBudget(c.base, b))
 	}
 	b.owner = owned
-	c.tasks[task.ID] = &taskRuntime{ctx: owned, cancel: cancel, budget: b}
+	c.tasks[task.ID] = &taskRuntime{ctx: owned, cancel: cancel, budget: b, admitted: task}
 	return owned, b, nil
 }
 
@@ -89,6 +99,14 @@ func (c *Coordinator) Task(ctx context.Context, admitted protocol.AgentTask, lim
 // Calling code must not free a child slot until its runner exits and this write
 // succeeds. Partial results/workspace references are retained by scoped CAS.
 func (c *Coordinator) CancelTask(ctx context.Context, taskID string) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	slot := c.slots[taskID]
+	if slot != nil {
+		slot.cancelRequested = true
+		slot.taskCancel = true
+		slot.cancel()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Live cancellation must survive even an unavailable lifecycle store.
@@ -154,5 +172,17 @@ func (c *Coordinator) CancelTask(ctx context.Context, taskID string) error {
 			errs = append(errs, fmt.Errorf("cancel child %s: %w", child.ID, err))
 		}
 	}
-	return errors.Join(errs...)
+	cancelErr := errors.Join(errs...)
+	if slot != nil && cancelErr == nil {
+		slot.taskCancelDurable = true
+		if slot.exited {
+			delete(c.slots, taskID)
+		}
+	}
+	for _, child := range children {
+		if latest, readErr := c.store.AgentChild(ctx, taskID, child.ID); readErr == nil {
+			c.notify(task, latest)
+		}
+	}
+	return cancelErr
 }

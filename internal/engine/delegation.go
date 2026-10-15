@@ -13,6 +13,7 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/tools"
 )
 
 const delegationSkillID = "superpowers:subagent-driven-development"
@@ -252,6 +253,44 @@ func (e *Engine) EnableDelegation(ctx context.Context, threadID, rootTurnID stri
 	}
 	if err = e.Store.CreateAgentTask(ctx, task); err != nil {
 		return protocol.AgentTask{}, err
+	}
+	return task, nil
+}
+
+func isDelegationTool(name string) bool {
+	name = tools.FromWire(name)
+	return strings.HasPrefix(name, "agent.") || name == "delegation.enable"
+}
+
+// authorizeDelegationTool revalidates the admitted context against durable
+// chat/project ownership. Arguments never select a task or grant admission.
+// Terminal tasks remain readable; the coordinator admits active mutations.
+func (e *Engine) authorizeDelegationTool(ctx context.Context) (protocol.AgentTask, error) {
+	admitted, ok := DelegationTaskFromContext(ctx)
+	scope := tools.ScopeFrom(ctx)
+	if !ok || scope == nil || scope.ThreadID != admitted.ThreadID || scope.ProjectID != admitted.ProjectID {
+		return protocol.AgentTask{}, errors.New("delegation requires an admitted parent task")
+	}
+	task, err := e.Store.AgentTask(ctx, admitted.ID)
+	if err != nil {
+		return task, err
+	}
+	if task.ThreadID != admitted.ThreadID || task.ProjectID != admitted.ProjectID || task.RootTurnID != admitted.RootTurnID || task.BaseRoot != admitted.BaseRoot || task.BaseRevision != admitted.BaseRevision || task.Activation != admitted.Activation {
+		return task, errors.New("delegation task ownership changed")
+	}
+	thread, err := e.Store.GetThread(ctx, task.ThreadID)
+	if err != nil {
+		return task, err
+	}
+	if thread.ProjectID != task.ProjectID {
+		return task, errors.New("delegation parent project changed")
+	}
+	project, err := e.Projects.Get(ctx, task.ProjectID)
+	if err != nil {
+		return task, err
+	}
+	if project.Missing || pathutil.Resolved(project.Root) != task.BaseRoot || pathutil.Resolved(scope.Root) != task.BaseRoot {
+		return task, errors.New("delegation project root changed")
 	}
 	return task, nil
 }

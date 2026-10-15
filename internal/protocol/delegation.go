@@ -91,3 +91,19 @@ type AgentCheckEvidence struct {
 	Status  string `json:"status"`
 	Summary string `json:"summary"`
 }
+
+// AgentFollowup is a durable correction, delivered only at a runner boundary.
+type AgentFollowup struct {
+	CallID  string `json:"callId"`
+	Message string `json:"message"`
+	Round   int    `json:"round"`
+}
+
+// DelegationUpdated updates the existing child row in its owning parent chat.
+type DelegationUpdated struct {
+	ThreadID string     `json:"threadId"`
+	TaskID   string     `json:"taskId"`
+	Child    AgentChild `json:"child"`
+}
+
+const NotifyDelegationUpdated = "delegation/updated"

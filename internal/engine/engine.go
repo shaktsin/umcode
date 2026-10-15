@@ -195,7 +195,10 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
-	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store)
+	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus))
+	for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
+		reg.Add(tool)
+	}
 	e.Work.StartGC(base, e.storageRetention) // best-effort, background, never prompts
 	e.Creds.OnSignIn = func(r protocol.ChatGPTSignInResult) { e.Bus.PublishAdmin(protocol.NotifyChatGPTSignIn, r) }
 	e.Router = router.New(o.Store, e.Creds, cat, o.LLMs, o.Config, o.Logger)

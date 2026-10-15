@@ -1266,6 +1266,12 @@ func (e *Engine) runTurnCompleteHooks(ctx context.Context, snapshot pluginSnapsh
 // runTool executes one tool call, asking for approval when policy requires it.
 func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn protocol.Turn, call llm.ToolCall, snapshot pluginSnapshot) toolRunResult {
 	name := call.Name
+	if isDelegationTool(name) {
+		if _, err := e.authorizeDelegationTool(ctx); err != nil {
+			return e.selectionFailure(sctx, turn, call, name, err.Error())
+		}
+	}
+	ctx = tools.WithAgentCallID(ctx, call.ID)
 	var tool tools.Tool
 	var ok bool
 	if selection := selectionFrom(ctx); selection != nil {

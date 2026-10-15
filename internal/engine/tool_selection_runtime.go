@@ -274,6 +274,11 @@ func (e *Engine) permittedTool(c turnTool, p *protocol.Project) bool {
 	return e.permittedToolFor(context.Background(), c, p)
 }
 func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.Project) bool {
+	if isDelegationTool(c.tool.Name()) {
+		if _, ok := DelegationTaskFromContext(ctx); !ok {
+			return false
+		}
+	}
 	if !catalogToolAllowed(c, p) {
 		return false
 	}

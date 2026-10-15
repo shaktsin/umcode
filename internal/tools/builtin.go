@@ -42,10 +42,16 @@ type BuiltinServices struct {
 	VisualQA       *visualqa.Manager
 	ComputerUse    *computeruse.Manager
 	Exec           *ExecManager
+	AgentTools     []Tool
 	SkillReadPaths SkillReadPathsFunc
 }
 
 func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv SkillEnvFunc, services ...BuiltinServices) {
+	if len(services) > 0 {
+		for _, tool := range services[0].AgentTools {
+			r.Add(tool)
+		}
+	}
 	r.Add(&fileRead{ws})
 	r.Add(&fileList{ws})
 	r.Add(&fileWrite{ws})
