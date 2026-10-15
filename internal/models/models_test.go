@@ -34,6 +34,12 @@ func TestClassifyAutoContinuation(t *testing.T) {
 		want     protocol.Complexity
 	}{
 		{name: "approval inherits deep task", text: "approved", previous: protocol.ComplexityDeep, project: true, want: protocol.ComplexityDeep},
+		{name: "skill approval inherits deep task", text: "/superpowers:using-superpowers approved", previous: protocol.ComplexityDeep, project: true, want: protocol.ComplexityDeep},
+		{name: "skill proceed inherits standard task", text: "/superpowers:using-superpowers proceed", previous: protocol.ComplexityStandard, project: true, want: protocol.ComplexityStandard},
+		{name: "skill project continuation floors quick", text: "/superpowers:using-superpowers proceed", previous: protocol.ComplexityQuick, project: true, want: protocol.ComplexityStandard},
+		{name: "skill project continuation without history", text: "/greet yes", project: true, want: protocol.ComplexityStandard},
+		{name: "skill continuation outside project", text: "/greet\ncontinue", previous: protocol.ComplexityDeep, want: protocol.ComplexityDeep},
+		{name: "skill quick query remains quick", text: "/greet what is a variable", previous: protocol.ComplexityDeep, project: true, want: protocol.ComplexityQuick},
 		{name: "project continuation floors quick at standard", text: "continue", previous: protocol.ComplexityQuick, project: true, want: protocol.ComplexityStandard},
 		{name: "new quick message remains quick", text: "what time is it", project: true, want: protocol.ComplexityQuick},
 		{name: "substantive message uses its own classification", text: "please continue and do research on these options", previous: protocol.ComplexityQuick, project: true, want: protocol.ComplexityDeep},
@@ -42,6 +48,30 @@ func TestClassifyAutoContinuation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ClassifyAuto(tt.text, 0, tt.previous, tt.project); got != tt.want {
 				t.Errorf("ClassifyAuto(%q) = %s, want %s", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsContinuation(t *testing.T) {
+	for _, tt := range []struct {
+		text string
+		want bool
+	}{
+		{"proceed", true},
+		{" APPROVED! ", true},
+		{"/superpowers:using-superpowers proceed", true},
+		{" /greet\nGo ahead! ", true},
+		{"/greet", false},
+		{"/tmp/file proceed", false},
+		{"/invalid:skill:command yes", false},
+		{"hello /greet proceed", false},
+		{"/greet continue with a new research task", false},
+		{"what is a variable", false},
+	} {
+		t.Run(tt.text, func(t *testing.T) {
+			if got := IsContinuation(tt.text); got != tt.want {
+				t.Errorf("IsContinuation(%q) = %v, want %v", tt.text, got, tt.want)
 			}
 		})
 	}

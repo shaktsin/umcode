@@ -7,6 +7,7 @@ import (
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/skills"
 )
 
 // DefaultPresets are the built-in complexity presets.
@@ -53,7 +54,11 @@ var (
 // IsContinuation reports whether a short user response is an acknowledgement
 // that continues the work already underway in the thread.
 func IsContinuation(text string) bool {
-	return continuationWords.MatchString(strings.TrimSpace(text))
+	text = strings.TrimSpace(text)
+	if name, ok := skills.Invocation(text); ok {
+		text = strings.TrimSpace(strings.TrimPrefix(text, "/"+name))
+	}
+	return continuationWords.MatchString(text)
 }
 
 // ClassifyAuto keeps an acknowledgement at the level of the work it is
