@@ -54,6 +54,58 @@ func writeSkill(t *testing.T, dir, name, body string, files map[string]string) s
 	return d
 }
 
+func TestSkillReadPathsUseDeclaredRuntimeOnly(t *testing.T) {
+	r, cfg, extra := newTestRegistry(t)
+	toolchain := t.TempDir()
+	bin := filepath.Join(toolchain, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	python := filepath.Join(bin, "python")
+	if err := os.WriteFile(python, []byte("synthetic"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Skills["weather-fetch"] = config.SkillRuntimeOverride{PythonBin: python, Env: map[string]string{"SKILL_DIR": "/untrusted-env"}}
+	dir := writeSkill(t, extra, "weather-fetch", weatherSkill, nil)
+	r.Refresh()
+	reader, ok := any(r).(interface {
+		ReadPathsFor(context.Context, string) ([]string, error)
+	})
+	if !ok {
+		t.Fatal("skill runtimes do not provide trusted sandbox read paths")
+	}
+	paths, err := reader.ReadPathsFor(t.Context(), "weather-fetch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{dir, toolchain} {
+		found := false
+		for _, path := range paths {
+			found = found || path == want
+		}
+		if !found {
+			t.Errorf("declared runtime path %s missing: %v", want, paths)
+		}
+	}
+	for _, path := range paths {
+		if path == "/untrusted-env" || path == os.Getenv("HOME") {
+			t.Errorf("environment granted arbitrary read path: %s", path)
+		}
+	}
+}
+
+func TestSkillReadPathsRejectBroadHomeRuntime(t *testing.T) {
+	r, cfg, extra := newTestRegistry(t)
+	writeSkill(t, extra, "weather-fetch", weatherSkill, nil)
+	r.Refresh()
+	for _, path := range []string{os.Getenv("HOME"), filepath.Join(os.Getenv("HOME"), "Library"), filepath.Join(os.Getenv("HOME"), ".cache")} {
+		cfg.Skills["weather-fetch"] = config.SkillRuntimeOverride{ExtraPath: []string{path}}
+		if paths, err := r.ReadPathsFor(t.Context(), "weather-fetch"); err == nil {
+			t.Errorf("broad runtime root %s accepted: %v", path, paths)
+		}
+	}
+}
+
 func newTestRegistry(t *testing.T) (*Registry, *config.Config, string) {
 	home := t.TempDir()
 	extra := t.TempDir()

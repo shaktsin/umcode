@@ -1,5 +1,6 @@
 // Package sandbox confines commands the agent runs on the host: writes are
 // limited to the project (plus temp and, optionally, package-manager caches),
+// reads are limited to the project and supporting runtime files,
 // the network is denied unless the project allows it, and credential
 // directories are unreadable. It uses Seatbelt on macOS and bubblewrap on
 // Linux. Where neither is available Detect returns nil and callers keep their
@@ -57,8 +58,36 @@ func Detect() Sandbox {
 // writable only when the project allows the network, because that is when a
 // command downloads dependencies.
 var cacheDirs = []string{
-	".npm", ".cache", ".pnpm-store", ".yarn", ".bun", ".cargo/registry", ".cargo/git",
-	"go/pkg", ".gradle", ".m2", ".nuget", ".local/share/pnpm", "Library/Caches",
+	".npm", ".pnpm-store", ".yarn/cache", ".bun/install/cache", ".cargo/registry", ".cargo/git",
+	"go/pkg", ".gradle/caches", ".gradle/wrapper/dists", ".m2/repository", ".nuget/packages", ".local/share/pnpm/store",
+	".cache/go-build", ".cache/pip", ".cache/uv", ".cache/yarn", ".cache/pnpm", ".cache/ms-playwright",
+	"Library/Caches/go-build", "Library/Caches/pip", "Library/Caches/uv", "Library/Caches/Yarn", "Library/Caches/pnpm", "Library/Caches/node-gyp", "Library/Caches/ms-playwright",
+}
+
+// These locations contain development runtimes, not arbitrary PATH entries or
+// the user's entire application-data/cache directories.
+var toolchainDirs = []string{
+	".nvm/versions/node", ".fnm/node-versions", ".fnm/current", ".volta/bin", ".volta/tools",
+	".local/share/mise/shims", ".local/share/mise/installs", ".asdf/shims", ".asdf/installs", ".asdf/bin", ".asdf/lib",
+	".pyenv/bin", ".pyenv/shims", ".pyenv/versions", ".pyenv/libexec", ".pyenv/plugins", ".pyenv/version",
+	".rustup/toolchains", ".rustup/settings.toml", ".cargo/bin", ".bun/bin",
+}
+
+// Git treats an existing but unreadable global config as fatal, even for
+// project-local status/diff commands. Grant individual standard settings files,
+// not the containing application configuration directory.
+var developmentConfigFiles = []string{
+	".gitconfig", ".config/git/config", ".config/git/ignore", ".config/git/attributes",
+}
+
+var commandRuntimePaths = []string{
+	"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/private/preboot/Cryptexes/OS/System/Library",
+	"/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/bin", "/sbin", "/lib", "/lib64", "/dev",
+	"/usr/local/bin", "/usr/local/lib", "/usr/local/share", "/usr/local/go", "/usr/local/Cellar", "/usr/local/opt",
+	"/opt/homebrew/Cellar", "/opt/homebrew/opt", "/opt/homebrew/bin", "/opt/homebrew/lib", "/opt/homebrew/share",
+	"/Library/Developer/CommandLineTools", "/Applications/Xcode.app/Contents/Developer",
+	"/etc/gitconfig", "/usr/local/etc/gitconfig", "/opt/homebrew/etc/gitconfig",
+	"/etc/ssl/certs", "/etc/ssl/cert.pem", "/etc/ssl/openssl.cnf", "/etc/pki/tls/certs", "/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf", "/etc/passwd", "/etc/localtime",
 }
 
 // credentialDirs are never readable from a sandboxed command: a command that
@@ -70,28 +99,53 @@ var credentialDirs = []string{
 
 // DefaultPolicy builds a Policy for a project at root. Paths that do not exist
 // are left out; symlinks are resolved so the rules match real paths.
-func DefaultPolicy(root string, network bool) Policy {
-	p := Policy{Root: realPath(root), Network: network}
+// readonly contains trusted skill/runtime paths supplied by the application,
+// never paths inferred from an arbitrary inherited PATH or shell command.
+func DefaultPolicy(root string, network bool, readonly ...string) Policy {
+	p := Policy{Root: realPath(root), Network: network, Readable: []string{realPath(root)}}
 	add := func(list *[]string, path string) {
 		if path = realPath(path); path != "" {
 			*list = append(*list, path)
 		}
 	}
+	read := func(path string) {
+		if exists(path) {
+			add(&p.Readable, path)
+			// Linux distributions often symlink /bin and /lib into /usr.
+			// Preserve the lexical mount location as well as its real target.
+			if filepath.IsAbs(path) && filepath.Clean(path) != realPath(path) {
+				p.Readable = append(p.Readable, filepath.Clean(path))
+			}
+		}
+	}
+	for _, path := range commandRuntimePaths {
+		read(path)
+	}
+	for _, path := range readonly {
+		read(path)
+	}
 	for _, t := range []string{os.TempDir(), "/tmp", "/var/tmp"} {
 		if isDir(t) {
 			add(&p.Writable, t)
+			read(t)
 		}
 	}
 	p.Writable = dedupe(p.Writable)
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
-		if network {
-			for _, c := range cacheDirs {
-				if d := filepath.Join(home, c); isDir(d) {
+		for _, c := range developmentConfigFiles {
+			read(filepath.Join(home, c))
+		}
+		for _, c := range toolchainDirs {
+			read(filepath.Join(home, c))
+		}
+		for _, c := range cacheDirs {
+			if d := filepath.Join(home, c); isDir(d) {
+				read(d)
+				if network {
 					add(&p.Writable, d)
 				}
 			}
-			p.Writable = dedupe(p.Writable)
 		}
 		for _, c := range credentialDirs {
 			if d := filepath.Join(home, c); exists(d) {
@@ -99,6 +153,8 @@ func DefaultPolicy(root string, network bool) Policy {
 			}
 		}
 	}
+	p.Writable = dedupe(p.Writable)
+	p.Readable = dedupe(p.Readable)
 	for _, rel := range []string{".git/hooks", ".git/config"} {
 		if d := filepath.Join(p.Root, rel); exists(d) {
 			p.ReadOnlyInRoot = append(p.ReadOnlyInRoot, realPathOrSelf(d))

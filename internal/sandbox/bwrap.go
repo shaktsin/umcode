@@ -21,16 +21,16 @@ func (b bwrap) Wrap(cmd *exec.Cmd, p Policy) error {
 	return nil
 }
 
-// bwrapArgs builds bubblewrap's arguments: the whole filesystem read-only,
-// then the writable locations bound on top, an empty view of credential
+// bwrapArgs builds bubblewrap's arguments: explicit readable roots (or the
+// whole filesystem for legacy policies), writable locations on top, credential
 // directories, and no network unless the policy allows it.
 func bwrapArgs(p Policy, dir string) []string {
 	args := []string{"--die-with-parent", "--new-session", "--unshare-pid",
 		"--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"}
 	if p.Readable != nil {
-		args = []string{"--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc"}
+		args = []string{"--die-with-parent", "--new-session", "--unshare-pid", "--tmpfs", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"}
 		for _, r := range p.Readable {
-			if r != "/dev" && exists(r) {
+			if r != "/dev" && r != "/tmp" && exists(r) {
 				args = append(args, "--ro-bind", r, r)
 			}
 		}
@@ -56,6 +56,11 @@ func bwrapArgs(p Policy, dir string) []string {
 		}
 	}
 	if dir != "" {
+		if p.Readable != nil {
+			// The allowlist mounts canonical paths, so a symlinked project's
+			// lexical working directory may not exist in the private root.
+			dir = realPath(dir)
+		}
 		args = append(args, "--chdir", dir)
 	}
 	return args
