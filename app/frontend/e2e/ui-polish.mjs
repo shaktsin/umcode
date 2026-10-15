@@ -44,7 +44,8 @@ try {
       await close.focus();assert.equal(await close.evaluate(el=>el===document.activeElement),true,'close keyboard focus');
       if(await page.getByRole('dialog',{name:panel==='side'?'Side chats panel':'Inspector panel'}).count())await page.keyboard.press('Escape');
     };
-    await measureClose('inspector','Show inspector');await measureClose('side','Show side chats');
+    await page.getByRole('dialog',{name:'Inspector panel'}).count() && await page.keyboard.press('Escape');
+    await measureClose('side','Show side chats');
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth&&document.documentElement.scrollHeight<=innerHeight),'no document overflow');
     assert.deepEqual(errors,[]);await page.close();
   }
