@@ -172,6 +172,14 @@ func (c *Coordinator) CancelTask(ctx context.Context, taskID string) error {
 			errs = append(errs, fmt.Errorf("cancel child %s: %w", child.ID, err))
 		}
 	}
+	if slot != nil && slot.exited && slot.pending != nil {
+		s, storeErr := c.lifecycleStore()
+		if storeErr != nil {
+			errs = append(errs, storeErr)
+		} else if _, finalErr := c.finalize(ctx, task, slot, s); finalErr != nil {
+			errs = append(errs, finalErr)
+		}
+	}
 	cancelErr := errors.Join(errs...)
 	if slot != nil && cancelErr == nil {
 		slot.taskCancelDurable = true

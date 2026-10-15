@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -156,7 +157,7 @@ func TestCoordinatorCancellationRetainsSlotOnFailure(t *testing.T) {
 		<-ctx.Done()
 		<-exit
 		close(returned)
-		return protocol.AgentResult{Summary: "partial"}, ctx.Err()
+		return protocol.AgentResult{Summary: "partial", Findings: []protocol.AgentFinding{{Path: "file.go", Message: "recover this finding"}}}, ctx.Err()
 	})))
 	c.Task(t.Context(), task, protocol.ExecutionLimits{MaxTokens: 100})
 	child, err := c.Spawn(t.Context(), task.ID, "spawn", protocol.AgentRoleImplementer, protocol.AgentAssignment{Prompt: "work"})
@@ -170,12 +171,11 @@ func TestCoordinatorCancellationRetainsSlotOnFailure(t *testing.T) {
 	}
 	close(exit)
 	<-returned
-	// Synchronize with finalization without polling: Wait uses caller cancellation
-	// because a failed durable terminalization must retain active child state.
+	// Finalization failure must wake Wait with an actionable recovery error.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer cancel()
-	if _, err = c.Wait(ctx, task.ID, []string{child.ID}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("wait ignored caller cancellation: %v", err)
+	if _, err = c.Wait(ctx, task.ID, []string{child.ID}); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wait did not surface finalization failure: %v", err)
 	}
 	_, err = c.Spawn(t.Context(), task.ID, "other", protocol.AgentRoleReviewer, protocol.AgentAssignment{Prompt: "review"})
 	var busy *BusyError
@@ -187,8 +187,8 @@ func TestCoordinatorCancellationRetainsSlotOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := c.Status(t.Context(), task.ID, child.ID)
-	if err != nil || got.State != protocol.AgentStateCancelled {
-		t.Fatalf("cancel retry: %+v %v", got, err)
+	if err != nil || got.State != protocol.AgentStateCancelled || got.Result.Summary != "partial" || len(got.Result.Findings) != 1 || got.Result.Findings[0].Message != "recover this finding" {
+		t.Fatalf("cancel retry lost retained outcome: %+v %v", got, err)
 	}
 	if err = c.CancelTask(t.Context(), task.ID); err != nil {
 		t.Fatal(err)
@@ -440,5 +440,122 @@ func TestCoordinatorParentPersistenceFailureRetainsSlot(t *testing.T) {
 	c.lifecycleMu.Unlock()
 	if slot != nil {
 		t.Fatal("successful task cancellation retained exited slot")
+	}
+}
+
+type finalizationFailStore struct {
+	*store.Store
+	failRead, failWrite atomic.Bool
+}
+
+func (s *finalizationFailStore) AgentChild(ctx context.Context, taskID, childID string) (protocol.AgentChild, error) {
+	if s.failRead.Load() {
+		return protocol.AgentChild{}, errors.New("final read unavailable")
+	}
+	return s.Store.AgentChild(ctx, taskID, childID)
+}
+func (s *finalizationFailStore) UpdateAgentChild(ctx context.Context, child protocol.AgentChild, version int64) error {
+	if s.failWrite.Load() {
+		return errors.New("final write unavailable")
+	}
+	return s.Store.UpdateAgentChild(ctx, child, version)
+}
+func TestCoordinatorFinalizationFailureRecovery(t *testing.T) {
+	for _, tt := range []struct {
+		mode        string
+		taskCancel  bool
+		runnerError bool
+	}{{"read", false, false}, {"write", false, false}, {"write", true, false}, {"write", false, true}} {
+		mode := tt.mode
+		t.Run(fmt.Sprintf("%s/taskCancel=%v/runnerError=%v", mode, tt.taskCancel, tt.runnerError), func(t *testing.T) {
+			db, task := coordinatorFixture(t)
+			s := &finalizationFailStore{Store: db}
+			events := make(lifecycleEvents, 20)
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var calls atomic.Int32
+			c := NewCoordinator(context.Background(), s, WithEventSink(events), WithRunner(runnerFunc(func(context.Context, protocol.AgentTask, protocol.AgentChild) (protocol.AgentResult, error) {
+				calls.Add(1)
+				close(started)
+				<-release
+				if mode == "read" {
+					s.failRead.Store(true)
+				} else {
+					s.failWrite.Store(true)
+				}
+				var runErr error
+				if tt.runnerError {
+					runErr = errors.New("runner failed")
+				}
+				return protocol.AgentResult{Summary: "finished outcome", Findings: []protocol.AgentFinding{{Message: "retained finding"}}}, runErr
+			})))
+			c.Task(t.Context(), task, protocol.ExecutionLimits{MaxTokens: 100})
+			child, err := c.Spawn(t.Context(), task.ID, "spawn", protocol.AgentRoleImplementer, protocol.AgentAssignment{Prompt: "work"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-started
+			waiting := make(chan error, 1)
+			go func() { _, err := c.Wait(t.Context(), task.ID, []string{child.ID}); waiting <- err }()
+			close(release)
+			select {
+			case err = <-waiting:
+				if err == nil {
+					t.Fatal("wait hid finalization error")
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("wait remained blocked after finalization failure")
+			}
+
+			seen := false
+			deadline := time.After(200 * time.Millisecond)
+			for !seen {
+				select {
+				case event := <-events:
+					raw, _ := json.Marshal(event)
+					var envelope struct {
+						Error string `json:"error"`
+					}
+					json.Unmarshal(raw, &envelope)
+					if envelope.Error != "" {
+						seen = true
+						if event.Child.Result.Summary != "finished outcome" {
+							t.Fatal("failure event lost pending result")
+						}
+						event.Child.Result.Findings[0].Message = "event mutation"
+					}
+				case <-deadline:
+					t.Fatal("no finalization failure event")
+				}
+			}
+			got, err := c.Status(t.Context(), task.ID, child.ID)
+			if err == nil || got.Result.Summary != "finished outcome" {
+				t.Fatalf("status lost pending result/error: %+v %v", got, err)
+			}
+			got.Result.Findings[0].Message = "caller mutation"
+			s.failRead.Store(false)
+			s.failWrite.Store(false)
+			if tt.taskCancel {
+				err = c.CancelTask(t.Context(), task.ID)
+			} else {
+				err = c.Cancel(t.Context(), task.ID, child.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err = c.Status(t.Context(), task.ID, child.ID)
+			if err != nil || got.Result.Summary != "finished outcome" || got.Result.Findings[0].Message != "retained finding" || calls.Load() != 1 {
+				t.Fatalf("recovery lost/repeated outcome: %+v %v calls=%d", got, err, calls.Load())
+			}
+			if tt.runnerError && got.Result.Blocker != "runner failed" {
+				t.Fatalf("runner error lost after recovery: %+v", got.Result)
+			}
+			c.lifecycleMu.Lock()
+			slot := c.slots[task.ID]
+			c.lifecycleMu.Unlock()
+			if slot != nil {
+				t.Fatal("recovered exited slot retained")
+			}
+		})
 	}
 }

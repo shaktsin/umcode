@@ -51,7 +51,26 @@ type childRun struct {
 	cancelRequested   bool
 	taskCancel        bool
 	taskCancelDurable bool
+	snapshot          protocol.AgentChild
+	pending           *childOutcome
+	finalErr          error
 }
+type childOutcome struct {
+	result    protocol.AgentResult
+	err       error
+	cancelled bool
+}
+
+// FinalizationError reports a retained outcome that still needs durable saving.
+type FinalizationError struct {
+	ChildID string
+	Cause   error
+}
+
+func (e *FinalizationError) Error() string {
+	return fmt.Sprintf("agent %s outcome retained; retry cancellation after storage recovers: %v", e.ChildID, e.Cause)
+}
+func (e *FinalizationError) Unwrap() error { return e.Cause }
 
 // FollowupQueue exposes durable messages to the injected runner. Call Pending at
 // provider/tool boundaries only, then Acknowledge after adding the message to
@@ -116,12 +135,19 @@ func (c *Coordinator) lifecycleStore() (lifecycleStore, error) {
 	return s, nil
 }
 func (c *Coordinator) notify(task protocol.AgentTask, child protocol.AgentChild) {
+	c.notifyError(task, child, nil)
+}
+func (c *Coordinator) notifyError(task protocol.AgentTask, child protocol.AgentChild, err error) {
 	if ch := c.changed[task.ID]; ch != nil {
 		close(ch)
 	}
 	c.changed[task.ID] = make(chan struct{})
 	if c.events != nil {
-		c.events.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Child: cloneChild(child)})
+		event := protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Child: cloneChild(child)}
+		if err != nil {
+			event.Error = err.Error()
+		}
+		c.events.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, event)
 	}
 }
 func cloneChild(child protocol.AgentChild) protocol.AgentChild {
@@ -209,7 +235,7 @@ func (c *Coordinator) launch(task protocol.AgentTask, child protocol.AgentChild,
 	handles := &childCancellation{}
 	ctx = context.WithValue(ctx, queueKey{}, &followupQueue{s: s, taskID: task.ID, childID: child.ID})
 	ctx = context.WithValue(ctx, cancellationKey{}, handles)
-	slot := &childRun{childID: child.ID, cancel: func() { cancel(); handles.cancel() }}
+	slot := &childRun{childID: child.ID, snapshot: cloneChild(child), cancel: func() { cancel(); handles.cancel() }}
 	c.slots[task.ID] = slot
 	go c.run(ctx, task, child, slot, s)
 }
@@ -225,6 +251,7 @@ func (c *Coordinator) run(ctx context.Context, task protocol.AgentTask, child pr
 		}
 	}
 	if err == nil {
+		slot.snapshot = cloneChild(saved)
 		c.notify(task, saved)
 	}
 	c.lifecycleMu.Unlock()
@@ -236,62 +263,93 @@ func (c *Coordinator) run(ctx context.Context, task protocol.AgentTask, child pr
 	}
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
+
 	slot.exited = true
-	writeCtx := context.WithoutCancel(c.base)
-	current, readErr := c.store.AgentChild(writeCtx, task.ID, child.ID)
-	if readErr != nil {
+	slot.pending = &childOutcome{result: cloneChild(protocol.AgentChild{Result: result}).Result, err: err, cancelled: ctx.Err() != nil}
+	if _, finalErr := c.finalize(context.WithoutCancel(c.base), task, slot, s); finalErr != nil {
 		return
 	}
-	savedResult := false
-	if active(current.State) {
-		current.Result = result
-		if ctx.Err() != nil || slot.cancelRequested {
-			current.State = protocol.AgentStateCancelled
-		} else if err != nil {
-			current.State = protocol.AgentStateFailed
-			if current.Result.Blocker == "" {
-				current.Result.Blocker = err.Error()
-			}
-		} else {
-			pending, queueErr := s.PendingAgentFollowups(writeCtx, task.ID, child.ID)
-			if queueErr != nil || len(pending) > 0 {
-				current.State = protocol.AgentStateFailed
-				current.Result.Blocker = "undelivered correction retained; explicitly follow up after inspecting pending messages"
-				if queueErr != nil {
-					current.Result.Blocker = queueErr.Error()
-				}
-			} else {
-				current.State = protocol.AgentStateCompleted
-			}
-		}
-		if saveErr := c.store.UpdateAgentChild(writeCtx, current, current.Version); saveErr != nil {
-			return
-		}
-		savedResult = true
-		current, readErr = c.store.AgentChild(writeCtx, task.ID, child.ID)
-		if readErr != nil {
-			return
-		}
-	}
-	if !savedResult && !active(current.State) && hasResult(result) {
-		current.Result = result
-		if saveErr := c.store.UpdateAgentChild(writeCtx, current, current.Version); saveErr != nil {
-			return
-		}
-		current, readErr = c.store.AgentChild(writeCtx, task.ID, child.ID)
-		if readErr != nil {
-			return
-		}
-	}
-	c.notify(task, current)
 	if slot.taskCancel && !slot.taskCancelDurable {
 		return
 	}
 	delete(c.slots, task.ID)
 }
-func (c *Coordinator) Status(ctx context.Context, taskID, childID string) (protocol.AgentChild, error) {
+
+// finalize runs under lifecycleMu. The pending outcome remains owned by the
+// occupied slot until both its CAS write and confirmation read succeed.
+func (c *Coordinator) finalize(ctx context.Context, task protocol.AgentTask, slot *childRun, s lifecycleStore) (protocol.AgentChild, error) {
+	fail := func(cause error) (protocol.AgentChild, error) {
+		slot.finalErr = &FinalizationError{ChildID: slot.childID, Cause: cause}
+		snapshot := cloneChild(slot.snapshot)
+		if slot.pending != nil && hasResult(slot.pending.result) {
+			snapshot.Result = cloneChild(protocol.AgentChild{Result: slot.pending.result}).Result
+		}
+		c.notifyError(task, snapshot, slot.finalErr)
+		return snapshot, slot.finalErr
+	}
+	current, err := c.store.AgentChild(ctx, task.ID, slot.childID)
+	if err != nil {
+		return fail(err)
+	}
+	slot.snapshot = cloneChild(current)
+	outcome := slot.pending
+	if outcome != nil {
+		if hasResult(outcome.result) {
+			current.Result = cloneChild(protocol.AgentChild{Result: outcome.result}).Result
+		}
+		if outcome.err != nil && !outcome.cancelled && current.Result.Blocker == "" {
+			current.Result.Blocker = outcome.err.Error()
+		}
+		if active(current.State) {
+			if outcome.cancelled || slot.cancelRequested {
+				current.State = protocol.AgentStateCancelled
+			} else if outcome.err != nil {
+				current.State = protocol.AgentStateFailed
+				if current.Result.Blocker == "" {
+					current.Result.Blocker = outcome.err.Error()
+				}
+			} else {
+				pending, queueErr := s.PendingAgentFollowups(ctx, task.ID, slot.childID)
+				if queueErr != nil {
+					return fail(queueErr)
+				}
+				if len(pending) > 0 {
+					current.State = protocol.AgentStateFailed
+					current.Result.Blocker = "undelivered correction retained; explicitly follow up after inspecting pending messages"
+				} else {
+					current.State = protocol.AgentStateCompleted
+				}
+			}
+		}
+		if err = c.store.UpdateAgentChild(ctx, current, current.Version); err != nil {
+			return fail(err)
+		}
+		current, err = c.store.AgentChild(ctx, task.ID, slot.childID)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	slot.snapshot = cloneChild(current)
+	slot.pending = nil
+	slot.finalErr = nil
+	c.notify(task, current)
+	return cloneChild(current), nil
+}
+func (c *Coordinator) statusLocked(ctx context.Context, taskID, childID string) (protocol.AgentChild, error) {
+	if slot := c.slots[taskID]; slot != nil && slot.childID == childID && slot.finalErr != nil {
+		child := cloneChild(slot.snapshot)
+		if slot.pending != nil && hasResult(slot.pending.result) {
+			child.Result = cloneChild(protocol.AgentChild{Result: slot.pending.result}).Result
+		}
+		return child, slot.finalErr
+	}
 	child, err := c.store.AgentChild(ctx, taskID, childID)
 	return cloneChild(child), err
+}
+func (c *Coordinator) Status(ctx context.Context, taskID, childID string) (protocol.AgentChild, error) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	return c.statusLocked(ctx, taskID, childID)
 }
 func (c *Coordinator) List(ctx context.Context, taskID string) ([]protocol.AgentChild, error) {
 	return c.store.AgentChildren(ctx, taskID)
@@ -309,7 +367,7 @@ func (c *Coordinator) Wait(ctx context.Context, taskID string, childIDs []string
 		out := make([]protocol.AgentChild, 0, len(childIDs))
 		done := false
 		for _, id := range childIDs {
-			child, err := c.Status(ctx, taskID, id)
+			child, err := c.statusLocked(ctx, taskID, id)
 			if err != nil {
 				c.lifecycleMu.Unlock()
 				return nil, err
@@ -427,6 +485,16 @@ func (c *Coordinator) Cancel(ctx context.Context, taskID, childID string) error 
 	}
 	if err != nil {
 		return err
+	}
+	if slot != nil && slot.childID == childID && slot.exited && slot.pending != nil {
+		s, storeErr := c.lifecycleStore()
+		if storeErr != nil {
+			return storeErr
+		}
+		child, err = c.finalize(ctx, task, slot, s)
+		if err != nil {
+			return err
+		}
 	}
 	if slot != nil && slot.childID == childID && slot.exited && (!slot.taskCancel || slot.taskCancelDurable) {
 		delete(c.slots, taskID)

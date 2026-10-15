@@ -104,6 +104,7 @@ type DelegationUpdated struct {
 	ThreadID string     `json:"threadId"`
 	TaskID   string     `json:"taskId"`
 	Child    AgentChild `json:"child"`
+	Error    string     `json:"error,omitempty"`
 }
 
 const NotifyDelegationUpdated = "delegation/updated"
