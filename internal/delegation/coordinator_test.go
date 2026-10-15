@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,5 +177,109 @@ func TestCoordinatorReadFailureStillStopsContexts(t *testing.T) {
 	}
 	if _, err = b.Reserve(t.Context(), "detached-after-cancel", protocol.UsageTotals{OutputTokens: 1}); err == nil {
 		t.Fatal("detached request escaped cancellation")
+	}
+}
+
+// conflictTaskStore models concurrent durable updates between a failed CAS and
+// its reload. It keeps records active on exhaustion, or can expose completion
+// on the conflicting write; those are distinct outcomes for slot ownership.
+type conflictTaskStore struct {
+	task                          protocol.AgentTask
+	child                         protocol.AgentChild
+	taskConflicts, childConflicts int
+	taskWrites, childWrites       int
+	taskCompletes, childCompletes bool
+}
+
+func (s *conflictTaskStore) AgentTask(context.Context, string) (protocol.AgentTask, error) {
+	return s.task, nil
+}
+func (s *conflictTaskStore) AgentTaskBudget(_ context.Context, _ string, limits protocol.ExecutionLimits) (protocol.ExecutionLimits, protocol.UsageTotals, error) {
+	return limits, protocol.UsageTotals{}, nil
+}
+func (*conflictTaskStore) UpdateAgentTaskBudget(context.Context, string, protocol.UsageTotals) error {
+	return nil
+}
+func (s *conflictTaskStore) UpdateAgentTaskState(_ context.Context, _, _, _ string, _, next protocol.AgentState) error {
+	s.taskWrites++
+	if s.taskWrites <= s.taskConflicts {
+		if s.taskCompletes {
+			s.task.State = protocol.AgentStateCompleted
+		}
+		return store.ErrAgentConflict
+	}
+	s.task.State = next
+	return nil
+}
+func (s *conflictTaskStore) AgentChildren(context.Context, string) ([]protocol.AgentChild, error) {
+	return []protocol.AgentChild{s.child}, nil
+}
+func (s *conflictTaskStore) AgentChild(context.Context, string, string) (protocol.AgentChild, error) {
+	return s.child, nil
+}
+func (s *conflictTaskStore) UpdateAgentChild(_ context.Context, child protocol.AgentChild, _ int64) error {
+	s.childWrites++
+	if s.childWrites <= s.childConflicts {
+		s.child.Version++
+		if s.childCompletes {
+			s.child.State = protocol.AgentStateCompleted
+		}
+		return store.ErrAgentConflict
+	}
+	s.child = child
+	s.child.Version++
+	return nil
+}
+
+func TestCoordinatorCancellationCASConflicts(t *testing.T) {
+	for _, tt := range []struct {
+		name                            string
+		taskConflicts, childConflicts   int
+		taskCompletes, childCompletes   bool
+		wantTask, wantChild             protocol.AgentState
+		wantTaskError, wantChildError   bool
+		wantTaskWrites, wantChildWrites int
+	}{
+		{name: "task exhaustion remains an error", taskConflicts: 3, wantTask: protocol.AgentStateRunning, wantChild: protocol.AgentStateCancelled, wantTaskError: true, wantTaskWrites: 3, wantChildWrites: 1},
+		{name: "child exhaustion remains an error", childConflicts: 3, wantTask: protocol.AgentStateCancelled, wantChild: protocol.AgentStateRunning, wantChildError: true, wantTaskWrites: 1, wantChildWrites: 3},
+		{name: "task and child exhaustion are both surfaced", taskConflicts: 3, childConflicts: 3, wantTask: protocol.AgentStateRunning, wantChild: protocol.AgentStateRunning, wantTaskError: true, wantChildError: true, wantTaskWrites: 3, wantChildWrites: 3},
+		{name: "successful retry cancels both records", taskConflicts: 2, childConflicts: 2, wantTask: protocol.AgentStateCancelled, wantChild: protocol.AgentStateCancelled, wantTaskWrites: 3, wantChildWrites: 3},
+		{name: "terminal task observed on reload succeeds", taskConflicts: 3, taskCompletes: true, wantTask: protocol.AgentStateCompleted, wantChild: protocol.AgentStateCancelled, wantTaskWrites: 1, wantChildWrites: 1},
+		{name: "terminal child observed on reload succeeds", childConflicts: 3, childCompletes: true, wantTask: protocol.AgentStateCancelled, wantChild: protocol.AgentStateCompleted, wantTaskWrites: 1, wantChildWrites: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &conflictTaskStore{task: protocol.AgentTask{ID: "task", ThreadID: "thread", State: protocol.AgentStateRunning, CreatedAt: time.Now()}, child: protocol.AgentChild{ID: "child", TaskID: "task", Role: protocol.AgentRoleImplementer, State: protocol.AgentStateRunning, Version: 1}, taskConflicts: tt.taskConflicts, childConflicts: tt.childConflicts, taskCompletes: tt.taskCompletes, childCompletes: tt.childCompletes}
+			c := NewCoordinator(context.Background(), s)
+			ctx, b, err := c.Task(t.Context(), s.task, protocol.ExecutionLimits{MaxTokens: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = c.CancelTask(t.Context(), "task")
+			if tt.wantTaskError || tt.wantChildError {
+				if !errors.Is(err, store.ErrAgentConflict) {
+					t.Fatalf("active durable records must return conflict: %v", err)
+				}
+				if tt.wantTaskError && !strings.Contains(err.Error(), "cancel task:") {
+					t.Fatalf("task exhaustion error lost: %v", err)
+				}
+				if tt.wantChildError && !strings.Contains(err.Error(), "cancel child child:") {
+					t.Fatalf("child exhaustion error lost: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("durable terminal record should succeed: %v", err)
+			}
+			if s.task.State != tt.wantTask || s.child.State != tt.wantChild {
+				t.Fatalf("durable states task=%s child=%s", s.task.State, s.child.State)
+			}
+			if s.taskWrites != tt.wantTaskWrites || s.childWrites != tt.wantChildWrites {
+				t.Fatalf("unbounded/unnecessary CAS writes task=%d child=%d", s.taskWrites, s.childWrites)
+			}
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatal("durable conflicts left live execution running")
+			}
+			if _, err = b.Reserve(t.Context(), "after-cancel", protocol.UsageTotals{OutputTokens: 1}); err == nil {
+				t.Fatal("detached request escaped cancellation")
+			}
+		})
 	}
 }

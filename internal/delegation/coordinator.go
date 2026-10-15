@@ -107,10 +107,18 @@ func (c *Coordinator) CancelTask(ctx context.Context, taskID string) error {
 			if !errors.Is(err, store.ErrAgentConflict) {
 				break
 			}
-			task, err = c.store.AgentTask(ctx, taskID)
-			if err != nil || !active(task.State) {
+			reloaded, reloadErr := c.store.AgentTask(ctx, taskID)
+			if reloadErr != nil {
+				err = reloadErr
 				break
 			}
+			task = reloaded
+			if !active(task.State) {
+				err = nil
+				break
+			}
+			// Keep ErrAgentConflict until a write succeeds or a reload proves
+			// terminal state. A successful active-record read is not cancellation.
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("cancel task: %w", err))
@@ -130,10 +138,17 @@ func (c *Coordinator) CancelTask(ctx context.Context, taskID string) error {
 			if !errors.Is(err, store.ErrAgentConflict) {
 				break
 			}
-			child, err = c.store.AgentChild(ctx, taskID, child.ID)
-			if err != nil || !active(child.State) {
+			reloaded, reloadErr := c.store.AgentChild(ctx, taskID, child.ID)
+			if reloadErr != nil {
+				err = reloadErr
 				break
 			}
+			child = reloaded
+			if !active(child.State) {
+				err = nil
+				break
+			}
+			// An active reload must not erase the failed CAS on the last retry.
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("cancel child %s: %w", child.ID, err))
