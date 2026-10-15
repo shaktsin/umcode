@@ -127,7 +127,8 @@ func (o *OpenAI) streamChatGPT(ctx context.Context, cred Credential, req Request
 		defer resp.Body.Close()
 		var usage Usage
 		var streamErr error
-		calls := 0
+		var calls []ToolCall
+		stop := ""
 		done := false
 		err := readSSE(resp.Body, func(ev sseEvent) bool {
 			if ev.Data == "" || ev.Data == "[DONE]" {
@@ -187,8 +188,9 @@ func (o *OpenAI) streamChatGPT(ctx context.Context, cred Credential, req Request
 					if id == "" {
 						id = e.Item.ID
 					}
-					calls++
-					ch <- Event{Type: EventToolCall, ToolCall: &ToolCall{ID: id, Name: e.Item.Name, Args: json.RawMessage(args)}}
+					// An item can finish before the enclosing response is truncated.
+					// Hold calls until the response completes successfully.
+					calls = append(calls, ToolCall{ID: id, Name: e.Item.Name, Args: json.RawMessage(args)})
 				}
 			case "response.completed", "response.incomplete":
 				if u := e.Response.Usage; u != nil {
@@ -196,6 +198,17 @@ func (o *OpenAI) streamChatGPT(ctx context.Context, cred Credential, req Request
 						OutputTokens: u.OutputTokens, ReasoningTokens: u.OutputTokensDetails.ReasoningTokens, Reported: true}
 				}
 				done = true
+				if e.Type == "response.incomplete" {
+					reason := "unknown reason"
+					if e.Response.IncompleteDetails != nil && e.Response.IncompleteDetails.Reason != "" {
+						reason = e.Response.IncompleteDetails.Reason
+					}
+					if reason == "max_output_tokens" {
+						stop = reason
+					} else {
+						streamErr = fmt.Errorf("%s (ChatGPT sign-in): response incomplete: %s", o.id, reason)
+					}
+				}
 				return false
 			case "response.failed":
 				msg := "the ChatGPT request failed"
@@ -220,14 +233,19 @@ func (o *OpenAI) streamChatGPT(ctx context.Context, cred Credential, req Request
 		if err == nil && !done {
 			err = errors.New(o.id + " (ChatGPT sign-in): stream ended before the response completed")
 		}
+		usage.Subscription = true
 		if err != nil {
 			ch <- Event{Type: EventError, Err: err, Usage: usage}
 			return
 		}
-		usage.Subscription = true
-		stop := "stop"
-		if calls > 0 {
-			stop = "tool_calls"
+		if stop == "" {
+			stop = "stop"
+			if len(calls) > 0 {
+				stop = "tool_calls"
+				for i := range calls {
+					ch <- Event{Type: EventToolCall, ToolCall: &calls[i]}
+				}
+			}
 		}
 		ch <- Event{Type: EventDone, Usage: usage, StopReason: stop}
 	}()

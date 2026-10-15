@@ -30,6 +30,7 @@ type ContextSourceRef struct {
 // Nullable measurements preserve unknown versus measured zero. No prompt or
 // tool-output bodies belong in this persisted diagnostic schema.
 type RequestDiagnostics struct {
+	StopReason              string             `json:"stopReason,omitempty"`
 	Ordinal                 int                `json:"ordinal"`
 	Phase                   string             `json:"phase"`
 	Provider                string             `json:"provider"`
