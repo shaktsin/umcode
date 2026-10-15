@@ -188,6 +188,11 @@ func (c *Coordinator) CancelTask(ctx context.Context, taskID string) error {
 		}
 	}
 	for _, child := range children {
+		// finalize already published the retained outcome and actionable error.
+		// A durable snapshot cannot clear that error until recovery succeeds.
+		if slot != nil && slot.childID == child.ID && slot.finalErr != nil {
+			continue
+		}
 		if latest, readErr := c.store.AgentChild(ctx, taskID, child.ID); readErr == nil {
 			c.notify(task, latest)
 		}

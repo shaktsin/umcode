@@ -533,6 +533,18 @@ func TestCoordinatorFinalizationFailureRecovery(t *testing.T) {
 				t.Fatalf("status lost pending result/error: %+v %v", got, err)
 			}
 			got.Result.Findings[0].Message = "caller mutation"
+			if tt.taskCancel && mode == "write" {
+				if retryErr := c.CancelTask(t.Context(), task.ID); retryErr == nil {
+					t.Fatal("failed parent recovery hid write outage")
+				}
+				var last protocol.DelegationUpdated
+				for len(events) > 0 {
+					last = <-events
+				}
+				if last.Error == "" || last.Child.Result.Summary != "finished outcome" || len(last.Child.Result.Findings) != 1 || last.Child.Result.Findings[0].Message != "retained finding" {
+					t.Fatalf("failed parent recovery cleared last retained result/error event: %+v", last)
+				}
+			}
 			s.failRead.Store(false)
 			s.failWrite.Store(false)
 			if tt.taskCancel {
@@ -546,6 +558,15 @@ func TestCoordinatorFinalizationFailureRecovery(t *testing.T) {
 			got, err = c.Status(t.Context(), task.ID, child.ID)
 			if err != nil || got.Result.Summary != "finished outcome" || got.Result.Findings[0].Message != "retained finding" || calls.Load() != 1 {
 				t.Fatalf("recovery lost/repeated outcome: %+v %v calls=%d", got, err, calls.Load())
+			}
+			if tt.taskCancel {
+				var last protocol.DelegationUpdated
+				for len(events) > 0 {
+					last = <-events
+				}
+				if last.Error != "" || last.Child.Result.Summary != "finished outcome" || len(last.Child.Result.Findings) != 1 || last.Child.Result.Findings[0].Message != "retained finding" {
+					t.Fatalf("successful recovery did not clear error with retained result: %+v", last)
+				}
 			}
 			if tt.runnerError && got.Result.Blocker != "runner failed" {
 				t.Fatalf("runner error lost after recovery: %+v", got.Result)
