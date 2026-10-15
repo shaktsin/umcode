@@ -379,11 +379,9 @@ func InstructionsPath(p protocol.Project) string {
 // ensureInstructions initializes project guidance without replacing any existing file.
 func (s *Service) ensureInstructions(p protocol.Project) error {
 	path := InstructionsPath(p)
-	if info, err := os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("UMCODE.md must be a regular file; existing symlinks or directories are not replaced")
-		}
-		return nil
+	if _, err := os.Lstat(path); err == nil {
+		_, validErr := containedInstructionFile(p.Root, path)
+		return validErr
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect UMCODE.md: %w", err)
 	}
@@ -394,14 +392,8 @@ func (s *Service) ensureInstructions(p protocol.Project) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if errors.Is(err, os.ErrExist) {
 		// A concurrent opener or user won the race: never truncate their file.
-		info, statErr := os.Lstat(path)
-		if statErr != nil {
-			return statErr
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("UMCODE.md must be a regular file")
-		}
-		return nil
+		_, validErr := containedInstructionFile(p.Root, path)
+		return validErr
 	}
 	if err != nil {
 		return fmt.Errorf("create UMCODE.md: %w", err)
@@ -461,16 +453,23 @@ func (s *Service) DraftInstructions(p protocol.Project) (protocol.ProjectInstruc
 	}
 	ignored := map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true, ".venv": true, "venv": true, "target": true, "coverage": true}
 	var dirs []string
+	visited := 0
 	var walk func(string, int)
 	walk = func(dir string, depth int) {
-		entries, readErr := os.ReadDir(dir)
+		if visited >= 180 {
+			return
+		}
+		directory, readErr := os.Open(dir)
 		if readErr != nil {
 			return
 		}
+		entries, _ := directory.ReadDir(180 - visited)
+		_ = directory.Close()
 		for _, entry := range entries {
-			if len(draft.ScannedFiles) >= 180 {
+			if visited >= 180 {
 				return
 			}
+			visited++
 			rel, _ := filepath.Rel(root, filepath.Join(dir, entry.Name()))
 			if entry.IsDir() {
 				if depth < 2 && !ignored[entry.Name()] {
@@ -487,12 +486,20 @@ func (s *Service) DraftInstructions(p protocol.Project) (protocol.ProjectInstruc
 	sort.Strings(dirs)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# UMCode project instructions\n\nProject: %s\n\n", p.Name)
+	name := []rune(p.Name)
+	if len(name) > 256 {
+		name = name[:256]
+	}
+	fmt.Fprintf(&b, "# UMCode project instructions\n\nProject: %s\n\n", string(name))
 	b.WriteString("## Repository map\n\n")
 	if len(dirs) == 0 {
 		b.WriteString("- (No subdirectories detected in the bounded scan.)\n")
 	} else {
 		for _, dir := range dirs {
+			if b.Len()+len(dir)+8 > 12<<10 {
+				b.WriteString("- (Additional directories omitted from the bounded scan.)\n")
+				break
+			}
 			fmt.Fprintf(&b, "- `%s`\n", dir)
 		}
 	}
