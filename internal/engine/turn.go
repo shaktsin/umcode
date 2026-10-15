@@ -652,6 +652,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				turnErr = err
 				break
 			}
+			if budget.shared != nil && out.attempted && !errors.Is(ctx.Err(), context.DeadlineExceeded) && !errors.Is(err, context.DeadlineExceeded) {
+				turnErr = err
+				break
+			}
 			if reason := budget.stopReason(); reason != "" {
 				pause(reason)
 				break
@@ -834,9 +838,10 @@ func outputLimitStop(reason string) bool {
 }
 
 type modelOutput struct {
-	text     string
-	thinking []llm.Thinking
-	calls    []llm.ToolCall
+	attempted bool // provider boundary was crossed; admission-only failures remain false
+	text      string
+	thinking  []llm.Thinking
+	calls     []llm.ToolCall
 }
 
 // callModel streams one model call, publishing items and recording usage. When
@@ -874,6 +879,11 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 		}
 		status := e.Router.Failed(sctx, res.route, err)
 		res.trail = append(res.trail, step(res.route, status, err.Error(), time.Since(start)))
+		// Retain the failed attempt instead of replacing it with a budget error
+		// at the next retry when settlement has exhausted the shared allowance.
+		if budget.shared != nil && budget.stopReason() != "" {
+			return out, err
+		}
 		if !router.Retryable(err) || res.plan == nil {
 			return out, err
 		}
@@ -1028,6 +1038,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 		}
 	}
 
+	out.attempted = true
 	ch, err := provider.Stream(ctx, cred.Material, req)
 	if err != nil {
 		status := "error"

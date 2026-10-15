@@ -290,6 +290,9 @@ func TestDelegationBudgetSettlesEveryFailoverAttempt(t *testing.T) {
 			if (tt.attempts == 1) != (err != nil) {
 				t.Fatalf("result=%v", err)
 			}
+			if tt.attempts == 1 && !strings.Contains(err.Error(), "unavailable") {
+				t.Fatalf("overrun hid original provider failure: %v", err)
+			}
 			if len(p.requests) != tt.attempts || shared.Usage().Requests != int64(tt.attempts) {
 				t.Fatalf("attempt settlement: requests=%d usage=%+v err=%v", len(p.requests), shared.Usage(), err)
 			}
@@ -404,55 +407,75 @@ func TestDelegationBudgetTaskGeneratedTitleRetainsContext(t *testing.T) {
 }
 
 func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing.T) {
-	e, th, _, _ := delegationFixture(t)
-	p := &budgetProvider{events: []llm.Event{
-		{Type: llm.EventTextDelta, Text: "Partial response"},
-		{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "incomplete", Name: "file__write", Args: []byte(`{"path":"never.txt","content":"unfinished`)}},
-		{Type: llm.EventError, Err: errors.New("response incomplete: content_filter"), Usage: llm.Usage{InputTokens: 10, OutputTokens: 20, Reported: true}},
-	}}
-	e.LLMs.Register(p)
-	token, err := e.PrepareDelegation(t.Context(), th.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wait := make(chan protocol.Turn, 1)
-	root, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "work", DelegationActivationToken: token.ActivationToken}, wait: wait})
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case finished := <-wait:
-		if finished.Status != protocol.TurnFailed || !strings.Contains(finished.Error, "content_filter") {
-			t.Fatalf("incomplete error lost: %+v", finished)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("incomplete response did not finish")
-	}
-	task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, root.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, shared, err := e.DelegationCoordinator.Task(t.Context(), task, protocol.ExecutionLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := shared.Usage(); got.InputTokens != 10 || got.OutputTokens != 20 || got.Requests != 1 {
-		t.Fatalf("reported error usage replaced by estimates: %+v", got)
-	}
-	items, err := e.Store.ListItems(t.Context(), th.ID, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, item := range items {
-		if item.Kind == protocol.ItemToolCall {
-			t.Fatalf("incomplete error tool executed: %+v", item)
-		}
-	}
-	details, err := e.Store.ReadTurnDetails(t.Context(), protocol.TurnDetailsParams{ThreadID: th.ID, TurnID: root.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(details.Diagnostics.Requests) != 1 || details.Diagnostics.Requests[0].Fallback != "error" || details.Diagnostics.Requests[0].MeasurementOrigin != "provider" {
-		t.Fatalf("reported error diagnostics lost: %+v", details.Diagnostics)
+	for _, tc := range []struct {
+		name                 string
+		limit, input, output int64
+		exhausted            bool
+	}{
+		{name: "within allowance", limit: 100_000, input: 10, output: 20},
+		{name: "actual overrun", limit: 3000, input: 100, output: 4096, exhausted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, th, _, _ := delegationFixture(t)
+			e.mu.Lock()
+			e.turnLimits.MaxTokens = tc.limit
+			e.mu.Unlock()
+			p := &budgetProvider{events: []llm.Event{
+				{Type: llm.EventTextDelta, Text: "Partial response"},
+				{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "incomplete", Name: "file__write", Args: []byte(`{"path":"never.txt","content":"unfinished`)}},
+				{Type: llm.EventError, Err: errors.New("response incomplete: content_filter"), Usage: llm.Usage{InputTokens: tc.input, OutputTokens: tc.output, Reported: true}},
+			}}
+			e.LLMs.Register(p)
+			token, err := e.PrepareDelegation(t.Context(), th.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wait := make(chan protocol.Turn, 1)
+			root, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "work", DelegationActivationToken: token.ActivationToken}, wait: wait})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case finished := <-wait:
+				if finished.Status != protocol.TurnFailed || !strings.Contains(finished.Error, "content_filter") {
+					t.Fatalf("incomplete error lost: %+v", finished)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("incomplete response did not finish")
+			}
+			task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, root.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, shared, err := e.DelegationCoordinator.Task(t.Context(), task, protocol.ExecutionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := shared.Usage(); got.InputTokens != tc.input || got.OutputTokens != tc.output || got.Requests != 1 {
+				t.Fatalf("reported error usage replaced by estimates: %+v", got)
+			}
+			if tc.exhausted && shared.StopReason() == "" {
+				t.Fatal("reported overrun did not exhaust shared budget")
+			}
+			if len(p.requests) != 1 {
+				t.Fatalf("incomplete response retried: %d", len(p.requests))
+			}
+			items, err := e.Store.ListItems(t.Context(), th.ID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, item := range items {
+				if item.Kind == protocol.ItemToolCall {
+					t.Fatalf("incomplete error tool executed: %+v", item)
+				}
+			}
+			details, err := e.Store.ReadTurnDetails(t.Context(), protocol.TurnDetailsParams{ThreadID: th.ID, TurnID: root.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(details.Diagnostics.Requests) != 1 || details.Diagnostics.Requests[0].Fallback != "error" || details.Diagnostics.Requests[0].MeasurementOrigin != "provider" {
+				t.Fatalf("reported error diagnostics lost: %+v", details.Diagnostics)
+			}
+		})
 	}
 }
