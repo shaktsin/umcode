@@ -261,21 +261,21 @@ func TestInstructionsIgnoreForeignOnlyProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	composed, sources := svc.InstructionsFor(ctx, p, "")
-	if composed != "" || len(sources) != 0 {
-		t.Fatalf("composed = %q sources = %+v", composed, sources)
+	if strings.Contains(composed, "Project: run make test.") || strings.Contains(composed, "Prefer small commits.") || len(sources) != 1 {
+		t.Fatalf("foreign instructions imported: composed = %q sources = %+v", composed, sources)
 	}
 	res, err := svc.Instructions(ctx, p, nil)
-	if err != nil || res.Exists {
+	if err != nil || !res.Exists {
 		t.Fatalf("res = %+v err = %v", res, err)
 	}
 }
 
 func TestInstructionsSkipDirectoryNamedUMCode(t *testing.T) {
-	svc, _, _ := newService(t)
+	svc, st, _ := newService(t)
 	ctx := context.Background()
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "UMCODE.md"), 0o755)
-	p, err := svc.Create(ctx, protocol.ProjectCreateParams{Root: root})
+	p, err := st.CreateProject(ctx, protocol.Project{Root: root})
 	if err != nil {
 		t.Fatal(err)
 	}
