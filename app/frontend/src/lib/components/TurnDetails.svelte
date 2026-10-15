@@ -25,6 +25,7 @@
       {#each diagnostics.requests as request (request.ordinal)}
         <article class="rounded-md bg-raised p-2 space-y-1 min-w-0">
           <p class="font-medium">{request.phase} · {request.provider}/{request.model}</p>
+          {#if request.stopReason}<p>Stop reason: {request.stopReason}</p>{/if}
           {#if request.fallback}<p>Fallback: {request.fallback}</p>{/if}
           {#if request.estimates}<p>Estimated context: {Object.entries(request.estimates).map(([key,value]) => `${key} ${value}`).join(' · ')}</p>{/if}
           <p>Selected sources: {request.selectedSources?.length ? request.selectedSources.map(x => `${x.kind}:${x.id}`).join(', ') : 'Not recorded for this turn'}</p>

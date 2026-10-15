@@ -81,6 +81,7 @@ var developmentConfigFiles = []string{
 }
 
 var commandRuntimePaths = []string{
+	"/Library/Frameworks/Python.framework", "/opt/homebrew/Frameworks/Python.framework", "/usr/local/Frameworks/Python.framework",
 	"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/private/preboot/Cryptexes/OS/System/Library",
 	"/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share", "/bin", "/sbin", "/lib", "/lib64", "/dev",
 	"/usr/local/bin", "/usr/local/lib", "/usr/local/share", "/usr/local/go", "/usr/local/Cellar", "/usr/local/opt",
