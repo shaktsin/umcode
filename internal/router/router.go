@@ -6,6 +6,7 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -324,6 +325,8 @@ func statusWord(status string) string {
 		return "an authentication error"
 	case "server_error":
 		return "a provider outage"
+	case "insufficient_credit":
+		return "insufficient provider credit"
 	case "":
 		return "an error"
 	}
@@ -452,6 +455,8 @@ func Classify(err error) (status string, cooldown time.Duration) {
 		return "rate_limited", cd
 	case pe.Status == http.StatusUnauthorized || pe.Status == http.StatusForbidden:
 		return "unauthorized", 15 * time.Minute
+	case isAnthropicCreditError(pe):
+		return "insufficient_credit", 15 * time.Minute
 	case pe.Status == http.StatusRequestEntityTooLarge || isContextError(pe):
 		return "context_too_long", 0
 	case pe.Status >= 500:
@@ -471,10 +476,28 @@ func Classify(err error) (status string, cooldown time.Duration) {
 func Retryable(err error) bool {
 	status, _ := Classify(err)
 	switch status {
-	case "rate_limited", "server_error", "unauthorized", "timeout", "context_too_long", "unknown_model":
+	case "rate_limited", "server_error", "unauthorized", "timeout", "context_too_long", "unknown_model", "insufficient_credit":
 		return true
 	}
 	return false
+}
+
+func isAnthropicCreditError(pe *llm.Error) bool {
+	if pe.Status != http.StatusBadRequest || config.NormalizeProvider(pe.Provider) != "claude" {
+		return false
+	}
+	var body struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(pe.Body), &body); err != nil {
+		return false
+	}
+	return body.Type == "error" && body.Error.Type == "invalid_request_error" &&
+		strings.HasPrefix(strings.ToLower(body.Error.Message), "your credit balance is too low to access the anthropic api.")
 }
 
 func isContextError(pe *llm.Error) bool {
