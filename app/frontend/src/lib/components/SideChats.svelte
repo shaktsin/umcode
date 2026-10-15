@@ -29,11 +29,11 @@
       <div class="flex items-center gap-1 px-2 my-1.5 rounded-md text-xs {on ? 'bg-raised text-ink' : 'text-muted hover:bg-raised/60'}">
         <button class="max-w-40 truncate" onclick={() => (chat.activeSideId = s.id)}>{s.title}</button>
         <button
-          class="text-faint hover:text-ink"
+          class="icon-button compact text-faint hover:text-ink"
           aria-label="Close side chat"
           onclick={() => s.id && chat.closeSide(s.id)}
         >
-          <X class="w-3 h-3" />
+          <X class="w-4 h-4" />
         </button>
       </div>
     {/each}
