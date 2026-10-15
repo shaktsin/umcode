@@ -3,7 +3,9 @@ package projects
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -374,6 +376,48 @@ func InstructionsPath(p protocol.Project) string {
 	return filepath.Join(p.Root, "UMCODE.md")
 }
 
+// ensureInstructions initializes project guidance without replacing any existing file.
+func (s *Service) ensureInstructions(p protocol.Project) error {
+	path := InstructionsPath(p)
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("UMCODE.md must be a regular file; existing symlinks or directories are not replaced")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect UMCODE.md: %w", err)
+	}
+	draft, err := s.DraftInstructions(p)
+	if err != nil {
+		return fmt.Errorf("prepare UMCODE.md: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if errors.Is(err, os.ErrExist) {
+		// A concurrent opener or user won the race: never truncate their file.
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("UMCODE.md must be a regular file")
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("create UMCODE.md: %w", err)
+	}
+	_, writeErr := file.WriteString(draft.Content)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write UMCODE.md: %w", writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("save UMCODE.md: %w", closeErr)
+	}
+	s.invalidate(p.ID)
+	return nil
+}
+
 // Instructions reads (and optionally writes) UMCODE.md and returns the composed prompt.
 func (s *Service) Instructions(ctx context.Context, p protocol.Project, content *string) (protocol.ProjectInstructionsResult, error) {
 	path := InstructionsPath(p)
@@ -482,23 +526,52 @@ func appendUnique(values []string, value string) []string {
 	return append(values, value)
 }
 
+// readDraftMetadata only reads bounded regular repository files. Automatic
+// initialization must not follow a manifest symlink outside the project.
+func readDraftMetadata(root, name string) ([]byte, error) {
+	path := filepath.Join(root, name)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 64<<10 {
+		return nil, fmt.Errorf("not bounded regular metadata")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return nil, fmt.Errorf("metadata changed during scan")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, (64<<10)+1))
+	if len(data) > 64<<10 {
+		return nil, fmt.Errorf("metadata exceeds size limit")
+	}
+	return data, err
+}
+
 func detectedCommands(root string) []string {
 	var commands []string
-	if data, err := os.ReadFile(filepath.Join(root, "Makefile")); err == nil {
+	if data, err := readDraftMetadata(root, "Makefile"); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			if strings.HasPrefix(line, "test:") || strings.HasPrefix(line, "check:") || strings.HasPrefix(line, "lint:") || strings.HasPrefix(line, "build:") {
 				commands = append(commands, "make "+strings.TrimSuffix(strings.SplitN(line, ":", 2)[0], "!"))
 			}
 		}
 	}
-	if data, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil {
+	if data, err := readDraftMetadata(root, "package.json"); err == nil {
 		var pkg struct {
 			PackageManager string            `json:"packageManager"`
 			Scripts        map[string]string `json:"scripts"`
 		}
 		if json.Unmarshal(data, &pkg) == nil {
 			pm := strings.SplitN(pkg.PackageManager, "@", 2)[0]
-			if pm == "" {
+			switch pm {
+			case "npm", "pnpm", "yarn", "bun":
+			default:
 				pm = "npm"
 			}
 			for _, script := range []string{"test", "check", "lint", "build"} {

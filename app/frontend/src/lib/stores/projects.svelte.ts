@@ -55,7 +55,7 @@ class ProjectStore {
       this.list = r.projects ?? [];
       const want = this.activeId ?? lastProject();
       const found = this.list.find((p) => p.id === want);
-      await this.open(found?.id ?? this.list[0]?.id ?? null, false);
+      await this.open(found?.id ?? this.list[0]?.id ?? null);
     } catch (e) {
       app.toast('error', errMsg(e));
     } finally {
