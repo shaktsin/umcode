@@ -17,10 +17,13 @@ type discoveryTool struct {
 
 func (*discoveryTool) Name() string { return "tools.discover" }
 func (*discoveryTool) Description() string {
-	return "Find permitted tools by query or exact canonical/wire names and load their schemas on the next provider request. Does not execute tools."
+	return "Find permitted tools by query or exact canonical/wire names and load their schemas on the next provider request. Provide a non-empty query or at least one name. Does not execute tools."
 }
+
+// Claude rejects combinators at the schema root. Discover validates the
+// query-or-names requirement at runtime; keep the wire schema a plain object.
 func (*discoveryTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","maxLength":512},"names":{"type":"array","maxItems":8,"minItems":1,"items":{"type":"string","minLength":1,"maxLength":4096}},"cursor":{"type":"string","maxLength":2048}},"anyOf":[{"required":["query"]},{"required":["names"]}],"additionalProperties":false}`)
+	return json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","maxLength":512},"names":{"type":"array","maxItems":8,"minItems":1,"items":{"type":"string","minLength":1,"maxLength":4096}},"cursor":{"type":"string","maxLength":2048}},"additionalProperties":false}`)
 }
 func (*discoveryTool) Assess(json.RawMessage) (tools.Risk, string) {
 	return tools.RiskGreen, "Load tool schemas for the next request"
