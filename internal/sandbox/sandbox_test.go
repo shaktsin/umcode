@@ -133,6 +133,27 @@ func TestDefaultPolicyLimitsReadsAndSharedCaches(t *testing.T) {
 	}
 }
 
+func TestDefaultPolicyIncludesSpecificPythonFrameworks(t *testing.T) {
+	p := DefaultPolicy(t.TempDir(), false)
+	for _, framework := range []string{
+		"/Library/Frameworks/Python.framework",
+		"/opt/homebrew/Frameworks/Python.framework",
+		"/usr/local/Frameworks/Python.framework",
+	} {
+		// Cover the known-runtime contract even on hosts without every Python
+		// distribution installed; installed roots must reach the real policy.
+		if !containsPath(commandRuntimePaths, framework) {
+			t.Errorf("standard Python framework missing from runtime policy: %s", framework)
+		}
+		if exists(framework) && !containsPath(p.Readable, realPath(framework)) {
+			t.Errorf("installed Python framework is unreadable: %s", framework)
+		}
+		if containsPath(commandRuntimePaths, filepath.Dir(framework)) || containsPath(p.Readable, filepath.Dir(framework)) {
+			t.Errorf("unrelated frameworks granted access: %s", filepath.Dir(framework))
+		}
+	}
+}
+
 func containsPath(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {
