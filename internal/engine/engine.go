@@ -85,18 +85,21 @@ type Engine struct {
 	toolReducerFailures     atomic.Int64 // recovered tool-result reducer panics
 	reduceHook              func()       // instance-local panic test seam; set before use
 
-	mu           sync.Mutex
-	activeTurns  map[string]*activeTurn // by turn id
-	threadTurns  map[string]string      // thread id -> running turn id
-	approvals    map[string]chan bool   // pending approval id -> decision
-	budgetWarned map[string]string      // credential id -> month already warned
-	pausedTurns  map[string]bool        // turn id -> ended on a budget pause
-	routing      protocol.RoutingConfig // the models the user has approved
-	presets      map[protocol.Complexity]protocol.ComplexityPreset
-	defaultCplx  protocol.Complexity
-	turnLimits   protocol.ExecutionLimits
-	turnWaiters  map[string]chan protocol.Turn // turn id -> completion (task runs)
-	wg           sync.WaitGroup
+	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
+	delegationTokens map[string]delegationToken // protected by mu; never persisted
+	shuttingDown     bool                       // protected by mu
+	mu               sync.Mutex
+	activeTurns      map[string]*activeTurn // by turn id
+	threadTurns      map[string]string      // thread id -> running turn id
+	approvals        map[string]chan bool   // pending approval id -> decision
+	budgetWarned     map[string]string      // credential id -> month already warned
+	pausedTurns      map[string]bool        // turn id -> ended on a budget pause
+	routing          protocol.RoutingConfig // the models the user has approved
+	presets          map[protocol.Complexity]protocol.ComplexityPreset
+	defaultCplx      protocol.Complexity
+	turnLimits       protocol.ExecutionLimits
+	turnWaiters      map[string]chan protocol.Turn // turn id -> completion (task runs)
+	wg               sync.WaitGroup
 }
 
 type activeTurn struct {
@@ -234,6 +237,10 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 
 // Shutdown cancels running turns and waits for them to finish.
 func (e *Engine) Shutdown(ctx context.Context) {
+	e.mu.Lock()
+	e.shuttingDown = true
+	clear(e.delegationTokens)
+	e.mu.Unlock()
 	e.Previews.Close()
 	e.VisualQA.Close()
 	e.ComputerUse.Close()

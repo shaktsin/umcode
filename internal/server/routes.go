@@ -195,6 +195,14 @@ func (s *Server) routes() map[string]handler {
 			return e.DiscardTaskWorkspace(ctx, p)
 		}),
 
+		// Explicit app action; no tool or caller-supplied project path grants authority.
+		protocol.MethodDelegationEnable: bind(func(ctx context.Context, c *conn, p protocol.ThreadIDParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can enable delegation")
+			}
+			return e.PrepareDelegation(ctx, p.ThreadID)
+		}),
+
 		// turns
 		protocol.MethodTurnDetails: bind(func(ctx context.Context, c *conn, p protocol.TurnDetailsParams) (any, error) {
 			return e.TurnDetails(ctx, p)

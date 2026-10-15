@@ -22,11 +22,12 @@ const (
 	MethodThreadSetApproval = "thread/setApprovalMode"
 	MethodThreadCompact     = "thread/compact"
 
-	MethodTurnDetails   = "turn/details"
-	MethodTurnStart     = "turn/start"
-	MethodTurnInterrupt = "turn/interrupt"
-	MethodPreviewList   = "preview/list"
-	MethodPreviewStop   = "preview/stop"
+	MethodTurnDetails      = "turn/details"
+	MethodTurnStart        = "turn/start"
+	MethodDelegationEnable = "delegation/enable"
+	MethodTurnInterrupt    = "turn/interrupt"
+	MethodPreviewList      = "preview/list"
+	MethodPreviewStop      = "preview/stop"
 
 	MethodApprovalList         = "approval/list"
 	MethodProjectMemoryList    = "project/memory/list"
@@ -251,11 +252,18 @@ type ComputerUseActParams struct {
 	Delta             int     `json:"delta,omitempty"`
 }
 
+type DelegationEnableResult struct {
+	ActivationToken string    `json:"activationToken"`
+	ExpiresAt       time.Time `json:"expiresAt"`
+}
+
 type TurnStartParams struct {
-	ThreadID    string         `json:"threadId"`
-	Text        string         `json:"text"`
-	Attachments []Attachment   `json:"attachments,omitempty"`
-	Override    ModelSelection `json:"override,omitempty"`
+	DelegationActivationToken string         `json:"delegationActivationToken,omitempty"`
+	DelegationTaskID          string         `json:"delegationTaskId,omitempty"`
+	ThreadID                  string         `json:"threadId"`
+	Text                      string         `json:"text"`
+	Attachments               []Attachment   `json:"attachments,omitempty"`
+	Override                  ModelSelection `json:"override,omitempty"`
 }
 
 type TurnStartResult struct {

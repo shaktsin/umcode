@@ -180,12 +180,23 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	if err != nil {
 		return protocol.Turn{}, err
 	}
+	// Serialize admission checks through persistence, including concurrent token delivery.
+	e.delegationMu.Lock()
+	defer e.delegationMu.Unlock()
+	admission, err := e.prepareDelegationAdmission(ctx, p.TurnStartParams)
+	if err != nil {
+		return protocol.Turn{}, err
+	}
 	res, err := e.resolveSelection(ctx, th, p.Override, p.Text, len(p.Attachments))
 	if err != nil {
 		return protocol.Turn{}, protocol.Errorf(protocol.CodeInvalidParams, "%v", err)
 	}
 
 	e.mu.Lock()
+	if e.shuttingDown {
+		e.mu.Unlock()
+		return protocol.Turn{}, protocol.Errorf(protocol.CodeConflict, "engine is shutting down")
+	}
 	if running, ok := e.threadTurns[th.ID]; ok {
 		e.mu.Unlock()
 		return protocol.Turn{}, protocol.Errorf(protocol.CodeConflict, "turn %s is still running in this thread", running)
@@ -195,6 +206,11 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 		Selection: p.Override, Resolved: res.sel, AutoPicked: res.auto, StartedAt: time.Now().UTC(),
 	}
 	tctx, cancel := context.WithCancel(optimization.WithPolicy(e.baseCtx, opt))
+	if delegationChild(ctx) {
+		tctx = WithDelegationChild(tctx)
+	}
+	// Reserve before shutdown can start Wait; abort releases this reservation.
+	e.wg.Add(1)
 	e.threadTurns[th.ID] = turn.ID
 	e.activeTurns[turn.ID] = &activeTurn{cancel: cancel, turn: turn}
 	if p.wait != nil {
@@ -203,10 +219,21 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	e.mu.Unlock()
 
 	var releaseOnce sync.Once
-	abort := func() {
+	persisted := false
+	abort := func(admissionErr error) {
+		if persisted {
+			now := time.Now().UTC()
+			turn.Status, turn.Error, turn.FinishedAt = protocol.TurnFailed, admissionErr.Error(), &now
+			_ = e.Store.FinishTurn(context.WithoutCancel(ctx), turn)
+			e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
+		}
 		e.mu.Lock()
 		delete(e.turnWaiters, turn.ID)
 		e.mu.Unlock()
+		if task, ok := DelegationTaskFromContext(tctx); ok && task.RootTurnID == turn.ID {
+			_ = e.Store.UpdateAgentTaskState(context.WithoutCancel(ctx), task.ID, task.ThreadID, task.ProjectID, task.State, protocol.AgentStateFailed)
+		}
+		e.wg.Done()
 	}
 	release := func() {
 		releaseOnce.Do(func() {
@@ -219,8 +246,28 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	}
 	if err := e.Store.CreateTurn(ctx, turn); err != nil {
 		release()
-		abort()
+		abort(err)
 		return protocol.Turn{}, err
+	}
+	persisted = true
+	// The real root exists before permission can be persisted. Tokens are consumed
+	// once even if a later admission write fails; the user can prepare another.
+	if admission != nil {
+		if p.DelegationActivationToken != "" {
+			e.mu.Lock()
+			delete(e.delegationTokens, p.DelegationActivationToken)
+			e.mu.Unlock()
+		}
+		task := admission.Task
+		if task.ID == "" {
+			task, err = e.EnableDelegation(context.WithValue(ctx, delegationAuthorizationKey{}, admission), th.ID, turn.ID)
+		}
+		if err != nil {
+			release()
+			abort(err)
+			return protocol.Turn{}, err
+		}
+		tctx = withDelegationTask(tctx, task)
 	}
 	recorder := newTurnRecorder(e, turn.ID, opt, optSource)
 	tctx = withTurnRecorder(tctx, recorder)
@@ -229,7 +276,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	userItem, err := e.newItem(ctx, turn, protocol.ItemUserMessage)
 	if err != nil {
 		release()
-		abort()
+		abort(err)
 		return protocol.Turn{}, err
 	}
 	userItem.Text = p.Text
@@ -243,11 +290,10 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	}
 	if err := e.saveAndPublish(ctx, userItem, protocol.NotifyItemCompleted); err != nil {
 		release()
-		abort()
+		abort(err)
 		return protocol.Turn{}, err
 	}
 
-	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
 		defer release()

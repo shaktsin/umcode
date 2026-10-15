@@ -19,7 +19,7 @@ var (
 	ErrAgentTransition = errors.New("invalid agent transition")
 )
 
-const agentTaskCols = `id, thread_id, root_turn_id, activation, state, base_revision, project_id, created_at, updated_at`
+const agentTaskCols = `id, thread_id, root_turn_id, activation, state, base_revision, base_root, project_id, created_at, updated_at`
 const agentChildCols = `id, task_id, role, assignment_json, state, revision, workspace_id, result_json, usage_json, correction_rounds, version, created_at, updated_at`
 
 func validAgentState(state protocol.AgentState) bool {
@@ -34,7 +34,7 @@ func validAgentState(state protocol.AgentState) bool {
 func scanAgentTask(row interface{ Scan(...any) error }) (protocol.AgentTask, error) {
 	var task protocol.AgentTask
 	var created, updated string
-	err := row.Scan(&task.ID, &task.ThreadID, &task.RootTurnID, &task.Activation, &task.State, &task.BaseRevision, &task.ProjectID, &created, &updated)
+	err := row.Scan(&task.ID, &task.ThreadID, &task.RootTurnID, &task.Activation, &task.State, &task.BaseRevision, &task.BaseRoot, &task.ProjectID, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return task, ErrNotFound
 	}
@@ -82,9 +82,10 @@ func (s *Store) CreateAgentTask(ctx context.Context, task protocol.AgentTask) er
 	}
 	task.UpdatedAt = task.CreatedAt
 	res, err := s.DB.ExecContext(ctx, `INSERT INTO agent_tasks (`+agentTaskCols+`)
-  SELECT ?,?,?,?,?,?,?,?,? FROM threads th JOIN turns tr ON tr.thread_id=th.id
-  WHERE th.id=? AND tr.id=? AND th.project_id=?`,
-		task.ID, task.ThreadID, task.RootTurnID, task.Activation, task.State, task.BaseRevision, task.ProjectID, FormatTime(task.CreatedAt), FormatTime(task.UpdatedAt),
+  SELECT ?,?,?,?,?,?,?,?,?,? FROM threads th JOIN turns tr ON tr.thread_id=th.id
+  WHERE th.id=? AND tr.id=? AND th.project_id=?
+ AND NOT EXISTS (SELECT 1 FROM agent_tasks active WHERE active.thread_id=th.id AND active.state IN ('queued','running','waiting_approval'))`,
+		task.ID, task.ThreadID, task.RootTurnID, task.Activation, task.State, task.BaseRevision, task.BaseRoot, task.ProjectID, FormatTime(task.CreatedAt), FormatTime(task.UpdatedAt),
 		task.ThreadID, task.RootTurnID, task.ProjectID)
 	if err != nil {
 		return err
@@ -99,6 +100,42 @@ func (s *Store) CreateAgentTask(ctx context.Context, task protocol.AgentTask) er
 // AgentTask loads an admitted task. Task/chat authorization belongs to admission.
 func (s *Store) AgentTask(ctx context.Context, id string) (protocol.AgentTask, error) {
 	return scanAgentTask(s.DB.QueryRowContext(ctx, `SELECT `+agentTaskCols+` FROM agent_tasks WHERE id=?`, id))
+}
+
+// AgentTaskForRootTurn performs a durable root lookup scoped to its parent chat.
+func (s *Store) AgentTaskForRootTurn(ctx context.Context, threadID, rootTurnID string) (protocol.AgentTask, error) {
+	return scanAgentTask(s.DB.QueryRowContext(ctx, `SELECT `+agentTaskCols+` FROM agent_tasks WHERE thread_id=? AND root_turn_id=?`, threadID, rootTurnID))
+}
+
+// ActiveAgentTask loads the unfinished task scoped to the current chat/project.
+func (s *Store) ActiveAgentTask(ctx context.Context, threadID, projectID string) (protocol.AgentTask, error) {
+	return scanAgentTask(s.DB.QueryRowContext(ctx, `SELECT `+agentTaskCols+` FROM agent_tasks WHERE thread_id=? AND project_id=? AND state IN ('queued','running','waiting_approval') ORDER BY created_at LIMIT 1`, threadID, projectID))
+}
+
+// UpdateAgentTaskState checks ownership and the expected state transactionally.
+// Terminal tasks cannot regain admission through this lifecycle API.
+func (s *Store) UpdateAgentTaskState(ctx context.Context, taskID, threadID, projectID string, expected, next protocol.AgentState) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	task, err := scanAgentTask(tx.QueryRowContext(ctx, `SELECT `+agentTaskCols+` FROM agent_tasks WHERE id=? AND thread_id=? AND project_id=? AND EXISTS (SELECT 1 FROM threads WHERE id=? AND project_id=?)`, taskID, threadID, projectID, threadID, projectID))
+	if err != nil {
+		return err
+	}
+	if task.State != expected {
+		return ErrAgentConflict
+	}
+	active := task.State == protocol.AgentStateQueued || task.State == protocol.AgentStateRunning || task.State == protocol.AgentStateWaitingApproval
+	if !validAgentState(next) || (!active && next != task.State) || (active && next != protocol.AgentStateCompleted && !validAgentTransition(task.State, next)) {
+		return ErrAgentTransition
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE agent_tasks SET state=?,updated_at=? WHERE id=? AND state=?`, next, FormatTime(time.Now().UTC()), taskID, expected)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CreateAgentChild returns the original record for duplicate (task, call) IDs,
