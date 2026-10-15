@@ -783,12 +783,13 @@ func switchNote(from, to router.Route, status string) string {
 		return r.Model
 	}
 	reason := map[string]string{
-		"rate_limited":     "a rate limit",
-		"server_error":     "a provider error",
-		"unauthorized":     "a key that was refused",
-		"timeout":          "a timeout",
-		"context_too_long": "a prompt too long for its context window",
-		"unknown_model":    "the model being unavailable",
+		"rate_limited":        "a rate limit",
+		"server_error":        "a provider error",
+		"unauthorized":        "a key that was refused",
+		"timeout":             "a timeout",
+		"context_too_long":    "a prompt too long for its context window",
+		"unknown_model":       "the model being unavailable",
+		"insufficient_credit": "insufficient provider credit",
 	}[status]
 	if reason == "" {
 		reason = "an error"

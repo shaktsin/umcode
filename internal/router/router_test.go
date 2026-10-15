@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -199,6 +200,88 @@ func TestClassify(t *testing.T) {
 	}
 	if _, cd := Classify(&llm.Error{Status: 429, RetryAfter: 10 * time.Hour}); cd > 30*time.Minute {
 		t.Fatalf("retry-after not capped: %v", cd)
+	}
+}
+
+func TestAnthropicCreditErrorClassification(t *testing.T) {
+	const creditBody = `{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"req_test"}`
+	for _, tt := range []struct {
+		name     string
+		provider string
+		body     string
+		want     string
+		retry    bool
+	}{
+		{"exhausted Claude credits", "claude", creditBody, "insufficient_credit", true},
+		{"Anthropic provider alias", "anthropic", creditBody, "insufficient_credit", true},
+		{"other provider", "openai", creditBody, "invalid_request", false},
+		{"schema error", "claude", `{"type":"error","error":{"type":"invalid_request_error","message":"tools.11.custom.input_schema: input_schema does not support anyOf at the top level"}}`, "invalid_request", false},
+		{"credit text inside schema error", "claude", `{"type":"error","error":{"type":"invalid_request_error","message":"messages.0.content: invalid value Your credit balance is too low"}}`, "invalid_request", false},
+		{"unstructured credit text", "claude", "Your credit balance is too low", "invalid_request", false},
+		{"wrong error type", "claude", `{"type":"error","error":{"type":"unknown_error","message":"Your credit balance is too low"}}`, "invalid_request", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := fmt.Errorf("stream failed: %w", &llm.Error{Provider: tt.provider, Status: http.StatusBadRequest, Body: tt.body})
+			status, cooldown := Classify(err)
+			if status != tt.want || Retryable(err) != tt.retry {
+				t.Fatalf("classification = %q, retryable = %v; want %q, %v", status, Retryable(err), tt.want, tt.retry)
+			}
+			if tt.retry && (cooldown < time.Minute || cooldown > 30*time.Minute) {
+				t.Fatalf("billing cooldown should avoid hammering the route and allow later recovery: %v", cooldown)
+			}
+			if !tt.retry && cooldown != 0 {
+				t.Fatalf("invalid request cooled the route: %v", cooldown)
+			}
+		})
+	}
+}
+
+func TestExhaustedCreditRecordsHealthAndPreservesApprovedFallback(t *testing.T) {
+	ctx := context.Background()
+	r, creds, _ := newRouter(t)
+	addKey(t, creds, "claude", "primary", "sk-one")
+	addKey(t, creds, "openai", "fallback", "sk-two")
+	req := Request{Level: protocol.ComplexityStandard, Strategy: protocol.PoolPriority,
+		Candidates: []protocol.ConfiguredModel{
+			{ID: "claude", Provider: "claude", Model: "claude-sonnet-4-6", Enabled: true},
+			{ID: "openai", Provider: "openai", Model: "gpt-5.6-sol", Enabled: true},
+		}}
+	plan, err := r.Plan(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, ok := plan.Next()
+	if !ok || first.Provider != "claude" {
+		t.Fatalf("initial route = %+v, %v", first, ok)
+	}
+	creditErr := &llm.Error{Provider: "claude", Status: http.StatusBadRequest,
+		Body: `{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}`}
+	if status := r.Failed(ctx, first, creditErr); status != "insufficient_credit" || !Retryable(creditErr) {
+		t.Fatalf("credit error must allow approved failover: %q", status)
+	}
+	second, ok := plan.Next()
+	if !ok || second.Provider != "openai" || second.Why != protocol.RouteFallback {
+		t.Fatalf("fallback route = %+v, %v", second, ok)
+	}
+	if _, ok := plan.Next(); ok {
+		t.Fatal("exhausted approved routes were retried")
+	}
+	health, err := r.Health(ctx)
+	if err != nil || len(health) != 1 || health[0].LastStatus != "insufficient_credit" || health[0].CooldownEnd == nil {
+		t.Fatalf("credit diagnostics = %+v, %v", health, err)
+	}
+	again, err := r.Plan(ctx, req)
+	if err != nil || len(again.Routes) != 1 || again.Routes[0].Provider != "openai" {
+		t.Fatalf("cooled route offered again: %+v, %v", again, err)
+	}
+	if len(again.Blocked) != 1 || again.Blocked[0].CooldownEnd == nil || !strings.Contains(again.Blocked[0].Unavailable, "credit") {
+		t.Fatalf("billing cooldown not explained: %+v", again.Blocked)
+	}
+	// A single approved model cannot silently expand into catalog alternatives.
+	req.Candidates = req.Candidates[:1]
+	single, err := r.Plan(ctx, req)
+	if err != nil || len(single.Routes) != 0 || single.Reason == "" {
+		t.Fatalf("single exhausted model = %+v, %v", single, err)
 	}
 }
 
