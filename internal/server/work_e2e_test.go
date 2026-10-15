@@ -669,6 +669,10 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 
 func TestDesignedWorkflowGeneralPurposeNoProject(t *testing.T) {
 	h, th, _ := workflowFixture(t, "design a public contract for a general purpose service", false, false)
+	initialInstructions, initialErr := os.ReadFile(filepath.Join(h.ws, "UMCODE.md"))
+	if initialErr != nil {
+		t.Fatal(initialErr)
+	}
 	h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, true, "") }),
 		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
 			return taskTransition(t, d, "Write notes", "in_progress")
@@ -704,10 +708,14 @@ func TestDesignedWorkflowGeneralPurposeNoProject(t *testing.T) {
 			t.Fatalf("file action=%+v", ev)
 		}
 	}
-	for _, name := range []string{"notes.txt", "UMCODE.md", ".umcode"} {
+	for _, name := range []string{"notes.txt", ".umcode"} {
 		if _, err := os.Stat(filepath.Join(h.ws, name)); !os.IsNotExist(err) {
 			t.Fatalf("unexpected project artifact %s: %v", name, err)
 		}
+	}
+	currentInstructions, err := os.ReadFile(filepath.Join(h.ws, "UMCODE.md"))
+	if err != nil || string(currentInstructions) != string(initialInstructions) {
+		t.Fatal("projectless turn changed initialized project instructions")
 	}
 	var memories int
 	if err := h.eng.Store.DB.QueryRow(`SELECT count(*) FROM project_memories`).Scan(&memories); err != nil || memories != 0 {

@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,5 +109,47 @@ func TestAutomaticInstructionsDoNotReadExternalMetadata(t *testing.T) {
 	}
 	if strings.Contains(string(data), "`make test`") {
 		t.Fatal("external symlink metadata was read")
+	}
+}
+
+func TestAutomaticInstructionsPreserveContainedAlias(t *testing.T) {
+	svc, _, _ := newService(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "instructions.md")
+	if err := os.WriteFile(target, []byte("Existing guidance"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("instructions.md", filepath.Join(root, "UMCODE.md")); err != nil {
+		t.Fatal(err)
+	}
+	p, err := svc.Create(t.Context(), protocol.ProjectCreateParams{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Open(t.Context(), p.ID); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(target)
+	if string(data) != "Existing guidance" {
+		t.Fatal("alias overwritten")
+	}
+}
+func TestAutomaticDraftBoundsDirectoryOnlyTrees(t *testing.T) {
+	svc, _, _ := newService(t)
+	root := t.TempDir()
+	for i := 0; i < 300; i++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("%03d-%s", i, strings.Repeat("d", 200))), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	draft, err := svc.DraftInstructions(protocol.Project{Root: root, Name: strings.Repeat("name", 10000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Content) > maxInstructionBytes {
+		t.Fatalf("draft too large: %d", len(draft.Content))
+	}
+	if !strings.Contains(draft.Content, "## Working guidelines") {
+		t.Fatal("working guidance lost")
 	}
 }
