@@ -333,3 +333,90 @@ func (r *Registry) EnvFor(ctx context.Context, skill string) ([]string, error) {
 	}
 	return env.Vars, nil
 }
+
+// ReadPathsFor returns the registered skill and explicitly configured runtime
+// roots for shell.run. Environment variables and inherited PATH entries cannot
+// broaden the sandbox. The normal policy supplies standard system toolchains.
+func (r *Registry) ReadPathsFor(ctx context.Context, skill string) ([]string, error) {
+	s, ok := r.GetContext(ctx, skill)
+	if !ok {
+		return nil, fmt.Errorf("skill %q is not installed", skill)
+	}
+	paths := []string{s.Dir}
+	addRuntime := func(path string, executable bool) {
+		path = filepath.Clean(expandHome(path))
+		if !filepath.IsAbs(path) {
+			return
+		}
+		if executable {
+			path = filepath.Dir(path)
+		}
+		// A declared interpreter under <distribution>/bin also needs its lib
+		// directory. Never turn ~/bin or /bin into an entire home/root grant.
+		home, _ := os.UserHomeDir()
+		parent := filepath.Dir(path)
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			parent = resolved
+		}
+		if resolved, err := filepath.EvalSymlinks(home); err == nil {
+			home = resolved
+		}
+		if filepath.Base(path) == "bin" && parent != home && parent != "/" && parent != "/usr" && parent != "/usr/local" && parent != "/opt/homebrew" {
+			path = filepath.Dir(path)
+		}
+		paths = append(paths, path)
+	}
+	defaults, per := r.cfg.Skills["defaults"], r.cfg.Skills[s.Name]
+	python := firstExisting(per.PythonBin, defaults.PythonBin, s.Runtime.PythonBin)
+	if python != "" {
+		addRuntime(python, true)
+		if resolved, err := filepath.EvalSymlinks(python); err == nil {
+			addRuntime(resolved, true)
+		}
+	}
+	for _, node := range []string{per.NodeBin, defaults.NodeBin, s.Runtime.NodeBin} {
+		if node = firstExisting(node); node != "" {
+			addRuntime(node, false)
+			if resolved, err := filepath.EvalSymlinks(node); err == nil {
+				addRuntime(resolved, false)
+			}
+			break
+		}
+	}
+	for _, extras := range [][]string{per.ExtraPath, defaults.ExtraPath, s.Runtime.ExtraPath} {
+		for _, path := range extras {
+			// ExtraPath declares this exact directory, not its parent.
+			if path = expandHome(path); filepath.IsAbs(path) {
+				paths = append(paths, path)
+			}
+		}
+	}
+	home, _ := os.UserHomeDir()
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
+	var broadCaches []string
+	for _, rel := range []string{"Library", "Library/Caches", ".cache"} {
+		path := filepath.Join(home, rel)
+		broadCaches = append(broadCaches, path)
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			broadCaches = append(broadCaches, resolved)
+		}
+	}
+	for _, path := range paths {
+		path = filepath.Clean(path)
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			path = resolved
+		}
+		rel, err := filepath.Rel(path, home)
+		ancestorOfHome := err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		broad := ancestorOfHome
+		for _, cache := range broadCaches {
+			broad = broad || path == cache
+		}
+		if broad {
+			return nil, fmt.Errorf("skill %q runtime path %q is too broad for the command sandbox; configure a specific runtime directory", skill, path)
+		}
+	}
+	return paths, nil
+}

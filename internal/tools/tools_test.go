@@ -408,17 +408,47 @@ func TestComputerToolsAreFirstPartyAndClassifyApprovals(t *testing.T) {
 type wrapSandbox struct{ policies []sandboxPolicy }
 
 type sandboxPolicy struct {
-	root    string
-	network bool
+	root     string
+	network  bool
+	readable []string
 }
 
 func (w *wrapSandbox) Name() string { return "fake" }
 func (w *wrapSandbox) Wrap(cmd *exec.Cmd, p sandbox.Policy) error {
-	w.policies = append(w.policies, sandboxPolicy{p.Root, p.Network})
+	w.policies = append(w.policies, sandboxPolicy{p.Root, p.Network, p.Readable})
 	inner := append([]string{cmd.Path}, cmd.Args[1:]...)
 	cmd.Path = "/usr/bin/env"
 	cmd.Args = append([]string{"/usr/bin/env", "SANDBOXED=yes"}, inner...)
 	return nil
+}
+
+func TestShellSkillPolicyIncludesOnlyTrustedReadPaths(t *testing.T) {
+	project, skill, arbitrary := t.TempDir(), t.TempDir(), t.TempDir()
+	sb := &wrapSandbox{}
+	sh := &shellRun{sandbox: sb,
+		skillEnv: func(context.Context, string) ([]string, error) {
+			return []string{"PATH=/usr/bin:/bin", "SKILL_DIR=" + arbitrary}, nil
+		},
+		skillReadPaths: func(context.Context, string) ([]string, error) { return []string{skill}, nil },
+	}
+	ctx := WithScope(t.Context(), &Scope{Root: project})
+	if _, err := sh.Call(ctx, json.RawMessage(`{"command":"true","skill":"declared"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(sb.policies) != 1 || sb.policies[0].readable == nil {
+		t.Fatalf("shell did not apply a bounded read policy: %+v", sb.policies)
+	}
+	found := false
+	for _, path := range sb.policies[0].readable {
+		resolved, _ := filepath.EvalSymlinks(skill)
+		found = found || path == resolved
+		if path == arbitrary {
+			t.Fatal("subprocess environment granted arbitrary read access")
+		}
+	}
+	if !found {
+		t.Fatal("declared skill root not passed to command sandbox")
+	}
 }
 
 func TestHostShellRunsInSandboxWhenNetworkIsOff(t *testing.T) {

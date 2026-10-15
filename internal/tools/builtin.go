@@ -30,14 +30,19 @@ const maxOutput = 64 << 10
 // SkillEnvFunc returns the environment for running commands as part of a skill.
 type SkillEnvFunc func(ctx context.Context, skill string) ([]string, error)
 
+// SkillReadPathsFunc supplies trusted declared skill/runtime roots, separately
+// from the subprocess environment, which may contain arbitrary PATH values.
+type SkillReadPathsFunc func(ctx context.Context, skill string) ([]string, error)
+
 // RegisterBuiltins adds available first-party tools. Risk and approval are
 // evaluated per chat; project settings only choose the compute environment.
 // skillEnv may be nil.
 type BuiltinServices struct {
-	Previews    *preview.Manager
-	VisualQA    *visualqa.Manager
-	ComputerUse *computeruse.Manager
-	Exec        *ExecManager
+	Previews       *preview.Manager
+	VisualQA       *visualqa.Manager
+	ComputerUse    *computeruse.Manager
+	Exec           *ExecManager
+	SkillReadPaths SkillReadPathsFunc
 }
 
 func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv SkillEnvFunc, services ...BuiltinServices) {
@@ -51,6 +56,9 @@ func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv 
 	// First-party tools are always available. Their assessed risk is handled by
 	// the chat's approval mode before any action runs.
 	shell := &shellRun{ws: ws, forbid: cfg.Policy.ShellForbidCommands, skillEnv: skillEnv, compute: compute.NewBundledRunner()}
+	if len(services) > 0 {
+		shell.skillReadPaths = services[0].SkillReadPaths
+	}
 	if !strings.EqualFold(cfg.Tools.HostSandbox, "off") {
 		shell.sandbox = sandbox.Detect()
 	}
@@ -483,10 +491,11 @@ func (t *fileWrite) Call(ctx context.Context, args json.RawMessage) (string, err
 // ---- shell.run ----
 
 type shellRun struct {
-	ws       *Workspaces
-	forbid   []string
-	skillEnv SkillEnvFunc
-	compute  compute.Runner
+	ws             *Workspaces
+	forbid         []string
+	skillEnv       SkillEnvFunc
+	skillReadPaths SkillReadPathsFunc
+	compute        compute.Runner
 	// sandbox confines host commands; nil means they run unconfined.
 	sandbox sandbox.Sandbox
 }
@@ -698,6 +707,7 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	procutil.Prepare(cmd)
 	cmd.Dir = dir
 	cmd.Env = safeEnv()
+	var skillReadPaths []string
 	if a.Skill != "" {
 		if t.skillEnv == nil {
 			return "", errors.New("skills are not available")
@@ -707,10 +717,16 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 			return "", err
 		}
 		cmd.Env = env
+		if t.skillReadPaths != nil {
+			skillReadPaths, err = t.skillReadPaths(ctx, a.Skill)
+			if err != nil {
+				return "", err
+			}
+		}
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if sandboxed {
-		if err := t.sandbox.Wrap(cmd, sandbox.DefaultPolicy(scope.Root, scope.AllowNet)); err != nil {
+		if err := t.sandbox.Wrap(cmd, sandbox.DefaultPolicy(scope.Root, scope.AllowNet, skillReadPaths...)); err != nil {
 			return "", fmt.Errorf("could not start the command sandbox: %w", err)
 		}
 	}

@@ -100,3 +100,77 @@ func TestDefaultPolicy(t *testing.T) {
 		t.Errorf("root = %s", on.Root)
 	}
 }
+
+func TestDefaultPolicyLimitsReadsAndSharedCaches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, rel := range []string{"Documents", ".cache/private-app", "Library/Caches/private-app", ".cache/go-build", ".nvm/versions/node/v24/bin"} {
+		if err := os.MkdirAll(filepath.Join(home, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := t.TempDir()
+	p := DefaultPolicy(root, false)
+	if p.Readable == nil {
+		t.Fatal("ordinary commands still have unrestricted reads")
+	}
+	for _, allowed := range p.Readable {
+		for _, forbidden := range []string{home, filepath.Join(home, "Documents"), filepath.Join(home, ".cache"), filepath.Join(home, "Library")} {
+			if allowed == realPath(forbidden) {
+				t.Errorf("overbroad read root: %s", allowed)
+			}
+		}
+	}
+	for _, want := range []string{root, filepath.Join(home, ".cache/go-build"), filepath.Join(home, ".nvm/versions/node")} {
+		if !containsPath(p.Readable, realPath(want)) {
+			t.Errorf("required read root %s missing: %v", want, p.Readable)
+		}
+	}
+	for _, writable := range DefaultPolicy(root, true).Writable {
+		if writable == realPath(filepath.Join(home, ".cache")) || writable == realPath(filepath.Join(home, "Library/Caches")) {
+			t.Errorf("shared app cache writable: %s", writable)
+		}
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBwrapDefaultPolicyUsesReadAllowlist(t *testing.T) {
+	root := t.TempDir()
+	args := bwrapArgs(DefaultPolicy(root, false), root)
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--ro-bind / /") {
+		t.Fatal("ordinary Linux commands can read the entire host")
+	}
+	if !strings.Contains(joined, "--tmpfs /") || !strings.Contains(joined, "--ro-bind "+realPath(root)+" "+realPath(root)) {
+		t.Fatalf("project not mounted in restricted filesystem: %s", joined)
+	}
+}
+
+func TestBwrapReadablePolicyRetainsPrivateTemporaryDirectory(t *testing.T) {
+	root := t.TempDir()
+	args := bwrapArgs(Policy{Root: root, Readable: []string{root, "/tmp"}, Writable: []string{"/tmp"}}, root)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--tmpfs /tmp") || strings.Contains(joined, "--ro-bind /tmp /tmp") || strings.Contains(joined, "--bind /tmp /tmp") {
+		t.Fatalf("temporary directory is missing or shared instead of private: %s", joined)
+	}
+}
+
+func TestBwrapReadablePolicyResolvesCommandDirectory(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "project-link")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	args := bwrapArgs(DefaultPolicy(alias, false), alias)
+	if args[len(args)-1] != realPath(root) {
+		t.Fatalf("command directory points outside canonical project mount: %v", args[len(args)-2:])
+	}
+}

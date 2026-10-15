@@ -153,7 +153,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	ws := tools.NewWorkspaces(o.Config)
 	reg := tools.NewRegistry()
 	sk := skills.NewRegistry(o.Config)
-	tools.RegisterBuiltins(reg, o.Config, ws, sk.EnvFor, tools.BuiltinServices{Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs})
+	tools.RegisterBuiltins(reg, o.Config, ws, sk.EnvFor, tools.BuiltinServices{SkillReadPaths: sk.ReadPathsFor, Previews: previews, VisualQA: visuals, ComputerUse: computers, Exec: execs})
 	reg.Add(tools.NewWorkUpdate(workService))
 	sk.Register(reg)
 
