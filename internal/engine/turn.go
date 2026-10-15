@@ -530,6 +530,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		recorderFrom(ctx).prepare(diagnostic)
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
 		if err != nil {
+			if errors.Is(err, errModelOutputLimit) {
+				e.markPaused(turn.ID)
+				turnErr = err
+				break
+			}
 			if reason := budget.stopReason(); reason != "" {
 				pause(reason)
 				break
@@ -701,6 +706,16 @@ func textParts(s string) []llm.Part {
 	return []llm.Part{{Type: "text", Text: s}}
 }
 
+var errModelOutputLimit = errors.New("model response reached its output limit; work is incomplete. Partial text was saved and incomplete tool calls were not executed. Use a larger response limit or a higher complexity setting, then continue")
+
+func outputLimitStop(reason string) bool {
+	switch strings.ToLower(reason) {
+	case "max_tokens", "max_output_tokens", "length":
+		return true
+	}
+	return false
+}
+
 type modelOutput struct {
 	text     string
 	thinking []llm.Thinking
@@ -800,6 +815,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 	provider llm.Provider, req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
 	var out modelOutput
 	start := time.Now()
+	stopReason := ""
 	record := func(u llm.Usage, status string) {
 		totals := protocol.UsageTotals{InputTokens: u.InputTokens, CachedInputTokens: u.CachedInputTokens,
 			OutputTokens: u.OutputTokens, ReasoningTokens: u.ReasoningTokens, Requests: 1, Estimated: !u.Reported}
@@ -821,6 +837,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 		diagnostic.Phase, diagnostic.Provider, diagnostic.Model = role, res.sel.Provider, res.sel.Model
 		diagnostic.InputTokens, diagnostic.CachedInputTokens = &totals.InputTokens, &totals.CachedInputTokens
 		diagnostic.OutputTokens, diagnostic.ReasoningTokens = &totals.OutputTokens, &totals.ReasoningTokens
+		diagnostic.StopReason = stopReason
 		diagnostic.MeasurementOrigin = "provider"
 		if totals.Estimated {
 			diagnostic.MeasurementOrigin = "estimated"
@@ -885,6 +902,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 		case llm.EventDone:
 			d := ev
 			done = &d
+			stopReason = d.StopReason
 		case llm.EventError:
 			streamErr = ev.Err
 		}
@@ -901,10 +919,17 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 		}
 		_ = e.saveAndPublish(sctx, *it, protocol.NotifyItemCompleted)
 	}
+	if streamErr == nil && done != nil && outputLimitStop(done.StopReason) {
+		streamErr = errModelOutputLimit
+	}
 	failed := streamErr != nil || ctx.Err() != nil
 	finish(msgItem, out.text, failed)
 	if done != nil {
-		record(done.Usage, "ok")
+		status := "ok"
+		if errors.Is(streamErr, errModelOutputLimit) {
+			status = "output_limit"
+		}
+		record(done.Usage, status)
 	} else {
 		record(llm.Usage{}, "error")
 	}
