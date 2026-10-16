@@ -81,6 +81,9 @@ func ValidateCommitted(ctx context.Context, root, expected string) error {
 	if expected != "" && head != expected {
 		return errors.New("delegation parent revision changed")
 	}
+	if err = ValidateIndexFlags(ctx, canonical); err != nil {
+		return err
+	}
 	status, err := gitOutput(ctx, canonical, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
 	if err != nil {
 		return err
@@ -98,6 +101,25 @@ func ValidateCommitted(ctx context.Context, root, expected string) error {
 		}
 	}
 	return ValidatePaths(ctx, canonical)
+}
+
+// ValidateIndexFlags rejects index settings that make status/add/diff omit
+// actual tracked bytes. User flags are never cleared or rewritten implicitly.
+func ValidateIndexFlags(ctx context.Context, root string) error {
+	entries, err := gitNULList(ctx, root, "ls-files", "-v", "-z")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if len(entry) < 2 {
+			return errors.New("invalid Git index flag record")
+		}
+		tag := entry[0]
+		if tag == 'S' || (tag >= 'a' && tag <= 'z') {
+			return fmt.Errorf("unsupported Git index flag (assume-unchanged or skip-worktree) on %q; inspect and explicitly clear it before delegation", entry[2:])
+		}
+	}
+	return nil
 }
 
 // ValidatePaths rejects symlinks that resolve outside the owned checkout,
@@ -288,6 +310,34 @@ func (m *Manager) DiscardCommitted(ctx context.Context, id, source, revision str
 		if err = ValidateCommitted(ctx, ws.Path, revision); err != nil {
 			return err
 		}
+		ignored, err := gitNULList(ctx, ws.Path, "ls-files", "--others", "--ignored", "--exclude-standard", "-z")
+		if err != nil {
+			return err
+		}
+		if len(ignored) > 0 {
+			return errors.New("cleanup blocked by ignored workspace contents; inspect and preserve or explicitly remove them before retrying; workspace retained")
+		}
 	}
 	return m.discard(ctx, id, source)
+}
+
+// WithCommittedBase runs a storage-only recovery mutation only while the
+// admitted parent still matches its clean base under the integration lock.
+// Callbacks must not reenter Manager or mutate checkout files.
+func (m *Manager) WithCommittedBase(ctx context.Context, parent, base string, guard, save func() error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := guard(); err != nil {
+		return err
+	}
+	if err := ValidateCommitted(ctx, parent, base); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return save()
 }

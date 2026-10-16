@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
+
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
@@ -23,6 +25,7 @@ type AgentIntegration struct {
 	ChangedPaths                 []string
 	CheckResults                 []protocol.AgentCheckEvidence
 	Applied, Verified            bool
+	PreviousAttempts             []AgentIntegration
 }
 
 func (s *Store) AgentWorkspace(ctx context.Context, id string) (AgentWorkspace, error) {
@@ -93,7 +96,7 @@ func (s *Store) AgentIntegration(ctx context.Context, taskID, childID string) (A
 }
 func (s *Store) SaveAgentIntegration(ctx context.Context, taskID, childID string, e AgentIntegration) error {
 	old, err := s.AgentIntegration(ctx, taskID, childID)
-	if err == nil && (old.BaseRevision != e.BaseRevision || old.ResultRevision != e.ResultRevision || old.Applied && !e.Applied || old.Verified && !e.Verified) {
+	if err == nil && (old.BaseRevision != e.BaseRevision || old.ResultRevision != e.ResultRevision || old.Applied && !e.Applied || old.Verified && !e.Verified || !reflect.DeepEqual(old.PreviousAttempts, e.PreviousAttempts)) {
 		return ErrAgentTransition
 	}
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -140,4 +143,49 @@ func (s *Store) AgentWorkspaces(ctx context.Context, taskID string) ([]AgentWork
 		out = append(out, w)
 	}
 	return out, rows.Err()
+}
+
+// SupersedeAgentIntegration is a CAS for a proven-unapplied attempt. The caller
+// must hold the manager's clean-parent integration lock. Prior recovery evidence
+// remains in the same durable row, including across restart.
+func (s *Store) SupersedeAgentIntegration(ctx context.Context, taskID, childID, expectedRevision string, next AgentIntegration) (AgentIntegration, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return next, err
+	}
+	defer tx.Rollback()
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT data_json FROM agent_integrations WHERE task_id=? AND child_id=?`, taskID, childID).Scan(&raw)
+	if err != nil {
+		return next, normalizeNotFound(err)
+	}
+	var old AgentIntegration
+	if err = json.Unmarshal([]byte(raw), &old); err != nil {
+		return next, err
+	}
+	if old.ResultRevision != expectedRevision {
+		return next, ErrAgentConflict
+	}
+	if old.Applied || old.Verified || old.BaseRevision != next.BaseRevision || next.ResultRevision == "" || next.ResultRevision == old.ResultRevision || next.Applied || next.Verified || len(next.PreviousAttempts) != 0 || len(next.CheckResults) != 0 {
+		return next, ErrAgentTransition
+	}
+	next.PreviousAttempts = append([]AgentIntegration(nil), old.PreviousAttempts...)
+	old.PreviousAttempts = nil
+	next.PreviousAttempts = append(next.PreviousAttempts, old)
+	data, err := json.Marshal(next)
+	if err != nil {
+		return next, err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE agent_integrations SET data_json=? WHERE task_id=? AND child_id=? AND data_json=? AND EXISTS(SELECT 1 FROM agent_children WHERE task_id=? AND id=? AND role='implementer' AND state='completed' AND revision=?)`, string(data), taskID, childID, raw, taskID, childID, next.ResultRevision)
+	if err != nil {
+		return next, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return next, err
+	}
+	if n != 1 {
+		return next, ErrAgentConflict
+	}
+	return next, tx.Commit()
 }

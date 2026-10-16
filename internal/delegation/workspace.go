@@ -173,6 +173,9 @@ func (s *WorkspaceService) Snapshot(ctx context.Context, task protocol.AgentTask
 		}
 		return WorkspaceSnapshot{WorkspaceRef: ref(w), ResultRevision: w.ResultRevision}, nil
 	}
+	if err = worktree.ValidateIndexFlags(ctx, w.Root); err != nil {
+		return WorkspaceSnapshot{}, err
+	}
 	if err = worktree.ValidatePaths(ctx, w.Root); err != nil {
 		return WorkspaceSnapshot{}, err
 	}
@@ -303,9 +306,14 @@ func (s *WorkspaceService) prepareReviewer(ctx context.Context, t protocol.Agent
 }
 func (s *WorkspaceService) reviewCopy(ctx context.Context, t protocol.AgentTask, impl protocol.AgentChild, source store.AgentWorkspace, owner, suffix string) (WorkspaceRef, error) {
 	id := "delegation-review-" + owner + "-" + suffix
+	kind := "reviewer"
+	if suffix == "inspection" {
+		id += "-" + source.ResultRevision
+		kind = "inspection"
+	}
 	w, err := s.Store.AgentWorkspace(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
-		w = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: owner, Kind: "reviewer", SourceID: impl.ID, Root: s.Manager.Path(id), ParentRoot: source.Root, BaseRevision: source.ResultRevision, ResultRevision: source.ResultRevision}
+		w = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: owner, Kind: kind, SourceID: impl.ID, Root: s.Manager.Path(id), ParentRoot: source.Root, BaseRevision: source.ResultRevision, ResultRevision: source.ResultRevision}
 		if err = s.Store.SaveAgentWorkspace(ctx, w); err != nil {
 			return WorkspaceRef{}, err
 		}
@@ -345,10 +353,27 @@ func (s *WorkspaceService) Integrate(ctx context.Context, taskID, childID, expec
 	}
 	evidence, err := s.Store.AgentIntegration(ctx, taskID, childID)
 	if err == nil {
-		if evidence.BaseRevision != expectedBase || evidence.ResultRevision != w.ResultRevision {
-			return evidence, errors.New("saved integration refers to another revision")
+		if evidence.BaseRevision != expectedBase {
+			return evidence, errors.New("saved integration refers to another base")
 		}
-		if err = s.verifyApplied(ctx, t, w); err == nil {
+		if evidence.ResultRevision != w.ResultRevision {
+			if evidence.Applied || evidence.Verified {
+				return evidence, errors.New("previous integration was applied; retain its evidence and workspace")
+			}
+			prior := evidence
+			next := IntegrationEvidence{BaseRevision: expectedBase, ResultRevision: w.ResultRevision, ChangedPaths: w.ChangedPaths}
+			err = s.Manager.WithCommittedBase(ctx, t.ParentRoot, expectedBase,
+				func() error { return s.integrationAuthority(ctx, t, c, w) },
+				func() error {
+					var saveErr error
+					next, saveErr = s.Store.SupersedeAgentIntegration(ctx, taskID, childID, prior.ResultRevision, next)
+					return saveErr
+				})
+			if err != nil {
+				return prior, err
+			}
+			evidence = next
+		} else if err = s.verifyApplied(ctx, t, w); err == nil {
 			if !evidence.Applied {
 				evidence.Applied = true
 				err = s.Store.SaveAgentIntegration(ctx, taskID, childID, evidence)
@@ -364,7 +389,7 @@ func (s *WorkspaceService) Integrate(ctx context.Context, taskID, childID, expec
 	if err = worktree.ValidateCommitted(ctx, t.ParentRoot, expectedBase); err != nil {
 		return evidence, err
 	}
-	evidence = IntegrationEvidence{BaseRevision: expectedBase, ResultRevision: w.ResultRevision, ChangedPaths: w.ChangedPaths}
+	evidence = IntegrationEvidence{BaseRevision: expectedBase, ResultRevision: w.ResultRevision, ChangedPaths: w.ChangedPaths, PreviousAttempts: evidence.PreviousAttempts}
 	if err = s.Store.SaveAgentIntegration(ctx, taskID, childID, evidence); err != nil {
 		return evidence, err
 	}
@@ -436,6 +461,9 @@ func (s *WorkspaceService) integrationAuthority(ctx context.Context, t protocol.
 }
 
 func (s *WorkspaceService) verifyApplied(ctx context.Context, t protocol.AgentTask, w store.AgentWorkspace) error {
+	if err := worktree.ValidateIndexFlags(ctx, t.ParentRoot); err != nil {
+		return err
+	}
 	head, err := privateGit(ctx, t.ParentRoot, "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(head) != t.BaseRevision {
 		return errors.New("integration parent HEAD changed")
@@ -528,7 +556,7 @@ func (s *WorkspaceService) Cleanup(ctx context.Context, taskID, childID string) 
 		return err
 	}
 	for _, review := range reviews {
-		if review.Kind != "reviewer" || review.SourceID != childID || review.Cleaned {
+		if (review.Kind != "reviewer" && review.Kind != "inspection") || review.SourceID != childID || review.Cleaned {
 			continue
 		}
 		if err = s.discardVerified(ctx, review); err != nil {
