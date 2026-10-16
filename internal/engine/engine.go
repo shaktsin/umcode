@@ -87,8 +87,9 @@ type Engine struct {
 	reduceHook              func()       // instance-local panic test seam; set before use
 
 	DelegationCoordinator *delegation.Coordinator
-	// Set at construction, before dispatch; nil fails closed. Task6 owns resolution.
-	DelegationWorkspaces WorkspaceResolver
+	// The default uses owned Git checkouts. Tests may inject an explicit resolver.
+	DelegationWorkspaces       WorkspaceResolver
+	DelegationWorkspaceService *delegation.WorkspaceService
 
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
@@ -198,7 +199,11 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
+	e.DelegationWorkspaceService = delegation.NewWorkspaceService(o.Store, e.Worktrees, e.validateDelegationParent, nil)
 	e.DelegationWorkspaces = o.DelegationWorkspaces
+	if e.DelegationWorkspaces == nil {
+		e.DelegationWorkspaces = managedChildWorkspaces{service: e.DelegationWorkspaceService}
+	}
 	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus), delegation.WithRunner(childRunner{engine: e}))
 	for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
 		reg.Add(tool)

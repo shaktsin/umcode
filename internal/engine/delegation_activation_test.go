@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -13,10 +14,12 @@ import (
 
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
+	"github.com/shaktsin/umcode/internal/pathutil"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/tools"
 )
 
 type delegationProvider struct {
@@ -576,5 +579,103 @@ func TestDelegationAdmissionFailedFollowupPreservesTask(t *testing.T) {
 	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "retry followup", DelegationTaskID: id})
 	if provider.last() != id {
 		t.Fatal("unfinished original task lost after failed followup")
+	}
+}
+
+// Admission must bind the existing active parent checkout, independently of
+// the registered project root; workspace-mode changes revoke that binding.
+func TestDelegationWorkspaceParentAdmission(t *testing.T) {
+	e, th, root, _ := delegationFixture(t)
+	if e.DelegationWorkspaces == nil {
+		t.Fatal("default real resolver missing")
+	}
+	if err := e.Store.UpdateThread(t.Context(), th.ID, map[string]any{"workspace_mode": "worktree"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.PrepareDelegation(t.Context(), th.ID); err == nil {
+		t.Fatal("missing parent worktree implicitly created/admitted")
+	}
+	ws, err := e.Worktrees.Ensure(t.Context(), th.ID, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The registered project may have local edits; child admission uses the clean
+	// active parent checkout and never copies registered-project dirty inputs.
+	if err = os.WriteFile(filepath.Join(root, "local-only"), []byte("user"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	token, err := e.PrepareDelegation(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: token.ActivationToken})
+	task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, tr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pathutil.SameFolder(task.BaseRoot, root) || !pathutil.SameFolder(task.ParentRoot, ws.Path) || task.BaseRevision != delegationGit(t, ws.Path, "rev-parse", "HEAD") {
+		t.Fatalf("wrong parent contract %+v", task)
+	}
+	child, err := e.Store.CreateAgentChild(t.Context(), protocol.AgentChild{TaskID: task.ID, Role: protocol.AgentRoleImplementer, Assignment: protocol.AgentAssignment{Prompt: "edit"}}, "workspace-call")
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolated, err := e.DelegationWorkspaces.Resolve(t.Context(), task, child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isolated.Root == ws.Path || isolated.ID == "" {
+		t.Fatalf("not isolated %+v", isolated)
+	}
+	if err = e.Store.UpdateThread(t.Context(), th.ID, map[string]any{"workspace_mode": "local"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.DelegationWorkspaces.Resolve(t.Context(), task, child); err == nil {
+		t.Fatal("changed parent mode accepted")
+	}
+}
+
+func TestDelegationWorkspaceDefaultRunner(t *testing.T) {
+	e, th, parent, _ := delegationFixture(t)
+	task := childExecutionTask(t, e, th)
+	e.LLMs.Register(&budgetProvider{eventsFor: func(n int) []llm.Event {
+		if n == 1 {
+			return []llm.Event{{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "write", Name: tools.ToWire("file.write"), Args: json.RawMessage(`{"path":"generated","content":"real owned result"}`)}}, {Type: llm.EventDone}}
+		}
+		return []llm.Event{{Type: llm.EventTextDelta, Text: "completed"}, {Type: llm.EventDone}}
+	}})
+	child, err := e.DelegationCoordinator.Spawn(t.Context(), task.ID, "real-owned", protocol.AgentRoleImplementer, protocol.AgentAssignment{Prompt: "write generated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	children, err := e.DelegationCoordinator.Wait(ctx, task.ID, []string{child.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := children[0]
+	if got.State != protocol.AgentStateCompleted || got.Revision == "" || got.WorkspaceID == "" || len(got.Result.ChangedPaths) != 1 || got.Result.ChangedPaths[0] != "generated" {
+		t.Fatalf("real finalization missing %+v", got)
+	}
+	owned, err := e.Store.AgentWorkspace(t.Context(), got.WorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned.ResultRevision != got.Revision || owned.ResultTree == "" || delegationGit(t, owned.Root, "rev-parse", "HEAD") != got.Revision {
+		t.Fatalf("submitted checkout mismatch %+v", owned)
+	}
+	if b, err := os.ReadFile(filepath.Join(owned.Root, "generated")); err != nil || string(b) != "real owned result" {
+		t.Fatalf("owned output %q %v", b, err)
+	}
+	if _, err = os.Stat(filepath.Join(parent, "generated")); !os.IsNotExist(err) {
+		t.Fatal("real child changed parent")
+	}
+	execution, err := e.Store.AgentExecution(t.Context(), task.ID, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Store.GetThread(t.Context(), execution.ThreadID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("owned execution not hidden: %v", err)
 	}
 }

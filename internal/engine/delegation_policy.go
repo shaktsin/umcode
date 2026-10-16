@@ -41,7 +41,7 @@ func (e *Engine) narrowChildToolAuthority(ctx context.Context, th protocol.Threa
 		return ctx, th, err
 	}
 	task, err := e.Store.AgentTask(ctx, x.task.ID)
-	if err != nil || task.ThreadID != x.task.ThreadID || task.ProjectID != x.task.ProjectID || task.RootTurnID != x.task.RootTurnID || task.BaseRoot != x.task.BaseRoot || task.BaseRevision != x.task.BaseRevision || !unfinishedDelegation(task.State) {
+	if err != nil || task.ThreadID != x.task.ThreadID || task.ProjectID != x.task.ProjectID || task.RootTurnID != x.task.RootTurnID || task.BaseRoot != x.task.BaseRoot || task.ParentRoot != x.task.ParentRoot || task.BaseRevision != x.task.BaseRevision || !unfinishedDelegation(task.State) {
 		return ctx, th, errors.New("child task ownership or admission changed")
 	}
 	parent, err := e.Store.GetThread(ctx, x.task.ThreadID)
@@ -51,6 +51,9 @@ func (e *Engine) narrowChildToolAuthority(ctx context.Context, th protocol.Threa
 	project, err := e.Projects.Get(ctx, x.task.ProjectID)
 	if err != nil || project.Missing || !pathutil.SameFolder(project.Root, x.task.BaseRoot) {
 		return ctx, th, errors.New("child project boundary unavailable or changed")
+	}
+	if err = e.validateDelegationParent(ctx, task); err != nil {
+		return ctx, th, err
 	}
 	scope := tools.ScopeFrom(ctx)
 	if scope == nil || scope.ProjectID != task.ProjectID || !scope.RestrictedChild || !pathutil.SameFolder(scope.Root, x.workspace.Root) {

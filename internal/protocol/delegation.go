@@ -41,6 +41,7 @@ type AgentTask struct {
 	State        AgentState      `json:"state"`
 	BaseRevision string          `json:"baseRevision"`
 	BaseRoot     string          `json:"baseRoot"`
+	ParentRoot   string          `json:"parentRoot"`
 	ProjectID    string          `json:"projectId,omitempty"`
 	CreatedAt    time.Time       `json:"createdAt"`
 	UpdatedAt    time.Time       `json:"updatedAt"`

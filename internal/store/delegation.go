@@ -19,7 +19,7 @@ var (
 	ErrAgentTransition = errors.New("invalid agent transition")
 )
 
-const agentTaskCols = `id, thread_id, root_turn_id, activation, state, base_revision, base_root, project_id, created_at, updated_at`
+const agentTaskCols = `id, thread_id, root_turn_id, activation, state, base_revision, base_root, project_id, created_at, updated_at, parent_root`
 const agentChildCols = `id, task_id, role, assignment_json, state, revision, workspace_id, result_json, usage_json, correction_rounds, version, created_at, updated_at, model_json`
 
 func validAgentState(state protocol.AgentState) bool {
@@ -34,7 +34,7 @@ func validAgentState(state protocol.AgentState) bool {
 func scanAgentTask(row interface{ Scan(...any) error }) (protocol.AgentTask, error) {
 	var task protocol.AgentTask
 	var created, updated string
-	err := row.Scan(&task.ID, &task.ThreadID, &task.RootTurnID, &task.Activation, &task.State, &task.BaseRevision, &task.BaseRoot, &task.ProjectID, &created, &updated)
+	err := row.Scan(&task.ID, &task.ThreadID, &task.RootTurnID, &task.Activation, &task.State, &task.BaseRevision, &task.BaseRoot, &task.ProjectID, &created, &updated, &task.ParentRoot)
 	if errors.Is(err, sql.ErrNoRows) {
 		return task, ErrNotFound
 	}
@@ -82,10 +82,10 @@ func (s *Store) CreateAgentTask(ctx context.Context, task protocol.AgentTask) er
 	}
 	task.UpdatedAt = task.CreatedAt
 	res, err := s.DB.ExecContext(ctx, `INSERT INTO agent_tasks (`+agentTaskCols+`)
-  SELECT ?,?,?,?,?,?,?,?,?,? FROM threads th JOIN turns tr ON tr.thread_id=th.id
+  SELECT ?,?,?,?,?,?,?,?,?,?,? FROM threads th JOIN turns tr ON tr.thread_id=th.id
   WHERE th.id=? AND tr.id=? AND th.project_id=?
  AND NOT EXISTS (SELECT 1 FROM agent_tasks active WHERE active.thread_id=th.id AND active.state IN ('queued','running','waiting_approval'))`,
-		task.ID, task.ThreadID, task.RootTurnID, task.Activation, task.State, task.BaseRevision, task.BaseRoot, task.ProjectID, FormatTime(task.CreatedAt), FormatTime(task.UpdatedAt),
+		task.ID, task.ThreadID, task.RootTurnID, task.Activation, task.State, task.BaseRevision, task.BaseRoot, task.ProjectID, FormatTime(task.CreatedAt), FormatTime(task.UpdatedAt), task.ParentRoot,
 		task.ThreadID, task.RootTurnID, task.ProjectID)
 	if err != nil {
 		return err

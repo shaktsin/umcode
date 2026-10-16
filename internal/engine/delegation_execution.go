@@ -28,7 +28,10 @@ import (
 type WorkspaceResolver interface {
 	Resolve(context.Context, protocol.AgentTask, protocol.AgentChild) (ChildWorkspace, error)
 }
-type ChildWorkspace struct{ ID, Root, Revision string }
+type ChildWorkspace struct {
+	ID, Root, Revision string
+	ChangedPaths       []string
+}
 
 // ChildWorkspaceFinalizer snapshots the stopped execution. Task6's managed
 // resolver implements this; a successful Resolve revision is only its input.
@@ -69,7 +72,7 @@ func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child pro
 	if err != nil {
 		return result, err
 	}
-	if ws.ID == "" || !filepath.IsAbs(ws.Root) || pathutil.Within(task.BaseRoot, ws.Root) || pathutil.Within(ws.Root, task.BaseRoot) {
+	if ws.ID == "" || !filepath.IsAbs(ws.Root) || pathutil.Within(task.BaseRoot, ws.Root) || pathutil.Within(ws.Root, task.BaseRoot) || (task.ParentRoot != "" && (pathutil.Within(task.ParentRoot, ws.Root) || pathutil.Within(ws.Root, task.ParentRoot))) {
 		return result, errors.New("child workspace must be an isolated owned checkout outside the parent")
 	}
 	ws.Root = pathutil.Resolved(ws.Root)
@@ -90,6 +93,9 @@ func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child pro
 	}
 	if proj.Missing || !pathutil.SameFolder(proj.Root, task.BaseRoot) {
 		return result, errors.New("child project base changed")
+	}
+	if err = e.validateDelegationParent(ctx, task); err != nil {
+		return result, err
 	}
 	modelScope, err := e.Store.AgentModelScope(ctx, task.ID)
 	if err != nil {
@@ -159,6 +165,9 @@ func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child pro
 			if finalErr != nil {
 				fail(finalErr)
 				return
+			}
+			if final.ChangedPaths != nil {
+				result.ChangedPaths = append([]string(nil), final.ChangedPaths...)
 			}
 			if updateErr := e.updateChildExecution(finalCtx, task.ID, child.ID, func(c *protocol.AgentChild) { c.WorkspaceID = final.ID; c.Revision = final.Revision }); updateErr != nil {
 				fail(updateErr)

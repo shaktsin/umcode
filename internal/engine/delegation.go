@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -14,13 +13,14 @@ import (
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
+	"github.com/shaktsin/umcode/internal/worktree"
 )
 
 const delegationSkillID = "superpowers:subagent-driven-development"
 
 type delegationToken struct {
-	ThreadID, ProjectID, Root, Revision string
-	ExpiresAt                           time.Time
+	ThreadID, ProjectID, Root, ParentRoot, Revision string
+	ExpiresAt                                       time.Time
 }
 type delegationAdmission struct {
 	delegationToken
@@ -69,22 +69,18 @@ func (e *Engine) delegationBase(ctx context.Context, threadID string) (delegatio
 	if proj.Missing {
 		return delegationToken{}, protocol.Errorf(protocol.CodeInvalidParams, "delegation project folder is missing")
 	}
-	git := func(args ...string) (string, error) {
-		b, err := exec.CommandContext(ctx, "git", append([]string{"-C", proj.Root}, args...)...).Output()
-		return strings.TrimSpace(string(b)), err
-	}
-	revision, err := git("rev-parse", "--verify", "HEAD^{commit}")
-	if err != nil {
-		return delegationToken{}, protocol.Errorf(protocol.CodeInvalidParams, "delegation requires a committed Git project")
-	}
-	status, err := git("status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
+	root, err := e.activeDelegationParent(ctx, th, proj.Root)
 	if err != nil {
 		return delegationToken{}, err
 	}
-	if status != "" {
-		return delegationToken{}, protocol.Errorf(protocol.CodeInvalidParams, "delegation requires a clean committed Git project; commit or remove changed and untracked inputs (including UMCODE.md) before enabling")
+	if err = worktree.ValidateCommitted(ctx, root, ""); err != nil {
+		return delegationToken{}, err
 	}
-	return delegationToken{ThreadID: th.ID, ProjectID: th.ProjectID, Root: pathutil.Resolved(proj.Root), Revision: revision}, nil
+	revision, err := privateParentRevision(ctx, root)
+	if err != nil {
+		return delegationToken{}, err
+	}
+	return delegationToken{ThreadID: th.ID, ProjectID: th.ProjectID, Root: pathutil.Resolved(proj.Root), ParentRoot: root, Revision: revision}, nil
 }
 func (e *Engine) delegationOpen() error {
 	e.mu.Lock()
@@ -201,7 +197,7 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 		if !unfinishedDelegation(task.State) {
 			return nil, protocol.Errorf(protocol.CodeInvalidParams, "delegation task is finished or interrupted; explicitly enable a new task")
 		}
-		if task.BaseRoot != base.Root {
+		if task.BaseRoot != base.Root || task.ParentRoot != base.ParentRoot {
 			return nil, protocol.Errorf(protocol.CodeConflict, "delegation project root changed")
 		}
 		if task.BaseRevision != base.Revision {
@@ -209,7 +205,7 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 		}
 		return &delegationAdmission{delegationToken: base, Task: task}, nil
 	}
-	if token.ThreadID != "" && (token.ProjectID != base.ProjectID || token.Root != base.Root || token.Revision != base.Revision) {
+	if token.ThreadID != "" && (token.ProjectID != base.ProjectID || token.Root != base.Root || token.ParentRoot != base.ParentRoot || token.Revision != base.Revision) {
 		return nil, protocol.Errorf(protocol.CodeConflict, "delegation activation project or revision changed; enable again")
 	}
 	if _, err = e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil {
@@ -241,14 +237,14 @@ func (e *Engine) EnableDelegation(ctx context.Context, threadID, rootTurnID stri
 	if err != nil {
 		return protocol.AgentTask{}, err
 	}
-	if base.ProjectID != admission.ProjectID || base.Root != admission.Root || base.Revision != admission.Revision {
+	if base.ProjectID != admission.ProjectID || base.Root != admission.Root || base.ParentRoot != admission.ParentRoot || base.Revision != admission.Revision {
 		return protocol.AgentTask{}, protocol.Errorf(protocol.CodeConflict, "delegation project changed during admission")
 	}
 	now := time.Now().UTC()
 	task := protocol.AgentTask{
 		ID: store.NewID("agtask"), ThreadID: threadID, RootTurnID: rootTurnID,
 		Activation: admission.Activation, State: protocol.AgentStateRunning,
-		BaseRevision: base.Revision, BaseRoot: base.Root, ProjectID: base.ProjectID,
+		BaseRevision: base.Revision, BaseRoot: base.Root, ParentRoot: base.ParentRoot, ProjectID: base.ProjectID,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err = e.Store.CreateAgentTask(ctx, task); err != nil {
@@ -275,7 +271,7 @@ func (e *Engine) authorizeDelegationTool(ctx context.Context) (protocol.AgentTas
 	if err != nil {
 		return task, err
 	}
-	if task.ThreadID != admitted.ThreadID || task.ProjectID != admitted.ProjectID || task.RootTurnID != admitted.RootTurnID || task.BaseRoot != admitted.BaseRoot || task.BaseRevision != admitted.BaseRevision || task.Activation != admitted.Activation {
+	if task.ThreadID != admitted.ThreadID || task.ProjectID != admitted.ProjectID || task.RootTurnID != admitted.RootTurnID || task.BaseRoot != admitted.BaseRoot || task.ParentRoot != admitted.ParentRoot || task.BaseRevision != admitted.BaseRevision || task.Activation != admitted.Activation {
 		return task, errors.New("delegation task ownership changed")
 	}
 	thread, err := e.Store.GetThread(ctx, task.ThreadID)
@@ -289,8 +285,11 @@ func (e *Engine) authorizeDelegationTool(ctx context.Context) (protocol.AgentTas
 	if err != nil {
 		return task, err
 	}
-	if project.Missing || pathutil.Resolved(project.Root) != task.BaseRoot || pathutil.Resolved(scope.Root) != task.BaseRoot {
+	if project.Missing || pathutil.Resolved(project.Root) != task.BaseRoot || pathutil.Resolved(scope.Root) != task.ParentRoot {
 		return task, errors.New("delegation project root changed")
+	}
+	if err = e.validateDelegationParent(ctx, task); err != nil {
+		return task, err
 	}
 	return task, nil
 }
