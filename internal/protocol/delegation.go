@@ -51,6 +51,7 @@ type AgentChild struct {
 	ID               string          `json:"id"`
 	TaskID           string          `json:"taskId"`
 	Role             AgentRole       `json:"role"`
+	Model            ModelSelection  `json:"model,omitempty"`
 	Assignment       AgentAssignment `json:"assignment"`
 	State            AgentState      `json:"state"`
 	Revision         string          `json:"revision,omitempty"`

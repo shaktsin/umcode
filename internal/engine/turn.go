@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -36,16 +37,19 @@ const historyLimit = 60
 // resolved is the concrete choice for a turn: the route being used now, and
 // the ones the router lined up behind it.
 type resolved struct {
-	sel    protocol.ModelSelection // what is used
-	auto   bool                    // complexity picked by Auto
-	preset protocol.ComplexityPreset
-	limits protocol.ExecutionLimits
-	meta   models.Meta
-	cred   credentials.Resolved
-	poolID string
-	route  router.Route
-	plan   *router.Plan
-	trail  []protocol.RouteStep
+	approved              candidateSet
+	approvedCredentialID  string
+	approvedCredentialIDs []string
+	sel                   protocol.ModelSelection // what is used
+	auto                  bool                    // complexity picked by Auto
+	preset                protocol.ComplexityPreset
+	limits                protocol.ExecutionLimits
+	meta                  models.Meta
+	cred                  credentials.Resolved
+	poolID                string
+	route                 router.Route
+	plan                  *router.Plan
+	trail                 []protocol.RouteStep
 }
 
 // use points the resolved selection at a route.
@@ -62,13 +66,17 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 	o.Provider = config.NormalizeProvider(o.Provider)
 	ts := th.Settings
 
-	pick, err := e.pickCandidates(protocol.ModelSelection{
-		Provider: firstNonEmpty(o.Provider, ts.Provider),
-		Model:    selectedModel(o, ts),
-	})
-	if err != nil {
-		return r, err
+	var pick candidateSet
+	var err error
+	if x := childExecutionFrom(ctx); x != nil {
+		pick = x.selection
+	} else {
+		pick, err = e.pickCandidates(protocol.ModelSelection{Provider: firstNonEmpty(o.Provider, ts.Provider), Model: selectedModel(o, ts)})
+		if err != nil {
+			return r, err
+		}
 	}
+	r.approved = pick
 	provider, model, candidates, strategy := pick.provider, pick.model, pick.candidates, pick.strategy
 	r.poolID = pick.poolID
 
@@ -76,6 +84,10 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 	if credID == "" && (ts.Provider == provider || provider == "") {
 		credID = ts.CredentialID
 	}
+	if x := childExecutionFrom(ctx); x != nil {
+		credID = x.credentialID
+	}
+	r.approvedCredentialID = credID
 
 	e.mu.Lock()
 	cplx := firstNonEmpty(string(o.Complexity), string(ts.Complexity), string(e.defaultCplx))
@@ -122,6 +134,32 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 	})
 	if err != nil {
 		return r, err
+	}
+	if x := childExecutionFrom(ctx); x != nil {
+		kept := plan.Routes[:0]
+		for _, route := range plan.Routes {
+			if slices.Contains(x.credentialIDs, route.Cred.Record.ID) {
+				kept = append(kept, route)
+			}
+		}
+		plan.Routes = kept
+	}
+	for _, route := range plan.Routes {
+		if !slices.Contains(r.approvedCredentialIDs, route.Cred.Record.ID) {
+			r.approvedCredentialIDs = append(r.approvedCredentialIDs, route.Cred.Record.ID)
+		}
+		if len(pick.candidates) == 0 {
+			found := false
+			for _, candidate := range r.approved.candidates {
+				if candidate.Provider == route.Provider && candidate.Model == route.Model {
+					found = true
+					break
+				}
+			}
+			if !found {
+				r.approved.candidates = append(r.approved.candidates, protocol.ConfiguredModel{Provider: route.Provider, Model: route.Model, Enabled: true})
+			}
+		}
 	}
 	first, hasRoute := plan.Next()
 	if !hasRoute {
@@ -178,6 +216,9 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	if err != nil {
 		return protocol.Turn{}, err
 	}
+	if childExecutionFrom(ctx) != nil {
+		opt = optimization.Policy{}
+	}
 	th, err := e.Store.GetThread(ctx, p.ThreadID)
 	if err != nil {
 		return protocol.Turn{}, err
@@ -220,6 +261,15 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	tctx, cancel := context.WithCancel(optimization.WithPolicy(executionBase, opt))
 	if delegationChild(ctx) {
 		tctx = WithDelegationChild(tctx)
+		tctx = delegation.InheritRunnerContext(tctx, ctx)
+		if x := childExecutionFrom(ctx); x != nil {
+			tctx = withChildExecution(store.WithInternalThreads(tctx), x)
+		}
+		if err := registerExecutionCancellation(tctx, cancel); err != nil {
+			cancel()
+			e.mu.Unlock()
+			return protocol.Turn{}, err
+		}
 		if shared := delegation.BudgetFromContext(ctx); shared != nil {
 			tctx = delegation.WithBudget(tctx, shared)
 		}
@@ -245,7 +295,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 				e.Log.Error("failed to record admission cleanup", "thread", th.ID, "turn", turn.ID, "admission_error", admissionErr, "cleanup_error", cleanupErr)
 				admissionErr = protocol.Errorf(protocol.CodeInternal, "turn %s admission failed: %v; failed to record cleanup: %v; unfinished turn will be reconciled on restart", turn.ID, admissionErr, cleanupErr)
 			} else {
-				e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
+				e.publishTurnEvent(ctx, th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
 			}
 		}
 		e.mu.Lock()
@@ -278,7 +328,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 
 	recorder := newTurnRecorder(e, turn.ID, opt, optSource)
 	tctx = withTurnRecorder(tctx, recorder)
-	e.Bus.Publish(th.ID, protocol.NotifyTurnStarted, protocol.TurnEvent{Turn: turn})
+	e.publishTurnEvent(ctx, th.ID, protocol.NotifyTurnStarted, protocol.TurnEvent{Turn: turn})
 
 	userItem, err := e.newItem(ctx, turn, protocol.ItemUserMessage)
 	if err != nil {
@@ -305,6 +355,12 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 		task := admission.Task
 		if task.ID == "" {
 			task, err = e.EnableDelegation(context.WithValue(ctx, delegationAuthorizationKey{}, admission), th.ID, turn.ID)
+			if err == nil {
+				err = e.Store.CreateAgentModelScope(ctx, task.ID, store.AgentModelScope{Provider: res.approved.provider, Model: res.approved.model, PoolID: res.approved.poolID, Strategy: res.approved.strategy, Explicit: res.approved.explicit, Candidates: res.approved.candidates, CredentialID: res.approvedCredentialID, CredentialIDs: res.approvedCredentialIDs})
+				if err != nil {
+					err = errors.Join(err, e.DelegationCoordinator.CancelTask(context.WithoutCancel(ctx), task.ID))
+				}
+			}
 		}
 		if err != nil {
 			release()
@@ -363,7 +419,7 @@ func (e *Engine) saveAndPublish(ctx context.Context, it protocol.Item, method st
 	if err := e.Store.SaveItem(ctx, it); err != nil {
 		return err
 	}
-	e.Bus.Publish(it.ThreadID, method, protocol.ItemEvent{Item: it})
+	e.publishTurnEvent(ctx, it.ThreadID, method, protocol.ItemEvent{Item: it})
 	return nil
 }
 
@@ -400,7 +456,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		sctx = delegation.WithBudget(sctx, budget.shared)
 	}
 	log := e.Log.With("thread", th.ID, "turn", turn.ID)
-	if e.Work != nil {
+	if e.Work != nil && childExecutionFrom(ctx) == nil {
 		_ = e.Work.Begin(sctx, th, p.Text) // failures are logged and counted by the service
 	}
 	pause := func(reason string) {
@@ -442,7 +498,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		}
 		p.Tools.ComputerUse = &computerEnabled
 		taskProject := p
-		if th.WorkspaceMode == "worktree" {
+		if x := childExecutionFrom(ctx); x != nil {
+			taskProject.Root = x.workspace.Root
+			computerEnabled = false
+		} else if th.WorkspaceMode == "worktree" {
 			workspace, err := e.Worktrees.Ensure(ctx, th.ID, p.Root)
 			if err != nil {
 				e.finishTurn(sctx, th, turn, fmt.Errorf("could not prepare an isolated Git workspace: %w", err), release)
@@ -465,6 +524,8 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			ComputeMemoryMiB: intOr(p.Tools.ComputeMemoryMiB, 0),
 			ComputeDiskMiB:   intOr(p.Tools.ComputeDiskMiB, 0),
 			ApprovalMode:     normalizedApprovalMode(th.ApprovalMode),
+			RestrictedChild:  childExecutionFrom(ctx) != nil,
+			ReadOnly:         childExecutionFrom(ctx) != nil && childExecutionFrom(ctx).child.Role == protocol.AgentRoleReviewer,
 			Record: func(c context.Context, abs string, before *string, deleted bool) {
 				rec.Record(sctx, abs, before, deleted)
 			},
@@ -473,7 +534,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		sctx = tools.WithScope(sctx, scope)
 	}
 	var snapshot pluginSnapshot
-	if e.Plugins != nil {
+	if e.Plugins != nil && childExecutionFrom(ctx) == nil {
 		acquired, err := e.Plugins.Acquire(sctx, th.ProjectID)
 		if err != nil {
 			e.finishTurn(sctx, th, turn, fmt.Errorf("load project plugins: %w", err), release)
@@ -577,6 +638,14 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	toolOccurrences := make(map[string]int)
 	instructionHint := ""
 	for {
+		if childExecutionFrom(ctx) != nil {
+			var followErr error
+			msgs, _, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
+			if followErr != nil {
+				turnErr = followErr
+				break
+			}
+		}
 		if ctx.Err() != nil {
 			if reason := budget.stopReason(); reason != "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				pause(reason)
@@ -664,6 +733,19 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			break
 		}
 		if len(out.calls) == 0 {
+			if childExecutionFrom(ctx) != nil {
+				var added bool
+				var followErr error
+				msgs = appendText(msgs, llm.RoleAssistant, out.text)
+				msgs, added, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
+				if followErr != nil {
+					turnErr = followErr
+					break
+				}
+				if added {
+					continue
+				}
+			}
 			break
 		}
 		if budget.toolRounds >= res.limits.MaxToolRounds {
@@ -851,6 +933,11 @@ type modelOutput struct {
 func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *resolved,
 	req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
 	for {
+		if x := childExecutionFrom(ctx); x != nil {
+			if err := e.recordChildModel(sctx, x, res.sel); err != nil {
+				return modelOutput{}, err
+			}
+		}
 		if reason := budget.stopReason(); reason != "" {
 			return modelOutput{}, fmt.Errorf("turn execution budget reached: %s", reason)
 		}
@@ -894,7 +981,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 		from := res.route
 		res.use(next)
 		e.Log.Info("switching route", "from", from.Model, "to", next.Model, "why", status, "turn", turn.ID)
-		e.Bus.Publish(turn.ThreadID, protocol.NotifyRouteChanged, protocol.RouteChangedEvent{
+		e.publishTurnEvent(ctx, turn.ThreadID, protocol.NotifyRouteChanged, protocol.RouteChangedEvent{
 			ThreadID: turn.ThreadID, TurnID: turn.ID, From: from.Info(), To: next.Info(), Reason: status,
 		})
 		// A different model can answer differently, so the chat says so. A
@@ -1073,7 +1160,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 				_ = e.saveAndPublish(sctx, it, protocol.NotifyItemStarted)
 			}
 			text.WriteString(ev.Text)
-			e.Bus.Publish(turn.ThreadID, protocol.NotifyItemDelta, protocol.ItemDelta{ThreadID: turn.ThreadID, TurnID: turn.ID, ItemID: msgItem.ID, Text: ev.Text})
+			e.publishTurnEvent(ctx, turn.ThreadID, protocol.NotifyItemDelta, protocol.ItemDelta{ThreadID: turn.ThreadID, TurnID: turn.ID, ItemID: msgItem.ID, Text: ev.Text})
 		case llm.EventReasoningDelta:
 			if ev.Thinking != nil {
 				out.thinking = append(out.thinking, *ev.Thinking)
@@ -1226,7 +1313,7 @@ func (e *Engine) turnTools(snapshot pluginSnapshot) []turnTool {
 }
 
 func (e *Engine) runPluginHooks(ctx context.Context, snapshot pluginSnapshot, invocation hooks.Invocation) hooks.Outcome {
-	if e.Hooks == nil || snapshot == nil {
+	if childExecutionFrom(ctx) != nil || e.Hooks == nil || snapshot == nil {
 		return hooks.Outcome{}
 	}
 	invocation.Version = hooks.EnvelopeVersion
@@ -1266,6 +1353,14 @@ func (e *Engine) runTurnCompleteHooks(ctx context.Context, snapshot pluginSnapsh
 // runTool executes one tool call, asking for approval when policy requires it.
 func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn protocol.Turn, call llm.ToolCall, snapshot pluginSnapshot) toolRunResult {
 	name := call.Name
+	if !childToolAllowed(ctx, name) {
+		return e.selectionFailure(sctx, turn, call, name, childPolicyError(name).Error())
+	}
+	var childPolicyErr error
+	ctx, th, childPolicyErr = e.narrowChildToolAuthority(ctx, th)
+	if childPolicyErr != nil {
+		return e.selectionFailure(sctx, turn, call, name, childPolicyErr.Error())
+	}
 	if isDelegationTool(name) {
 		if _, err := e.authorizeDelegationTool(ctx); err != nil {
 			return e.selectionFailure(sctx, turn, call, name, err.Error())
@@ -1332,7 +1427,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	riskLevel := ""
 	var sink *tools.RawSink // the tool's unclipped result, when it provides one
 	observe := func(event hooks.Event, output, toolError string, priorContext []string) toolRunResult {
-		if e.Work != nil {
+		if e.Work != nil && childExecutionFrom(ctx) == nil {
 			raw := ""
 			if sink != nil {
 				raw = sink.Text
@@ -1424,6 +1519,19 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 
 	// An approval wait or plugin hook can outlive policy changes. Check again
 	// immediately before action, against the same frozen implementation.
+	ctx, th, childPolicyErr = e.narrowChildToolAuthority(ctx, th)
+	if childPolicyErr != nil {
+		it.Status, it.Tool.Error = protocol.ItemDenied, childPolicyErr.Error()
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+	}
+	if childExecutionFrom(ctx) != nil && decision == policy.Allow {
+		if currentDecision, _ := e.gate.Check(name, risk, th.Channel == "listener", normalizedApprovalMode(th.ApprovalMode)); currentDecision != policy.Allow {
+			it.Status, it.Tool.Error = protocol.ItemDenied, "parent approval policy narrowed before action; explicitly retry for approval"
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+		}
+	}
 	if selection := selectionFrom(ctx); selection != nil {
 		candidate, found := resolveTurnTool(selection.actual, call.Name)
 		p, policyErr := e.currentSelectionProject(ctx, selection)
@@ -1451,7 +1559,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 					_ = e.Store.SaveItem(sctx, it)
 				}
 			}
-			e.Bus.Publish(turn.ThreadID, protocol.NotifyItemDelta, protocol.ItemDelta{
+			e.publishTurnEvent(ctx, turn.ThreadID, protocol.NotifyItemDelta, protocol.ItemDelta{
 				ThreadID: turn.ThreadID, TurnID: turn.ID, ItemID: it.ID, Output: output,
 			})
 		}
@@ -1531,12 +1639,17 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 	}
 	_ = e.Store.TouchThread(ctx, th.ID)
 	paused := e.takePaused(turn.ID)
-	if e.Work != nil {
+	if paused && childExecutionFrom(ctx) != nil && turn.Status == protocol.TurnCompleted {
+		turn.Status = protocol.TurnFailed
+		turn.Error = "child execution paused at its budget or progress limit"
+		_ = e.Store.FinishTurn(ctx, turn)
+	}
+	if e.Work != nil && childExecutionFrom(ctx) == nil {
 		completedID, _ := e.Work.End(ctx, th.ID, turn.Status, paused, scopeRoot(ctx))
 		e.promoteMemory(ctx, th, turn, completedID)
 	}
 	release()
-	e.Bus.Publish(th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
+	e.publishTurnEvent(ctx, th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
 	e.mu.Lock()
 	if ch, ok := e.turnWaiters[turn.ID]; ok {
 		ch <- turn

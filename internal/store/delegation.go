@@ -20,7 +20,7 @@ var (
 )
 
 const agentTaskCols = `id, thread_id, root_turn_id, activation, state, base_revision, base_root, project_id, created_at, updated_at`
-const agentChildCols = `id, task_id, role, assignment_json, state, revision, workspace_id, result_json, usage_json, correction_rounds, version, created_at, updated_at`
+const agentChildCols = `id, task_id, role, assignment_json, state, revision, workspace_id, result_json, usage_json, correction_rounds, version, created_at, updated_at, model_json`
 
 func validAgentState(state protocol.AgentState) bool {
 	switch state {
@@ -47,8 +47,8 @@ func scanAgentTask(row interface{ Scan(...any) error }) (protocol.AgentTask, err
 
 func scanAgentChild(row interface{ Scan(...any) error }) (protocol.AgentChild, error) {
 	var child protocol.AgentChild
-	var assignment, result, usage, created, updated string
-	err := row.Scan(&child.ID, &child.TaskID, &child.Role, &assignment, &child.State, &child.Revision, &child.WorkspaceID, &result, &usage, &child.CorrectionRounds, &child.Version, &created, &updated)
+	var assignment, result, usage, created, updated, model string
+	err := row.Scan(&child.ID, &child.TaskID, &child.Role, &assignment, &child.State, &child.Revision, &child.WorkspaceID, &result, &usage, &child.CorrectionRounds, &child.Version, &created, &updated, &model)
 	if errors.Is(err, sql.ErrNoRows) {
 		return child, ErrNotFound
 	}
@@ -58,7 +58,7 @@ func scanAgentChild(row interface{ Scan(...any) error }) (protocol.AgentChild, e
 	for _, field := range []struct {
 		data   string
 		target any
-	}{{assignment, &child.Assignment}, {result, &child.Result}, {usage, &child.Usage}} {
+	}{{assignment, &child.Assignment}, {result, &child.Result}, {usage, &child.Usage}, {model, &child.Model}} {
 		if err := json.Unmarshal([]byte(field.data), field.target); err != nil {
 			return child, fmt.Errorf("decode agent child %s: %w", child.ID, err)
 		}
@@ -187,8 +187,12 @@ func (s *Store) CreateAgentChild(ctx context.Context, child protocol.AgentChild,
 	if err != nil {
 		return protocol.AgentChild{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO agent_children (`+agentChildCols+`,call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		child.ID, child.TaskID, child.Role, string(assignment), child.State, child.Revision, child.WorkspaceID, string(result), string(usage), child.CorrectionRounds, child.Version, FormatTime(child.CreatedAt), FormatTime(child.UpdatedAt), callID)
+	model, err := json.Marshal(child.Model)
+	if err != nil {
+		return protocol.AgentChild{}, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO agent_children (`+agentChildCols+`,call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		child.ID, child.TaskID, child.Role, string(assignment), child.State, child.Revision, child.WorkspaceID, string(result), string(usage), child.CorrectionRounds, child.Version, FormatTime(child.CreatedAt), FormatTime(child.UpdatedAt), string(model), callID)
 	if err != nil {
 		return protocol.AgentChild{}, err
 	}
@@ -288,8 +292,12 @@ func (s *Store) UpdateAgentChild(ctx context.Context, child protocol.AgentChild,
 	if err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE agent_children SET state=?,revision=?,workspace_id=?,result_json=?,usage_json=?,correction_rounds=?,version=version+1,updated_at=? WHERE task_id=? AND id=? AND version=?`,
-		child.State, child.Revision, child.WorkspaceID, string(result), string(usage), child.CorrectionRounds, Now(), child.TaskID, child.ID, expectedVersion)
+	model, err := json.Marshal(child.Model)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE agent_children SET state=?,revision=?,workspace_id=?,result_json=?,usage_json=?,model_json=?,correction_rounds=?,version=version+1,updated_at=? WHERE task_id=? AND id=? AND version=?`,
+		child.State, child.Revision, child.WorkspaceID, string(result), string(usage), string(model), child.CorrectionRounds, Now(), child.TaskID, child.ID, expectedVersion)
 	if err != nil {
 		return err
 	}

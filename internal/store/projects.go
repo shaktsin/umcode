@@ -66,7 +66,7 @@ func (s *Store) GetProject(ctx context.Context, id string) (protocol.Project, er
 	if err != nil {
 		return p, err
 	}
-	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM threads WHERE project_id = ?`, id).Scan(&p.Threads)
+	_ = s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM threads WHERE internal_child_id = '' AND project_id = ?`, id).Scan(&p.Threads)
 	return p, nil
 }
 
@@ -84,7 +84,7 @@ func (s *Store) ListProjects(ctx context.Context, includeArchived bool) ([]proto
 	// Counts first: the driver keeps one connection, so a second query while
 	// rows are open would deadlock.
 	counts := map[string]int{}
-	crows, err := s.DB.QueryContext(ctx, `SELECT project_id, COUNT(*) FROM threads WHERE project_id != '' GROUP BY project_id`)
+	crows, err := s.DB.QueryContext(ctx, `SELECT project_id, COUNT(*) FROM threads WHERE internal_child_id = '' AND project_id != '' GROUP BY project_id`)
 	if err == nil {
 		for crows.Next() {
 			var id string
@@ -245,8 +245,8 @@ func (s *Store) ListFileChanges(ctx context.Context, projectID, turnID, path str
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	var where []string
-	var args []any
+	where := []string{"(thread_id NOT IN (SELECT id FROM threads WHERE internal_child_id != '') OR ?)"}
+	args := []any{internalThreads(ctx)}
 	if projectID != "" {
 		where = append(where, "project_id = ?")
 		args = append(args, projectID)

@@ -87,6 +87,8 @@ type Engine struct {
 	reduceHook              func()       // instance-local panic test seam; set before use
 
 	DelegationCoordinator *delegation.Coordinator
+	// Set at construction, before dispatch; nil fails closed. Task6 owns resolution.
+	DelegationWorkspaces WorkspaceResolver
 
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
@@ -113,11 +115,12 @@ type activeTurn struct {
 
 // Options configures New.
 type Options struct {
-	Config  *config.Config
-	Store   *store.Store
-	Secrets secrets.Store
-	LLMs    *llm.Registry // nil = built-in adapters
-	Logger  *slog.Logger
+	DelegationWorkspaces WorkspaceResolver
+	Config               *config.Config
+	Store                *store.Store
+	Secrets              secrets.Store
+	LLMs                 *llm.Registry // nil = built-in adapters
+	Logger               *slog.Logger
 	// DisableScheduler turns off scheduled task runs (tests, secondary engines).
 	DisableScheduler bool
 	// DisableMCP skips starting MCP servers.
@@ -195,7 +198,8 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
-	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus))
+	e.DelegationWorkspaces = o.DelegationWorkspaces
+	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus), delegation.WithRunner(childRunner{engine: e}))
 	for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
 		reg.Add(tool)
 	}
@@ -283,6 +287,9 @@ func (e *Engine) Status(ctx context.Context) protocol.EngineStatus {
 // ---- threads ----
 
 func (e *Engine) publishThread(ctx context.Context, id string) {
+	if hidden, err := e.Store.IsInternalThread(ctx, id); err != nil || hidden {
+		return
+	}
 	if t, err := e.Store.GetThread(ctx, id); err == nil {
 		e.Bus.Publish(id, protocol.NotifyThreadUpdated, protocol.ThreadEvent{Thread: t})
 	}
@@ -936,6 +943,9 @@ func (e *Engine) systemPrompt(ctx context.Context, userText string, proj *protoc
 // instructions, the skills catalog and the project's UMCODE.md files. userText
 // is used to point at a matching skill. Empty layers are omitted.
 func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *protocol.Project, instructionHint string, hookContext []string) []promptLayer {
+	if x := childExecutionFrom(ctx); x != nil {
+		return []promptLayer{{Name: layerCore, Text: "You are a scoped UMCode child agent. Complete only the supplied assignment and acceptance criteria. The supplied guidance and references are your context. Read applicable nested UMCODE.md and explicitly requested skills through scoped read tools. No delegation or activation is permitted. Report the result, changed paths, findings and actual verification evidence; never claim blocked checks passed. Reviewer command, script, hook and plugin execution is blocked because a read-only command sandbox is unavailable. All file access is confined to the owned checkout: " + x.workspace.Root}}
+	}
 	var layers []promptLayer
 	var b strings.Builder
 	flush := func(name string) {

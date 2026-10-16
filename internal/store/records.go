@@ -503,13 +503,24 @@ func recordWorkflowAcceptance(ctx context.Context, tx *sql.Tx, d protocol.WorkDe
 
 // CreateApproval inserts a pending approval.
 func (s *Store) CreateApproval(ctx context.Context, a protocol.Approval) error {
+	if a.AgentTaskID != "" || a.AgentChildID != "" {
+		var valid bool
+		err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_tasks t JOIN agent_children c ON c.task_id=t.id JOIN agent_executions x ON x.child_id=c.id AND x.task_id=t.id JOIN turns tr ON tr.thread_id=x.thread_id JOIN items i ON i.turn_id=tr.id WHERE t.id=? AND c.id=? AND t.thread_id=? AND tr.id=? AND i.id=?)`, a.AgentTaskID, a.AgentChildID, a.ThreadID, a.TurnID, a.ItemID).Scan(&valid)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return errors.New("invalid child approval ownership")
+		}
+	}
+
 	if a.Kind == "" {
 		a.Kind = "tool"
 	}
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO approvals (id, thread_id, turn_id, item_id, tool, args_json, risk,
-		reason, action_summary, status, created_at, expires_at, kind, work_id, node_id, node_revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		reason, action_summary, status, created_at, expires_at, kind, work_id, node_id, node_revision, agent_task_id, agent_child_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULLIF(?,''),NULLIF(?,''))`,
 		a.ID, a.ThreadID, a.TurnID, a.ItemID, a.Tool, string(a.Args), a.Risk, a.Reason, a.ActionSummary,
-		a.Status, FormatTime(a.CreatedAt), FormatTime(a.ExpiresAt), a.Kind, a.WorkID, a.NodeID, a.NodeRevision)
+		a.Status, FormatTime(a.CreatedAt), FormatTime(a.ExpiresAt), a.Kind, a.WorkID, a.NodeID, a.NodeRevision, a.AgentTaskID, a.AgentChildID)
 	return err
 }
 
@@ -532,7 +543,7 @@ func (s *Store) GetApproval(ctx context.Context, id string) (protocol.Approval, 
 	var a protocol.Approval
 	var args, created, expires string
 	var decided sql.NullString
-	err := s.DB.QueryRowContext(ctx, `SELECT id,thread_id,turn_id,item_id,tool,args_json,risk,reason,action_summary,status,decided_by,created_at,expires_at,decided_at,kind,work_id,node_id,node_revision FROM approvals WHERE id=?`, id).Scan(&a.ID, &a.ThreadID, &a.TurnID, &a.ItemID, &a.Tool, &args, &a.Risk, &a.Reason, &a.ActionSummary, &a.Status, &a.DecidedBy, &created, &expires, &decided, &a.Kind, &a.WorkID, &a.NodeID, &a.NodeRevision)
+	err := s.DB.QueryRowContext(ctx, `SELECT id,thread_id,turn_id,item_id,tool,args_json,risk,reason,action_summary,status,decided_by,created_at,expires_at,decided_at,kind,work_id,node_id,node_revision, COALESCE(agent_task_id,''), COALESCE(agent_child_id,'') FROM approvals WHERE id=?`, id).Scan(&a.ID, &a.ThreadID, &a.TurnID, &a.ItemID, &a.Tool, &args, &a.Risk, &a.Reason, &a.ActionSummary, &a.Status, &a.DecidedBy, &created, &expires, &decided, &a.Kind, &a.WorkID, &a.NodeID, &a.NodeRevision, &a.AgentTaskID, &a.AgentChildID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -559,7 +570,7 @@ func (s *Store) PendingWorkflowApproval(ctx context.Context, workID, nodeID stri
 // ListApprovals returns approvals with the given status ("" = all), newest first.
 func (s *Store) ListApprovals(ctx context.Context, status string) ([]protocol.Approval, error) {
 	q := `SELECT id, thread_id, turn_id, item_id, tool, args_json, risk, reason, action_summary, status,
-		decided_by, created_at, expires_at, decided_at, kind, work_id, node_id, node_revision FROM approvals`
+		decided_by, created_at, expires_at, decided_at, kind, work_id, node_id, node_revision, COALESCE(agent_task_id,''), COALESCE(agent_child_id,'') FROM approvals`
 	var args []any
 	if status != "" {
 		q += ` WHERE status = ?`
@@ -576,7 +587,7 @@ func (s *Store) ListApprovals(ctx context.Context, status string) ([]protocol.Ap
 		var args, created, expires string
 		var decided sql.NullString
 		if err := rows.Scan(&a.ID, &a.ThreadID, &a.TurnID, &a.ItemID, &a.Tool, &args, &a.Risk, &a.Reason,
-			&a.ActionSummary, &a.Status, &a.DecidedBy, &created, &expires, &decided, &a.Kind, &a.WorkID, &a.NodeID, &a.NodeRevision); err != nil {
+			&a.ActionSummary, &a.Status, &a.DecidedBy, &created, &expires, &decided, &a.Kind, &a.WorkID, &a.NodeID, &a.NodeRevision, &a.AgentTaskID, &a.AgentChildID); err != nil {
 			return nil, err
 		}
 		a.Args = json.RawMessage(args)
