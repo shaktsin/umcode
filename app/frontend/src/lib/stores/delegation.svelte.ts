@@ -15,10 +15,10 @@ export class DelegationState {
   private request = 0;
   private events = 0;
   get active() { return this.tasks.find(s => agentActive(s.task.state)); }
-  async bind(threadId: string | null, projectId?: string) {
-    if (this.threadId !== threadId || this.projectId !== projectId) {
+  async bind(threadId: string | null, projectId?: string, preservePending = false) {
+    if (threadId === null || this.threadId !== threadId || this.projectId !== projectId) {
       this.generation++; this.request++; this.threadId = threadId; this.projectId = projectId;
-      this.tasks = []; this.token = null; this.pending = false; this.error = '';
+      this.tasks = []; this.token = null; this.pending = preservePending; this.error = '';
     }
     if (threadId) await this.hydrate();
   }

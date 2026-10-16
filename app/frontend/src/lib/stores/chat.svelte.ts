@@ -334,7 +334,11 @@ class ChatState {
       const th = await this.startMainThread();
       if (generation !== this.mainGeneration || projects.activeId !== projectId || view.id) return;
       view.id = th.id; view.thread = th;
-      await view.delegation.bind(th.id, th.projectId);
+      await view.delegation.bind(th.id, th.projectId, true);
+      if (generation !== this.mainGeneration || projects.activeId !== projectId || view.id !== th.id || view.delegation.threadId !== th.id) return;
+      // Transfer the pending guard synchronously to enable; no submission can
+      // run between hydration and the one-use permission request.
+      view.delegation.pending = false;
       await view.delegation.enable();
     } catch (e) {
       if (generation === this.mainGeneration) view.delegation.error = errMsg(e);

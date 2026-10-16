@@ -12,3 +12,5 @@
     {/if}
   </div>
 {/if}
+
+{#if state.error && !state.threadId}<p class="px-4 pb-2 text-xs text-rust" role="alert">{state.error}</p>{/if}

@@ -94,3 +94,29 @@ it('child events refresh shared actual usage', async () => {
   v.delegation.apply({ threadId: 'parent', taskId: 'task', child: child(2), sequence: 2 });
   await vi.waitFor(() => expect(v.delegation.tasks[0].usage?.costUsd).toBe(.5));
 });
+it('new-chat activation remains pending across delayed hydration until its token is ready', async () => {
+  const { chat } = await import('./stores/chat.svelte'); await chat.newChatFor('project'); const list = deferred<any>(); const permission = deferred<any>();
+  call.mockImplementation(async (method: string) => {
+    if (method === 'thread/start') return { id: 'parent', projectId: 'project', settings: {}, updatedAt: '' };
+    if (method === 'delegation/list') return list.promise;
+    if (method === 'delegation/enable') return permission.promise;
+    return {};
+  });
+  const enabling = chat.enableDelegation(chat.main); await vi.waitFor(() => expect(chat.main.id).toBe('parent'));
+  expect(chat.main.delegation.pending).toBe(true); await chat.send('should wait'); expect(call.mock.calls.some(([m]) => m === 'turn/start')).toBe(false);
+  await chat.enableDelegation(chat.main); expect(call.mock.calls.filter(([m]) => m === 'thread/start')).toHaveLength(1); expect(call.mock.calls.some(([m]) => m === 'delegation/enable')).toBe(false);
+  list.resolve({ tasks: [] }); await vi.waitFor(() => expect(call.mock.calls.some(([m]) => m === 'delegation/enable')).toBe(true)); expect(chat.main.delegation.pending).toBe(true);
+  permission.resolve({ activationToken: 'ready', expiresAt: new Date(Date.now() + 10000).toISOString() }); await enabling;
+  await chat.send('first paid message'); expect(call).toHaveBeenCalledWith('turn/start', expect.objectContaining({ delegationActivationToken: 'ready' }));
+});
+it('navigation while activation hydration waits cannot enable the replacement chat', async () => {
+  const { chat } = await import('./stores/chat.svelte'); await chat.newChatFor('project'); const list = deferred<any>();
+  call.mockImplementation(async (method: string, params: any) => {
+    if (method === 'thread/start') return { id: 'parent', projectId: 'project', settings: {}, updatedAt: '' };
+    if (method === 'delegation/list' && params.threadId === 'parent') return list.promise;
+    if (method === 'thread/read') return { thread: { id: 'replacement', projectId: 'project', settings: {} }, turns: [], items: [] };
+    return { tasks: [] };
+  });
+  const enabling = chat.enableDelegation(chat.main); await vi.waitFor(() => expect(chat.main.id).toBe('parent')); await chat.open('replacement'); list.resolve({ tasks: [] }); await enabling;
+  expect(chat.main.id).toBe('replacement'); expect(chat.main.delegation.token).toBeNull(); expect(call.mock.calls.some(([m]) => m === 'delegation/enable')).toBe(false);
+});

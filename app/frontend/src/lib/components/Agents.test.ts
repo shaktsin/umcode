@@ -9,3 +9,9 @@ it('renders collapsed compact agent evidence with honest blocked and interrupted
   const { body } = render(Agents, { props: { state, threadId: 'parent', projectId: 'project' } });
   expect(body).toContain('Agents'); expect(body).toContain('Inspect exact revision'); expect(body).toContain('review-model'); expect(body).toContain('Interrupted'); expect(body).toContain('Storage unavailable'); expect(body).toContain('Partial review'); expect(body).toContain('Ownership issue'); expect(body).toContain('blocked'); expect(body).toContain('not_run'); expect(body).not.toMatch(/<details[^>]* open/);
 });
+
+import DelegationActivation from './DelegationActivation.svelte';
+it('shows unsupported projectless activation errors before a chat exists', () => {
+  const { body } = render(DelegationActivation, { props: { state: { active: undefined, threadId: null, error: 'Agents require a committed Git project. Open a project first.', pending: false, token: null } as any, onenable() {} } });
+  expect(body).toContain('role="alert"'); expect(body).toContain('Agents require a committed Git project. Open a project first.');
+});
