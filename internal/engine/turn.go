@@ -573,7 +573,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	// starts with room to work. Failure is not fatal: the history limit and
 	// tool-result trimming still bound the request.
 	if overWindow(msgs, 0, res.meta.ContextWindow, contextCompactFraction) {
-		if err := e.compactLocked(sctx, th.ID, turn.ID, snapshot); err != nil {
+		if err := e.compactLocked(ctx, sctx, th.ID, turn.ID, snapshot); err != nil {
 			log.Warn("automatic context compaction failed", "err", err)
 		} else if h, err := e.history(sctx, th.ID, turn.ID); err == nil {
 			msgs = h

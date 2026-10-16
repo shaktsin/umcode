@@ -54,20 +54,20 @@ func (e *Engine) CompactThread(ctx context.Context, threadID string) error {
 		snapshot = acquired
 		defer snapshot.Release()
 	}
-	return e.compactLocked(ctx, threadID, "", snapshot)
+	return e.compactLocked(ctx, ctx, threadID, "", snapshot)
 }
 
 // compactLocked summarizes the context of every turn except currentTurn and
 // stores the summary on the newest of those turns. The caller must hold the
 // thread's turn lock (a manual compaction takes it; a running turn already has
 // it). currentTurn is empty for a manual compaction.
-func (e *Engine) compactLocked(ctx context.Context, threadID, currentTurn string, snapshot pluginSnapshot) error {
+func (e *Engine) compactLocked(ctx, sctx context.Context, threadID, currentTurn string, snapshot pluginSnapshot) error {
 	thread, err := e.Store.GetThread(ctx, threadID)
 	if err != nil {
 		return err
 	}
 	return e.withCompactionHooks(ctx, snapshot, thread, currentTurn, func() error {
-		return e.compactConversation(ctx, thread, currentTurn)
+		return e.compactConversation(ctx, sctx, thread, currentTurn)
 	})
 }
 
@@ -83,7 +83,11 @@ func (e *Engine) withCompactionHooks(ctx context.Context, snapshot pluginSnapsho
 	return err
 }
 
-func (e *Engine) compactConversation(ctx context.Context, thread protocol.Thread, currentTurn string) error {
+func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.Thread, currentTurn string) error {
+	// Only durable settlement and summary writes detach from execution. Allow
+	// the two-minute provider request plus a bounded recovery-write interval.
+	sctx, cancelStorage := context.WithTimeout(context.WithoutCancel(sctx), 2*time.Minute+30*time.Second)
+	defer cancelStorage()
 	threadID := thread.ID
 	allTurns, err := e.Store.ListTurns(ctx, threadID)
 	if err != nil {
@@ -136,7 +140,7 @@ func (e *Engine) compactConversation(ctx context.Context, thread protocol.Thread
 	if shared != nil {
 		budget := newTurnBudget(selection.limits)
 		budget.shared = shared
-		out, err := e.streamOnce(compactCtx, context.WithoutCancel(ctx), turns[len(turns)-1], selection, selection.cred, provider, request, "compaction", budget)
+		out, err := e.streamOnce(compactCtx, sctx, turns[len(turns)-1], selection, selection.cred, provider, request, "compaction", budget)
 		if err != nil {
 			return fmt.Errorf("compact chat context: %w", err)
 		}
@@ -168,13 +172,13 @@ func (e *Engine) compactConversation(ctx context.Context, thread protocol.Thread
 	}
 
 	turn := turns[len(turns)-1]
-	item, err := e.newItem(ctx, turn, protocol.ItemContextCompaction)
+	item, err := e.newItem(sctx, turn, protocol.ItemContextCompaction)
 	if err != nil {
 		return err
 	}
 	item.Status = protocol.ItemCompleted
 	item.Text = text
-	if err := e.Store.SaveItem(ctx, item); err != nil {
+	if err := e.Store.SaveItem(sctx, item); err != nil {
 		return err
 	}
 	if shared == nil {
@@ -189,7 +193,7 @@ func (e *Engine) compactConversation(ctx context.Context, thread protocol.Thread
 			Requests: 1, Estimated: !usage.Reported,
 		}
 		totals.CostUSD = models.Cost(selection.meta, usage)
-		if err := e.Store.InsertUsage(ctx, store.UsageRecord{
+		if err := e.Store.InsertUsage(sctx, store.UsageRecord{
 			CredentialID: selection.cred.Record.ID, Provider: selection.sel.Provider, Model: selection.sel.Model,
 			ThreadID: threadID, TurnID: turn.ID, Role: "compaction", Usage: totals,
 			LatencyMs: time.Since(started).Milliseconds(), Status: "ok",
@@ -197,7 +201,7 @@ func (e *Engine) compactConversation(ctx context.Context, thread protocol.Thread
 			e.Log.Warn("record compaction usage", "err", err)
 		}
 	}
-	e.Bus.Publish(threadID, protocol.NotifyItemCompleted, protocol.ItemEvent{Item: item})
+	e.publishTurnEvent(ctx, threadID, protocol.NotifyItemCompleted, protocol.ItemEvent{Item: item})
 	return nil
 }
 

@@ -58,12 +58,22 @@ func (b ScopedContextBuilder) Build(ctx context.Context, task protocol.AgentTask
 		if sensitiveReference(pathutil.Rel(b.Root, path)) || sensitiveReference(pathutil.Rel(b.Root, pathutil.Resolved(path))) {
 			return nil, fmt.Errorf("credential or system reference is not permitted: %s", ref)
 		}
-		f, err := os.Open(path)
+		canonical := pathutil.Resolved(path)
+		before, err := os.Lstat(canonical)
+		if err != nil {
+			return nil, err
+		}
+		if !before.Mode().IsRegular() {
+			return nil, fmt.Errorf("reference must be a regular file: %s", ref)
+		}
+		f, err := os.Open(canonical)
 		if err != nil {
 			return nil, err
 		}
 		info, err := f.Stat()
-		if err != nil || !info.Mode().IsRegular() {
+		current, pathErr := os.Lstat(canonical)
+		_, containErr := pathutil.Contain(b.Root, canonical)
+		if err != nil || !info.Mode().IsRegular() || pathErr != nil || !current.Mode().IsRegular() || containErr != nil || !os.SameFile(before, info) || !os.SameFile(info, current) {
 			f.Close()
 			return nil, fmt.Errorf("reference must be a regular file: %s", ref)
 		}

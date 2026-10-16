@@ -227,7 +227,7 @@ func TestDelegationBudgetIncludesAuxiliaryRequests(t *testing.T) {
 	}
 	shared := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100_000, MaxCostUSD: 10}, protocol.UsageTotals{}, nil)
 	ctx := delegation.WithBudget(t.Context(), shared)
-	if err := e.compactConversation(ctx, th, ""); err != nil {
+	if err := e.compactConversation(ctx, ctx, th, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := shared.Usage(); got.Requests != 1 || got.InputTokens != 10 || got.OutputTokens != 20 {

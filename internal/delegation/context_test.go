@@ -3,9 +3,11 @@ package delegation
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 )
@@ -64,5 +66,44 @@ func TestScopedContext(t *testing.T) {
 				t.Fatal("unsafe or oversized context accepted")
 			}
 		})
+	}
+}
+
+// Opening a FIFO before validating its type blocks without honoring ctx.
+// The failure branch connects a writer to release the old implementation.
+func TestScopedContextRejectsFIFO(t *testing.T) {
+	program, err := exec.LookPath("mkfifo")
+	if err != nil {
+		t.Skip("FIFO fixture unavailable on this platform")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "reference")
+	if out, err := exec.Command(program, path).CombinedOutput(); err != nil {
+		t.Fatalf("create FIFO: %v %s", err, out)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (ScopedContextBuilder{Root: root}).Build(ctx, protocol.AgentTask{}, protocol.AgentChild{Assignment: protocol.AgentAssignment{Prompt: "inspect", ContextRefs: []string{"reference"}}})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Fatalf("FIFO not rejected as nonregular: %v", err)
+		}
+	case <-time.After(time.Second):
+		cancel()
+		writer, err := os.OpenFile(path, os.O_WRONLY, 0600)
+		if err == nil {
+			writer.Close()
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("FIFO reader stayed blocked after cleanup writer")
+		}
+		t.Fatal("special reference blocked before file-type validation")
 	}
 }
