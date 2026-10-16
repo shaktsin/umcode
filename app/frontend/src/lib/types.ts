@@ -258,6 +258,8 @@ export interface Attachment {
 }
 
 export interface Approval {
+  agentTaskId?: string;
+  agentChildId?: string;
   id: string;
   threadId: string;
   projectId?: string;

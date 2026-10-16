@@ -118,6 +118,7 @@ type DelegationUpdated struct {
 	Task     *AgentTask     `json:"task,omitempty"`
 	Workflow *AgentWorkflow `json:"workflow,omitempty"`
 	Error    string         `json:"error,omitempty"`
+	Sequence int64          `json:"sequence,omitempty"`
 }
 
 const NotifyDelegationUpdated = "delegation/updated"
@@ -149,4 +150,31 @@ type AgentWorkflow struct {
 	Revision       string               `json:"revision"`
 	Checks         []AgentWorkflowCheck `json:"checks"`
 	CleanupWarning string               `json:"cleanupWarning,omitempty"`
+}
+
+// AgentSnapshot is a read-only, parent-scoped hydration view. Host workspace
+// roots and internal execution identities are never exposed by this RPC.
+type AgentSnapshot struct {
+	Task            AgentTask         `json:"task"`
+	Children        []AgentChild      `json:"children"`
+	ChildErrors     map[string]string `json:"childErrors,omitempty"`
+	ChildSequences  map[string]int64  `json:"childSequences,omitempty"`
+	Workflow        *AgentWorkflow    `json:"workflow,omitempty"`
+	Usage           UsageTotals       `json:"usage"`
+	BudgetAvailable bool              `json:"budgetAvailable"`
+	StopReason      string            `json:"stopReason,omitempty"`
+}
+type DelegationListParams struct {
+	ThreadID string `json:"threadId"`
+	TaskID   string `json:"taskId,omitempty"`
+}
+type DelegationListResult struct {
+	Tasks []AgentSnapshot `json:"tasks"`
+}
+type DelegationFileParams struct {
+	ThreadID string `json:"threadId"`
+	TaskID   string `json:"taskId"`
+	ChildID  string `json:"childId"`
+	Revision string `json:"revision"`
+	Path     string `json:"path"`
 }

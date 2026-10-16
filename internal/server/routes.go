@@ -202,6 +202,18 @@ func (s *Server) routes() map[string]handler {
 			}
 			return e.PrepareDelegation(ctx, p.ThreadID)
 		}),
+		protocol.MethodDelegationList: bind(func(ctx context.Context, c *conn, p protocol.DelegationListParams) (any, error) {
+			if !c.admin.Load() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read delegation")
+			}
+			return e.ListDelegation(ctx, p)
+		}),
+		protocol.MethodDelegationFile: bind(func(ctx context.Context, c *conn, p protocol.DelegationFileParams) (any, error) {
+			if !c.admin.Load() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read delegation")
+			}
+			return e.ReadDelegationFile(ctx, p)
+		}),
 		protocol.MethodDelegationCancel: bind(func(ctx context.Context, c *conn, p protocol.DelegationCancelParams) (any, error) {
 			if !c.IsAdmin() {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can cancel delegation")

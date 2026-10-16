@@ -607,6 +607,11 @@ func TestCoordinatorReviewSnapshots(t *testing.T) {
 	if _, err = c.Wait(ctx, task.ID, []string{child.ID}); err == nil || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected retained outcome: %v", err)
 	}
+	children, failures, sequences, readErr := c.Snapshot(t.Context(), task.ID)
+	if readErr != nil || len(children) != 1 || children[0].Result.Summary != "Retained review" || failures[child.ID] == "" || sequences[child.ID] == 0 {
+		t.Fatalf("hydration lost pending outcome: %+v %+v %+v %v", children, failures, sequences, readErr)
+	}
+	oldSequence := sequences[child.ID]
 	snapshot, err := c.Status(t.Context(), task.ID, child.ID)
 	if err == nil || snapshot.Result.Review == nil {
 		t.Fatalf("missing retained review: %+v %v", snapshot, err)
@@ -620,5 +625,9 @@ func TestCoordinatorReviewSnapshots(t *testing.T) {
 	s.fail.Store(false)
 	if err = c.Cancel(t.Context(), task.ID, child.ID); err != nil {
 		t.Fatal(err)
+	}
+	children, failures, sequences, readErr = c.Snapshot(t.Context(), task.ID)
+	if readErr != nil || len(failures) != 0 || sequences[child.ID] <= oldSequence || children[0].Result.Summary != "Retained review" {
+		t.Fatalf("hydration recovery: %+v %+v %+v %v", children, failures, sequences, readErr)
 	}
 }

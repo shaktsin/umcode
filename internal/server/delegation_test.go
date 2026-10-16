@@ -130,3 +130,55 @@ func TestDelegationRPCCancel(t *testing.T) {
 	h.call("delegation/cancel", p, &result)
 	h.callErr(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "late resume", DelegationTaskID: task.ID})
 }
+
+func TestDelegationRPCReadOwnership(t *testing.T) {
+	h := newHarness(t, nil)
+	commitDelegationFixture(t, h)
+	h.addKey("claude", "test", "fake")
+	var th, other protocol.Thread
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &th)
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &other)
+	var activation protocol.DelegationEnableResult
+	h.call(protocol.MethodDelegationEnable, protocol.ThreadIDParams{ThreadID: th.ID}, &activation)
+	h.fake.push(textReply("ready"))
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "work", DelegationActivationToken: activation.ActivationToken}, &started)
+	h.waitTurn(started.Turn.ID, nil)
+	task, err := h.eng.Store.AgentTaskForRootTurn(h.ctx, th.ID, started.Turn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a task not yet having executed a budget-bearing root request.
+	if _, err = h.eng.Store.DB.ExecContext(h.ctx, `DELETE FROM agent_task_budgets WHERE task_id=?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	var got protocol.DelegationListResult
+	h.call("delegation/list", protocol.DelegationListParams{ThreadID: th.ID}, &got)
+	if len(got.Tasks) != 1 || got.Tasks[0].Task.ID != task.ID || got.Tasks[0].Task.BaseRoot != "" || got.Tasks[0].Task.ParentRoot != "" {
+		t.Fatalf("hydration: %+v", got)
+	}
+	var count int
+	if err = h.eng.Store.DB.QueryRowContext(h.ctx, `SELECT count(*) FROM agent_task_budgets WHERE task_id=?`, task.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("read initialized ledger: %d %v", count, err)
+	}
+	h.callErr("delegation/list", protocol.DelegationListParams{ThreadID: other.ID, TaskID: task.ID})
+	h.callErr("delegation/file", protocol.DelegationFileParams{ThreadID: other.ID, TaskID: task.ID, ChildID: "guessed", Revision: "HEAD", Path: "/etc/passwd"})
+	h.callErr("delegation/file", protocol.DelegationFileParams{ThreadID: th.ID, TaskID: task.ID, ChildID: "guessed", Revision: "HEAD", Path: "/etc/passwd"})
+	nonadmin, err := client.Dial(h.ctx, h.eng.Cfg.Runtime.SocketPath, "tool-client", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nonadmin.Close()
+	for _, method := range []string{"delegation/list", "delegation/file"} {
+		if err = nonadmin.Call(h.ctx, method, map[string]string{"threadId": th.ID, "taskId": task.ID}, nil); err == nil {
+			t.Fatalf("non-app %s accepted", method)
+		}
+	}
+	if err = h.eng.Store.UpdateAgentTaskState(h.ctx, task.ID, th.ID, task.ProjectID, task.State, protocol.AgentStateInterrupted); err != nil {
+		t.Fatal(err)
+	}
+	h.call("delegation/list", protocol.DelegationListParams{ThreadID: th.ID, TaskID: task.ID}, &got)
+	if len(got.Tasks) != 1 || got.Tasks[0].Task.State != protocol.AgentStateInterrupted {
+		t.Fatalf("restart record missing: %+v", got)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
@@ -150,8 +151,15 @@ func (c *Coordinator) notifyError(task protocol.AgentTask, child protocol.AgentC
 		close(ch)
 	}
 	c.changed[task.ID] = make(chan struct{})
+	// Microsecond stamps (safe as JavaScript integers) also order delayed deliveries across engine restarts.
+	next := time.Now().UnixMicro()
+	if next <= c.sequence {
+		next = c.sequence + 1
+	}
+	c.sequence = next
+	c.sequences[child.ID] = next
 	if c.events != nil {
-		event := protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Child: cloneChild(child)}
+		event := protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Child: cloneChild(child), Sequence: next}
 		if err != nil {
 			event.Error = err.Error()
 		}
@@ -371,8 +379,44 @@ func (c *Coordinator) Status(ctx context.Context, taskID, childID string) (proto
 	defer c.lifecycleMu.Unlock()
 	return c.statusLocked(ctx, taskID, childID)
 }
+
+// Snapshot overlays retained outcomes without retrying persistence, starting
+// execution, or constructing the task budget. Errors belong to individual rows.
+func (c *Coordinator) Snapshot(ctx context.Context, taskID string) ([]protocol.AgentChild, map[string]string, map[string]int64, error) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	children, err := c.store.AgentChildren(ctx, taskID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	errs := map[string]string{}
+	seqs := map[string]int64{}
+	for i, child := range children {
+		if slot := c.slots[taskID]; slot != nil && slot.childID == child.ID && slot.finalErr != nil {
+			children[i] = cloneChild(slot.snapshot)
+			if slot.pending != nil && hasResult(slot.pending.result) {
+				children[i].Result = cloneChild(protocol.AgentChild{Result: slot.pending.result}).Result
+			}
+			errs[child.ID] = slot.finalErr.Error()
+		}
+		seqs[child.ID] = c.sequences[child.ID]
+	}
+	return children, errs, seqs, nil
+}
 func (c *Coordinator) List(ctx context.Context, taskID string) ([]protocol.AgentChild, error) {
-	return c.store.AgentChildren(ctx, taskID)
+	children, _, _, err := c.Snapshot(ctx, taskID)
+	return children, err
+}
+
+// LiveBudget is a read-only view of an already-admitted owner.
+func (c *Coordinator) LiveBudget(taskID string) (protocol.UsageTotals, string, bool) {
+	c.mu.Lock()
+	rt := c.tasks[taskID]
+	c.mu.Unlock()
+	if rt == nil {
+		return protocol.UsageTotals{}, "", false
+	}
+	return rt.budget.Usage(), rt.budget.StopReason(), true
 }
 func (c *Coordinator) Wait(ctx context.Context, taskID string, childIDs []string) ([]protocol.AgentChild, error) {
 	if len(childIDs) == 0 {

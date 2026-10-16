@@ -125,6 +125,16 @@ class Inspector {
       : { error: 'This file could not be read.' });
   }
 
+  /** An immutable owned child snapshot; never substitute current parent bytes. */
+  async openAgentFile(path: string, threadId: string, taskId: string, childId: string, revision: string, projectId?: string) {
+    const id = scopedId('agent-file', projectId, threadId, JSON.stringify([taskId, childId, revision, path]));
+    const token = this.beginRead({ id, kind: 'file', title: `${path.split('/').pop()} · ${revision.slice(0, 7)}`, path, threadId, projectId, loading: true });
+    const result = await app.try<ProjectFileContent>('delegation/file', { threadId, taskId, childId, revision, path });
+    this.finishRead(id, token, result
+      ? { content: result.content, truncated: result.truncated, binary: result.binary }
+      : { error: 'Child snapshot is unavailable. Its retained workspace may have been cleaned.' });
+  }
+
   /** Open one file change (a unified diff) from a turn. */
   openDiff(change: FileChangeData, threadId?: string, projectId?: string) {
     const path = canonicalPath(change.path);

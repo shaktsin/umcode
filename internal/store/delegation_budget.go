@@ -22,8 +22,15 @@ func (s *Store) AgentTaskBudget(ctx context.Context, taskID string, initial prot
 	if err != nil {
 		return limits, usage, err
 	}
+	return s.ReadAgentTaskBudget(ctx, taskID)
+}
+
+// ReadAgentTaskBudget never initializes a ledger or changes its limits.
+func (s *Store) ReadAgentTaskBudget(ctx context.Context, taskID string) (protocol.ExecutionLimits, protocol.UsageTotals, error) {
+	var limits protocol.ExecutionLimits
+	var usage protocol.UsageTotals
 	var l, u string
-	err = s.DB.QueryRowContext(ctx, `SELECT limits_json,usage_json FROM agent_task_budgets WHERE task_id=?`, taskID).Scan(&l, &u)
+	err := s.DB.QueryRowContext(ctx, `SELECT limits_json,usage_json FROM agent_task_budgets WHERE task_id=?`, taskID).Scan(&l, &u)
 	if errors.Is(err, sql.ErrNoRows) {
 		return limits, usage, ErrNotFound
 	}

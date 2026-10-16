@@ -42,10 +42,12 @@ type Coordinator struct {
 	events      EventSink
 	slots       map[string]*childRun
 	changed     map[string]chan struct{}
+	sequences   map[string]int64
+	sequence    int64
 }
 
 func NewCoordinator(base context.Context, s TaskStore, options ...CoordinatorOption) *Coordinator {
-	c := &Coordinator{base: base, store: s, tasks: map[string]*taskRuntime{}, cancelled: map[string]bool{}, slots: map[string]*childRun{}, changed: map[string]chan struct{}{}}
+	c := &Coordinator{base: base, store: s, tasks: map[string]*taskRuntime{}, cancelled: map[string]bool{}, slots: map[string]*childRun{}, changed: map[string]chan struct{}{}, sequences: map[string]int64{}}
 	for _, option := range options {
 		option(c)
 	}

@@ -329,3 +329,24 @@ func TestAgentDelegationMigrationAndOwnership(t *testing.T) {
 		t.Fatalf("migration count=%d err=%v", count, err)
 	}
 }
+
+// A UI read before first execution must never initialize an unlimited ledger.
+func TestAgentBudgetReadDoesNotInitialize(t *testing.T) {
+	s, err := Open(t.Context(), filepath.Join(t.TempDir(), "read.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	task := agentTaskFixture(t, s, "read")
+	if _, _, err := s.ReadAgentTaskBudget(t.Context(), task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing ledger: %v", err)
+	}
+	limits, _, err := s.AgentTaskBudget(t.Context(), task.ID, protocol.ExecutionLimits{MaxTokens: 42})
+	if err != nil || limits.MaxTokens != 42 {
+		t.Fatalf("UI poisoned limits: %+v %v", limits, err)
+	}
+	limits, _, err = s.ReadAgentTaskBudget(t.Context(), task.ID)
+	if err != nil || limits.MaxTokens != 42 {
+		t.Fatalf("read: %+v %v", limits, err)
+	}
+}

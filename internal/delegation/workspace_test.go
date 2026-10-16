@@ -575,3 +575,50 @@ func TestDelegationWorkspaceCancelledTaskCannotIntegrate(t *testing.T) {
 		t.Fatal("cancelled task changed parent")
 	}
 }
+
+// Snapshot links must read the bound committed child bytes, even when its
+// checkout or the parent changes; guessed paths/owners cannot expose host data.
+func TestWorkspaceReadSnapshotScope(t *testing.T) {
+	svc, s, task, child := workspaceFixture(t)
+	ref, err := svc.Prepare(t.Context(), task, child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceWrite(t, ref.Root, "tracked", "child snapshot\n")
+	if err = os.Symlink("/etc/passwd", filepath.Join(ref.Root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	// Snapshot correctly refuses an outside symlink; remove it before finalizing.
+	if _, err = svc.Snapshot(t.Context(), task, child, ref); err == nil {
+		t.Fatal("outside symlink snapshot accepted")
+	}
+	os.Remove(filepath.Join(ref.Root, "escape"))
+	snap, err := svc.Snapshot(t.Context(), task, child, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child = workspaceComplete(t, s, task, child, snap.ResultRevision)
+	workspaceWrite(t, ref.Root, "tracked", "later mutable checkout\n")
+	got, err := svc.ReadSnapshotFile(t.Context(), task.ID, child.ID, child.Revision, "tracked")
+	if err != nil || got.Content != "child snapshot\n" {
+		t.Fatalf("snapshot: %+v %v", got, err)
+	}
+	for _, path := range []string{"../tracked", "/etc/passwd", "./tracked", "a/../tracked", ".git/config", ".aws/credentials", ".env", "tracked:other", "tracked\\other"} {
+		if _, err = svc.ReadSnapshotFile(t.Context(), task.ID, child.ID, child.Revision, path); err == nil {
+			t.Fatalf("unsafe path %q accepted", path)
+		}
+	}
+	for _, ids := range [][3]string{{"foreign", child.ID, child.Revision}, {task.ID, "foreign", child.Revision}, {task.ID, child.ID, task.BaseRevision}, {task.ID, child.ID, "HEAD"}} {
+		if _, err = svc.ReadSnapshotFile(t.Context(), ids[0], ids[1], ids[2], "tracked"); err == nil {
+			t.Fatalf("foreign snapshot %v accepted", ids)
+		}
+	}
+	w, _ := s.AgentWorkspace(t.Context(), ref.ID)
+	w.Cleaned = true
+	if err = s.SaveAgentWorkspace(t.Context(), w); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ReadSnapshotFile(t.Context(), task.ID, child.ID, child.Revision, "tracked"); err == nil {
+		t.Fatal("cleaned snapshot substituted parent")
+	}
+}

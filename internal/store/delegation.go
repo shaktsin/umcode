@@ -336,3 +336,21 @@ func (s *Store) ReconcileAgentChildren(ctx context.Context) error {
 	}
 	return tx.Commit()
 }
+
+// AgentTasksForThread includes terminal and interrupted recovery records.
+func (s *Store) AgentTasksForThread(ctx context.Context, threadID string) ([]protocol.AgentTask, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+agentTaskCols+` FROM agent_tasks WHERE thread_id=? ORDER BY created_at DESC`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []protocol.AgentTask{}
+	for rows.Next() {
+		task, err := scanAgentTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, task)
+	}
+	return out, rows.Err()
+}

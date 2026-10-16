@@ -1,3 +1,5 @@
+import { DelegationState } from './delegation.svelte';
+import type { DelegationUpdated } from '$lib/delegation';
 import { app } from './app.svelte';
 import { projects } from './projects.svelte';
 import { errMsg } from '$lib/format';
@@ -24,6 +26,7 @@ function isSideChat(t: Thread): boolean {
 
 /** One open conversation: the main chat, or a side chat beside it. */
 export class ThreadView {
+  delegation = new DelegationState();
   id = $state<string | null>(null);
   thread = $state<Thread | null>(null);
   turns = $state<Turn[]>([]);
@@ -48,6 +51,7 @@ export class ThreadView {
   }
 
   reset() {
+    void this.delegation.bind(null);
     this.id = null;
     this.thread = null;
     this.workspaceMode = 'local';
@@ -59,12 +63,14 @@ export class ThreadView {
   }
 
   async load(id: string) {
+    if (this.id !== id) void this.delegation.bind(id);
     this.id = id;
     this.loading = true;
     try {
       const r = await app.call<{ thread: Thread; turns: Turn[]; items: Item[] }>('thread/read', { threadId: id });
       if (this.id !== id) return;
       this.thread = r.thread;
+      void this.delegation.bind(id, r.thread.projectId);
       this.workspaceMode = r.thread.workspaceMode || 'local';
       this.turns = r.turns ?? [];
       this.items = (r.items ?? []).sort((a, b) => a.seq - b.seq);
@@ -106,6 +112,7 @@ export class ThreadView {
   }
 
   async send(text: string, attachments: Attachment[] = [], start?: () => Promise<Thread>) {
+    if (this.delegation.pending) return;
     text = text.trim();
     if (!text && attachments.length === 0) return;
     this.sending = true;
@@ -118,7 +125,9 @@ export class ThreadView {
         this.turns = [];
         this.items = [];
       }
-      await app.call('turn/start', { threadId: this.id, text, attachments });
+      if (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId) await this.delegation.bind(this.id, this.thread?.projectId);
+      await app.call('turn/start', { threadId: this.id, text, attachments, ...this.delegation.submission() });
+      void this.delegation.hydrate();
     } catch (e) {
       this.sending = false;
       app.toast('error', errMsg(e));
@@ -127,6 +136,7 @@ export class ThreadView {
 
   async interrupt() {
     const t = this.running;
+    if (this.delegation.active) await this.delegation.cancel(this.delegation.active.task.id);
     if (t) await app.try('turn/interrupt', { turnId: t.id });
   }
 
@@ -167,9 +177,11 @@ class ChatState {
   activeSideId = $state<string | null>(null);
   /** Running turns across chats, including chats not currently open. */
   workingThreads = $state<Record<string, boolean>>({});
+  private mainGeneration = 0;
 
   constructor() {
     const r = app.rpc;
+    r.on('delegation/updated', (p: DelegationUpdated) => this.each(v => v.delegation.apply(p)));
     r.on('thread/updated', (p: { thread: Thread }) => this.upsertThread(p.thread));
     r.on('turn/started', (p: { turn: Turn }) => {
       this.workingThreads[p.turn.threadId] = true;
@@ -240,6 +252,7 @@ class ChatState {
     await this.loadThreads();
     if (this.main.id) await this.main.load(this.main.id);
     else void this.main.loadRoute();
+    for (const side of this.sides) void side.delegation.hydrate();
   }
 
   /** All chats, grouped by project in the rail. */
@@ -259,8 +272,8 @@ class ChatState {
   private upsertThread(t: Thread) {
     this.threads = sortThreads(this.threads.filter((x) => x.id !== t.id && !x.archived).concat(t.archived ? [] : [t]));
     this.archivedThreads = sortThreads(this.archivedThreads.filter((x) => x.id !== t.id && x.archived).concat(t.archived ? [t] : []));
-    if (this.main.id === t.id) this.main.thread = t;
-    for (const s of this.sides) if (s.id === t.id) s.thread = t;
+    if (this.main.id === t.id) { this.main.thread = t; void this.main.delegation.bind(t.id, t.projectId); }
+    for (const s of this.sides) if (s.id === t.id) { s.thread = t; void s.delegation.bind(t.id, t.projectId); }
   }
 
   get rootThreads(): Thread[] {
@@ -272,6 +285,7 @@ class ChatState {
   }
 
   async open(id: string, highlightItem?: string) {
+    this.mainGeneration++;
     app.view = 'chat';
     const known = this.threads.find((t) => t.id === id);
     const targetProject = known?.projectId ?? null;
@@ -283,6 +297,7 @@ class ChatState {
   }
 
   newChat(projectId: string | null = null) {
+    this.mainGeneration++;
     if (projects.activeId !== projectId) void projects.open(projectId);
     app.view = 'chat';
     this.main.reset();
@@ -293,18 +308,44 @@ class ChatState {
     this.newChat(projectId);
   }
 
+  private async startMainThread(): Promise<Thread> {
+    const th = await app.call<Thread>('thread/start', {
+      channel: 'app', projectId: projects.activeId ?? undefined,
+      workspaceMode: this.main.workspaceMode, settings: this.main.selection,
+    });
+    this.upsertThread(th);
+    return th;
+  }
+
+  /** Manual permission works before the first paid message. The pending guard
+   * coalesces repeated clicks; navigation cannot attach a token to another scope. */
+  async enableDelegation(view: ThreadView) {
+    if (view.delegation.pending || view.sending || view.running) return;
+    const projectId = view.id ? view.thread?.projectId : view === this.main ? projects.activeId : null;
+    if (!projectId) { view.delegation.error = 'Agents require a committed Git project. Open a project first.'; return; }
+    if (view.id) {
+      if (view.delegation.threadId !== view.id || view.delegation.projectId !== projectId) await view.delegation.bind(view.id, projectId);
+      await view.delegation.enable(); return;
+    }
+    if (view !== this.main) return;
+    const generation = this.mainGeneration;
+    view.delegation.pending = true; view.delegation.error = '';
+    try {
+      const th = await this.startMainThread();
+      if (generation !== this.mainGeneration || projects.activeId !== projectId || view.id) return;
+      view.id = th.id; view.thread = th;
+      await view.delegation.bind(th.id, th.projectId);
+      await view.delegation.enable();
+    } catch (e) {
+      if (generation === this.mainGeneration) view.delegation.error = errMsg(e);
+    } finally {
+      if (generation === this.mainGeneration) { view.delegation.pending = false; }
+    }
+  }
+
   /** Send in the main chat, creating the thread in the open project on first send. */
   async send(text: string, attachments: Attachment[] = []) {
-    await this.main.send(text, attachments, async () => {
-      const th = await app.call<Thread>('thread/start', {
-        channel: 'app',
-        projectId: projects.activeId ?? undefined,
-        workspaceMode: this.main.workspaceMode,
-        settings: this.main.selection,
-      });
-      this.upsertThread(th);
-      return th;
-    });
+    await this.main.send(text, attachments, () => this.startMainThread());
   }
 
   // ---- side chats ----
