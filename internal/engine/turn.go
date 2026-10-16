@@ -1592,7 +1592,19 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		if e.optimizationPolicy(ctx).DesignedWorkflow && name == "verification.plan" && tools.ScopeFrom(toolCtx) == nil {
 			toolCtx = tools.WithScope(toolCtx, &tools.Scope{ThreadID: th.ID})
 		}
-		output, err = tool.Call(toolCtx, call.Args)
+		verification, verificationErr := e.beginDelegationVerification(toolCtx, name)
+		if verificationErr != nil {
+			err = verificationErr
+		} else {
+			output, err = tool.Call(toolCtx, call.Args)
+			if err == nil {
+				raw := output
+				if sink != nil && sink.Text != "" {
+					raw = sink.Text
+				}
+				err = e.finishDelegationVerification(toolCtx, name, verification, raw)
+			}
+		}
 	}
 	if err != nil {
 		it.Status, it.Tool.Error = protocol.ItemFailed, err.Error()

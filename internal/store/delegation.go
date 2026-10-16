@@ -120,7 +120,15 @@ func (s *Store) UpdateAgentTaskState(ctx context.Context, taskID, threadID, proj
 		return err
 	}
 	defer tx.Rollback()
-	task, err := scanAgentTask(tx.QueryRowContext(ctx, `SELECT `+agentTaskCols+` FROM agent_tasks WHERE id=? AND thread_id=? AND project_id=? AND EXISTS (SELECT 1 FROM threads WHERE id=? AND project_id=?)`, taskID, threadID, projectID, threadID, projectID))
+	// Revocation reduces authority and must remain possible after a parent
+	// changes project. All execution/completion transitions retain live ownership.
+	q := `SELECT ` + agentTaskCols + ` FROM agent_tasks WHERE id=? AND thread_id=? AND project_id=? AND EXISTS (SELECT 1 FROM threads WHERE id=?`
+	args := []any{taskID, threadID, projectID, threadID}
+	if next != protocol.AgentStateCancelled {
+		q += ` AND project_id=?`
+		args = append(args, projectID)
+	}
+	task, err := scanAgentTask(tx.QueryRowContext(ctx, q+`)`, args...))
 	if err != nil {
 		return err
 	}
@@ -315,6 +323,16 @@ func (s *Store) UpdateAgentChild(ctx context.Context, child protocol.AgentChild,
 // modifying results, workspace references, verification evidence or usage.
 // Repeating reconciliation leaves already interrupted children untouched.
 func (s *Store) ReconcileAgentChildren(ctx context.Context) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE agent_children SET state='interrupted',version=version+1,updated_at=? WHERE state IN ('queued','running','waiting_approval')`, Now())
-	return err
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE agent_children SET state='interrupted',version=version+1,updated_at=? WHERE state IN ('queued','running','waiting_approval')`, Now()); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE agent_tasks SET state='interrupted',updated_at=? WHERE state IN ('queued','running','waiting_approval')`, Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

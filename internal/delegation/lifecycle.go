@@ -18,6 +18,14 @@ type Service interface {
 	Followup(context.Context, string, string, string, string) (protocol.AgentChild, error)
 	Cancel(context.Context, string, string) error
 }
+
+// WorkflowPolicy is checked under the lifecycle lock before admission. Empty childID means spawn.
+type WorkflowPolicy func(context.Context, protocol.AgentTask, protocol.AgentRole, string) error
+
+func WithWorkflowPolicy(p WorkflowPolicy) CoordinatorOption {
+	return func(c *Coordinator) { c.policy = p }
+}
+
 type Runner interface {
 	Run(context.Context, protocol.AgentTask, protocol.AgentChild) (protocol.AgentResult, error)
 }
@@ -151,6 +159,13 @@ func (c *Coordinator) notifyError(task protocol.AgentTask, child protocol.AgentC
 	}
 }
 func cloneChild(child protocol.AgentChild) protocol.AgentChild {
+	if child.Result.Review != nil {
+		review := *child.Result.Review
+		if review.Findings != nil {
+			review.Findings = append([]protocol.AgentFinding{}, review.Findings...)
+		}
+		child.Result.Review = &review
+	}
 	child.Assignment.AcceptanceChecks = append([]string(nil), child.Assignment.AcceptanceChecks...)
 	child.Assignment.ContextRefs = append([]string(nil), child.Assignment.ContextRefs...)
 	child.Result.Findings = append([]protocol.AgentFinding(nil), child.Result.Findings...)
@@ -221,6 +236,11 @@ func (c *Coordinator) Spawn(ctx context.Context, taskID, callID string, role pro
 	}
 	if err = c.busy(ctx, taskID); err != nil {
 		return child, err
+	}
+	if c.policy != nil {
+		if err = c.policy(ctx, task, role, ""); err != nil {
+			return child, err
+		}
 	}
 	child, err = s.CreateAgentChild(ctx, protocol.AgentChild{TaskID: taskID, Role: role, Assignment: assignment}, callID)
 	if err != nil {
@@ -436,6 +456,11 @@ func (c *Coordinator) Followup(ctx context.Context, taskID, childID, callID, mes
 	}
 	if strings.TrimSpace(message) == "" {
 		return child, errors.New("follow-up message required")
+	}
+	if c.policy != nil {
+		if err = c.policy(ctx, task, child.Role, child.ID); err != nil {
+			return child, err
+		}
 	}
 	child, err = s.EnqueueAgentFollowup(ctx, taskID, childID, callID, message)
 	if err != nil {

@@ -37,6 +37,7 @@ type Coordinator struct {
 	tasks       map[string]*taskRuntime
 	cancelled   map[string]bool
 	lifecycleMu sync.Mutex
+	policy      WorkflowPolicy
 	runner      Runner
 	events      EventSink
 	slots       map[string]*childRun

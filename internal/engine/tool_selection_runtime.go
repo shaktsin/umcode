@@ -277,6 +277,12 @@ func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.P
 	if !childToolAllowed(ctx, c.tool.Name()) || (childExecutionFrom(ctx) != nil && c.plugin) {
 		return false
 	}
+	if c.tool.Name() == "agent.review_report" {
+		x := childExecutionFrom(ctx)
+		if x == nil || x.child.Role != protocol.AgentRoleReviewer {
+			return false
+		}
+	}
 	if isDelegationTool(c.tool.Name()) {
 		if _, ok := DelegationTaskFromContext(ctx); !ok {
 			return false

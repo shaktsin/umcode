@@ -255,7 +255,47 @@ func (e *Engine) EnableDelegation(ctx context.Context, threadID, rootTurnID stri
 
 func isDelegationTool(name string) bool {
 	name = tools.FromWire(name)
-	return strings.HasPrefix(name, "agent.") || name == "delegation.enable"
+	return name != "agent.review_report" && strings.HasPrefix(name, "agent.") || name == "delegation.enable"
+}
+
+// CancelDelegation remains available when a project folder is unavailable, so
+// recovering a stopped task never depends on re-admitting its filesystem.
+func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCancelParams) (protocol.DelegationCancelResult, error) {
+	var result protocol.DelegationCancelResult
+	if delegationChild(ctx) || p.ThreadID == "" || p.TaskID == "" {
+		return result, protocol.Errorf(protocol.CodeInvalidParams, "owning parent chat and task required")
+	}
+	task, err := e.Store.AgentTask(ctx, p.TaskID)
+	if err != nil {
+		return result, err
+	}
+	parent, err := e.Store.GetThread(ctx, p.ThreadID)
+	if err != nil {
+		return result, err
+	}
+	if task.ThreadID != parent.ID {
+		return result, protocol.Errorf(protocol.CodeInvalidParams, "delegation task belongs to another chat")
+	}
+	if p.ChildID != "" {
+		if _, err = e.Store.AgentChild(ctx, task.ID, p.ChildID); err != nil {
+			return result, err
+		}
+		err = e.DelegationCoordinator.Cancel(ctx, task.ID, p.ChildID)
+	} else {
+		err = e.DelegationCoordinator.CancelTask(ctx, task.ID)
+	}
+	if err != nil {
+		return result, err
+	}
+	result.Task, err = e.Store.AgentTask(ctx, task.ID)
+	if err != nil {
+		return result, err
+	}
+	result.Children, err = e.DelegationCoordinator.List(ctx, task.ID)
+	if err == nil {
+		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &result.Task})
+	}
+	return result, err
 }
 
 // authorizeDelegationTool revalidates the admitted context against durable

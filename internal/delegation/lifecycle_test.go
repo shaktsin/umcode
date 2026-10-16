@@ -580,3 +580,45 @@ func TestCoordinatorFinalizationFailureRecovery(t *testing.T) {
 		})
 	}
 }
+
+// Clients may inspect recovery snapshots without mutating the retained verdict.
+func TestCoordinatorReviewSnapshots(t *testing.T) {
+	db, task := coordinatorFixture(t)
+	s := &failingChildStore{Store: db}
+	release := make(chan struct{})
+	started := make(chan struct{})
+	c := NewCoordinator(t.Context(), s, WithRunner(runnerFunc(func(context.Context, protocol.AgentTask, protocol.AgentChild) (protocol.AgentResult, error) {
+		close(started)
+		<-release
+		return protocol.AgentResult{Summary: "Retained review", Review: &protocol.AgentReviewReport{Verdict: "changes_requested", Findings: []protocol.AgentFinding{{Message: "fix required", Severity: "important"}}}}, nil
+	})))
+	if _, _, err := c.Task(t.Context(), task, protocol.ExecutionLimits{MaxTokens: 100}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := c.Spawn(t.Context(), task.ID, "review", protocol.AgentRoleReviewer, protocol.AgentAssignment{Prompt: "Review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	s.fail.Store(true)
+	close(release)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err = c.Wait(ctx, task.ID, []string{child.ID}); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected retained outcome: %v", err)
+	}
+	snapshot, err := c.Status(t.Context(), task.ID, child.ID)
+	if err == nil || snapshot.Result.Review == nil {
+		t.Fatalf("missing retained review: %+v %v", snapshot, err)
+	}
+	snapshot.Result.Review.Verdict = "approved"
+	snapshot.Result.Review.Findings[0].Message = "erased"
+	again, _ := c.Status(t.Context(), task.ID, child.ID)
+	if again.Result.Review.Verdict != "changes_requested" || again.Result.Review.Findings[0].Message != "fix required" {
+		t.Fatalf("client mutated retained review: %+v", again.Result.Review)
+	}
+	s.fail.Store(false)
+	if err = c.Cancel(t.Context(), task.ID, child.ID); err != nil {
+		t.Fatal(err)
+	}
+}

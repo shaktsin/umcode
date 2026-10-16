@@ -634,3 +634,31 @@ func validatePrivate(ctx context.Context, root string) error {
 	}
 	return nil
 }
+
+// ValidateIntegrated brackets actual lead tool execution and completion. It
+// checks exact parent bytes and durable review without accepting model evidence.
+func (s *WorkspaceService) ValidateIntegrated(ctx context.Context, taskID, childID, revision string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, c, w, err := s.submitted(ctx, childID)
+	if err != nil {
+		return err
+	}
+	if t.ID != taskID || w.ResultRevision != revision {
+		return errors.New("integrated revision changed")
+	}
+	if s.Eligibility == nil {
+		return errors.New("review eligibility unavailable")
+	}
+	if err = s.Eligibility(ctx, t, c, revision); err != nil {
+		return err
+	}
+	i, err := s.Store.AgentIntegration(ctx, taskID, childID)
+	if err != nil {
+		return err
+	}
+	if !i.Applied || i.ResultRevision != revision {
+		return errors.New("integration not applied")
+	}
+	return s.verifyApplied(ctx, t, w)
+}

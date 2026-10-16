@@ -73,7 +73,16 @@ type AgentAssignment struct {
 }
 
 // AgentResult retains partial results and verification evidence after failure.
+type AgentReviewReport struct {
+	ReviewerID    string         `json:"reviewerId"`
+	ImplementerID string         `json:"implementerId"`
+	Revision      string         `json:"revision"`
+	Verdict       string         `json:"verdict"`
+	Findings      []AgentFinding `json:"findings"`
+}
+
 type AgentResult struct {
+	Review       *AgentReviewReport   `json:"review,omitempty"`
 	Summary      string               `json:"summary"`
 	Findings     []AgentFinding       `json:"findings,omitempty"`
 	Checks       []AgentCheckEvidence `json:"checks,omitempty"`
@@ -103,10 +112,41 @@ type AgentFollowup struct {
 
 // DelegationUpdated updates the existing child row in its owning parent chat.
 type DelegationUpdated struct {
-	ThreadID string     `json:"threadId"`
-	TaskID   string     `json:"taskId"`
-	Child    AgentChild `json:"child"`
-	Error    string     `json:"error,omitempty"`
+	ThreadID string         `json:"threadId"`
+	TaskID   string         `json:"taskId"`
+	Child    AgentChild     `json:"child,omitzero"`
+	Task     *AgentTask     `json:"task,omitempty"`
+	Workflow *AgentWorkflow `json:"workflow,omitempty"`
+	Error    string         `json:"error,omitempty"`
 }
 
 const NotifyDelegationUpdated = "delegation/updated"
+
+type DelegationCancelParams struct {
+	ThreadID string `json:"threadId"`
+	TaskID   string `json:"taskId"`
+	ChildID  string `json:"childId,omitempty"`
+}
+
+type DelegationCancelResult struct {
+	Task     AgentTask    `json:"task"`
+	Children []AgentChild `json:"children"`
+}
+
+type AgentWorkflowCheck struct {
+	Label           string `json:"label"`
+	Command         string `json:"command"`
+	Directory       string `json:"directory,omitempty"`
+	Kind            string `json:"kind,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	RequiredCommand string `json:"required_command,omitempty"`
+	Status          string `json:"status"`
+	Summary         string `json:"summary,omitempty"`
+}
+type AgentWorkflow struct {
+	TaskID         string               `json:"taskId"`
+	ChildID        string               `json:"childId"`
+	Revision       string               `json:"revision"`
+	Checks         []AgentWorkflowCheck `json:"checks"`
+	CleanupWarning string               `json:"cleanupWarning,omitempty"`
+}

@@ -25,6 +25,7 @@ const (
 	MethodTurnDetails      = "turn/details"
 	MethodTurnStart        = "turn/start"
 	MethodDelegationEnable = "delegation/enable"
+	MethodDelegationCancel = "delegation/cancel"
 	MethodTurnInterrupt    = "turn/interrupt"
 	MethodPreviewList      = "preview/list"
 	MethodPreviewStop      = "preview/stop"

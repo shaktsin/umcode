@@ -87,3 +87,46 @@ func TestDelegationSubmittedInstalledSkill(t *testing.T) {
 		t.Fatalf("submitted installed skill not admitted: %+v %v", task, err)
 	}
 }
+
+// Cancellation must be an app-owned action scoped to the owning parent chat.
+func TestDelegationRPCCancel(t *testing.T) {
+	h := newHarness(t, nil)
+	commitDelegationFixture(t, h)
+	h.addKey("claude", "test", "fake")
+	var th, other protocol.Thread
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &th)
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &other)
+	var activation protocol.DelegationEnableResult
+	h.call(protocol.MethodDelegationEnable, protocol.ThreadIDParams{ThreadID: th.ID}, &activation)
+	h.fake.push(textReply("ready"))
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "work", DelegationActivationToken: activation.ActivationToken}, &started)
+	h.waitTurn(started.Turn.ID, nil)
+	task, err := h.eng.Store.AgentTaskForRootTurn(h.ctx, th.ID, started.Turn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := map[string]string{"threadId": th.ID, "taskId": task.ID}
+	nonadmin, err := client.Dial(h.ctx, h.eng.Cfg.Runtime.SocketPath, "tool-client", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nonadmin.Close()
+	if err = nonadmin.Call(h.ctx, "delegation/cancel", p, nil); err == nil {
+		t.Fatal("non-app cancellation accepted")
+	}
+	h.callErr("delegation/cancel", map[string]string{"threadId": other.ID, "taskId": task.ID})
+	// Revocation must still work after the parent changes project membership.
+	if _, err = h.eng.Store.DB.ExecContext(h.ctx, `UPDATE threads SET project_id='' WHERE id=?`, th.ID); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Task protocol.AgentTask `json:"task"`
+	}
+	h.call("delegation/cancel", p, &result)
+	if result.Task.State != protocol.AgentStateCancelled {
+		t.Fatalf("task not cancelled: %+v", result)
+	}
+	h.call("delegation/cancel", p, &result)
+	h.callErr(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "late resume", DelegationTaskID: task.ID})
+}

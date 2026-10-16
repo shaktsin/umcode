@@ -86,6 +86,7 @@ type Engine struct {
 	toolReducerFailures     atomic.Int64 // recovered tool-result reducer panics
 	reduceHook              func()       // instance-local panic test seam; set before use
 
+	delegationWorkflowMu  sync.Mutex
 	DelegationCoordinator *delegation.Coordinator
 	// The default uses owned Git checkouts. Tests may inject an explicit resolver.
 	DelegationWorkspaces       WorkspaceResolver
@@ -199,13 +200,16 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
-	e.DelegationWorkspaceService = delegation.NewWorkspaceService(o.Store, e.Worktrees, e.validateDelegationParent, nil)
+	e.DelegationWorkspaceService = delegation.NewWorkspaceService(o.Store, e.Worktrees, e.validateDelegationParent, o.Store.AgentReviewEligible)
 	e.DelegationWorkspaces = o.DelegationWorkspaces
 	if e.DelegationWorkspaces == nil {
 		e.DelegationWorkspaces = managedChildWorkspaces{service: e.DelegationWorkspaceService}
 	}
-	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus), delegation.WithRunner(childRunner{engine: e}))
+	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus), delegation.WithRunner(workflowRunner{engine: e}), delegation.WithWorkflowPolicy(e.delegationWorkflowPolicy))
 	for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
+		reg.Add(tool)
+	}
+	for _, tool := range tools.NewAgentWorkflowTools(e.delegationWorkflowCall) {
 		reg.Add(tool)
 	}
 	e.Work.StartGC(base, e.storageRetention) // best-effort, background, never prompts
@@ -219,6 +223,9 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		return nil, err
 	}
 	if err := e.loadRouting(ctx); err != nil {
+		return nil, err
+	}
+	if err := o.Store.ReconcileAgentChildren(ctx); err != nil {
 		return nil, err
 	}
 	if n, err := o.Store.MarkStaleTurns(ctx); err != nil {
@@ -949,9 +956,16 @@ func (e *Engine) systemPrompt(ctx context.Context, userText string, proj *protoc
 // is used to point at a matching skill. Empty layers are omitted.
 func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *protocol.Project, instructionHint string, hookContext []string) []promptLayer {
 	if x := childExecutionFrom(ctx); x != nil {
-		return []promptLayer{{Name: layerCore, Text: "You are a scoped UMCode child agent. Complete only the supplied assignment and acceptance criteria. The supplied guidance and references are your context. Read applicable nested UMCODE.md and explicitly requested skills through scoped read tools. No delegation or activation is permitted. Report the result, changed paths, findings and actual verification evidence; never claim blocked checks passed. Reviewer command, script, hook and plugin execution is blocked because a read-only command sandbox is unavailable. All file access is confined to the owned checkout: " + x.workspace.Root}}
+		review := ""
+		if x.child.Role == protocol.AgentRoleReviewer {
+			review = " Submit agent.review_report with your explicit verdict, findings, and exact revision " + x.workspace.Revision + ". An approved summary is not a review report. "
+		}
+		return []promptLayer{{Name: layerCore, Text: review + "You are a scoped UMCode child agent. Complete only the supplied assignment and acceptance criteria. The supplied guidance and references are your context. Read applicable nested UMCODE.md and explicitly requested skills through scoped read tools. No delegation or activation is permitted. Report the result, changed paths, findings and actual verification evidence; never claim blocked checks passed. Reviewer command, script, hook and plugin execution is blocked because a read-only command sandbox is unavailable. All file access is confined to the owned checkout: " + x.workspace.Root}}
 	}
 	var layers []promptLayer
+	if _, ok := DelegationTaskFromContext(ctx); ok {
+		layers = append(layers, promptLayer{Name: "delegation_workflow", Text: delegationWorkflowPrompt})
+	}
 	var b strings.Builder
 	flush := func(name string) {
 		if b.Len() > 0 {

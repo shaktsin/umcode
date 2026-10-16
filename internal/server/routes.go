@@ -202,6 +202,12 @@ func (s *Server) routes() map[string]handler {
 			}
 			return e.PrepareDelegation(ctx, p.ThreadID)
 		}),
+		protocol.MethodDelegationCancel: bind(func(ctx context.Context, c *conn, p protocol.DelegationCancelParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can cancel delegation")
+			}
+			return e.CancelDelegation(ctx, p)
+		}),
 
 		// turns
 		protocol.MethodTurnDetails: bind(func(ctx context.Context, c *conn, p protocol.TurnDetailsParams) (any, error) {

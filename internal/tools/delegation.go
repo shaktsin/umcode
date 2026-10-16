@@ -31,7 +31,8 @@ func NewAgentTools(service delegation.Service, authorize AgentAuthorize) []Tool 
 	}
 	return out
 }
-func (t *agentTool) Name() string { return "agent." + t.action }
+func (t *agentTool) SelectionMetadata() (string, string) { return "core", "engine" }
+func (t *agentTool) Name() string                        { return "agent." + t.action }
 func (t *agentTool) Description() string {
 	switch t.action {
 	case "spawn":
