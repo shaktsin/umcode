@@ -55,3 +55,22 @@ composer routing/feedback, and plugin disclosures/errors. Screenshots and
 to preserve them elsewhere. `PLAYWRIGHT_MODULE` and `CHROME_PATH` work as
 above. Browser fixtures verify renderer behavior, not native macOS window
 constraints or signing.
+
+The delegated-development acceptance matrix uses the same real App fixture
+server and the installed Playwright/Chrome runtime:
+
+```sh
+node e2e/delegation.mjs
+```
+
+It runs widths 320, 720 and 1200 in both themes, checking keyboard activation
+before the first message, one-use token submission, collapsed/expanded Agents,
+results and check blockers, attributed approvals, cancellation, notification
+updates, reconnect hydration and failure recovery. Repeated exact-snapshot links
+reuse inspector tabs. It captures page/console errors, failed requests and
+horizontal bounds. Screenshots and `report.json` go to `/tmp/umcode-delegation`
+(or `UI_ARTIFACT_DIR`). `PLAYWRIGHT_MODULE` and `CHROME_PATH` work as above.
+This deterministic RPC fixture validates browser rendering and interaction;
+`internal/server/delegation_e2e_test.go` separately exercises real RPC, engine,
+Git and fake-provider execution. Neither check claims native signing/window
+acceptance or supplies a trusted interactive visual-QA completion receipt.

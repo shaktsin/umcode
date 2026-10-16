@@ -35,7 +35,7 @@ func TestDelegationToolAuthority(t *testing.T) {
 			}
 		}
 		_, allowed := DelegationTaskFromContext(ctx)
-		if allowed && count != 5 || !allowed && count != 0 {
+		if allowed && count != 7 || !allowed && count != 0 {
 			t.Fatalf("catalog count %d allowed %v", count, allowed)
 		}
 	}

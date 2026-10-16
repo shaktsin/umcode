@@ -1,7 +1,7 @@
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 
-export async function startUiFixtureServer() {
+export async function startUiFixtureServer({ setup = '' } = {}) {
   const root = fileURLToPath(new URL('..', import.meta.url));
   const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="data:,"></head><body><div id="app"></div>
   <script type="module">
@@ -49,6 +49,7 @@ export async function startUiFixtureServer() {
   state.blocked = () => {chat.main.route={chosen:null,reason:'No credentials available',alternatives:[]};};
   state.pluginFailure = () => {plugin={...plugin,health:'configuration_required',diagnostics:[{severity:'error',message:'Configuration is required to connect this integration. '+('Long diagnostic '.repeat(20)),remediation:'Configure the plugin.'}]};};
   state.refreshPlugins = () => window.dispatchEvent(new CustomEvent('fixture:refresh'));
+  ${setup}
   if(mode==='controls') {
     document.getElementById('app').innerHTML='<main style="padding:24px"><div id="control-row" style="display:flex;align-items:center;gap:8px"><button class="btn-primary" id="standard">Standard</button><input class="input" id="field" style="width:160px" aria-label="Field"><select class="select" id="select" aria-label="Select"><option>Choose</option></select><button class="icon-button" id="icon" aria-label="Action"><svg width="16" height="16"></svg></button></div><p id="help">Help</p><button class="btn-ghost btn-sm" id="compact">Compact</button><button class="icon-button compact" id="compact-icon" aria-label="Compact action"><svg width="16" height="16"></svg></button><textarea class="input" rows="3" aria-label="Multiline"></textarea></main>';
   } else { mount(App,{target:document.getElementById('app')}); }

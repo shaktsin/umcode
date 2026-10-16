@@ -120,3 +120,41 @@ it('navigation while activation hydration waits cannot enable the replacement ch
   const enabling = chat.enableDelegation(chat.main); await vi.waitFor(() => expect(chat.main.id).toBe('parent')); await chat.open('replacement'); list.resolve({ tasks: [] }); await enabling;
   expect(chat.main.id).toBe('replacement'); expect(chat.main.delegation.token).toBeNull(); expect(call.mock.calls.some(([m]) => m === 'delegation/enable')).toBe(false);
 });
+it('orders RFC3339 task updates by instant including fractional seconds and nanoseconds', async () => {
+  const s = new DelegationState(); await s.bind('parent', 'project');
+  const update = (updatedAt: string, state: 'running' | 'cancelled') => s.apply({ threadId: 'parent', taskId: 'task', task: { ...task, updatedAt, state } });
+  update('2026-10-15T12:00:05Z', 'cancelled');
+  update('2026-10-15T12:00:05.5Z', 'running');
+  expect(s.active?.task.state).toBe('running');
+  update('2026-10-15T12:00:05Z', 'cancelled');
+  expect(s.active?.task.state).toBe('running');
+  update('2026-10-15T12:00:06.000001Z', 'running');
+  update('2026-10-15T12:00:06.000002Z', 'cancelled');
+  update('2026-10-15T12:00:06.000001Z', 'running');
+  expect(s.active).toBeUndefined();
+  expect(s.tasks[0].task.updatedAt).toBe('2026-10-15T12:00:06.000002Z');
+  update('2026-10-15T05:00:06.000002001-07:00', 'running');
+  expect(s.active?.task.state).toBe('running');
+  update('2026-10-15T12:00:06.000002Z', 'cancelled');
+  expect(s.active?.task.state).toBe('running');
+});
+it('invalid task timestamps cannot introduce activation or regress retained state', async () => {
+  const s = new DelegationState(); await s.bind('parent', 'project');
+  s.apply({ threadId: 'parent', taskId: 'task', task: { ...task, updatedAt: 'invalid' } });
+  expect(s.tasks).toEqual([]); expect(s.active).toBeUndefined();
+  s.apply({ threadId: 'parent', taskId: 'task', task: { ...task, state: 'cancelled' } });
+  for (const updatedAt of ['invalid', '2099-02-30T12:00:00Z', '2099-01-01T25:00:00Z', '2099-01-01T12:00:00+24:00']) {
+    s.apply({ threadId: 'parent', taskId: 'task', task: { ...task, updatedAt } });
+    expect(s.active).toBeUndefined(); expect(s.tasks[0].task.state).toBe('cancelled');
+  }
+});
+it('hydration skips malformed task timestamps while retaining valid snapshots', async () => {
+  const s = new DelegationState();
+  call.mockResolvedValueOnce({ tasks: [
+    { task: { ...task, id: 'invalid', updatedAt: 'invalid' }, children: [] },
+    { task: { ...task, state: 'cancelled' }, children: [] },
+  ] });
+  await s.bind('parent', 'project');
+  expect(s.tasks.map(snapshot => snapshot.task.id)).toEqual(['task']);
+  expect(s.active).toBeUndefined(); expect(s.error).toBe('');
+});

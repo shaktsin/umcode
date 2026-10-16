@@ -3,6 +3,22 @@ import { errMsg } from '$lib/format';
 import { agentActive, type AgentSnapshot, type DelegationUpdated } from '$lib/delegation';
 
 type Snapshot = AgentSnapshot & { childErrors: Record<string, string>; childSequences: Record<string, number> };
+// Go emits RFC3339 timestamps with variable fractional precision. Compare exact
+// instants, keeping nanoseconds that Date.parse would truncate to milliseconds.
+function timestamp(value: string): bigint | null {
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!m) return null;
+  const seconds = Date.parse(m[1] + 'Z');
+  if (!Number.isFinite(seconds) || new Date(seconds).toISOString().slice(0, 19) !== m[1]) return null;
+  let offset = 0;
+  if (m[3] !== 'Z') {
+    const hours = Number(m[3].slice(1, 3)), minutes = Number(m[3].slice(4, 6));
+    if (hours > 23 || minutes > 59) return null;
+    offset = (hours * 60 + minutes) * 60000 * (m[3][0] === '+' ? 1 : -1);
+  }
+  return BigInt(seconds - offset) * 1000000n + BigInt((m[2] ?? '').padEnd(9, '0'));
+}
+
 /** Owned by one ThreadView; no activation permission or results cross columns. */
 export class DelegationState {
   threadId = $state<string | null>(null);
@@ -33,7 +49,8 @@ export class DelegationState {
       for (const s of r.tasks ?? []) {
         if (s.task.threadId !== id) continue;
         this.merge({ threadId: id, taskId: s.task.id, task: s.task, workflow: s.workflow }, true);
-        const current = this.tasks.find(t => t.task.id === s.task.id)!;
+        const current = this.tasks.find(t => t.task.id === s.task.id);
+        if (!current) continue;
         current.usage = s.usage; current.budgetAvailable = s.budgetAvailable; current.stopReason = s.stopReason;
         for (const child of s.children ?? []) this.merge({ threadId: id, taskId: s.task.id, child, sequence: s.childSequences?.[child.id], error: s.childErrors?.[child.id] }, true);
       }
@@ -47,12 +64,15 @@ export class DelegationState {
     if (event.child?.id || event.workflow || !this.tasks.some(s => s.task.id === event.taskId)) void this.hydrate();
   }
   private merge(event: DelegationUpdated, durable = false) {
+    const incoming = event.task ? timestamp(event.task.updatedAt) : null;
+    if (event.task && (incoming === null || event.task.threadId !== this.threadId)) return;
     let s = this.tasks.find(s => s.task.id === event.taskId);
     if (!s) {
       if (!event.task || event.task.threadId !== this.threadId) return;
       s = { task: event.task, children: [], childErrors: {}, childSequences: {} }; this.tasks = [...this.tasks, s];
     }
-    if (event.task && event.task.updatedAt >= s.task.updatedAt) { s.task = event.task; if (durable && event.workflow) s.workflow = event.workflow; }
+    const current = timestamp(s.task.updatedAt);
+    if (event.task && incoming !== null && current !== null && incoming >= current) { s.task = event.task; if (durable && event.workflow) s.workflow = event.workflow; }
     const child = event.child;
     if (!child?.id || child.taskId !== event.taskId) return;
     const old = s.children.find(c => c.id === child.id), sequence = event.sequence ?? 0, previous = s.childSequences[child.id] ?? 0;

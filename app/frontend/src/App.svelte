@@ -32,7 +32,7 @@
   let activeAuxiliary = $state<Auxiliary | null>(null);
   const layout = $derived(resolveShellLayout({width:viewportWidth,height:viewportHeight,railCollapsedPreference,sideRequested:chat.sides.length>0,inspectorRequested:inspector.open,sidePreferredWidth:sideWidth,inspectorPreferredWidth:inspectorWidth,activeAuxiliary}));
   $effect(() => { void chat.activeSideId; if(chat.activeSideId) activeAuxiliary='side'; });
-  $effect(() => { void inspector.activeId; if(inspector.activeId) activeAuxiliary='inspector'; });
+  $effect(() => { void inspector.revealVersion; void inspector.activeId; if(inspector.activeId) activeAuxiliary='inspector'; });
   $effect(() => { try { localStorage.setItem('umcode.railCollapsed',railCollapsedPreference?'1':'0'); } catch { /* optional */ } });
   function showPanel(panel:Auxiliary) { activeAuxiliary=panel; void tick().then(()=>document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus()); }
 

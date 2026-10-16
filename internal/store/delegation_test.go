@@ -142,6 +142,9 @@ func TestReconcileAgentChildrenPreservesArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(after) != len(before) {
+		t.Fatalf("recovery lost child rows: got %d, want %d", len(after), len(before))
+	}
 	for _, got := range after {
 		old := before[got.ID]
 		active := old.State == protocol.AgentStateQueued || old.State == protocol.AgentStateRunning || old.State == protocol.AgentStateWaitingApproval

@@ -84,6 +84,16 @@ func (s *Service) Update(ctx context.Context, threadID string, req protocol.Work
 	if err != nil {
 		return result, nil, err
 	}
+	// Detail uses several SELECTs. A concurrent commit between its work and
+	// graph reads must be reported as stale before semantic validation sees
+	// a mixture of revisions and misclassifies the winner's nodes as duplicates.
+	current, open, err := s.Store.OpenWorkForThread(ctx, threadID)
+	if err != nil {
+		return result, nil, err
+	}
+	if !open || current.ID != w.ID || current.Revision != req.ExpectedRevision {
+		return result, nil, store.ErrWorkUpdateConflict
+	}
 	// Enforce bounds on the original bytes as well as the sanitized projection.
 	// A long secret must not become a valid oversized request by being masked.
 	if err := updateInputBounds(req); err != nil {
