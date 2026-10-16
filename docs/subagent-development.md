@@ -28,7 +28,9 @@ the parent Stop action also cancels the delegated task. Cancellation releases
 approval waits and retains recoverable work. After engine restart, unfinished
 work appears interrupted and never resumes provider execution automatically.
 
-The parent and all children share the task's usage and limits. Reservations are
+The parent and all children share the task's usage and limits. Manual context
+compaction of an unfinished task shares its budget, deadline and cancellation
+owner; exhausted or unavailable task accounting blocks provider execution. Reservations are
 estimates, so a request already underway can exceed an estimated billing limit.
 Actual usage and budget stops appear in Agents. Unavailable models or credentials
 fail before provider execution.

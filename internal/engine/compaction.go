@@ -41,12 +41,59 @@ func (e *Engine) CompactThread(ctx context.Context, threadID string) error {
 		e.mu.Unlock()
 	}()
 
-	var snapshot pluginSnapshot
-	if e.Plugins != nil {
-		thread, err := e.Store.GetThread(ctx, threadID)
-		if err != nil {
+	thread, err := e.Store.GetThread(ctx, threadID)
+	if err != nil {
+		return err
+	}
+	tasks, err := e.Store.AgentTasksForThread(ctx, threadID)
+	if err != nil {
+		return err
+	}
+	var admitted bool
+	for _, task := range tasks {
+		if !unfinishedDelegation(task.State) {
+			continue
+		}
+		if admitted {
+			return errors.New("manual compaction has multiple unfinished task owners")
+		}
+		if err = e.validateDelegationParent(ctx, task); err != nil {
+			return fmt.Errorf("manual compaction task ownership: %w", err)
+		}
+		// Manual compaction may only reuse a real admitted ledger. Never create
+		// an unlimited zero-default budget for an incomplete stored task.
+		limits, _, readErr := e.Store.ReadAgentTaskBudget(ctx, task.ID)
+		if readErr != nil {
+			return fmt.Errorf("manual compaction shared task budget unavailable: %w", readErr)
+		}
+		owned, shared, ownerErr := e.DelegationCoordinator.Task(ctx, task, limits)
+		if ownerErr != nil {
+			return fmt.Errorf("manual compaction task owner: %w", ownerErr)
+		}
+		if reason := shared.StopReason(); reason != "" {
+			return errors.New(reason)
+		}
+		var linked context.Context
+		var cancel context.CancelFunc
+		if deadline, ok := owned.Deadline(); ok {
+			linked, cancel = context.WithDeadline(ctx, deadline)
+		} else {
+			linked, cancel = context.WithCancel(ctx)
+		}
+		stop := context.AfterFunc(owned, cancel)
+		defer stop()
+		defer cancel()
+		if owned.Err() != nil {
+			cancel()
+		}
+		ctx = delegation.WithBudget(withDelegationTask(linked, task), shared)
+		if err = ctx.Err(); err != nil {
 			return err
 		}
+		admitted = true
+	}
+	var snapshot pluginSnapshot
+	if e.Plugins != nil {
 		acquired, err := e.Plugins.Acquire(ctx, thread.ProjectID)
 		if err != nil {
 			return fmt.Errorf("load project plugins: %w", err)
