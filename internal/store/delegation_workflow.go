@@ -65,26 +65,49 @@ func (s *Store) AgentReviewEligible(ctx context.Context, t protocol.AgentTask, c
 	if task.State != protocol.AgentStateRunning || current.State != protocol.AgentStateCompleted || current.Revision != revision || revision == "" {
 		return ErrAgentConflict
 	}
+	var latest *protocol.AgentChild
+	ambiguous := false
 	for _, r := range children {
-		if r.Role != protocol.AgentRoleReviewer || r.State != protocol.AgentStateCompleted {
+		if r.Role != protocol.AgentRoleReviewer {
 			continue
-		}
-		report, err := s.AgentReviewReport(ctx, t.ID, r.ID)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return err
 		}
 		source, rev, err := s.AgentReviewerSource(ctx, t.ID, r.ID)
+		if errors.Is(err, ErrNotFound) {
+			// A terminal pre-binding setup failure never inspected a submitted
+			// revision. Pending or malformed completed attempts fail closed.
+			if r.State == protocol.AgentStateFailed || r.State == protocol.AgentStateCancelled || r.State == protocol.AgentStateInterrupted {
+				continue
+			}
+			return errors.New("independent review source binding is pending or unavailable")
+		}
 		if err != nil {
 			return err
 		}
-		if report.ReviewerID == r.ID && source == c.ID && report.ImplementerID == c.ID && rev == revision && report.Revision == revision && report.Verdict == "approved" && len(report.Findings) == 0 {
-			return nil
+		if source != c.ID || rev != revision {
+			continue
+		}
+		if latest == nil || r.UpdatedAt.After(latest.UpdatedAt) {
+			candidate := r
+			latest = &candidate
+			ambiguous = false
+		} else if r.UpdatedAt.Equal(latest.UpdatedAt) {
+			ambiguous = true
 		}
 	}
-	return errors.New("independent structured approval of current implementation revision required")
+	if latest == nil || latest.State != protocol.AgentStateCompleted {
+		return errors.New("latest bound independent review must complete with a valid structured approval")
+	}
+	if ambiguous {
+		return errors.New("bound review ordering is ambiguous; independent approval cannot be selected")
+	}
+	report, err := s.AgentReviewReport(ctx, t.ID, latest.ID)
+	if err != nil {
+		return err
+	}
+	if report.ReviewerID != latest.ID || report.ImplementerID != c.ID || report.Revision != revision || report.Verdict != "approved" || len(report.Findings) != 0 {
+		return errors.New("latest independent review must approve the exact current revision without unresolved findings")
+	}
+	return nil
 }
 
 type AgentWorkflowCheck = protocol.AgentWorkflowCheck

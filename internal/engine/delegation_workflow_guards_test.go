@@ -487,3 +487,81 @@ func TestDelegationWorkflowRequiredVisualQA(t *testing.T) {
 		t.Fatal("unverified required visual QA completed")
 	}
 }
+
+// A later independent rejection revokes a prior approval of the same SHA.
+func TestDelegationWorkflowLatestReviewAuthoritative(t *testing.T) {
+	e, th, root, _ := delegationFixture(t)
+	task := childExecutionTask(t, e, th)
+	base := workflowChildScript("approved")
+	reviews := 0
+	p := &workflowScriptProvider{script: func(ctx context.Context, req llm.Request, n int) []llm.Event {
+		x := childExecutionFrom(ctx)
+		if x != nil && x.child.Role == protocol.AgentRoleReviewer && n == 0 {
+			reviews++
+			if reviews == 4 {
+				return workflowDone()
+			}
+			if reviews == 2 {
+				return workflowCall("agent.review_report", map[string]any{"revision": x.workspace.Revision, "verdict": "changes_requested", "findings": []protocol.AgentFinding{{Message: "New unresolved issue", Severity: "important"}}})
+			}
+		}
+		return base(ctx, req, n)
+	}}
+	e.LLMs.Register(p)
+	impl := workflowWorker(t, e, task, protocol.AgentRoleImplementer, "impl")
+	first := workflowWorker(t, e, task, protocol.AgentRoleReviewer, "approved")
+	orphan, err := e.Store.CreateAgentChild(t.Context(), protocol.AgentChild{TaskID: task.ID, Role: protocol.AgentRoleReviewer, Assignment: protocol.AgentAssignment{Prompt: "Pre-binding attempt"}}, "pre-binding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.Store.AgentReviewEligible(t.Context(), task, impl, impl.Revision); err == nil {
+		t.Fatal("pending pre-binding review reused historical approval")
+	}
+	orphan.State = protocol.AgentStateFailed
+	if err = e.Store.UpdateAgentChild(t.Context(), orphan, orphan.Version); err != nil {
+		t.Fatal(err)
+	}
+	second := workflowWorker(t, e, task, protocol.AgentRoleReviewer, "rejected")
+	if first.Result.Review == nil || first.Result.Review.Verdict != "approved" || second.Result.Review == nil || second.Result.Review.Verdict != "changes_requested" {
+		t.Fatalf("review fixture failed: %+v / %+v", first, second)
+	}
+	ctx := workflowParentContext(t, e, th, root, task)
+	if _, err := e.delegationWorkflowCall(ctx, "integrate", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("historical approval bypassed newer unresolved findings")
+	}
+	if got := delegationGit(t, root, "status", "--porcelain"); got != "" {
+		t.Fatalf("rejected review changed parent: %s", got)
+	}
+	// Ambiguous completion timestamps must not choose the older approval by ID.
+	if _, err := e.Store.DB.ExecContext(ctx, `UPDATE agent_children SET updated_at=? WHERE id=?`, store.FormatTime(first.UpdatedAt), second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.AgentReviewEligible(ctx, task, impl, impl.Revision); err == nil {
+		t.Fatal("tied approval/rejection selected an arbitrary winner")
+	}
+	if _, err := e.DelegationCoordinator.Followup(ctx, task.ID, impl.ID, "fix", "Resolve new findings"); err != nil {
+		t.Fatal(err)
+	}
+	corrected := workflowWait(t, e, task, impl.ID)
+	if corrected.Revision == impl.Revision || corrected.State != protocol.AgentStateCompleted {
+		t.Fatalf("correction failed %+v", corrected)
+	}
+	fresh := workflowWorker(t, e, task, protocol.AgentRoleReviewer, "fresh-approved")
+	if fresh.Result.Review == nil || fresh.Result.Review.Revision != corrected.Revision {
+		t.Fatalf("fresh approval missing %+v", fresh)
+	}
+	missing := workflowWorker(t, e, task, protocol.AgentRoleReviewer, "missing-report")
+	if missing.State != protocol.AgentStateFailed {
+		t.Fatalf("missing report did not fail: %+v", missing)
+	}
+	if _, err := e.delegationWorkflowCall(ctx, "integrate", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("new failed bound review reused old approval")
+	}
+	retried := workflowWorker(t, e, task, protocol.AgentRoleReviewer, "retry-review")
+	if retried.State != protocol.AgentStateCompleted || retried.Result.Review == nil || retried.Result.Review.Verdict != "approved" {
+		t.Fatalf("explicit independent review retry failed: %+v", retried)
+	}
+	if _, err := e.delegationWorkflowCall(ctx, "integrate", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("corrected independent approval rejected: %v", err)
+	}
+}

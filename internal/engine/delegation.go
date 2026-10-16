@@ -142,7 +142,7 @@ func (e *Engine) submittedDelegationSkill(ctx context.Context, text string) bool
 		return false
 	}
 	skill, ok := e.Skills.GetContext(ctx, name)
-	return ok && skill.Error == "" && skill.Name == delegationSkillID
+	return ok && skill.Error == "" && skill.PackageName == "superpowers" && skill.OriginalName == "subagent-driven-development"
 }
 func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.TurnStartParams) (*delegationAdmission, error) {
 	if err := e.delegationOpen(); err != nil {
