@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -67,11 +66,12 @@ func (e *Engine) operationArgs(ctx context.Context, op protocol.TaskOperation) (
 	if item.Tool == nil || item.Tool.Name != op.Tool {
 		return nil, errors.New("original tool arguments unavailable")
 	}
-	var raw bytes.Buffer
-	if err := json.Compact(&raw, item.Tool.Args); err != nil {
+	// Use the same RawMessage encoding as persistence and operation creation.
+	raw, err := json.Marshal(item.Tool.Args)
+	if err != nil {
 		return nil, err
 	}
-	hash := sha256.Sum256(raw.Bytes())
+	hash := sha256.Sum256(raw)
 	if hex.EncodeToString(hash[:]) != op.ArgsSHA256 {
 		return nil, errors.New("original tool arguments changed")
 	}
