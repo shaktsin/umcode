@@ -32,6 +32,9 @@ func (*memoryScriptProvider) ListModels(context.Context, llm.Credential) ([]stri
 	return []string{"deterministic"}, nil
 }
 func (p *memoryScriptProvider) Stream(_ context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	// Copy the request: later loop appends must not change measured inputs.
 	b, err := json.Marshal(req)
 	if err != nil {

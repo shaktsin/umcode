@@ -29,16 +29,25 @@ import (
 
 // fakeProvider replays scripted responses. Each call pops the next script.
 type fakeProvider struct {
-	id      string
-	mu      sync.Mutex
-	scripts []func(req llm.Request, key string) ([]llm.Event, error)
-	calls   []llm.Request
-	keys    []string
+	intentCalls []llm.Request
+	intentKind  string
+	intentPath  string
+	id          string
+	mu          sync.Mutex
+	scripts     []func(req llm.Request, key string) ([]llm.Event, error)
+	calls       []llm.Request
+	keys        []string
 }
 
 func (f *fakeProvider) ID() string { return f.id }
 
 func (f *fakeProvider) Stream(ctx context.Context, cred llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := serverIntentReply(req, f.intentKind, f.intentPath); ok {
+		f.mu.Lock()
+		f.intentCalls = append(f.intentCalls, req)
+		f.mu.Unlock()
+		return reply, nil
+	}
 	f.mu.Lock()
 	f.calls = append(f.calls, req)
 	f.keys = append(f.keys, cred.APIKey)
@@ -301,8 +310,8 @@ func TestChatWithApprovedShellTool(t *testing.T) {
 		t.Fatalf("reasoning = %q/%q", second.Reasoning, second.ReasoningStyle)
 	}
 	// Usage: 2 chat calls. Sonnet 4.6: (800*3 + 200*0.3 + 100*15)/1e6 + (500*3 + 20*15)/1e6
-	want := (800*3.0+200*0.3+100*15.0)/1e6 + (500*3.0+20*15.0)/1e6
-	if turn.Usage.Requests != 2 || turn.Usage.InputTokens != 1500 || abs(turn.Usage.CostUSD-want) > 1e-12 {
+	want := (800*3.0+200*0.3+100*15.0)/1e6 + (500*3.0+20*15.0)/1e6 + (5*3.0+5*15.0)/1e6
+	if turn.Usage.Requests != 3 || turn.Usage.InputTokens != 1505 || abs(turn.Usage.CostUSD-want) > 1e-12 {
 		t.Fatalf("turn usage = %+v (want cost %v)", turn.Usage, want)
 	}
 	// Per-key summary includes the background title request.
@@ -361,7 +370,7 @@ func TestDeniedToolAndHistory(t *testing.T) {
 	h.fake.mu.Lock()
 	req := h.fake.calls[len(h.fake.calls)-1]
 	h.fake.mu.Unlock()
-	if req.Messages[0].JoinedText() != "delete it" || req.Reasoning != llm.ReasoningOff {
+	if !strings.HasPrefix(req.Messages[0].JoinedText(), "delete it") || !strings.Contains(req.Messages[0].JoinedText(), "Historical execution records") || req.Reasoning != llm.ReasoningOff {
 		t.Fatalf("history/reasoning: %+v", req)
 	}
 }
@@ -443,14 +452,14 @@ func TestBudgetHardStopAndFallback(t *testing.T) {
 	for _, r := range sum.Rows {
 		byKey[r.Key] = r.Usage
 	}
-	if byKey[k1.ID].Requests != 1 || byKey[k1.ID].InputTokens != 0 || byKey[k2.ID].InputTokens != 1000 {
+	if byKey[k1.ID].Requests != 2 || byKey[k1.ID].InputTokens != 5 || byKey[k2.ID].InputTokens != 1000 {
 		t.Fatalf("per-key usage = %+v", byKey)
 	}
 
 	// The turn records which routes it used: the rate-limited key, then the one
 	// that answered.
-	if len(turn.RouteTrail) != 2 || turn.RouteTrail[0].Status != "rate_limited" ||
-		turn.RouteTrail[1].Status != "used" || turn.RouteTrail[1].CredentialID != k2.ID {
+	if len(turn.RouteTrail) != 3 || turn.RouteTrail[0].Status != "used" || turn.RouteTrail[1].Status != "rate_limited" ||
+		turn.RouteTrail[2].Status != "used" || turn.RouteTrail[2].CredentialID != k2.ID {
 		t.Fatalf("route trail = %+v", turn.RouteTrail)
 	}
 

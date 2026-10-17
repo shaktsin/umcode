@@ -24,6 +24,9 @@ type budgetProvider struct {
 func (*budgetProvider) ID() string                                                   { return "claude" }
 func (*budgetProvider) ListModels(context.Context, llm.Credential) ([]string, error) { return nil, nil }
 func (p *budgetProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.requests = append(p.requests, req)
 	p.budgets = append(p.budgets, delegation.BudgetFromContext(ctx))
 	if p.err != nil {
@@ -149,7 +152,7 @@ func TestDelegationBudgetInheritedAcrossFollowups(t *testing.T) {
 	if len(p.budgets) != 2 || p.budgets[0] == nil || p.budgets[0] != p.budgets[1] {
 		t.Fatalf("follow-up lost shared owner: %+v", p.budgets)
 	}
-	if got := p.budgets[1].Usage(); got.InputTokens != 20 || got.OutputTokens != 40 || got.Requests != 2 {
+	if got := p.budgets[1].Usage(); got.InputTokens != 25 || got.OutputTokens != 45 || got.Requests != 3 {
 		t.Fatalf("usage reset/doubled: %+v", got)
 	}
 	child := WithDelegationChild(delegation.WithBudget(t.Context(), p.budgets[0]))
@@ -316,7 +319,10 @@ func (*waitingDelegationProvider) ID() string { return "claude" }
 func (*waitingDelegationProvider) ListModels(context.Context, llm.Credential) ([]string, error) {
 	return nil, nil
 }
-func (p *waitingDelegationProvider) Stream(ctx context.Context, _ llm.Credential, _ llm.Request) (<-chan llm.Event, error) {
+func (p *waitingDelegationProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.started <- ctx
 	ch := make(chan llm.Event)
 	go func() { <-ctx.Done(); close(ch) }()
@@ -398,10 +404,10 @@ func TestDelegationBudgetTaskGeneratedTitleRetainsContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for shared.Usage().Requests < 2 && time.Now().Before(deadline) {
+	for shared.Usage().Requests < 3 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if got := shared.Usage(); got.Requests != 2 || got.InputTokens != 20 || got.OutputTokens != 40 {
+	if got := shared.Usage(); got.Requests != 3 || got.InputTokens != 25 || got.OutputTokens != 45 {
 		t.Fatalf("background title lost task context: %+v", got)
 	}
 }
@@ -451,7 +457,7 @@ func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := shared.Usage(); got.InputTokens != tc.input || got.OutputTokens != tc.output || got.Requests != 1 {
+			if got := shared.Usage(); got.InputTokens != tc.input+5 || got.OutputTokens != tc.output+5 || got.Requests != 2 {
 				t.Fatalf("reported error usage replaced by estimates: %+v", got)
 			}
 			if tc.exhausted && shared.StopReason() == "" {
@@ -473,7 +479,7 @@ func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(details.Diagnostics.Requests) != 1 || details.Diagnostics.Requests[0].Fallback != "error" || details.Diagnostics.Requests[0].MeasurementOrigin != "provider" {
+			if len(details.Diagnostics.Requests) != 2 || details.Diagnostics.Requests[1].Fallback != "error" || details.Diagnostics.Requests[1].MeasurementOrigin != "provider" {
 				t.Fatalf("reported error diagnostics lost: %+v", details.Diagnostics)
 			}
 		})

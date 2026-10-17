@@ -607,3 +607,11 @@ export interface TurnStartParams {
   delegationActivationToken?: string;
   delegationTaskId?: string;
 }
+
+// Engine-owned execution outcome. Model prose does not create this metadata.
+export interface TaskExecutionOutcome {
+  status: 'satisfied' | 'not_executed' | 'unverified' | 'blocked' | 'clarify';
+  expectationIds?: string[];
+  evidenceIds?: string[];
+  denialIds?: string[];
+}

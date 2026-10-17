@@ -261,12 +261,13 @@ type DelegationEnableResult struct {
 }
 
 type TurnStartParams struct {
-	DelegationActivationToken string         `json:"delegationActivationToken,omitempty"`
-	DelegationTaskID          string         `json:"delegationTaskId,omitempty"`
-	ThreadID                  string         `json:"threadId"`
-	Text                      string         `json:"text"`
-	Attachments               []Attachment   `json:"attachments,omitempty"`
-	Override                  ModelSelection `json:"override,omitempty"`
+	TaskIntent                *TaskIntentProposal `json:"taskIntent,omitempty"`
+	DelegationActivationToken string              `json:"delegationActivationToken,omitempty"`
+	DelegationTaskID          string              `json:"delegationTaskId,omitempty"`
+	ThreadID                  string              `json:"threadId"`
+	Text                      string              `json:"text"`
+	Attachments               []Attachment        `json:"attachments,omitempty"`
+	Override                  ModelSelection      `json:"override,omitempty"`
 }
 
 type TurnStartResult struct {

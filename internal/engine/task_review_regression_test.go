@@ -16,6 +16,39 @@ import (
 
 func persistTaskTestUser(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn, text string) protocol.Item {
 	t.Helper()
+	// Direct runTurn fixtures must persist real turn ownership, including their
+	// synthetic history, just as public turn.start does before request resolution.
+	ids := []string{turn.ID}
+	rows, queryErr := e.Store.DB.QueryContext(t.Context(), `SELECT DISTINCT i.turn_id FROM items i LEFT JOIN turns t ON t.id=i.turn_id WHERE i.thread_id=? AND i.turn_id<>'' AND t.id IS NULL`, th.ID)
+	if queryErr != nil {
+		t.Fatal(queryErr)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		var count int
+		if err := e.Store.DB.QueryRowContext(t.Context(), `SELECT count(*) FROM turns WHERE id=?`, id).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count == 0 {
+			copy := turn
+			copy.ID = id
+			copy.ThreadID = th.ID
+			copy.StartedAt = time.Now()
+			copy.Status = protocol.TurnRunning
+			if err := e.Store.CreateTurn(t.Context(), copy); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	item, err := e.newItem(t.Context(), turn, protocol.ItemUserMessage)
 	if err != nil {
 		t.Fatal(err)

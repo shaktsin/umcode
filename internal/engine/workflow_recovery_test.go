@@ -29,6 +29,9 @@ func (*workflowRecoveryProvider) ListModels(context.Context, llm.Credential) ([]
 	return []string{"deterministic"}, nil
 }
 func (p *workflowRecoveryProvider) Stream(_ context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.calls++
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == llm.RoleTool {

@@ -27,7 +27,10 @@ func (*outputLimitProvider) ID() string { return "claude" }
 func (*outputLimitProvider) ListModels(context.Context, llm.Credential) ([]string, error) {
 	return []string{"deterministic"}, nil
 }
-func (p *outputLimitProvider) Stream(context.Context, llm.Credential, llm.Request) (<-chan llm.Event, error) {
+func (p *outputLimitProvider) Stream(_ context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.calls++
 	ch := make(chan llm.Event, 3)
 	ch <- llm.Event{Type: llm.EventTextDelta, Text: "Now I will write the implementation"}
@@ -113,10 +116,10 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 			if err = json.Unmarshal(b, &decoded); err != nil {
 				t.Fatal(err)
 			}
-			if len(decoded.Requests) != 1 || decoded.Requests[0].StopReason != tc.reason {
+			if len(decoded.Requests) != 2 || decoded.Requests[1].StopReason != tc.reason {
 				t.Fatalf("stop reason lost: %s", b)
 			}
-			if tc.failed && decoded.Requests[0].Fallback != "output_limit" {
+			if tc.failed && decoded.Requests[1].Fallback != "output_limit" {
 				t.Fatalf("truncation diagnostic missing: %s", b)
 			}
 		})
@@ -158,7 +161,7 @@ func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := shared.Usage(); got.InputTokens != 100 || got.OutputTokens != 4096 || got.Requests != 1 {
+	if got := shared.Usage(); got.InputTokens != 105 || got.OutputTokens != 4101 || got.Requests != 2 {
 		t.Fatalf("output-limited attempt lost shared actuals: %+v", got)
 	}
 	if shared.StopReason() == "" {
@@ -180,7 +183,7 @@ func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(details.Diagnostics.Requests) != 1 || details.Diagnostics.Requests[0].StopReason != "max_output_tokens" || details.Diagnostics.Requests[0].Fallback != "output_limit" {
+	if len(details.Diagnostics.Requests) != 2 || details.Diagnostics.Requests[1].StopReason != "max_output_tokens" || details.Diagnostics.Requests[1].Fallback != "output_limit" {
 		t.Fatalf("delegated output-limit diagnostics lost: %+v", details.Diagnostics)
 	}
 }

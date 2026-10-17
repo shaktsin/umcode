@@ -74,3 +74,25 @@ UMCODE_APP_OUT="$PWD/bin/UMCode-local-task-recovery.app" GOCACHE=/tmp/umcode-go-
 ```
 
 This local bundle does not replace the running app and is not a notarized release.
+
+Requested outcomes are recorded separately from model narration. Saving a file
+requires a real permitted write and matching full read-back evidence. A quoted
+receipt such as `[Created file.md]` does not execute a tool. Current inspection
+can report a missing file; an ordinary explanation needs no tool calls. Directory listings
+use trusted observations with explicit bounds; a clipped or changed listing does
+not establish a complete inspection. New edits require evidence after their
+originating request, and symlink targets are checked against the requested path.
+Unfinished requested work stays retryable even after other operations succeed.
+
+New tasks and material requests use a private interpretation call with the
+selected model. Its usage is included in existing budgets. Ambiguous or
+unsupported outcomes ask for clarification; natural-language interpretation and
+semantic document completeness are not universally verifiable. An explicit
+ensure request can establish already-matching content using a user-supplied hash.
+
+When expected work lacks evidence, UMCode allows at most two additional
+corrective responses per turn within existing limits. If no action runs, it
+reports `The model did not execute the requested action.` Executed effects with
+missing proof remain unverified. Original provisional text stays in the Work log
+and audit metadata; it does not become an execution receipt or permission denial.
+Real approvals, denials and uncertain effects retain their existing safeguards.

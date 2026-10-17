@@ -292,12 +292,13 @@ func TestDelegationRPCEndToEnd(t *testing.T) {
 			mu.Unlock()
 			h.fake.mu.Lock()
 			calls := len(h.fake.calls)
+			intentCalls := len(h.fake.intentCalls)
 			h.fake.mu.Unlock()
 			if !countsOK || calls != wantCalls {
 				t.Errorf("unexpected provider attempts: %d %s, want %d", calls, gotCounts, wantCalls)
 			}
 			// Shared usage includes the lead's final answer even after durable completion.
-			if !snapshot.BudgetAvailable || snapshot.Usage.Requests != int64(wantCalls) || snapshot.Usage.InputTokens != int64(wantCalls*11) || snapshot.Usage.OutputTokens != int64(wantCalls*3) {
+			if !snapshot.BudgetAvailable || snapshot.Usage.Requests != int64(wantCalls+intentCalls) || snapshot.Usage.InputTokens != int64(wantCalls*11+intentCalls*5) || snapshot.Usage.OutputTokens != int64(wantCalls*3+intentCalls*5) {
 				t.Errorf("shared actual usage: %+v", snapshot)
 			}
 			h.call("delegation/cancel", protocol.DelegationCancelParams{ThreadID: th.ID, TaskID: taskID}, nil)
@@ -423,7 +424,7 @@ func TestDelegationRPCCancelReleasesApprovalAndWait(t *testing.T) {
 	}
 	var list protocol.DelegationListResult
 	h.call("delegation/list", protocol.DelegationListParams{ThreadID: th.ID, TaskID: approval.AgentTaskID}, &list)
-	if len(list.Tasks) != 1 || list.Tasks[0].Usage.Requests != 3 || list.Tasks[0].Task.State != protocol.AgentStateCancelled {
+	if len(list.Tasks) != 1 || list.Tasks[0].Usage.Requests != 4 || list.Tasks[0].Task.State != protocol.AgentStateCancelled {
 		t.Fatalf("cancelled retained accounting: %+v", list)
 	}
 }

@@ -124,6 +124,7 @@ func (e *Engine) taskContext(ctx context.Context, threadID string) (string, erro
 	snapshot.Operations = pending
 	truncated := false
 	pendingTotal, requirementsTotal := len(snapshot.Operations), len(snapshot.Requirements)
+	expectationsTotal := len(snapshot.Expectations)
 	for i := range snapshot.Operations {
 		if len(snapshot.Operations[i].Args) > 1024 {
 			snapshot.Operations[i].Args = nil
@@ -141,7 +142,8 @@ func (e *Engine) taskContext(ctx context.Context, threadID string) (string, erro
 			ContextTruncated  bool `json:"contextTruncated,omitempty"`
 			PendingTotal      int  `json:"pendingTotal"`
 			RequirementsTotal int  `json:"requirementsTotal"`
-		}{snapshot, truncated, pendingTotal, requirementsTotal})
+			ExpectationsTotal int  `json:"expectationsTotal"`
+		}{snapshot, truncated, pendingTotal, requirementsTotal, expectationsTotal})
 		if err != nil {
 			return "", err
 		}
@@ -153,6 +155,8 @@ func (e *Engine) taskContext(ctx context.Context, threadID string) (string, erro
 			snapshot.Operations = snapshot.Operations[1:]
 		} else if len(snapshot.Requirements) > 0 {
 			snapshot.Requirements = snapshot.Requirements[1:]
+		} else if len(snapshot.Expectations) > 0 {
+			snapshot.Expectations = snapshot.Expectations[1:]
 		} else {
 			return "", errors.New("task summary exceeds metadata limit")
 		}

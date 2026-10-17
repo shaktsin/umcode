@@ -682,7 +682,15 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
 	}
 
+	if childExecutionFrom(ctx) == nil {
+		if intentErr := e.prepareExecutionExpectations(ctx, sctx, th, turn, &res, p, budget); intentErr != nil {
+			finish(e.finishIntentClarification(sctx, turn, intentErr))
+			return
+		}
+	}
 	var turnErr error
+	var executionEvaluation *protocol.TaskExpectationEvaluation
+	inquirySatisfied := false
 	var reductions ToolReductions
 	if e.Cfg != nil && e.optimizationPolicy(ctx).ToolResultReducers {
 		reductions = make(ToolReductions)
@@ -801,6 +809,48 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			break
 		}
 		if len(out.calls) == 0 {
+			if childExecutionFrom(ctx) == nil {
+				saved, lookupErr := e.Store.ActiveExecutionTask(sctx, th.ID)
+				if lookupErr != nil {
+					turnErr = lookupErr
+					break
+				}
+				correction, retry, evaluation, correctionErr := e.nextExecutionCorrection(sctx, saved.Task.ID, turn.ID)
+				executionEvaluation = &evaluation
+				if correctionErr != nil {
+					turnErr = correctionErr
+					break
+				}
+				inquirySatisfied = evaluation.Status == "satisfied" && taskInquiryOnly(saved, turn.ID)
+				if inquirySatisfied {
+					taskRecovery.pending = nil
+				}
+				if retry {
+					if markErr := e.markExecutionProvisional(sctx, lastMessageID); markErr != nil {
+						turnErr = markErr
+						break
+					}
+					msgs = appendText(msgs, llm.RoleAssistant, out.text)
+					msgs = appendText(msgs, llm.RoleUser, correction)
+					continue
+				}
+				if evaluation.Status != "satisfied" {
+					if lastMessageID == "" {
+						item, createErr := e.newItem(sctx, turn, protocol.ItemAgentMessage)
+						if createErr != nil {
+							turnErr = createErr
+							break
+						}
+						if saveErr := e.Store.SaveItem(sctx, item); saveErr != nil {
+							turnErr = saveErr
+							break
+						}
+						lastMessageID = item.ID
+					}
+					turnErr = e.finalizeExecutionExpectation(sctx, turn, lastMessageID, evaluation)
+					break
+				}
+			}
 			if failure := taskRecovery.failure(); failure != nil {
 				turnErr = &taskActionError{Failure: *failure}
 				break
@@ -892,7 +942,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			outcome, outcomeErr := e.reconcileTaskOutcome(sctx, saved.Task.ID)
 			if outcomeErr != nil {
 				turnErr = errors.Join(turnErr, outcomeErr)
-			} else if outcome == "blocked" && turnErr == nil {
+			} else if outcome == "blocked" && turnErr == nil && !inquirySatisfied {
 				for _, op := range saved.Operations {
 					if op.ResolvedByID == "" && op.Failure != nil && !op.Failure.Advisory && !e.taskWorkflowConditionCleared(sctx, th.ID, op) {
 						turnErr = &taskActionError{Failure: *op.Failure}
@@ -906,7 +956,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 						lastMessageID = item.ID
 					}
 				}
-			} else if (outcome == "unverified" || outcome == "not_executed") && turnErr == nil {
+			} else if (outcome == "unverified" || outcome == "not_executed") && turnErr == nil && !inquirySatisfied {
 				item, itemErr := e.Store.GetItem(sctx, lastMessageID)
 				if itemErr != nil {
 					item, itemErr = e.newItem(sctx, turn, protocol.ItemAgentMessage)
@@ -941,6 +991,13 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			turnErr = errors.Join(turnErr, workflowRecovery.pending)
 		}
 		turnErr = errors.Join(turnErr, e.blockWorkflowSummary(sctx, lastMessageID, workflowRecovery.pending))
+	}
+	if executionEvaluation != nil && childExecutionFrom(ctx) == nil {
+		// The old operation reconciliation may have corrected this same message.
+		// Finalize from the requested-outcome evaluation after preserving its audit.
+		if turnErr == nil && executionEvaluation.Status == "satisfied" {
+			turnErr = e.finalizeExecutionExpectation(sctx, turn, lastMessageID, *executionEvaluation)
+		}
 	}
 	if turnErr != nil {
 		log.Warn("turn failed", "err", turnErr)
@@ -1304,7 +1361,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 	for ev := range ch { // always drain so the adapter goroutine exits
 		switch ev.Type {
 		case llm.EventTextDelta:
-			if role == "title" || role == "compaction" {
+			if role == "title" || role == "compaction" || role == "task_intent" {
 				text.WriteString(ev.Text)
 				continue
 			}
@@ -1655,6 +1712,8 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		source = "builtin_file_mutation"
 	} else if name == "file.read" && tools.IsFileObservationSource(tool) {
 		source = "builtin_file_read"
+	} else if tools.IsFileListingSource(tool) {
+		source = "builtin_file_list"
 	} else if tools.IsVerificationSource(tool) {
 		source = "builtin_verification"
 	} else if tools.IsAgentControlSource(tool) {
@@ -1981,6 +2040,12 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			}
 		}
 	}
+	if sink != nil && sink.FileListing != nil && source == "builtin_file_list" {
+		mergeTaskItemData(&it, "fileListing", sink.FileListing)
+	}
+	if sink != nil && sink.FileExistence != nil && source == "builtin_file_read" {
+		mergeTaskItemData(&it, "fileExistence", sink.FileExistence)
+	}
 	if sink != nil && sink.OutcomeUnknown {
 		err = &taskActionError{Failure: protocol.ActionFailure{Category: "outcome_unknown", OperationID: taskOperation.ID, Message: "The action was interrupted after it started; its effects are uncertain.", NextStep: "Inspect the actual effects before any further mutation; do not replay it."}}
 	}
@@ -1995,6 +2060,14 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return observe(hooks.ToolUseFailed, "Error: "+err.Error(), err.Error(), before.Context)
 	}
 	if workflowDenied {
+		f := protocol.ActionFailure{AuthoritySource: "work_graph", Category: "workflow_requirement", OperationID: taskOperation.ID, Message: "The required workflow review was not approved.", Retryable: false, NextStep: "Obtain a new explicit review decision before continuing this action."}
+		if work, found, lookupErr := e.Store.OpenWorkForThread(sctx, th.ID); lookupErr == nil && found {
+			f.BlockerID = work.ID
+		}
+		f.State = json.RawMessage(output)
+		taskFailure = &f
+		mergeTaskItemData(&it, "actionFailure", f)
+		it.Tool.Error = f.Message
 		it.Status, it.Tool.Output = protocol.ItemDenied, output
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 		return result(output, true, before.Context...)
@@ -2120,6 +2193,7 @@ func (e *Engine) history(ctx context.Context, threadID, currentTurn string) ([]l
 // historyMessages applies the latest explicit compaction marker while keeping
 // the original transcript in storage and available to the UI.
 func historyMessages(items []protocol.Item, currentTurn string, limit int) []llm.Message {
+	items = historicalEvidenceItems(items, currentTurn)
 	var msgs []llm.Message
 	for _, it := range items {
 		if it.TurnID == currentTurn || it.Status == protocol.ItemInProgress {
@@ -2133,15 +2207,6 @@ func historyMessages(items []protocol.Item, currentTurn string, limit int) []llm
 		case protocol.ItemAgentMessage:
 			if it.Text != "" && it.Status == protocol.ItemCompleted {
 				msgs = appendText(msgs, llm.RoleAssistant, it.Text)
-			}
-		case protocol.ItemToolCall:
-			if it.Tool != nil {
-				note := fmt.Sprintf("[earlier tool call %s: %s]", it.Tool.Name, it.Status)
-				msgs = appendText(msgs, llm.RoleAssistant, note)
-			}
-		case protocol.ItemFileChange:
-			if it.Text != "" {
-				msgs = appendText(msgs, llm.RoleAssistant, "["+it.Text+"]")
 			}
 		case protocol.ItemContextCompaction:
 			msgs = []llm.Message{llm.Text(llm.RoleUser, "Earlier conversation summary (the full transcript remains visible in UMCode):\n"+it.Text)}

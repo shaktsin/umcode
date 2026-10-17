@@ -41,8 +41,33 @@ export function taskFailurePresentation(items: Item[], turnError: string) {
   const text = summary?.text || (failure ? [failure.message, failure.nextStep].filter(Boolean).join(' ') : '');
   return {
     failure, text,
-    details: [...matching.map(item => JSON.stringify(item, null, 2)), turnError].filter(Boolean).join('\n\n'),
+    details: [...items.filter(item => matching.includes(item) || isProvisionalExecution(item)).map(item => JSON.stringify(item, null, 2)), turnError].filter(Boolean).join('\n\n'),
     hiddenItemIds: matching.filter(item => item.kind === 'agentMessage' || item.kind === 'error').map(item => item.id),
     showTurnError: Boolean(turnError) && !correlated(parseActionFailure(turnError), failure),
+  };
+}
+
+export function isProvisionalExecution(item: Item): boolean {
+  return item.kind === 'agentMessage' && Boolean(item.data && typeof item.data === 'object'
+    && (item.data as { provisionalExecution?: unknown }).provisionalExecution === true);
+}
+
+export function executionOutcomePresentation(items: Item[], turnStatus: string): { text: string; details: string; show: boolean } {
+  const final = [...items].reverse().find(item => item.kind === 'agentMessage' && !isProvisionalExecution(item)
+    && item.data && typeof item.data === 'object' && typeof (item.data as { taskOutcome?: { status?: unknown } }).taskOutcome?.status === 'string');
+  const outcome = final?.data && typeof final.data === 'object'
+    ? (final.data as { taskOutcome?: { status?: unknown; evidenceIds?: unknown } }).taskOutcome : undefined;
+  let text = '';
+  switch (outcome?.status) {
+    case 'not_executed': text = 'The model did not execute the requested action.'; break;
+    case 'unverified': text = 'Changes ran; verification of the requested result is incomplete.'; break;
+    case 'satisfied':
+      if (Array.isArray(outcome.evidenceIds) && outcome.evidenceIds.length > 0) text = 'Verified the requested result.';
+      break;
+  }
+  return {
+    text,
+    show: Boolean(text) && turnStatus !== 'running',
+    details: items.filter(item => isProvisionalExecution(item) || item === final).map(item => JSON.stringify(item, null, 2)).join('\n\n'),
   };
 }

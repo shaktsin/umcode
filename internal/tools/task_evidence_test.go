@@ -34,3 +34,15 @@ func TestFileReadEvidence(t *testing.T) {
 		t.Fatal("denied read produced verification evidence")
 	}
 }
+
+// Only a real first-party filesystem result can establish absence.
+func TestFileExistenceEvidence(t *testing.T) {
+	ctx, sink := WithRawSink(WithScope(t.Context(), &Scope{Root: t.TempDir()}))
+	if _, err := (&fileRead{}).Call(ctx, json.RawMessage(`{"path":"missing.txt"}`)); err == nil || sink.FileExistence == nil || sink.FileExistence.Exists {
+		t.Fatal("missing file lacks authoritative absence")
+	}
+	ctx, sink = WithRawSink(WithScope(t.Context(), &Scope{Root: t.TempDir()}))
+	if _, err := (&fileRead{}).Call(ctx, json.RawMessage(`{"path":"../forbidden.txt"}`)); err == nil || sink.FileExistence != nil {
+		t.Fatal("denied path invented absence evidence")
+	}
+}

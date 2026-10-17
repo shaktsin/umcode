@@ -13,6 +13,8 @@ type rawSinkKey struct{}
 // without depending on the clipped string the model sees.
 type RawSink struct {
 	OutcomeUnknown  bool
+	FileExistence   *FileExistenceEvidence
+	FileListing     *FileListingEvidence
 	FileRead        *FileReadEvidence
 	Text            string
 	CaptureExcerpts bool
@@ -53,4 +55,25 @@ func MarkOutcomeUnknown(ctx context.Context) {
 	if sink, _ := ctx.Value(rawSinkKey{}).(*RawSink); sink != nil {
 		sink.OutcomeUnknown = true
 	}
+}
+
+// FileExistenceEvidence is only captured after builtin path authorization.
+type FileExistenceEvidence struct {
+	Path   string `json:"path"`
+	Exists bool   `json:"exists"`
+}
+
+func captureFileExistence(ctx context.Context, path string, exists bool) {
+	if sink, _ := ctx.Value(rawSinkKey{}).(*RawSink); sink != nil {
+		sink.FileExistence = &FileExistenceEvidence{Path: path, Exists: exists}
+	}
+}
+
+// FileListingEvidence records the bounds and identity of an authorized builtin listing.
+type FileListingEvidence struct {
+	Path     string `json:"path"`
+	SHA256   string `json:"sha256"`
+	Entries  int    `json:"entries"`
+	Bytes    int    `json:"bytes"`
+	Complete bool   `json:"complete"`
 }

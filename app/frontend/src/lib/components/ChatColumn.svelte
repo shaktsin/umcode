@@ -9,7 +9,7 @@
   import { usageLine, fmtUsd } from '$lib/format';
   import ItemView from './ItemView.svelte';
   import ChatError from './ChatError.svelte';
-  import { taskFailurePresentation } from '$lib/taskOutcome';
+  import { taskFailurePresentation, executionOutcomePresentation, isProvisionalExecution } from '$lib/taskOutcome';
   import ToolCall from './ToolCall.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import ComputerUseView from './ComputerUseView.svelte';
@@ -160,13 +160,14 @@
   function workLogItems(g: Group): Item[] {
     const lastToolCall = Math.max(0, ...g.items.filter((i) => i.kind === 'toolCall').map((i) => i.seq));
     return g.items.filter((i) =>
-      i.kind === 'toolCall' || i.kind === 'fileChange' ||
+      i.kind === 'toolCall' || i.kind === 'fileChange' || isProvisionalExecution(i) ||
       (i.kind === 'agentMessage' && i.seq < lastToolCall && Boolean(i.text?.trim())),
     );
   }
 
   function progressText(item: Item): string {
-    const text = (item.text ?? '').trim();
+    const provisional = item.data && typeof item.data === "object" ? (item.data as { provisionalText?: unknown }).provisionalText : undefined;
+    const text = (isProvisionalExecution(item) && typeof provisional === 'string' ? provisional : item.text ?? '').trim();
     return text.length > 480 ? `${text.slice(0, 480).trimEnd()}…` : text;
   }
 
@@ -177,6 +178,7 @@
   }
 
   function isVisibleChatMessage(item: Item): boolean {
+    if (isProvisionalExecution(item)) return false;
     return item.kind === 'userMessage' ||
       item.kind === 'contextCompaction' ||
       (item.kind === 'agentMessage' && Boolean(item.text?.trim()));
@@ -344,9 +346,10 @@
       <div class="{variant === 'main' ? 'max-w-3xl' : ''} mx-auto px-4 py-4 space-y-4">
         {#each groups as g (g.turnId)}
           {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '')}
+          {@const executionOutcome = executionOutcomePresentation(g.items, g.turn?.status || '')}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}
-              {#if !taskFailure.hiddenItemIds.includes(it.id) && (it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim())))}
+              {#if !isProvisionalExecution(it) && !taskFailure.hiddenItemIds.includes(it.id) && (it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim())))}
                 {#if isVisibleChatMessage(it) && hasPreviousChatMessage(g, index)}
                   <div class="h-px bg-line/70 my-2" aria-hidden="true"></div>
                 {/if}
@@ -354,7 +357,9 @@
               {/if}
             {/each}
             {#if taskFailure.failure}
-              <ChatError text={taskFailure.text} details={taskFailure.details} />
+              <ChatError text={taskFailure.text} details={[taskFailure.details, executionOutcome.details].filter(Boolean).join("\n\n")} />
+            {:else if executionOutcome.show}
+              <p class="text-xs text-muted" role="status">{executionOutcome.text}</p>
             {/if}
             {#each app.approvals.filter((approval) => approval.threadId === view.id && approval.turnId === g.turnId) as approval (approval.id)}
               <section id={`approval-${approval.id}`} class="rounded-xl border border-amber-warm/40 bg-clay-soft/20 p-3 shadow-sm" aria-live="assertive">
@@ -423,7 +428,7 @@
                     <li class="pl-1">
                       {#if action.kind === 'agentMessage'}
                         <div class="text-ink-soft">
-                          <span class="block text-[10px] uppercase tracking-wide text-faint">Progress update</span>
+                          <span class="block text-[10px] uppercase tracking-wide text-faint">{isProvisionalExecution(action) ? 'Unverified model narration' : 'Progress update'}</span>
                           <p class="mt-0.5 whitespace-pre-wrap">{progressText(action)}</p>
                         </div>
                       {:else if action.kind === 'toolCall' && action.tool}
