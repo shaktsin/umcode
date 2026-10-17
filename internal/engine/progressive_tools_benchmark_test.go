@@ -38,6 +38,7 @@ func measureProgressiveRequests(reqs []llm.Request) progressiveMeasurement {
 }
 func runProgressiveFixture(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn, text string) {
 	t.Helper()
+	persistTaskTestUser(t, e, th, turn, text)
 	e.runTurn(t.Context(), th, turn, resolved{sel: protocol.ModelSelection{Provider: "memory-script", Model: "deterministic"}, meta: models.Meta{ContextWindow: 200000, Tools: true}, limits: protocol.ExecutionLimits{MaxDurationMinutes: 2, MaxTokens: 1000000, MaxCostUSD: 100, MaxToolRounds: 10}}, protocol.TurnStartParams{Text: text}, func() {})
 	turns, err := e.Store.ListTurns(t.Context(), th.ID)
 	if err != nil {

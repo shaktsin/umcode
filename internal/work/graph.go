@@ -964,14 +964,18 @@ func DeriveTaskStatuses(d protocol.WorkDetail) map[string]string {
 
 // MutationReady enforces the Designed solution and runnable implementation
 // obligations independently of whether an approval is still proposed.
-func MutationReady(d protocol.WorkDetail) bool {
+func MutationReady(d protocol.WorkDetail) bool { return len(MutationBlockers(d)) == 0 }
+
+// MutationBlockers explains the same readiness rules enforced before execution.
+func MutationBlockers(d protocol.WorkDetail) []string {
 	solution, requiredTask, runnable := false, false, false
+	var missing []string
 	for _, n := range d.Nodes {
 		if !active(n) {
 			continue
 		}
 		if n.Kind == protocol.NodeUnknown && blocking(n) && n.Status != protocol.StatusResolved && n.Status != protocol.StatusAcceptedRisk {
-			return false
+			missing = append(missing, "blocking unknown: "+n.Title)
 		}
 		if n.Kind == protocol.NodeDecision && n.Status == protocol.StatusApproved {
 			if _, ok := selectedOption(d, n); ok {
@@ -983,7 +987,13 @@ func MutationReady(d protocol.WorkDetail) bool {
 			runnable = runnable || n.Status == protocol.StatusReady || n.Status == protocol.StatusInProgress
 		}
 	}
-	return solution && (!requiredTask || runnable)
+	if !solution {
+		missing = append(missing, "approved solution decision with a selected option")
+	}
+	if requiredTask && !runnable {
+		missing = append(missing, "ready or in-progress required task")
+	}
+	return missing
 }
 
 // PendingWorkflowGates returns only unresolved, active required decisions.

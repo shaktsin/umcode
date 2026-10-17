@@ -1,5 +1,8 @@
+import { parseActionFailure } from './taskOutcome';
 /** Present persisted provider errors without losing their diagnostic text. */
 export function formatChatError(raw: string): { message: string; resetAt?: number } {
+  const failure = parseActionFailure(raw);
+  if (failure) return { message: [failure.message, failure.nextStep].filter(Boolean).join(' ') };
   const fallback = { message: raw || 'The request failed. Please try again.' };
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');

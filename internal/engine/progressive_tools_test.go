@@ -106,7 +106,7 @@ func TestProgressiveSnapshotIdentity(t *testing.T) {
 		}
 		return memoryAnswer(req)
 	}
-	runMemoryTurn(t, e, th, turn)
+	runMemoryTurn(t, e, th, turn, protocol.TurnFailed)
 	if replacement.calls.Load() != 0 {
 		t.Fatal("frozen tool silently replaced")
 	}
@@ -145,7 +145,7 @@ func TestProgressiveGuessedToolAndRevocation(t *testing.T) {
 			return nil
 		}
 	}
-	runMemoryTurn(t, e, th, turn)
+	runMemoryTurn(t, e, th, turn, protocol.TurnFailed)
 	if target.calls.Load() != 0 {
 		t.Fatal("revoked target executed")
 	}

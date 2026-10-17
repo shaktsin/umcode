@@ -436,12 +436,13 @@ func TestGuidedWorkflowRecordsSolutionTaskAndVerification(t *testing.T) {
 // approval transaction updates the node, dependent task and work revisions.
 func TestDesignedWorkflowBlocksMutationUntilApproval(t *testing.T) {
 	h, th, initial := workflowFixture(t, "update the public schema", true, false)
+	h.eng.Cfg.Policy.RequireWorkflowApproval = true
 	if initial.Work.WorkflowDepth != "designed" {
 		t.Fatalf("depth=%s", initial.Work.WorkflowDepth)
 	}
 	var pending protocol.WorkDetail
 	h.fake.push(
-		toolReply("file__write", `{"path":"notes.txt","content":"premature"}`),
+		toolReply("file__write", `{"path":"notes.txt","content":"approved\n"}`),
 		toolReply("file__list", `{}`),
 		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, true, "") }),
 		func(req llm.Request, key string) ([]llm.Event, error) {
@@ -465,7 +466,7 @@ func TestDesignedWorkflowBlocksMutationUntilApproval(t *testing.T) {
 	if turn.Status != protocol.TurnCompleted || approvals != 1 || len(items) != 4 {
 		t.Fatalf("turn=%+v approvals=%d items=%+v", turn, approvals, items)
 	}
-	if items[0].Status != protocol.ItemDenied || items[0].Tool.Error != "workflow not ready" || items[1].Status != protocol.ItemCompleted || items[3].Status != protocol.ItemCompleted {
+	if items[0].Status != protocol.ItemDenied || !strings.Contains(items[0].Tool.Error, "workflow not ready") || items[1].Status != protocol.ItemCompleted || items[3].Status != protocol.ItemCompleted {
 		t.Fatalf("gate/discovery/retry=%+v", items)
 	}
 	if data, err := os.ReadFile(filepath.Join(h.ws, "notes.txt")); err != nil || string(data) != "approved\n" {
@@ -525,6 +526,7 @@ func restartWorkflowHarness(h *harness) {
 // mutation, while proving reconstruction through the actual compiled request.
 func TestDesignedWorkflowApprovalSurvivesRestart(t *testing.T) {
 	h, th, _ := workflowFixture(t, "update the public schema", true, true)
+	h.eng.Cfg.Policy.RequireWorkflowApproval = true
 	h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, true, "") }))
 	var started protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "propose"}, &started)
@@ -604,10 +606,11 @@ func TestDesignedWorkflowApprovalSurvivesRestart(t *testing.T) {
 
 func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 	h, th, _ := workflowFixture(t, "update the public schema", true, false)
+	h.eng.Cfg.Policy.RequireWorkflowApproval = true
 	h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, true, "") }),
 		toolReply("file__write", `{"path":"notes.txt","content":"denied"}`), textReply("Waiting."))
 	denied := 0
-	_, items := workflowTurn(h, th, func(a protocol.Approval) bool {
+	deniedTurn, items := workflowTurn(h, th, func(a protocol.Approval) bool {
 		if a.Kind == "workflow" {
 			denied++
 			return false
@@ -615,10 +618,10 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 		return true
 	})
 	d := workflowDetail(h, th.ID)
-	if denied != 1 || workflowNode(t, d, "decision", "").Status != "rejected" || workflowNode(t, d, "task", "").Status != "blocked" || len(items) != 2 || items[1].Tool.Error != "workflow not ready" {
+	if deniedTurn.Status != protocol.TurnFailed || denied != 1 || workflowNode(t, d, "decision", "").Status != "rejected" || workflowNode(t, d, "task", "").Status != "blocked" || len(items) != 2 || !strings.Contains(items[1].Tool.Error, "workflow not ready") {
 		t.Fatalf("rejection=%+v items=%+v denied=%d", d, items, denied)
 	}
-	h.fake.push(toolReply("file__write", `{"path":"notes.txt","content":"still denied"}`),
+	h.fake.push(toolReply("file__write", `{"path":"notes.txt","content":"replacement\n"}`),
 		workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {
 			return solutionBatch(t, d, true, " replacement")
 		}),
@@ -647,7 +650,7 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 			return taskTransition(t, d, "Write notes replacement", "completed")
 		}), textReply("Applied replacement."))
 	approved := 0
-	_, items = workflowTurn(h, th, func(a protocol.Approval) bool {
+	replacementTurn, items := workflowTurn(h, th, func(a protocol.Approval) bool {
 		if a.Kind == "workflow" {
 			approved++
 			assertWorkflowApproval(t, h, th, a, "Use a small implementation replacement", "Write notes replacement")
@@ -655,7 +658,7 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 		return true
 	})
 	d = workflowDetail(h, th.ID)
-	if approved != 1 || len(items) != 7 || items[0].Tool.Error != "workflow not ready" || items[2].Status != protocol.ItemCompleted || d.Work.Status != "completed" || workflowNode(t, d, "task", "Write notes").Status != "superseded" || workflowNode(t, d, "task", "Write notes replacement").Status != "completed" {
+	if replacementTurn.Status != protocol.TurnCompleted || approved != 1 || len(items) != 7 || !strings.Contains(items[0].Tool.Error, "workflow not ready") || items[2].Status != protocol.ItemCompleted || d.Work.Status != "completed" || workflowNode(t, d, "task", "Write notes").Status != "superseded" || workflowNode(t, d, "task", "Write notes replacement").Status != "completed" {
 		t.Fatalf("replacement=%+v items=%+v approvals=%d", d, items, approved)
 	}
 	old, replacement := workflowNode(t, d, "task", "Write notes"), workflowNode(t, d, "task", "Write notes replacement")
@@ -669,6 +672,7 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 
 func TestDesignedWorkflowGeneralPurposeNoProject(t *testing.T) {
 	h, th, _ := workflowFixture(t, "design a public contract for a general purpose service", false, false)
+	h.eng.Cfg.Policy.RequireWorkflowApproval = true
 	initialInstructions, initialErr := os.ReadFile(filepath.Join(h.ws, "UMCODE.md"))
 	if initialErr != nil {
 		t.Fatal(initialErr)
@@ -736,7 +740,10 @@ func TestGuidedWorkflowProjectlessPlanDoesNotImplyApproval(t *testing.T) {
 func TestDesignedWorkflowProspectivePathBlocksFirstWrite(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("enabled_%t", enabled), func(t *testing.T) {
-			h := newHarness(t, func(c *config.Config) { c.Models.DesignedWorkflow = enabled })
+			h := newHarness(t, func(c *config.Config) {
+				c.Models.DesignedWorkflow = enabled
+				c.Policy.RequireWorkflowApproval = enabled
+			})
 			h.addKey("claude", "workflow", "sk-1")
 			th := startWorkThread(h)
 			h.fake.push(toolReply("file__write", `{"path":"schema.json","content":"{}"}`), textReply("Stopped."))
@@ -760,6 +767,7 @@ func TestGuidedWorkflowMaterialGatePersistsAcrossDenialExpiryAndRestart(t *testi
 	for _, outcome := range []string{"denied", "expired"} {
 		t.Run(outcome, func(t *testing.T) {
 			h, th, initial := workflowFixture(t, "write notes", true, false)
+			h.eng.Cfg.Policy.RequireWorkflowApproval = true
 			if initial.Work.WorkflowDepth != "guided" {
 				t.Fatalf("fixture depth=%s", initial.Work.WorkflowDepth)
 			}

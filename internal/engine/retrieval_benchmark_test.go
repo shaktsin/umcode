@@ -106,6 +106,7 @@ func TestRetrievalRecoversEarlierContextWithoutQualityLoss(t *testing.T) {
 			}
 			return memoryAnswer(req)
 		}
+		persistTaskTestUser(t, e, th, turn, "Complete the QUASAR repository change and verify it.")
 		e.runTurn(t.Context(), th, turn, resolved{sel: protocol.ModelSelection{Provider: "memory-script", Model: "deterministic"}, meta: models.Meta{ContextWindow: 200000, Tools: true}, limits: protocol.ExecutionLimits{MaxDurationMinutes: 2, MaxTokens: 1000000, MaxCostUSD: 100, MaxToolRounds: 10}}, protocol.TurnStartParams{Text: "Complete the QUASAR repository change and verify it."}, func() {})
 		turns, err := e.Store.ListTurns(t.Context(), th.ID)
 		if err != nil {

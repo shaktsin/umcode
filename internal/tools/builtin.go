@@ -396,6 +396,7 @@ func (t *fileRead) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if !utf8.Valid(b) {
 		return "", errors.New("file is not UTF-8 text")
 	}
+	captureFileReadEvidence(ctx, p, b)
 	captureFileExcerpt(ctx, p, b, 1, 40)
 	return clip(string(b)), nil
 }
@@ -762,6 +763,9 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		}
 	}
 	runErr := cmd.Run()
+	if cctx.Err() != nil {
+		MarkOutcomeUnknown(ctx)
+	}
 	code := 0
 	var ee *exec.ExitError
 	switch {
