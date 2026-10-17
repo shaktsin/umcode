@@ -24,10 +24,20 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 	timeout := time.Duration(e.Cfg.Policy.ApprovalTimeoutMinutes) * time.Minute
 	now := time.Now().UTC()
 	th, _ := e.Store.GetThread(sctx, turn.ThreadID)
+	if x := childExecutionFrom(ctx); x != nil {
+		var err error
+		th, err = e.Store.GetThread(sctx, x.task.ThreadID)
+		if err != nil || th.ProjectID != x.task.ProjectID {
+			return false, errors.New("child approval parent unavailable or changed")
+		}
+	}
 	a := protocol.Approval{
 		ID: store.NewID("apr"), ThreadID: turn.ThreadID, ProjectID: th.ProjectID, TurnID: turn.ID, ItemID: it.ID, Tool: tool, Args: args,
 		Risk: string(risk), Reason: reason, ActionSummary: summary, Status: "pending",
 		CreatedAt: now, ExpiresAt: now.Add(timeout),
+	}
+	if x := childExecutionFrom(ctx); x != nil {
+		a.ThreadID, a.AgentTaskID, a.AgentChildID = x.task.ThreadID, x.task.ID, x.child.ID
 	}
 	// A running Computer Use session's latest screenshot lets the person see
 	// exactly what they're being asked to approve, instead of judging a
@@ -59,6 +69,15 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 // persistAndWaitApproval is shared transport; workflow decisions never consult
 // remembered tool decisions and commit their graph before this waiter wakes.
 func (e *Engine) persistAndWaitApproval(ctx, sctx context.Context, a protocol.Approval, timeout time.Duration, auditEvent string) (bool, error) {
+	if x := childExecutionFrom(ctx); x != nil {
+		if err := e.setChildApprovalState(sctx, x, true); err != nil {
+			return false, err
+		}
+		defer e.setChildApprovalState(sctx, x, false)
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+	}
 	if err := e.Store.CreateApproval(sctx, a); err != nil {
 		return false, err
 	}

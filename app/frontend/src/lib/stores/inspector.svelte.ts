@@ -46,6 +46,8 @@ function scopedId(kind: string, projectId: string | undefined, threadId: string 
 class Inspector {
   tabs = $state<InspectorTab[]>([]);
   activeId = $state<string | null>(null);
+  /** Explicit snapshot links reveal an existing tab even after its overlay was dismissed. */
+  revealVersion = $state(0);
   private requests = new Map<string, symbol>();
 
   constructor() {
@@ -123,6 +125,17 @@ class Inspector {
     this.finishRead(id, token, result
       ? { content: result.content, truncated: result.truncated, binary: result.binary }
       : { error: 'This file could not be read.' });
+  }
+
+  /** An immutable owned child snapshot; never substitute current parent bytes. */
+  async openAgentFile(path: string, threadId: string, taskId: string, childId: string, revision: string, projectId?: string) {
+    this.revealVersion++;
+    const id = scopedId('agent-file', projectId, threadId, JSON.stringify([taskId, childId, revision, path]));
+    const token = this.beginRead({ id, kind: 'file', title: `${path.split('/').pop()} · ${revision.slice(0, 7)}`, path, threadId, projectId, loading: true });
+    const result = await app.try<ProjectFileContent>('delegation/file', { threadId, taskId, childId, revision, path });
+    this.finishRead(id, token, result
+      ? { content: result.content, truncated: result.truncated, binary: result.binary }
+      : { error: 'Child snapshot is unavailable. Its retained workspace may have been cleaned.' });
   }
 
   /** Open one file change (a unified diff) from a turn. */

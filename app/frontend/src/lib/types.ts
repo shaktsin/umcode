@@ -258,6 +258,8 @@ export interface Attachment {
 }
 
 export interface Approval {
+  agentTaskId?: string;
+  agentChildId?: string;
   id: string;
   threadId: string;
   projectId?: string;
@@ -580,4 +582,15 @@ export interface BudgetWarning {
   spentUsd: number;
   budgetUsd: number;
   percent: number;
+}
+
+// Explicit delegation preparation is chat-bound; the token is consumed on submission.
+export interface DelegationEnableResult { activationToken: string; expiresAt: string }
+export interface TurnStartParams {
+  threadId: string;
+  text: string;
+  attachments?: Attachment[];
+  override?: ModelSelection;
+  delegationActivationToken?: string;
+  delegationTaskId?: string;
 }

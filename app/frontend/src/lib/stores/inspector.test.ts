@@ -98,3 +98,16 @@ it('previews reuse their session within scope while preserving different project
   inspector.openPreview({...preview,projectId:'project-b'});inspector.openPreview({...preview,threadId:'thread-b'});expect(inspector.tabs).toHaveLength(3);
   handlers.get('preview/output')!({preview,output:'original scope'});expect(inspector.tabs[0].text).toBe('original scope');expect(inspector.tabs[1].text).toBe('');
 });
+
+it('child snapshots reuse child/revision/path tabs and never fall back to mutable project bytes', async () => {
+  request.mockResolvedValue(file('owned snapshot'));
+  await inspector.openAgentFile('src/main.ts', 'thread-a', 'task-a', 'child-a', 'rev-a', 'project-a');
+  await inspector.openAgentFile('src/main.ts', 'thread-a', 'task-a', 'child-a', 'rev-a', 'project-a');
+  expect(inspector.tabs).toHaveLength(1); expect(inspector.active?.content).toBe('owned snapshot');
+  expect(request).toHaveBeenCalledWith('delegation/file', { path: 'src/main.ts', threadId: 'thread-a', taskId: 'task-a', childId: 'child-a', revision: 'rev-a' });
+  await inspector.openAgentFile('src/main.ts', 'thread-a', 'task-a', 'child-b', 'rev-a', 'project-a');
+  await inspector.openAgentFile('src/main.ts', 'thread-a', 'task-a', 'child-a', 'rev-b', 'project-a'); expect(inspector.tabs).toHaveLength(3);
+  request.mockResolvedValue(undefined); await inspector.openAgentFile('src/main.ts', 'thread-a', 'task-a', 'child-a', 'rev-a', 'project-a');
+  expect(inspector.active?.error).toMatch(/snapshot.*unavailable/i); expect(inspector.active?.content).toBeUndefined();
+  expect(request.mock.calls.every(([method]) => method === 'delegation/file')).toBe(true);
+});

@@ -125,6 +125,9 @@ func (t *runScript) assess(ctx context.Context, args json.RawMessage) (tools.Ris
 	return risk, summary
 }
 func (t *runScript) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if scope := tools.ScopeFrom(ctx); scope != nil && (scope.RestrictedChild || scope.ReadOnly) {
+		return "", fmt.Errorf("child skill scripts are blocked without an enforced workspace sandbox")
+	}
 	var a runArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err

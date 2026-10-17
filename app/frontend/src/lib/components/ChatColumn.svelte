@@ -13,6 +13,7 @@
   import ApprovalCard from './ApprovalCard.svelte';
   import ComputerUseView from './ComputerUseView.svelte';
   import Composer from './Composer.svelte';
+  import Agents from './Agents.svelte';
   import type { Item, Turn, TaskWorkspaceResult } from '$lib/types';
   import { createProject } from '$lib/createProject';
 
@@ -439,5 +440,6 @@
     {/if}
   </div>
 
+  {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} />{/if}
   <Composer {view} compact={variant === 'side'} />
 </div>

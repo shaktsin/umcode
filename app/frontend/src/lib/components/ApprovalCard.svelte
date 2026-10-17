@@ -44,7 +44,7 @@
   {#if chatContext}
     <button class="btn-ghost btn-sm" aria-expanded={showDetails} onclick={() => (showDetails = !showDetails)}>{showDetails ? 'Hide details' : 'Review details'}</button>
   {/if}
-  <div class="w-full flex justify-end gap-2">
+  <div class="w-full flex flex-wrap justify-end gap-2">
     <button class="btn-outline btn-sm" onclick={() => app.respondApproval(approval.id, false)}>Deny</button>
     {#if canRemember}
     <button class="btn-outline btn-sm" title={`Always allow this exact ${rememberAction} in this chat`} onclick={() => app.respondApproval(approval.id, true, true)}>Always allow in this chat</button>

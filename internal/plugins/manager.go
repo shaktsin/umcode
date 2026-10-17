@@ -413,7 +413,7 @@ func (m *Manager) buildSnapshot(inputs []snapshotInput, generation string) (*Sna
 			// selectable with a source-qualified namespace valid in / commands.
 			skillNamespace = strings.ReplaceAll(input.installation.ID, "/", ".")
 		}
-		skillRoots = append(skillRoots, skills.Root{PluginID: skillNamespace, Paths: paths, Config: input.project.Settings, RuntimeValues: input.runtime.replacements, SecretValues: input.runtime.secretValues, AllowUnconfigured: !input.project.Enabled})
+		skillRoots = append(skillRoots, skills.Root{PluginID: skillNamespace, PackageName: input.pkg.Name, Paths: paths, Config: input.project.Settings, RuntimeValues: input.runtime.replacements, SecretValues: input.runtime.secretValues, AllowUnconfigured: !input.project.Enabled})
 		if !input.project.Enabled {
 			continue
 		}

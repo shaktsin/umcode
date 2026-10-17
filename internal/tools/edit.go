@@ -43,6 +43,9 @@ type editArgs struct {
 }
 
 func (t *fileEdit) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := RequireWritable(ctx); err != nil {
+		return "", err
+	}
 	a, err := decode[editArgs](args)
 	if err != nil {
 		return "", err

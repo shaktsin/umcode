@@ -14,6 +14,10 @@ import (
 // Scope is the project a turn is working in. It travels on the context, so
 // every tool — built-in, skill or MCP — sees the same boundary.
 type Scope struct {
+	// RestrictedChild requires enforced command confinement, never host fallback.
+	RestrictedChild bool
+	// ReadOnly denies every command and mutation path, even direct tool calls.
+	ReadOnly         bool
 	ThreadID         string
 	ProjectID        string
 	ProjectName      string
@@ -157,4 +161,11 @@ func NeedsNetwork(command string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func RequireWritable(ctx context.Context) error {
+	if scope := ScopeFrom(ctx); scope != nil && scope.ReadOnly {
+		return errors.New("reviewer action blocked: enforceable read-only execution is unavailable")
+	}
+	return nil
 }

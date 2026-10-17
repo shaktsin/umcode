@@ -206,12 +206,17 @@ func (h *harness) callErr(method string, params any) error {
 // waitTurn consumes notifications until the turn completes. onApproval decides approvals.
 func (h *harness) waitTurn(turnID string, onApproval func(protocol.Approval) bool) (protocol.Turn, string, []protocol.Item) {
 	h.t.Helper()
+	return h.waitTurnWithin(turnID, onApproval, 10*time.Second)
+}
+
+func (h *harness) waitTurnWithin(turnID string, onApproval func(protocol.Approval) bool, timeout time.Duration) (protocol.Turn, string, []protocol.Item) {
+	h.t.Helper()
 	var text strings.Builder
 	var tools []protocol.Item
-	timeout := time.After(10 * time.Second)
+	deadline := time.After(timeout)
 	for {
 		select {
-		case <-timeout:
+		case <-deadline:
 			h.t.Fatal("timed out waiting for turn")
 		case n := <-h.c.Notifications():
 			switch n.Method {

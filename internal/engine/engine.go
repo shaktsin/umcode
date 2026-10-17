@@ -20,6 +20,7 @@ import (
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/credentials"
+	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/hooks"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/mcp"
@@ -85,32 +86,43 @@ type Engine struct {
 	toolReducerFailures     atomic.Int64 // recovered tool-result reducer panics
 	reduceHook              func()       // instance-local panic test seam; set before use
 
-	mu           sync.Mutex
-	activeTurns  map[string]*activeTurn // by turn id
-	threadTurns  map[string]string      // thread id -> running turn id
-	approvals    map[string]chan bool   // pending approval id -> decision
-	budgetWarned map[string]string      // credential id -> month already warned
-	pausedTurns  map[string]bool        // turn id -> ended on a budget pause
-	routing      protocol.RoutingConfig // the models the user has approved
-	presets      map[protocol.Complexity]protocol.ComplexityPreset
-	defaultCplx  protocol.Complexity
-	turnLimits   protocol.ExecutionLimits
-	turnWaiters  map[string]chan protocol.Turn // turn id -> completion (task runs)
-	wg           sync.WaitGroup
+	delegationWorkflowMu  sync.Mutex
+	DelegationCoordinator *delegation.Coordinator
+	// The default uses owned Git checkouts. Tests may inject an explicit resolver.
+	DelegationWorkspaces       WorkspaceResolver
+	DelegationWorkspaceService *delegation.WorkspaceService
+
+	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
+	delegationTokens map[string]delegationToken // protected by mu; never persisted
+	shuttingDown     bool                       // protected by mu
+	mu               sync.Mutex
+	activeTurns      map[string]*activeTurn // by turn id
+	threadTurns      map[string]string      // thread id -> running turn id
+	approvals        map[string]chan bool   // pending approval id -> decision
+	budgetWarned     map[string]string      // credential id -> month already warned
+	pausedTurns      map[string]bool        // turn id -> ended on a budget pause
+	routing          protocol.RoutingConfig // the models the user has approved
+	presets          map[protocol.Complexity]protocol.ComplexityPreset
+	defaultCplx      protocol.Complexity
+	turnLimits       protocol.ExecutionLimits
+	turnWaiters      map[string]chan protocol.Turn // turn id -> completion (task runs)
+	wg               sync.WaitGroup
 }
 
 type activeTurn struct {
+	taskID string
 	cancel context.CancelFunc
 	turn   protocol.Turn
 }
 
 // Options configures New.
 type Options struct {
-	Config  *config.Config
-	Store   *store.Store
-	Secrets secrets.Store
-	LLMs    *llm.Registry // nil = built-in adapters
-	Logger  *slog.Logger
+	DelegationWorkspaces WorkspaceResolver
+	Config               *config.Config
+	Store                *store.Store
+	Secrets              secrets.Store
+	LLMs                 *llm.Registry // nil = built-in adapters
+	Logger               *slog.Logger
 	// DisableScheduler turns off scheduled task runs (tests, secondary engines).
 	DisableScheduler bool
 	// DisableMCP skips starting MCP servers.
@@ -188,6 +200,18 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
+	e.DelegationWorkspaceService = delegation.NewWorkspaceService(o.Store, e.Worktrees, e.validateDelegationParent, o.Store.AgentReviewEligible)
+	e.DelegationWorkspaces = o.DelegationWorkspaces
+	if e.DelegationWorkspaces == nil {
+		e.DelegationWorkspaces = managedChildWorkspaces{service: e.DelegationWorkspaceService}
+	}
+	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus), delegation.WithRunner(workflowRunner{engine: e}), delegation.WithWorkflowPolicy(e.delegationWorkflowPolicy))
+	for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
+		reg.Add(tool)
+	}
+	for _, tool := range tools.NewAgentWorkflowTools(e.delegationWorkflowCall) {
+		reg.Add(tool)
+	}
 	e.Work.StartGC(base, e.storageRetention) // best-effort, background, never prompts
 	e.Creds.OnSignIn = func(r protocol.ChatGPTSignInResult) { e.Bus.PublishAdmin(protocol.NotifyChatGPTSignIn, r) }
 	e.Router = router.New(o.Store, e.Creds, cat, o.LLMs, o.Config, o.Logger)
@@ -199,6 +223,9 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		return nil, err
 	}
 	if err := e.loadRouting(ctx); err != nil {
+		return nil, err
+	}
+	if err := o.Store.ReconcileAgentChildren(ctx); err != nil {
 		return nil, err
 	}
 	if n, err := o.Store.MarkStaleTurns(ctx); err != nil {
@@ -234,6 +261,10 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 
 // Shutdown cancels running turns and waits for them to finish.
 func (e *Engine) Shutdown(ctx context.Context) {
+	e.mu.Lock()
+	e.shuttingDown = true
+	clear(e.delegationTokens)
+	e.mu.Unlock()
 	e.Previews.Close()
 	e.VisualQA.Close()
 	e.ComputerUse.Close()
@@ -268,6 +299,9 @@ func (e *Engine) Status(ctx context.Context) protocol.EngineStatus {
 // ---- threads ----
 
 func (e *Engine) publishThread(ctx context.Context, id string) {
+	if hidden, err := e.Store.IsInternalThread(ctx, id); err != nil || hidden {
+		return
+	}
 	if t, err := e.Store.GetThread(ctx, id); err == nil {
 		e.Bus.Publish(id, protocol.NotifyThreadUpdated, protocol.ThreadEvent{Thread: t})
 	}
@@ -921,7 +955,17 @@ func (e *Engine) systemPrompt(ctx context.Context, userText string, proj *protoc
 // instructions, the skills catalog and the project's UMCODE.md files. userText
 // is used to point at a matching skill. Empty layers are omitted.
 func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *protocol.Project, instructionHint string, hookContext []string) []promptLayer {
+	if x := childExecutionFrom(ctx); x != nil {
+		review := ""
+		if x.child.Role == protocol.AgentRoleReviewer {
+			review = " Submit agent.review_report with your explicit verdict, findings, and exact revision " + x.workspace.Revision + ". An approved summary is not a review report. "
+		}
+		return []promptLayer{{Name: layerCore, Text: review + "You are a scoped UMCode child agent. Complete only the supplied assignment and acceptance criteria. The supplied guidance and references are your context. Read applicable nested UMCODE.md and explicitly requested skills through scoped read tools. No delegation or activation is permitted. Report the result, changed paths, findings and actual verification evidence; never claim blocked checks passed. Reviewer command, script, hook and plugin execution is blocked because a read-only command sandbox is unavailable. All file access is confined to the owned checkout: " + x.workspace.Root}}
+	}
 	var layers []promptLayer
+	if _, ok := DelegationTaskFromContext(ctx); ok {
+		layers = append(layers, promptLayer{Name: "delegation_workflow", Text: delegationWorkflowPrompt})
+	}
 	var b strings.Builder
 	flush := func(name string) {
 		if b.Len() > 0 {

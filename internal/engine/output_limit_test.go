@@ -122,3 +122,65 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 		})
 	}
 }
+
+// A capped delegated request can still report an actual overrun. Its output
+// limit must remain a failed/incomplete turn, rather than a completed budget
+// pause, while the same attempt settles shared actuals and suppresses tools.
+func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T) {
+	e, th, _, _ := delegationFixture(t)
+	p := &outputLimitProvider{reason: "max_output_tokens", tool: true}
+	e.LLMs.Register(p)
+	e.mu.Lock()
+	e.turnLimits.MaxTokens = 3000
+	e.mu.Unlock()
+	token, err := e.PrepareDelegation(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := make(chan protocol.Turn, 1)
+	started, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Implement the reader", DelegationActivationToken: token.ActivationToken}, wait: wait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case finished := <-wait:
+		if finished.Status != protocol.TurnFailed || !strings.Contains(finished.Error, "output limit") {
+			t.Fatalf("delegated truncation incorrectly completed/paused: %+v", finished)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("delegated output-limited turn did not finish")
+	}
+	task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, started.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, shared, err := e.DelegationCoordinator.Task(t.Context(), task, protocol.ExecutionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shared.Usage(); got.InputTokens != 100 || got.OutputTokens != 4096 || got.Requests != 1 {
+		t.Fatalf("output-limited attempt lost shared actuals: %+v", got)
+	}
+	if shared.StopReason() == "" {
+		t.Fatal("reported overrun did not exhaust shared allowance")
+	}
+	if p.calls != 1 {
+		t.Fatalf("unexpected output-limit retry: %d", p.calls)
+	}
+	items, err := e.Store.ListItems(t.Context(), th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Kind == protocol.ItemToolCall {
+			t.Fatalf("truncated delegated tool executed: %+v", item)
+		}
+	}
+	details, err := e.Store.ReadTurnDetails(t.Context(), protocol.TurnDetailsParams{ThreadID: th.ID, TurnID: started.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.Diagnostics.Requests) != 1 || details.Diagnostics.Requests[0].StopReason != "max_output_tokens" || details.Diagnostics.Requests[0].Fallback != "output_limit" {
+		t.Fatalf("delegated output-limit diagnostics lost: %+v", details.Diagnostics)
+	}
+}

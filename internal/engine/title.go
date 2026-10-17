@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -60,6 +61,20 @@ func (e *Engine) llmTitle(ctx context.Context, turn protocol.Turn, first, reply 
 	defer cancel()
 	prompt := "Write a 3-6 word title for this chat. Reply with the title only, no quotes or punctuation at the end.\n\nUser: " +
 		clipRunes(first, 1500) + "\n\nAssistant: " + clipRunes(reply, 1500)
+	if shared := delegation.BudgetFromContext(ctx); shared != nil {
+		meta := e.Catalog.Lookup(ctx, provider, model)
+		budget := newTurnBudget(protocol.ExecutionLimits{})
+		budget.shared = shared
+		out, err := e.streamOnce(tctx, context.WithoutCancel(ctx), turn, resolved{sel: protocol.ModelSelection{Provider: provider, Model: model}, meta: meta}, cred, p, llm.Request{Model: model, Messages: []llm.Message{llm.Text(llm.RoleUser, prompt)}, MaxTokens: 60}, "title", budget)
+		if err != nil {
+			return ""
+		}
+		t := strings.TrimSpace(strings.Trim(strings.TrimSpace(out.text), `"'.`))
+		if i := strings.IndexByte(t, '\n'); i >= 0 {
+			t = t[:i]
+		}
+		return clipRunes(t, 80)
+	}
 	start := time.Now()
 	ch, err := p.Stream(tctx, cred.Material, llm.Request{Model: model, Messages: []llm.Message{llm.Text(llm.RoleUser, prompt)}, MaxTokens: 60})
 	if err != nil {

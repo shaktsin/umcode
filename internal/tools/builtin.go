@@ -42,10 +42,16 @@ type BuiltinServices struct {
 	VisualQA       *visualqa.Manager
 	ComputerUse    *computeruse.Manager
 	Exec           *ExecManager
+	AgentTools     []Tool
 	SkillReadPaths SkillReadPathsFunc
 }
 
 func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv SkillEnvFunc, services ...BuiltinServices) {
+	if len(services) > 0 {
+		for _, tool := range services[0].AgentTools {
+			r.Add(tool)
+		}
+	}
 	r.Add(&fileRead{ws})
 	r.Add(&fileList{ws})
 	r.Add(&fileWrite{ws})
@@ -116,6 +122,9 @@ func (t *verificationRun) Assess(args json.RawMessage) (Risk, string) {
 	return risk, fmt.Sprintf("Run %d verification checks", len(a.Checks))
 }
 func (t *verificationRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := RequireWritable(ctx); err != nil {
+		return "", err
+	}
 	type check struct {
 		Label           string `json:"label"`
 		Command         string `json:"command"`
@@ -459,6 +468,9 @@ func (*fileWrite) Assess(args json.RawMessage) (Risk, string) {
 	return RiskYellow, fmt.Sprintf("Write %d bytes to %s", len(a.Content), a.Path)
 }
 func (t *fileWrite) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := RequireWritable(ctx); err != nil {
+		return "", err
+	}
 	a, err := decode[struct{ Path, Content, Workspace string }](args)
 	if err != nil {
 		return "", err
@@ -640,6 +652,9 @@ func discoveredToolPath(path, home string) string {
 }
 
 func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := RequireWritable(ctx); err != nil {
+		return "", err
+	}
 	a, err := decode[struct {
 		Command        string
 		Workspace      string
@@ -657,6 +672,12 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		return "", ErrNoProject
 	}
 	sandboxed := !scope.UseCompute && t.sandbox != nil
+	if scope.RestrictedChild && !scope.UseCompute && !sandboxed {
+		return "", errors.New("child shell blocked: enforceable workspace sandbox unavailable")
+	}
+	if scope.RestrictedChild && a.Skill != "" {
+		return "", errors.New("child shell skill environments are unavailable")
+	}
 	trusted := scope.TrustedAutonomy()
 	if !scope.AllowNet && !scope.UseCompute && !sandboxed && !trusted {
 		return "", errors.New("shell execution is blocked while network access is off unless the project's microVM is enabled, the host sandbox is available, or the chat's approval mode is auto_workspace/auto_all; host shell networking cannot be safely restricted otherwise")
@@ -726,7 +747,17 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if sandboxed {
-		if err := t.sandbox.Wrap(cmd, sandbox.DefaultPolicy(scope.Root, scope.AllowNet, skillReadPaths...)); err != nil {
+		policy := sandbox.DefaultPolicy(scope.Root, scope.AllowNet, skillReadPaths...)
+		if scope.RestrictedChild {
+			temp, err := os.MkdirTemp("", "umcode-child-command-")
+			if err != nil {
+				return "", err
+			}
+			defer os.RemoveAll(temp)
+			policy = sandbox.IsolatedChildPolicy(scope.Root, scope.AllowNet, temp)
+			cmd.Env = append(cmd.Env, "TMPDIR="+temp, "TMP="+temp, "TEMP="+temp)
+		}
+		if err := t.sandbox.Wrap(cmd, policy); err != nil {
 			return "", fmt.Errorf("could not start the command sandbox: %w", err)
 		}
 	}

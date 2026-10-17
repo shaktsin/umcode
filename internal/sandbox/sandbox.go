@@ -218,3 +218,23 @@ func EvaluationPolicy(root string, readonly []string) Policy {
 	}
 	return p
 }
+
+// IsolatedChildPolicy retains trusted runtimes but grants writes only to the
+// owned checkout and a fresh command-private temporary directory. Shared temp
+// roots and package caches must not expose a sibling/parent checkout.
+func IsolatedChildPolicy(root string, network bool, temporary string) Policy {
+	p := DefaultPolicy(root, network)
+	p.Writable = []string{realPath(temporary)}
+	shared := map[string]bool{}
+	for _, path := range []string{os.TempDir(), "/tmp", "/var/tmp"} {
+		shared[realPath(path)] = true
+	}
+	reads := []string{realPath(root), realPath(temporary)}
+	for _, path := range p.Readable {
+		if !shared[realPath(path)] {
+			reads = append(reads, path)
+		}
+	}
+	p.Readable = dedupe(reads)
+	return p
+}

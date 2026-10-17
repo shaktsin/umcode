@@ -38,6 +38,9 @@ type Manager struct {
 
 // New creates a manager rooted under appDataDir/worktrees.
 func New(appDataDir string) *Manager {
+	if canonical, err := filepath.EvalSymlinks(appDataDir); err == nil {
+		appDataDir = canonical
+	}
 	return &Manager{root: filepath.Join(appDataDir, "worktrees")}
 }
 
@@ -287,6 +290,12 @@ func (m *Manager) Keep(ctx context.Context, taskID, projectRoot string) (int, er
 // Discard removes a stopped task workspace. Callers should require an explicit
 // user confirmation because uncommitted task changes are permanently removed.
 func (m *Manager) Discard(ctx context.Context, taskID, projectRoot string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.discard(ctx, taskID, projectRoot)
+}
+
+func (m *Manager) discard(ctx context.Context, taskID, projectRoot string) error {
 	if strings.TrimSpace(taskID) == "" {
 		return errors.New("cannot discard a coding workspace without a task id")
 	}
@@ -305,11 +314,27 @@ func (m *Manager) Discard(ctx context.Context, taskID, projectRoot string) error
 	h := sha256.Sum256([]byte(taskID))
 	path := filepath.Join(m.root, hex.EncodeToString(h[:]))
 	marker := path + ".ready"
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		info, markerErr := os.Lstat(marker)
+		if errors.Is(markerErr, os.ErrNotExist) {
+			return nil
+		}
+		if markerErr != nil {
+			return markerErr
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("invalid cleanup ownership marker")
+		}
+		ready, markerErr := os.ReadFile(marker)
+		if markerErr != nil {
+			return markerErr
+		}
+		fields := strings.Split(strings.TrimSpace(string(ready)), "\n")
+		if len(fields) != 3 || !samePath(fields[0], commonDir) {
+			return errors.New("cleanup ownership marker changed")
+		}
+		return os.Remove(marker)
 	}
 	if err != nil {
 		return err

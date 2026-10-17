@@ -53,7 +53,7 @@ func (s *Store) CreateThread(ctx context.Context, t protocol.Thread) (protocol.T
 
 // GetThread loads a thread with its usage totals.
 func (s *Store) GetThread(ctx context.Context, id string) (protocol.Thread, error) {
-	t, err := scanThread(s.DB.QueryRowContext(ctx, `SELECT `+threadCols+` FROM threads WHERE id = ?`, id))
+	t, err := scanThread(s.DB.QueryRowContext(ctx, `SELECT `+threadCols+` FROM threads WHERE id = ? AND (internal_child_id = '' OR ?)`, id, internalThreads(ctx)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -70,7 +70,7 @@ func (s *Store) ListThreads(ctx context.Context, p protocol.ThreadListParams) ([
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	var where []string
+	where := []string{"internal_child_id = ''"}
 	var args []any
 	archived := false
 	if p.Archived != nil {
@@ -335,7 +335,11 @@ func (s *Store) SaveItem(ctx context.Context, it protocol.Item) error {
 			return err
 		}
 		text := searchText(it)
-		if text != "" {
+		var hidden string
+		if err := tx.QueryRowContext(ctx, `SELECT internal_child_id FROM threads WHERE id=?`, it.ThreadID).Scan(&hidden); err != nil {
+			return err
+		}
+		if text != "" && hidden == "" {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO items_fts (item_id, thread_id, text) VALUES (?,?,?)`,
 				it.ID, it.ThreadID, text); err != nil {
 				return err
@@ -427,7 +431,7 @@ func (s *Store) SearchItems(ctx context.Context, query string, limit int) ([]pro
 	rows, err := s.DB.QueryContext(ctx, `SELECT f.item_id, f.thread_id, t.title,
 			snippet(items_fts, 2, '[', ']', '…', 12)
 		FROM items_fts f JOIN threads t ON t.id = f.thread_id
-		WHERE items_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery(query), limit)
+		WHERE t.internal_child_id = '' AND items_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery(query), limit)
 	if err != nil {
 		return nil, err
 	}
