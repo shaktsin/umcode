@@ -373,17 +373,20 @@ func createTaskOperationTx(ctx context.Context, tx *sql.Tx, op protocol.TaskOper
 		if err := json.Unmarshal(toolRaw, &stored); err != nil {
 			return op, err
 		}
-		var expected, actual bytes.Buffer
-		if err := json.Compact(&expected, op.Args); err != nil {
+		// Match SaveItem's RawMessage encoding: compact whitespace and escape
+		// HTML/Unicode separators without decoding or altering argument values.
+		expected, err := json.Marshal(op.Args)
+		if err != nil {
 			return op, err
 		}
-		if err := json.Compact(&actual, stored.Args); err != nil {
+		actual, err := json.Marshal(stored.Args)
+		if err != nil {
 			return op, err
 		}
-		if stored.Name != op.Tool || !bytes.Equal(expected.Bytes(), actual.Bytes()) {
+		if stored.Name != op.Tool || !bytes.Equal(expected, actual) {
 			return op, errors.New("operation arguments do not match the original tool item")
 		}
-		hash := sha256.Sum256(actual.Bytes())
+		hash := sha256.Sum256(actual)
 		op.ArgsRef = op.ItemID
 		op.ArgsSHA256 = hex.EncodeToString(hash[:])
 		var args map[string]json.RawMessage
