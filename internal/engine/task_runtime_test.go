@@ -31,6 +31,9 @@ func (*taskScriptProvider) ListModels(context.Context, llm.Credential) ([]string
 	return []string{"deterministic"}, nil
 }
 func (p *taskScriptProvider) Stream(_ context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "mutation", "file_content", "notes.txt"); ok {
+		return reply, nil
+	}
 	p.calls++
 	if p.calls == 1 && p.before != nil {
 		p.before()

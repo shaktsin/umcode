@@ -27,6 +27,9 @@ func (*childCompactionProvider) ListModels(context.Context, llm.Credential) ([]s
 	return nil, nil
 }
 func (p *childCompactionProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	ch := make(chan llm.Event, 2)
 	if strings.HasPrefix(req.System, "Summarize this coding conversation") {
 		p.entered <- ctx

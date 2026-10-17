@@ -411,6 +411,15 @@ func (e *Engine) reconcileTaskOutcome(ctx context.Context, taskID string) (strin
 	if outcome == "completed" && !succeeded {
 		outcome, status = "not_executed", "active"
 	}
+	// Successful operations do not close requested work that still lacks evidence.
+	if outcome == "completed" {
+		for _, expectation := range snap.Expectations {
+			if expectation.Kind != "explanation" && expectation.Status == "pending" {
+				outcome, status = "unverified", "active"
+				break
+			}
+		}
+	}
 	if _, childErr := e.Store.ActiveAgentTask(ctx, task.ThreadID, task.ProjectID); childErr == nil && outcome == "completed" {
 		outcome, status = "unverified", "active"
 	} else if childErr != nil && !errors.Is(childErr, store.ErrNotFound) {
@@ -660,7 +669,11 @@ func (e *Engine) taskWorkflowConditionCleared(ctx context.Context, threadID stri
 			blockerID = b.WorkID
 		}
 	}
-	if e.checkWorkflowGate(ctx, threadID, op.Tool) == nil {
+	tool := op.Tool
+	if tool == "work.update" {
+		tool = "file.write"
+	}
+	if e.checkWorkflowGate(ctx, threadID, tool) == nil {
 		return true
 	}
 	w, ok, err := e.Store.OpenWorkForThread(ctx, threadID)

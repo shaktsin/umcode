@@ -264,6 +264,10 @@ func (s *Store) ActiveExecutionTask(ctx context.Context, threadID string) (proto
 	if rowErr != nil {
 		return result, rowErr
 	}
+	result.Expectations, err = readTaskExpectations(ctx, tx, id)
+	if err != nil {
+		return result, err
+	}
 	return result, tx.Commit()
 }
 func (s *Store) TransitionExecutionTask(ctx context.Context, id string, change protocol.TaskTransition) (protocol.ExecutionTask, error) {

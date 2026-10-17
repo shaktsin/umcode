@@ -3,6 +3,8 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -391,8 +393,12 @@ func (t *fileRead) Call(ctx context.Context, args json.RawMessage) (string, erro
 	}
 	b, err := os.ReadFile(p)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			captureFileExistence(ctx, p, false)
+		}
 		return "", err
 	}
+	captureFileExistence(ctx, p, true)
 	if !utf8.Valid(b) {
 		return "", errors.New("file is not UTF-8 text")
 	}
@@ -425,15 +431,31 @@ func (t *fileList) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
-	entries, err := os.ReadDir(p)
+	observation, body, err := ObserveDirectory(p)
 	if err != nil {
 		return "", err
 	}
+	if sink, _ := ctx.Value(rawSinkKey{}).(*RawSink); sink != nil {
+		sink.FileListing = observation
+	}
+	SetRaw(ctx, body)
+	return clip(body), nil
+}
+
+// ObserveDirectory uses the builtin listing format for first-party freshness checks.
+// Callers must authorize and scope path before calling it.
+func ObserveDirectory(path string) (*FileListingEvidence, string, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, "", err
+	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	complete := true
 	var b strings.Builder
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil {
+			complete = false
 			continue
 		}
 		kind := "file"
@@ -445,9 +467,11 @@ func (t *fileList) Call(ctx context.Context, args json.RawMessage) (string, erro
 		fmt.Fprintf(&b, "%s\t%s\t%d\n", kind, e.Name(), info.Size())
 	}
 	if b.Len() == 0 {
-		return "(empty directory)", nil
+		b.WriteString("(empty directory)")
 	}
-	return clip(b.String()), nil
+	body := b.String()
+	hash := sha256.Sum256([]byte(body))
+	return &FileListingEvidence{Path: path, SHA256: hex.EncodeToString(hash[:]), Entries: len(entries), Bytes: len(body), Complete: complete && len(body) <= maxOutput}, body, nil
 }
 
 // ---- file.write ----

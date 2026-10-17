@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type evaluationRunner struct{}
@@ -270,6 +271,42 @@ func (s *evaluationScript) restartPending() bool {
 func (s *evaluationScript) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if strings.HasPrefix(req.System, "Privately classify") {
+		var input struct {
+			TaskID           string `json:"taskId"`
+			ExpectedRevision int    `json:"expectedRevision"`
+			OriginItemID     string `json:"originItemId"`
+			Request          string `json:"request"`
+		}
+		if len(req.Messages) == 0 || json.Unmarshal([]byte(req.Messages[0].JoinedText()), &input) != nil {
+			return nil, errors.New("invalid scripted intent request")
+		}
+		kind, predicate := "explanation", "answer"
+		resource := json.RawMessage(`{}`)
+		// The synthetic evaluation provider has an explicit action script. Describe
+		// its next scripted request without consuming that execution step.
+		if s.index < len(s.steps) {
+			step := s.steps[s.index]
+			var args struct {
+				Path string `json:"path"`
+			}
+			_ = json.Unmarshal(step.Args, &args)
+			if args.Path != "" && (step.Tool == "file.write" || step.Tool == "file.edit" || step.Tool == "file.read") {
+				kind, predicate = "mutation", "file_content"
+				if step.Tool == "file.read" {
+					kind, predicate = "inspection", "read"
+				}
+				resource, _ = json.Marshal(protocol.TaskResource{Type: "file", Path: args.Path})
+			}
+		}
+		proposal := protocol.TaskIntentProposal{TaskID: input.TaskID, ExpectedRevision: input.ExpectedRevision, OriginItemID: input.OriginItemID, Relation: "continue", Expectations: []protocol.TaskExpectationProposal{{Source: protocol.TaskSourceSpan{ItemID: input.OriginItemID, Start: 0, End: utf8.RuneCountInString(input.Request)}, Kind: kind, Predicate: predicate, Resource: resource}}}
+		raw, _ := json.Marshal(proposal)
+		ch := make(chan llm.Event, 2)
+		ch <- llm.Event{Type: llm.EventTextDelta, Text: string(raw)}
+		ch <- llm.Event{Type: llm.EventDone, Usage: llm.Usage{Reported: true, InputTokens: estimateInput(req), OutputTokens: llm.EstimateTokens(string(raw))}}
+		close(ch)
+		return ch, nil
+	}
 	if s.index >= len(s.steps) {
 		return nil, errors.New("evaluation script exhausted")
 	}

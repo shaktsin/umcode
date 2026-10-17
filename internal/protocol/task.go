@@ -7,20 +7,21 @@ import (
 
 // ExecutionTask is durable user work, distinct from scheduled Task jobs.
 type ExecutionTask struct {
-	ObjectiveTruncated bool            `json:"objectiveTruncated,omitempty"`
-	ID                 string          `json:"id"`
-	ThreadID           string          `json:"threadId"`
-	WorkID             string          `json:"workId,omitempty"`
-	ProjectID          string          `json:"projectId,omitempty"`
-	OriginItemID       string          `json:"originItemId"`
-	Revision           int             `json:"revision"`
-	Objective          string          `json:"objective"`
-	Scope              json.RawMessage `json:"scope,omitempty"`
-	Phase              string          `json:"phase,omitempty"`
-	Status             string          `json:"status"`
-	ContinuationItemID string          `json:"continuationItemId,omitempty"`
-	CreatedAt          time.Time       `json:"createdAt"`
-	UpdatedAt          time.Time       `json:"updatedAt"`
+	ExpectationsVersion int             `json:"expectationsVersion,omitempty"`
+	ObjectiveTruncated  bool            `json:"objectiveTruncated,omitempty"`
+	ID                  string          `json:"id"`
+	ThreadID            string          `json:"threadId"`
+	WorkID              string          `json:"workId,omitempty"`
+	ProjectID           string          `json:"projectId,omitempty"`
+	OriginItemID        string          `json:"originItemId"`
+	Revision            int             `json:"revision"`
+	Objective           string          `json:"objective"`
+	Scope               json.RawMessage `json:"scope,omitempty"`
+	Phase               string          `json:"phase,omitempty"`
+	Status              string          `json:"status"`
+	ContinuationItemID  string          `json:"continuationItemId,omitempty"`
+	CreatedAt           time.Time       `json:"createdAt"`
+	UpdatedAt           time.Time       `json:"updatedAt"`
 }
 
 type ActionFailure struct {
@@ -71,6 +72,7 @@ type TaskRequirement struct {
 }
 
 type TaskSnapshot struct {
+	Expectations []TaskExpectation `json:"expectations,omitempty"`
 	Task         ExecutionTask     `json:"task"`
 	Operations   []TaskOperation   `json:"operations"`
 	Requirements []TaskRequirement `json:"requirements"`

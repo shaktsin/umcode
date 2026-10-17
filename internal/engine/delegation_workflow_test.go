@@ -101,6 +101,9 @@ func (*workflowProvider) ListModels(context.Context, llm.Credential) ([]string, 
 	return []string{"deterministic"}, nil
 }
 func (p *workflowProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	events := []llm.Event{{Type: llm.EventTextDelta, Text: "done"}, {Type: llm.EventDone}}
