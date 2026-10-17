@@ -9,6 +9,7 @@
   import { usageLine, fmtUsd } from '$lib/format';
   import ItemView from './ItemView.svelte';
   import ChatError from './ChatError.svelte';
+  import { taskFailurePresentation } from '$lib/taskOutcome';
   import ToolCall from './ToolCall.svelte';
   import ApprovalCard from './ApprovalCard.svelte';
   import ComputerUseView from './ComputerUseView.svelte';
@@ -342,15 +343,19 @@
     {:else}
       <div class="{variant === 'main' ? 'max-w-3xl' : ''} mx-auto px-4 py-4 space-y-4">
         {#each groups as g (g.turnId)}
+          {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '')}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}
-              {#if it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim()))}
+              {#if !taskFailure.hiddenItemIds.includes(it.id) && (it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim())))}
                 {#if isVisibleChatMessage(it) && hasPreviousChatMessage(g, index)}
                   <div class="h-px bg-line/70 my-2" aria-hidden="true"></div>
                 {/if}
                 <ItemView item={it} highlight={view.highlightItem === it.id} {view} />
               {/if}
             {/each}
+            {#if taskFailure.failure}
+              <ChatError text={taskFailure.text} details={taskFailure.details} />
+            {/if}
             {#each app.approvals.filter((approval) => approval.threadId === view.id && approval.turnId === g.turnId) as approval (approval.id)}
               <section id={`approval-${approval.id}`} class="rounded-xl border border-amber-warm/40 bg-clay-soft/20 p-3 shadow-sm" aria-live="assertive">
                 <div class="flex items-center gap-2 mb-2">
@@ -367,7 +372,7 @@
                 <span>{currentActivity(g)}…</span>
               </div>
             {:else if g.turn}
-              {#if g.turn.status === 'failed' && !g.items.some((item) => item.kind === 'error')}
+              {#if g.turn.status === 'failed' && taskFailure.showTurnError && !g.items.some((item) => item.kind === 'error' && item.text === g.turn?.error)}
                 <ChatError text={g.turn.error || ''} />
               {/if}
               <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint [overflow-wrap:anywhere]">

@@ -238,6 +238,18 @@ export interface ToolCallData {
   risk?: string;
 }
 
+export interface ActionFailure {
+  authoritySource?: string;
+  category: string;
+  operationId?: string;
+  blockerId?: string;
+  message: string;
+  retryable: boolean;
+  advisory?: boolean;
+  nextStep?: string;
+  state?: unknown;
+}
+
 export interface Item {
   id: string;
   threadId: string;
@@ -258,6 +270,7 @@ export interface Attachment {
 }
 
 export interface Approval {
+  kind?: string;
   agentTaskId?: string;
   agentChildId?: string;
   id: string;

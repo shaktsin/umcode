@@ -1,7 +1,7 @@
 <script lang="ts">
   import { AlertTriangle } from '@lucide/svelte';
   import { formatChatError } from '$lib/chatError';
-  let { text }: { text: string } = $props();
+  let { text, details }: { text: string; details?: string } = $props();
   const error = $derived(formatChatError(text));
 </script>
 
@@ -14,7 +14,7 @@
     {/if}
     <details class="mt-2 text-xs">
       <summary class="cursor-pointer">Technical details</summary>
-      <pre class="mt-1 whitespace-pre-wrap font-mono">{text}</pre>
+      <pre class="mt-1 whitespace-pre-wrap font-mono">{details ?? text}</pre>
     </details>
   </div>
 </div>

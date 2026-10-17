@@ -68,8 +68,13 @@ func installMemoryProvider(t *testing.T, e *Engine) *memoryScriptProvider {
 	tools.RegisterBuiltins(e.Tools, e.Cfg, tools.NewWorkspaces(e.Cfg), nil)
 	return p
 }
-func runMemoryTurn(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn) {
+func runMemoryTurn(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn, wanted ...string) {
+	expected := protocol.TurnCompleted
+	if len(wanted) > 0 {
+		expected = wanted[0]
+	}
 	t.Helper()
+	persistTaskTestUser(t, e, th, turn, "Complete the repository change and verify it.")
 	e.runTurn(t.Context(), th, turn, resolved{
 		sel:    protocol.ModelSelection{Provider: "memory-script", Model: "deterministic"},
 		meta:   models.Meta{ContextWindow: 200000, Tools: true},
@@ -81,7 +86,7 @@ func runMemoryTurn(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Tu
 	}
 	for _, got := range turns {
 		if got.ID == turn.ID {
-			if got.Status != protocol.TurnCompleted {
+			if got.Status != expected {
 				t.Fatalf("turn status=%s error=%s", got.Status, got.Error)
 			}
 			return

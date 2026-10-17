@@ -49,7 +49,7 @@ func TestWorkflowGateRejectedDecisionCannotMutate(t *testing.T) {
 	}
 	tool := &engineTestTool{name: "file.write", risk: tools.RiskGreen, output: "ran"}
 	out := runWorkTool(t, e, th, turn, tool)
-	if !out.IsError || out.Output != "workflow not ready" || tool.calls.Load() != 0 {
+	if !out.IsError || !strings.Contains(out.Output, "workflow not ready") || tool.calls.Load() != 0 {
 		t.Fatalf("rejected gate allowed mutation: %+v", out)
 	}
 	all, _ := st.ListApprovals(t.Context(), "")
@@ -67,7 +67,7 @@ func TestWorkflowGateApprovedSolutionRequiresRunnableTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err == nil || err.Error() != "workflow not ready" {
+	if err := e.checkWorkflowGate(t.Context(), th.ID, "file.write"); err == nil || !errors.Is(err, errWorkflowNotReady) {
 		t.Fatalf("pending task opened gate: %v", err)
 	}
 	for _, status := range []string{"ready", "in_progress"} {
@@ -342,7 +342,7 @@ func TestWorkflowProspectiveEscalationBeforeFirstMutation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if d.Work.WorkflowDepth != "designed" || d.Work.Revision != 2 || !out.IsError || out.Output != "workflow not ready" || tool.calls.Load() != 0 {
+				if d.Work.WorkflowDepth != "designed" || d.Work.Revision != 2 || !out.IsError || !strings.Contains(out.Output, "workflow not ready") || tool.calls.Load() != 0 {
 					t.Fatalf("first risky mutation escaped: depth=%s revision=%d out=%+v calls=%d", d.Work.WorkflowDepth, d.Work.Revision, out, tool.calls.Load())
 				}
 				if _, err := os.Stat(marker); !os.IsNotExist(err) {

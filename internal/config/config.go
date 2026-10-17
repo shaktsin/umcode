@@ -101,6 +101,8 @@ type ToolsConfig struct {
 }
 
 type PolicyConfig struct {
+	// RequireWorkflowApproval explicitly gates task mutations; inferred depth alone does not.
+	RequireWorkflowApproval bool `yaml:"require_workflow_approval"`
 	// ShellForbidCommands are command prefixes (word by word, per pipeline
 	// segment, e.g. "git push") that are refused without asking.
 	ShellForbidCommands    []string `yaml:"shell_forbid_commands"`

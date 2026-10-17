@@ -348,7 +348,7 @@ func TestDeniedToolAndHistory(t *testing.T) {
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "delete it"}, &res)
 	turn, _, tools := h.waitTurn(res.Turn.ID, func(protocol.Approval) bool { return false })
-	if turn.Status != protocol.TurnCompleted || len(tools) != 1 || tools[0].Status != protocol.ItemDenied {
+	if turn.Status != protocol.TurnFailed || len(tools) != 1 || tools[0].Status != protocol.ItemDenied {
 		t.Fatalf("turn=%+v tools=%+v", turn, tools)
 	}
 	// Second turn sends earlier text history and uses quick for a short message (auto).
@@ -386,6 +386,10 @@ func TestAgentFixLoop(t *testing.T) {
 	turn, text, items := h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { return true })
 	if turn.Status != protocol.TurnCompleted || !strings.Contains(text, "reran the check successfully") {
 		t.Fatalf("turn=%+v text=%q", turn, text)
+	}
+	snapshot, snapshotErr := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
+	if snapshotErr != nil || snapshot.Task.Status != "completed" {
+		t.Fatalf("verified correction did not complete task: %+v %v", snapshot.Task, snapshotErr)
 	}
 	var statuses []string
 	for _, item := range items {
@@ -528,7 +532,7 @@ func TestProjectContainment(t *testing.T) {
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "read that file for me please"}, &res)
 	_, _, tools := h.waitTurn(res.Turn.ID, nil)
-	if len(tools) != 1 || tools[0].Status != protocol.ItemFailed || !strings.Contains(tools[0].Tool.Error, "outside the project") {
+	if len(tools) != 1 || tools[0].Status != protocol.ItemDenied || !strings.Contains(tools[0].Tool.Error, "outside the project") {
 		t.Fatalf("tools = %+v", tools)
 	}
 }

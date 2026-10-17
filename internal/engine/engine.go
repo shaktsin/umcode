@@ -219,6 +219,8 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		e.Bus.PublishAdmin(protocol.NotifyTaskUpdated, protocol.TaskEvent{Task: t})
 	})
 	e.Tasks.Register(reg)
+	reg.Add(&taskProposalTool{engine: e})
+	reg.Add(&taskContextTool{engine: e})
 	if err := e.loadComplexity(ctx); err != nil {
 		return nil, err
 	}
@@ -986,9 +988,9 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 	flush(layerClock)
 	if e.optimizationPolicy(ctx).DesignedWorkflow {
 		if e.optimizationPolicy(ctx).AutomaticWorkflow {
-			b.WriteString("\nAutomatic workflow: maintain compact internal plans, decisions, tasks and verification evidence through work.update. Resolve proposed decisions autonomously using revision-checked transitions; these are agent decisions, never user approval. Do not ask for optimization activation, planning or design approval merely because workflow classification escalates. Preserve explicit user review requirements and the chat's normal action permissions. For simple tasks keep this lightweight. Missing evidence or runnable tasks must be repaired internally before implementation; do not claim unperformed checks passed.\n")
+			b.WriteString("\nAutomatic workflow: maintain compact internal plans, decisions, tasks and verification evidence through work.update. Resolve proposed decisions autonomously using revision-checked transitions; these are agent decisions, never user approval. Do not ask for optimization activation, planning or design approval merely because workflow classification escalates. Preserve explicit user review requirements and the chat's normal action permissions. For simple tasks keep this lightweight. Planning depth and graph readiness are advisory. Missing planning metadata alone must not block an otherwise permitted action. The engine enforces explicit task requirements and action permissions; never manufacture approval or claim unperformed checks passed.\n")
 		} else {
-			b.WriteString("\nWorkflow: Direct work should call work.update only when semantic structure or classification changes. Before Guided or Designed implementation, call verification.plan to establish applicable criteria, inspect with discovery tools for supporting evidence, then record the first sufficient solution rung, linked criteria and evidence, the current task, and blocking unknowns. Use the canonical identity context for work/node revisions and evidence IDs. Without a project, the planned approval criterion verifies only human acceptance of its linked decision, not execution or unrelated outcomes. Keep updates compact; the engine derives readiness and enforces gates.\n")
+			b.WriteString("\nWorkflow: Direct work should call work.update only when semantic structure or classification changes. For Guided or Designed work, use verification.plan and discovery tools when useful to establish criteria and supporting evidence, and record the first sufficient solution rung, linked criteria and evidence, the current task, and blocking unknowns. Planning classification and readiness are advisory, not permission requirements. Use the canonical identity context for work/node revisions and evidence IDs. Without a project, the planned approval criterion verifies only human acceptance of its linked decision, not execution or unrelated outcomes. Keep updates compact; the engine derives readiness for planning and enforces gates only for explicit task requirements and current action permissions. Do not invent a user requirement from a model suggestion; task.propose interpretations require engine-mediated confirmation.\n")
 		}
 		flush(layerWorkflow)
 	}

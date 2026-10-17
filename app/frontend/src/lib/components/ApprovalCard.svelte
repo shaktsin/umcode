@@ -2,6 +2,7 @@
   import { app } from '$lib/stores/app.svelte';
   import type { Approval, ProjectArtifactContent } from '$lib/types';
   import { prettyJSON } from '$lib/format';
+  import { approvalActions } from '$lib/approvalActions';
 
   let { approval, compact = false, chatContext = false }: {
     approval: Approval; compact?: boolean; chatContext?: boolean;
@@ -13,7 +14,7 @@
   // scroll gets its own approval signature (see ApprovalSignature on the
   // backend), so a remembered decision here would silently rubber-stamp
   // every future action instead of the one specific one that was reviewed.
-  const canRemember = $derived(Boolean(approval.threadId) && !approval.tool.startsWith('computer.'));
+  const actions = $derived(approvalActions(approval));
   const rememberAction = $derived(approval.tool === 'shell.run' ? 'command' : 'action');
 
   // Approvals for a running Computer Use session carry a path to its latest
@@ -39,17 +40,17 @@
   <div class="flex-1 min-w-48">
     <div class="text-amber-warm text-sm font-medium selectable">{approval.actionSummary || `Run ${approval.tool}`}</div>
     {#if approval.reason}<div class="text-xs text-muted mt-0.5 selectable">{approval.reason}</div>{/if}
-    <div class="text-[11px] text-muted mt-1">{approval.tool} · request expires {new Date(approval.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>
+    <div class="text-[11px] text-muted mt-1">{actions.contextLabel} · request expires {new Date(approval.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>
   </div>
   {#if chatContext}
     <button class="btn-ghost btn-sm" aria-expanded={showDetails} onclick={() => (showDetails = !showDetails)}>{showDetails ? 'Hide details' : 'Review details'}</button>
   {/if}
   <div class="w-full flex flex-wrap justify-end gap-2">
     <button class="btn-outline btn-sm" onclick={() => app.respondApproval(approval.id, false)}>Deny</button>
-    {#if canRemember}
+    {#if actions.canRemember}
     <button class="btn-outline btn-sm" title={`Always allow this exact ${rememberAction} in this chat`} onclick={() => app.respondApproval(approval.id, true, true)}>Always allow in this chat</button>
     {/if}
-    <button class="btn-primary btn-sm" onclick={() => app.respondApproval(approval.id, true)}>Allow once</button>
+    <button class="btn-primary btn-sm" onclick={() => app.respondApproval(approval.id, true)}>{actions.allowLabel}</button>
   </div>
   {#if chatContext && showDetails}
     <pre class="w-full max-h-56 overflow-auto rounded-lg border border-line bg-paper p-2 font-mono text-[11px] whitespace-pre-wrap break-all selectable">{prettyJSON(approval.args)}</pre>

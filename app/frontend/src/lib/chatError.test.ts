@@ -4,6 +4,10 @@ import { formatChatError } from './chatError';
 const raw = 'openai (ChatGPT sign-in): HTTP 429: {"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_at":1791047417,"resets_in_seconds":74488}} (no other model was available)';
 
 describe('chat error presentation', () => {
+  it('presents structured task reasons without revision metadata', () => {
+    const raw = JSON.stringify({category:'stale_state', operationId:'op', message:'Refresh the task.', nextStep:'Then retry.', retryable:true, state:{revision:17}});
+    expect(formatChatError(raw).message).toBe('Refresh the task. Then retry.');
+  });
   it('extracts usage limits and their absolute reset time from wrapped provider errors', () => {
     const result = formatChatError(raw);
     expect(result.message).toContain('ChatGPT usage limit reached');

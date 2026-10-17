@@ -245,7 +245,20 @@ func (e *Engine) selectionFailure(ctx context.Context, turn protocol.Turn, call 
 		it.Status = protocol.ItemDenied
 		_ = e.saveAndPublish(ctx, it, protocol.NotifyItemCompleted)
 	}
-	return toolRunResult{Output: reason, ModelOutput: reason, IsError: true}
+	failure := protocol.ActionFailure{Category: "policy_denied", Message: reason, NextStep: "Respect the current tool permission or availability constraint; clarify it rather than claiming execution.", OperationID: it.ID}
+	if saved, lookupErr := e.Store.ActiveExecutionTask(ctx, turn.ThreadID); lookupErr == nil && it.ID != "" {
+		operation, createErr := e.Store.CreateTaskOperation(ctx, protocol.TaskOperation{TaskID: saved.Task.ID, TurnID: turn.ID, ItemID: it.ID, Tool: name, Args: call.Args, ImplementationID: name})
+		if createErr == nil {
+			failure.OperationID = operation.ID
+			_, _ = e.Store.TransitionTaskOperation(ctx, operation.ID, protocol.OperationTransition{ExpectedRevision: operation.Revision, Status: "blocked", Failure: &failure})
+		}
+	}
+	if it.ID != "" {
+		it.Data, _ = json.Marshal(map[string]any{"actionFailure": failure})
+		_ = e.saveAndPublish(ctx, it, protocol.NotifyItemCompleted)
+	}
+	raw, _ := json.Marshal(failure)
+	return toolRunResult{Output: reason, ModelOutput: string(raw), IsError: true, ActionFailure: &failure, WorkflowAction: workflowActionKey(ctx, name, call.Args)}
 }
 func (e *Engine) runDiscovery(ctx, sctx context.Context, turn protocol.Turn, call llm.ToolCall, tool *discoveryTool) toolRunResult {
 	if tool == nil {

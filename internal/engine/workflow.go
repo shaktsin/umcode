@@ -17,7 +17,7 @@ var errWorkflowNotReady = errors.New("workflow not ready")
 
 func workflowDiscoveryTool(name string) bool {
 	switch name {
-	case "tools.discover", "file.read", "file.list", "file.search", "web.search", "web.fetch", "verification.plan", "computer.list", "computer.inspect", "visual.inspect", "work.update":
+	case "tools.discover", "file.read", "file.list", "file.search", "web.search", "web.fetch", "verification.plan", "computer.list", "computer.inspect", "visual.inspect", "work.update", "task.propose", "task.context", "skill.get_instructions", "agent.review_report":
 		return true
 	}
 	return false
@@ -50,7 +50,13 @@ func (e *Engine) escalateProspectiveWorkflow(ctx context.Context, threadID strin
 }
 
 func (e *Engine) workflowDetail(ctx context.Context, threadID, tool string) (*protocol.WorkDetail, error) {
-	if !e.optimizationPolicy(ctx).DesignedWorkflow || workflowDiscoveryTool(tool) {
+	if _, err := e.Store.ActiveExecutionTask(ctx, threadID); err == nil && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
+		return nil, nil
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+
+	if workflowDiscoveryTool(tool) || !e.optimizationPolicy(ctx).DesignedWorkflow && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
 		return nil, nil
 	}
 	w, ok, err := e.Store.OpenWorkForThread(ctx, threadID)
@@ -64,7 +70,7 @@ func (e *Engine) workflowDetail(ctx context.Context, threadID, tool string) (*pr
 	if err != nil {
 		return nil, errWorkflowUnavailable
 	}
-	if w.WorkflowDepth != protocol.DepthDesigned {
+	if w.WorkflowDepth != protocol.DepthDesigned && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
 		if !work.HasMaterialGate(d) {
 			return nil, nil
 		}
@@ -90,7 +96,7 @@ func (e *Engine) checkWorkflowGate(ctx context.Context, threadID, tool string) e
 		return errors.New("workflow approval pending")
 	}
 	if !work.MutationReady(*d) {
-		return errWorkflowNotReady
+		return blockedWorkflow(d)
 	}
 	return nil
 }
@@ -113,7 +119,7 @@ func (e *Engine) recoverWorkflowGate(ctx, sctx context.Context, turn protocol.Tu
 		return nil
 	}
 	gates := work.PendingWorkflowGates(*d)
-	if e.optimizationPolicy(ctx).AutomaticWorkflow {
+	if e.optimizationPolicy(ctx).AutomaticWorkflow && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
 		// Obsolete workflow waiters convey no action authority. Keep the decision
 		// proposed until the agent resolves it through a revision-checked update.
 		for _, gate := range gates {
@@ -126,7 +132,7 @@ func (e *Engine) recoverWorkflowGate(ctx, sctx context.Context, turn protocol.Tu
 				live := e.approvals[a.ID] != nil
 				e.mu.Unlock()
 				if live {
-					return errWorkflowNotReady
+					return blockedWorkflow(d)
 				}
 				if err := e.expireApproval(sctx, a, "automatic workflow supersedes internal review"); err != nil {
 					return errWorkflowUnavailable
@@ -134,7 +140,7 @@ func (e *Engine) recoverWorkflowGate(ctx, sctx context.Context, turn protocol.Tu
 			}
 		}
 		if len(gates) > 0 {
-			return errWorkflowNotReady
+			return blockedWorkflow(d)
 		}
 		return e.checkWorkflowGate(sctx, turn.ThreadID, tool)
 	}
@@ -159,6 +165,9 @@ func (e *Engine) recoverWorkflowGate(ctx, sctx context.Context, turn protocol.Tu
 			}
 		}
 		approved, err := e.requestWorkflowApproval(ctx, sctx, turn, item, gate)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		if err != nil || !approved {
 			status := "denied"
 			if err != nil {
@@ -170,7 +179,7 @@ func (e *Engine) recoverWorkflowGate(ctx, sctx context.Context, turn protocol.Tu
 		}
 	}
 	if blocked != nil {
-		return blocked
+		return errors.Join(blockedWorkflow(d), blocked)
 	}
 	return e.checkWorkflowGate(sctx, turn.ThreadID, tool)
 }
@@ -181,7 +190,11 @@ type workflowGateResult struct {
 }
 
 func (e *Engine) finishWorkflowUpdate(ctx, sctx context.Context, turn protocol.Turn, item protocol.Item, result protocol.WorkUpdateResult, gates []protocol.WorkflowGate) (string, bool, error) {
-	if e.optimizationPolicy(ctx).AutomaticWorkflow {
+	if e.optimizationPolicy(ctx).AutomaticWorkflow && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
+		raw, err := json.Marshal(result)
+		return string(raw), false, err
+	}
+	if _, err := e.Store.ActiveExecutionTask(sctx, turn.ThreadID); err == nil && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
 		raw, err := json.Marshal(result)
 		return string(raw), false, err
 	}
