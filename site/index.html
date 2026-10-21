@@ -231,6 +231,8 @@ footer a { color: var(--ink-soft); }
     </div>
     <p class="fine" id="dl-note">Free and open source (MIT). Needs macOS 14 or later. Apple Silicon and Intel.</p>
 
+    <p class="fine" id="download-stats" hidden></p>
+
     <figure class="shot">
       <img src="app.webp" width="2000" height="1256" alt="The UMCode window: a project list in the sidebar, a chat about a llama.cpp project folder with a work log and a token and cost line under the reply, and a message box with model and effort selectors.">
     </figure>
@@ -370,6 +372,17 @@ make app-build</code></pre>
     io.observe(pool);
   }
   replay.addEventListener('click', play);
+
+  fetch('./download-stats.json', { cache: 'no-cache' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (stats) {
+      if (!stats || !Number.isSafeInteger(stats.total) || stats.total < 0) return;
+      var count = document.getElementById('download-stats');
+      count.textContent = stats.total.toLocaleString() + (stats.total === 1 ? ' download' : ' downloads');
+      count.title = 'Installer downloads across all releases, including repeat downloads. Updated ' + stats.updatedAt;
+      count.hidden = false;
+    })
+    .catch(function () {});
 
   // Show the latest version next to the download if GitHub answers.
   try {
