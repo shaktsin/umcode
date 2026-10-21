@@ -230,6 +230,9 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	if err := e.loadRouting(ctx); err != nil {
 		return nil, err
 	}
+	if err := o.Store.ReconcileCompactions(ctx); err != nil {
+		return nil, err
+	}
 	if err := o.Store.ReconcileAgentChildren(ctx); err != nil {
 		return nil, err
 	}
@@ -381,7 +384,28 @@ func (e *Engine) ReadThread(ctx context.Context, id string) (protocol.ThreadRead
 	if err != nil {
 		return protocol.ThreadReadResult{}, err
 	}
-	return protocol.ThreadReadResult{Thread: t, Turns: turns, Items: items}, nil
+	compaction, err := e.Store.LatestCompactionState(ctx, id)
+	if err != nil {
+		return protocol.ThreadReadResult{}, err
+	}
+	if compaction != nil && !compaction.Terminal() {
+		active := false
+		for _, turn := range turns {
+			if turn.ID == compaction.TurnID && turn.Status == protocol.TurnRunning {
+				active = true
+			}
+		}
+		if !active {
+			compaction.Sequence++
+			compaction.Status = "interrupted"
+			compaction.Error = "Automatic compaction was interrupted."
+			compaction.UpdatedAt = time.Now().UTC()
+			if err = e.Store.SaveCompactionState(ctx, *compaction); err != nil {
+				return protocol.ThreadReadResult{}, err
+			}
+		}
+	}
+	return protocol.ThreadReadResult{Thread: t, Turns: turns, Items: items, Compaction: compaction}, nil
 }
 
 func (e *Engine) resolveLegacyWorkspaceMode(ctx context.Context, th protocol.Thread) (protocol.Thread, error) {

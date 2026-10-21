@@ -93,6 +93,9 @@ func (e *Engine) compactLiveMessages(ctx, sctx context.Context, turn protocol.Tu
 	if len(chunks) > 8 {
 		return nil, errCompactionNoReduction
 	}
+	if err := compactionPhase(ctx, "summarizing"); err != nil {
+		return nil, err
+	}
 	var summaries []string
 	compactCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()

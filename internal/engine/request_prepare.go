@@ -11,11 +11,27 @@ import (
 
 // prepareModelRequest is the final capacity admission for the selected route.
 // It never changes durable history or increases the execution budget.
-func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Turn, res *resolved, req llm.Request, phase string, budget *turnBudget) (llm.Request, requestBudgetReport, error) {
+func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Turn, res *resolved, req llm.Request, phase string, budget *turnBudget) (result llm.Request, resultReport requestBudgetReport, resultErr error) {
 	capacity, err := e.resolveCapacity(ctx, *res)
 	if err != nil {
 		return llm.Request{}, requestBudgetReport{}, err
 	}
+	var progress *compactionProgress
+	defer func() {
+		if progress == nil {
+			return
+		}
+		settleCtx, cancel := context.WithTimeout(context.WithoutCancel(sctx), 10*time.Second)
+		defer cancel()
+		if recovered := recover(); recovered != nil {
+			_ = progress.finish(settleCtx, errors.New("compaction panicked"))
+			panic(recovered)
+		}
+		if err := progress.finish(settleCtx, resultErr); err != nil {
+			resultErr = errors.Join(resultErr, err)
+			result = llm.Request{}
+		}
+	}()
 	res.meta.ContextWindow = capacity.Window
 	for pass := 0; ; pass++ {
 		var measured *int
@@ -35,6 +51,9 @@ func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Tu
 		if fitErr == nil {
 			report.Reductions = pass
 			if pass > 0 {
+				if err := compactionPhase(ctx, "restoring"); err != nil {
+					return llm.Request{}, report, err
+				}
 				if turn.ID != "" && turn.ThreadID != "" {
 					item, err := e.newItem(sctx, turn, protocol.ItemContextCompaction)
 					if err != nil {
@@ -54,6 +73,13 @@ func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Tu
 		}
 		if !errors.Is(fitErr, errRequestOverCapacity) || phase != "chat" || pass >= 2 {
 			return llm.Request{}, report, fitErr
+		}
+		if progress == nil && turn.ID != "" && turn.ThreadID != "" {
+			progress, err = e.beginCompaction(sctx, turn)
+			if err != nil {
+				return llm.Request{}, report, err
+			}
+			ctx = context.WithValue(ctx, compactionProgressKey{}, progress)
 		}
 		reduced, err := e.compactLiveMessages(ctx, sctx, turn, res, req.Messages, budget)
 		if err != nil {

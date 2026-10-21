@@ -183,9 +183,10 @@ type PreviewEvent struct {
 }
 
 type ThreadReadResult struct {
-	Thread Thread `json:"thread"`
-	Turns  []Turn `json:"turns"`
-	Items  []Item `json:"items"`
+	Compaction *CompactionState `json:"compaction,omitempty"`
+	Thread     Thread           `json:"thread"`
+	Turns      []Turn           `json:"turns"`
+	Items      []Item           `json:"items"`
 }
 
 type ThreadRenameParams struct {
