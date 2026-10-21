@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 
-Status: Architectural direction approved in conversation; written specification pending user review.
+Status: Written specification approved by the user on 2026-10-20, including automatic-only compaction with visible progress. Implementation plan pending user review and execution-method selection.
 
 Source baseline: UMCode `88ce931`; local Codex reference checkout `c7234c1174`.
 
