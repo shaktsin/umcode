@@ -623,3 +623,8 @@ export interface ModelCapacityProfile {
 export interface ModelCapacityResult {
  profile: ModelCapacityProfile; effectiveContextWindow?: number; source: string; observedAt?: string;
 }
+
+export interface CompactionState {
+ id:string;threadId:string;turnId:string;sequence:number;
+ status:string;startedAt:string;updatedAt:string;error?:string;
+}

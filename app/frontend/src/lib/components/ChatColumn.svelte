@@ -1,4 +1,5 @@
 <script lang="ts">
+ import CompactionProgress from './CompactionProgress.svelte';
   import { tick } from 'svelte';
   import { Sparkles, KeyRound, FolderPlus, Undo2, Check, Circle, LoaderCircle, FileText, ShieldCheck } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
@@ -133,7 +134,6 @@
   let reviewedTurnId = $state('');
   let changesKept = $state(false);
   let workspaceDiscarded = $state(false);
-  let compacting = $state(false);
 
   $effect(() => {
     const id = latestTurn?.id ?? '';
@@ -220,16 +220,6 @@
     }
   }
 
-  async function compactChat() {
-    if (!view.id || compacting || view.sending) return;
-    compacting = true;
-    try {
-      await app.try('thread/compact', { threadId: view.id }, 'Chat context compacted. Earlier messages remain visible.');
-    } finally {
-      compacting = false;
-    }
-  }
-
   async function openProject() {
     await createProject();
   }
@@ -283,11 +273,7 @@
           {fmtUsd(view.thread.usage.costUsd)} / {view.thread.usage.requests} requests
         </span>
       {/if}
-      {#if view.id}
-        <button class="btn-ghost btn-sm shrink-0" disabled={compacting || view.sending} title="Summarize earlier context for future turns; the transcript stays visible" onclick={compactChat}>
-          {compacting ? 'Compacting…' : 'Compact chat'}
-        </button>
-      {/if}
+
       </div>
       {#if latestTurn}
         <div class="mt-2 flex items-center gap-2 text-[10px]" aria-label="Chat lifecycle">
@@ -451,5 +437,6 @@
   </div>
 
   {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} />{/if}
+  <CompactionProgress state={view.compaction} />
   <Composer {view} compact={variant === 'side'} />
 </div>
