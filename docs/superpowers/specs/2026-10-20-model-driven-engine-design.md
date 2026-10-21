@@ -26,6 +26,7 @@ Included:
 - Retain factual operation records and recoverable conversation state.
 - Resolve endpoint-specific model capacity and budget every outbound model request.
 - Bound working history and tool output; compact within a running turn.
+- Make context compaction automatic and remove manual compaction controls from every UI surface.
 - Keep tool discovery and original-source retrieval available to the model.
 - Restrict fallback to the selected pool; a direct model selection has no alternate model.
 - Keep review optional and model/user-directed.
@@ -110,7 +111,7 @@ Checkpoint content includes the model's working objective and plan, user decisio
 
 Provide a small core retrieval surface, reusing `task.context` and source retrieval where possible, that can page original requests and full stored results. Every omission marker supplies a source reference and explains that more material exists. A truncated summary must never imply that the original user request ended there.
 
-Compaction may occur at turn admission or between tool rounds. The running turn must retain its new tool results, active child state, cancellation, and shared budget. Summarization itself uses a budgeted request with output headroom. If it needs chunking, each chunk obeys the same rule; it cannot call the same overfull request to summarize itself. Use bounded attempts and detect lack of reduction.
+Compaction occurs automatically when capacity management requires it, at turn admission or between tool rounds. It must not depend on a UI button, user command, confirmation, or approval. The running turn must retain its new tool results, active child state, cancellation, and shared budget. Summarization itself uses a budgeted request with output headroom. If it needs chunking, each chunk obeys the same rule; it cannot call the same overfull request to summarize itself. Use bounded attempts and detect lack of reduction.
 
 When compaction fails, use a simpler budgeted history representation only if it preserves required input and fits. Otherwise return the actual capacity/compaction limitation. Never fall back to an unbounded request.
 
@@ -171,6 +172,8 @@ Extend turn diagnostics to record effective capacity and its source, selected ve
 
 Normal optimization is automatic and quiet. Existing on-demand turn details explain reductions and routing. Surface a limitation when the request cannot proceed, an output was interrupted, or settings lack usable capacity. Do not add per-task activation questions or optimization approval dialogs.
 
+There must be no manual context-compaction control anywhere in the product UI: no button, menu action, command-palette action, slash command, or keyboard shortcut that triggers compaction. Remove the existing `Compact chat` button and its frontend handler/state in `app/frontend/src/lib/components/ChatColumn.svelte`, and audit the remaining UI surfaces for equivalent actions. Read-only compaction status, transcript markers, and turn diagnostics may remain; they must not trigger compaction or require acknowledgment. If compaction fails, explain the actual failure rather than offering a manual compaction action. Existing backend manual-compaction entry points may remain for compatibility or internal tests, but must have no product UI trigger; deleting those APIs is not required by this design.
+
 Metrics include total calls/tokens/cost and elapsed time per completed scenario, unnecessary retries, context failures, and scenario correctness. Review calls count toward total cost. Do not invent savings percentages or treat fewer tokens as proof of better results.
 
 ## 13. Acceptance and validation
@@ -192,6 +195,7 @@ Required scenarios:
 11. Context overflow, output cap, and unknown truncation yield distinct diagnostics. Partial tool calls never execute and already completed effects are not replayed by engine recovery.
 12. Optional reviewers can use fresh focused context and return findings without becoming a required completion gate. Existing shared budgets, cancellation, isolation, and permission checks still pass.
 13. With the master switch on, optional optimizations activate without extra approvals; with it off, physical context checks remain active and removed semantic gates do not return.
+14. Frontend coverage verifies the main chat and side-chat UI expose no manual context-compaction action. Audit menus, command registries, slash commands, and keyboard bindings for equivalent triggers. An engine integration scenario crosses the context threshold after a tool result and compacts/continues without any UI event, confirmation, or approval. Read-only markers and diagnostics remain usable.
 
 Compare the same representative tasks before and after the change: the Goodreads scaffold-plan edit, continuation after a failed mutation, a large-file targeted edit, a long requirements request, and an optional focused review. Evaluate resulting files/output against scenario-specific checks and record tokens, retries, and duration. These are development acceptance checks, not generic runtime contracts imposed on user requests.
 
