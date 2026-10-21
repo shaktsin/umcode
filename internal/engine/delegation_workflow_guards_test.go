@@ -568,3 +568,7 @@ func TestDelegationWorkflowLatestReviewAuthoritative(t *testing.T) {
 		t.Fatalf("corrected independent approval rejected: %v", err)
 	}
 }
+
+func (*workflowScriptProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

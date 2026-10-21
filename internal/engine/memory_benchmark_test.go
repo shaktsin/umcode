@@ -304,3 +304,7 @@ func TestCuratedMemoryReducesRepeatedDiscoveryWithoutQualityLoss(t *testing.T) {
 	t.Logf("treatment: model_calls=%d second_turn_calls=%d discovery_calls=%d tool_rounds=%d second_turn_input_bytes=%d estimated_second_turn_input_tokens=%d", treatment.calls, treatment.secondCalls, treatment.discovery, treatment.rounds, treatment.inputBytes, treatment.inputTokens)
 	t.Logf("quality: completed=2/2 verified=2/2 identical_answer=true identical_artifact=true bytes_saved=%d", baseline.inputBytes-treatment.inputBytes)
 }
+
+func (*memoryScriptProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

@@ -193,6 +193,11 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 		}
 		summary.WriteString(out.text)
 	} else {
+		prepared, report, err := e.prepareModelRequest(compactCtx, sctx, turns[len(turns)-1], &selection, request, "compaction", newTurnBudget(selection.limits))
+		if err != nil {
+			return err
+		}
+		request = prepared
 		events, err := provider.Stream(compactCtx, selection.cred.Material, request)
 		if err != nil {
 			return fmt.Errorf("compact chat context: %w", err)
@@ -209,6 +214,7 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 				}
 			}
 		}
+		e.observeRequestUsage(selection, report, usage.InputTokens, usage.Reported)
 	}
 	if err := compactCtx.Err(); err != nil {
 		return fmt.Errorf("compact chat context: %w", err)

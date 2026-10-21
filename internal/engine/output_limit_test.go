@@ -187,3 +187,7 @@ func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T)
 		t.Fatalf("delegated output-limit diagnostics lost: %+v", details.Diagnostics)
 	}
 }
+
+func (*outputLimitProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

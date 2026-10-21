@@ -76,7 +76,12 @@ func (e *Engine) llmTitle(ctx context.Context, turn protocol.Turn, first, reply 
 		return clipRunes(t, 80)
 	}
 	start := time.Now()
-	ch, err := p.Stream(tctx, cred.Material, llm.Request{Model: model, Messages: []llm.Message{llm.Text(llm.RoleUser, prompt)}, MaxTokens: 60})
+	res := resolved{sel: protocol.ModelSelection{Provider: provider, Model: model}, cred: cred, meta: e.Catalog.Lookup(ctx, provider, model)}
+	request, report, err := e.prepareModelRequest(tctx, ctx, turn, &res, llm.Request{Model: model, Messages: []llm.Message{llm.Text(llm.RoleUser, prompt)}, MaxTokens: 60}, "title", newTurnBudget(protocol.ExecutionLimits{}))
+	if err != nil {
+		return ""
+	}
+	ch, err := p.Stream(tctx, cred.Material, request)
 	if err != nil {
 		return ""
 	}
@@ -91,6 +96,7 @@ func (e *Engine) llmTitle(ctx context.Context, turn protocol.Turn, first, reply 
 			usage, ok = ev.Usage, true
 		}
 	}
+	e.observeRequestUsage(res, report, usage.InputTokens, usage.Reported)
 	meta := e.Catalog.Lookup(ctx, provider, model)
 	totals := protocol.UsageTotals{InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens,
 		OutputTokens: usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens, Requests: 1,

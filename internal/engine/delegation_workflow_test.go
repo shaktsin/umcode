@@ -409,3 +409,7 @@ func taskFixtureGoCache(t *testing.T) (string, string) {
 	return goBin, cache
 }
 func taskFixtureQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+
+func (*workflowProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

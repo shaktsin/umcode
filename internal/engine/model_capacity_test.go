@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/shaktsin/umcode/internal/credentials"
+	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"net/http"
@@ -136,4 +138,8 @@ func TestCapacityRefreshInvalidatesPriorAllocation(t *testing.T) {
 	if err != nil || refreshed.EffectiveContextWindow == nil || *refreshed.EffectiveContextWindow != 8192 || calls.Load() != 2 {
 		t.Fatalf("refresh kept stale runtime allocation: %+v calls=%d error=%v", refreshed, calls.Load(), err)
 	}
+}
+
+func (*capacityFixtureProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{}, llm.ErrRuntimeCapacityUnavailable
 }

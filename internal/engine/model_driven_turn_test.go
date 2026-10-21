@@ -144,3 +144,7 @@ func TestModelDrivenTurnCanDiscussPriorDeniedAction(t *testing.T) {
 		t.Fatalf("prior tool denial blocked model discussion: status=%s calls=%d error=%s", turn.Status, len(p.requests), turn.Error)
 	}
 }
+
+func (*modelDrivenScript) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

@@ -682,3 +682,7 @@ func TestDelegationWorkspaceDefaultRunner(t *testing.T) {
 		t.Fatalf("owned execution not hidden: %v", err)
 	}
 }
+
+func (*delegationProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

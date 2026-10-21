@@ -601,17 +601,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			user.Parts = append(user.Parts, llm.Part{Type: "image", MimeType: a.MimeType, DataB64: a.DataB64})
 		}
 	}
-	// A long conversation is summarized before the new message so the turn
-	// starts with room to work. Failure is not fatal: the history limit and
-	// tool-result trimming still bound the request.
-	if overWindow(msgs, 0, res.meta.ContextWindow, contextCompactFraction) {
-		if err := e.compactLocked(ctx, sctx, th.ID, turn.ID, snapshot); err != nil {
-			log.Warn("automatic context compaction failed", "err", err)
-		} else if h, err := e.history(sctx, th.ID, turn.ID); err == nil {
-			msgs = h
-			log.Info("conversation context compacted automatically", "window", res.meta.ContextWindow)
-		}
-	}
+	e.invalidateCapacity(res) // Refresh the actual serving allocation at admission.
 	// turnItems is this thread's transcript, read once: the compiler reuses it
 	// for every model call in the loop instead of re-reading it each time.
 	var turnItems []protocol.Item
@@ -1004,7 +994,11 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			req.Reasoning, req.ReasoningStyle = "", ""
 		}
 		start := time.Now()
-		out, err := e.streamOnce(ctx, sctx, turn, *res, res.cred, provider, req, role, budget)
+		prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, res, req, role, budget)
+		if err != nil {
+			return modelOutput{}, err
+		}
+		out, err := e.streamPrepared(ctx, sctx, turn, *res, res.cred, provider, prepared, report, role, budget)
 		if err == nil {
 			e.Router.Succeeded(sctx, res.route, time.Since(start))
 			res.trail = append(res.trail, step(res.route, "used", "", time.Since(start)))
@@ -1077,6 +1071,15 @@ func switchNote(from, to router.Route, status string) string {
 
 func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res resolved, cred credentials.Resolved,
 	provider llm.Provider, req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
+	res.cred = cred
+	prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, &res, req, role, budget)
+	if err != nil {
+		return modelOutput{}, err
+	}
+	return e.streamPrepared(ctx, sctx, turn, res, cred, provider, prepared, report, role, budget)
+}
+
+func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, res resolved, cred credentials.Resolved, provider llm.Provider, req llm.Request, report requestBudgetReport, role string, budget *turnBudget) (modelOutput, error) {
 	var out modelOutput
 	settle := func(protocol.UsageTotals) {}
 	if budget.shared != nil {
@@ -1091,7 +1094,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 			ctx = linked
 		}
 		remaining, cost := budget.shared.Remaining()
-		input := estimateInput(req)
+		input := int64(report.EstimatedInput)
 		output := int64(req.MaxTokens)
 		if output <= 0 {
 			output = int64(res.preset.MaxOutputTokens)
@@ -1125,10 +1128,11 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 	start := time.Now()
 	stopReason := ""
 	record := func(u llm.Usage, status string) {
+		e.observeRequestUsage(res, report, u.InputTokens, u.Reported)
 		totals := protocol.UsageTotals{InputTokens: u.InputTokens, CachedInputTokens: u.CachedInputTokens,
 			OutputTokens: u.OutputTokens, ReasoningTokens: u.ReasoningTokens, Requests: 1, Estimated: !u.Reported}
 		if !u.Reported {
-			totals.InputTokens = estimateInput(req)
+			totals.InputTokens = int64(report.EstimatedInput)
 			totals.OutputTokens = llm.EstimateTokens(out.text)
 			for _, call := range out.calls {
 				totals.OutputTokens += llm.EstimateTokens(string(call.Args))

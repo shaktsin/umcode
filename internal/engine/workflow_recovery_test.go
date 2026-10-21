@@ -141,3 +141,7 @@ func TestWorkflowRecoveryActualTurn(t *testing.T) {
 		})
 	}
 }
+
+func (*workflowRecoveryProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

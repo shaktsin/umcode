@@ -197,3 +197,7 @@ func TestChildExecutionAutomaticCompaction(t *testing.T) {
 		})
 	}
 }
+
+func (*childCompactionProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

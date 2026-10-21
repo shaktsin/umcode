@@ -1128,3 +1128,7 @@ func TestPoolFailover(t *testing.T) {
 		t.Fatalf("default pool budget fallback failed: turn=%+v text=%q", turn, text)
 	}
 }
+
+func (*fakeProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}
