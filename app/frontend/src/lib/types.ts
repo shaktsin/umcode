@@ -615,3 +615,11 @@ export interface TaskExecutionOutcome {
   evidenceIds?: string[];
   denialIds?: string[];
 }
+
+export interface ModelCapacityProfile {
+ provider: string; endpointId: string; model: string; backend: 'generic' | 'ollama';
+ contextWindow?: number; maxOutputTokens?: number; responseReserveTokens?: number;
+}
+export interface ModelCapacityResult {
+ profile: ModelCapacityProfile; effectiveContextWindow?: number; source: string; observedAt?: string;
+}
