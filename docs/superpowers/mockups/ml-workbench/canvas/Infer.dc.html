@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UMCode Inference playground</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.mono{font-family:'SF Mono',ui-monospace,Menlo,monospace}
+.chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;background:#fff;border:1px solid #d9dee7;font-size:12px;color:#344157}
+.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c}
+.sub{font-size:12px;color:#5b687c}
+.pane{flex:1;min-width:0;background:#fff;border:1px solid #d9dee7;border-radius:10px;display:flex;flex-direction:column}
+.pane header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e3e7ed}
+.pane .body{padding:12px 14px;font-size:14px;line-height:22px;flex:1}
+.pane footer{display:flex;align-items:center;gap:8px;padding:8px 14px;border-top:1px solid #e3e7ed;font-size:12px;color:#5b687c}
+.btn{height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px}
+.hist{padding:8px 10px;border:1px solid #e3e7ed;border-radius:8px;background:#fff;font-size:12px;line-height:16px;color:#344157}
+</style>
+</helmet>
+<div style="width:1440px;height:900px;display:flex;background:#f7f8fa;color:#172033;font:13px/20px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',system-ui,sans-serif;overflow:hidden;border-radius:12px;border:1px solid #c6ccd6;box-sizing:border-box">
+
+<aside style="width:64px;flex:none;background:#eef1f5;border-right:1px solid #d9dee7;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px">
+<div style="width:32px;height:32px;border-radius:8px;background:#3569d4;color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;margin-bottom:12px">UM</div>
+<button aria-label="Chat" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg></button>
+<button aria-label="Build" aria-current="page" style="width:40px;height:40px;border:0;border-radius:8px;background:#dfe9ff;color:#2454b5;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+<button aria-label="Approvals" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/></svg></button>
+<button aria-label="Plugins" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+<button aria-label="Periodic" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
+</aside>
+
+<section style="width:340px;flex:none;display:flex;flex-direction:column;border-right:1px solid #d9dee7">
+<header style="height:44px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #d9dee7"><strong>umcode-ml</strong><span class="sub">· GPT-2 finetune</span></header>
+<div style="flex:1;min-height:0;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="align-self:flex-end;max-width:270px;background:#dfe9ff;border-radius:12px 12px 4px 12px;padding:8px 12px">Try run 7 against the base model on a double-charge ticket.</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div>Done. Run 7 gives a clear, on-topic reply with the refund steps. The base model drifts and never answers the question. I loaded both on <strong>lab-a100</strong>.</div>
+<span class="chip" style="align-self:flex-start;height:24px">Generated · 2 completions · 1.4 s</span>
+<div>Want me to save this as a test case?</div>
+<div style="display:flex;gap:8px"><button class="btn">Add to eval set</button></div>
+</div>
+</div>
+<div style="padding:12px 16px 16px"><div style="border:1px solid #c6ccd6;background:#fff;border-radius:16px;padding:10px 12px;display:flex;flex-direction:column;gap:8px"><span class="chip" style="align-self:flex-start;height:24px;background:#dfe9ff;border-color:#b9cdf8;color:#2454b5">Context · Playground prompt</span><span class="sub" style="font-size:13px">Ask about these outputs…</span></div></div>
+</section>
+
+<section style="flex:1;min-width:0;display:flex;flex-direction:column">
+<header style="height:44px;box-sizing:border-box;padding:0 12px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #d9dee7">
+<div role="tablist" style="display:flex;background:#eef1f5;border-radius:8px;padding:2px;gap:2px">
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Data</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Build</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Train</button>
+<button role="tab" aria-selected="true" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:#fff;color:#172033;font-size:13px;font-weight:600;box-shadow:0 1px 2px rgba(23,32,51,.12)">Inference</button>
+</div>
+<div role="tablist" style="display:flex;background:#eef1f5;border-radius:8px;padding:2px;gap:2px">
+<button role="tab" aria-selected="true" style="height:24px;padding:0 12px;border:0;border-radius:6px;background:#fff;color:#172033;font-size:12px;font-weight:600;box-shadow:0 1px 2px rgba(23,32,51,.12)">Playground</button>
+<button role="tab" aria-selected="false" style="height:24px;padding:0 12px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:12px">Evaluate</button>
+</div>
+<span class="mono" style="font-size:12px;color:#344157">gpt2_support.model</span><span style="display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;background:#dfe9ff;color:#2454b5;font-size:11px;font-weight:600">Text generation</span>
+</header>
+
+<div style="flex:none;padding:10px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #d9dee7;background:#eef1f5">
+<span class="chip">Checkpoint · Run #7 · step 1,240 <span style="color:#5b687c">▾</span></span>
+<span class="chip">Compare with · gpt2 base <span style="color:#5b687c">▾</span></span>
+<span class="chip"><span style="width:7px;height:7px;border-radius:50%;background:#2f7a5c"></span>lab-a100 · loaded · 2.1 GB <span style="color:#5b687c">▾</span></span>
+<span class="sub" style="margin-left:auto">Unloads after 12 min idle</span>
+</div>
+
+<div style="flex:1;min-height:0;display:flex">
+<div style="flex:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:12px;overflow:hidden">
+<div style="background:#fff;border:1px solid #c6ccd6;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:10px">
+<div class="h">Prompt · text in</div>
+<div style="font-size:14px;line-height:22px">Customer: My invoice shows two charges for the same month. Can you fix this?<br>Support agent:</div>
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+<span class="chip" style="height:26px">temperature <strong class="mono" style="color:#172033">0.7</strong></span>
+<span class="chip" style="height:26px">top-p <strong class="mono" style="color:#172033">0.9</strong></span>
+<span class="chip" style="height:26px">max tokens <strong class="mono" style="color:#172033">128</strong></span>
+<span class="chip" style="height:26px">seed <strong class="mono" style="color:#172033">42</strong></span>
+<button style="margin-left:auto;height:32px;padding:0 16px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:13px;font-weight:600">Generate ▸</button>
+</div>
+</div>
+
+<div style="flex:1;min-height:0;display:flex;gap:12px">
+<div class="pane" style="border-color:#3569d4">
+<header><strong>Run #7 · finetuned</strong><span class="tag" style="margin-left:auto;font-size:11px;font-weight:600;color:#2f7a5c">Best eval</span></header>
+<div class="body">Hi, thanks for reaching out, and I'm sorry about the double charge. I can see both payments on your account for September. I've refunded the duplicate and it will appear in 3–5 business days. Is there anything else I can help with?</div>
+<footer><span class="mono">96 tokens · 41 tok/s</span><button class="btn" style="margin-left:auto">Add to eval set</button></footer>
+</div>
+<div class="pane">
+<header><strong>gpt2 · base</strong></header>
+<div class="body" style="color:#344157">I have two charges for the same month and I don't know what to do. I think it might be a problem with my credit card. I will try to call them tomorrow and see if they can help me with this. I am not sure what the</div>
+<footer><span class="mono">128 tokens · 52 tok/s</span><button class="btn" style="margin-left:auto">Add to eval set</button></footer>
+</div>
+</div>
+</div>
+
+<aside style="width:276px;flex:none;border-left:1px solid #d9dee7;padding:14px;display:flex;flex-direction:column;gap:12px;overflow:hidden">
+<div style="background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:8px"><strong class="mono" style="font-size:12px">adapter.py</strong><span style="margin-left:auto;font-size:11px;font-weight:600;color:#2f7a5c">✓ Schema valid</span></div>
+<div class="sub" style="display:flex;align-items:center;gap:6px">Task: Text generation · set when the model was created</div>
+<div class="sub mono">in: text → out: text</div>
+<div class="sub mono">metrics: loss, perplexity</div>
+<div style="display:flex;gap:8px;margin-top:2px"><button class="btn" style="height:26px">Edit</button><button class="btn" style="height:26px">Fix with chat</button></div>
+</div>
+<div class="h" style="margin-top:2px">History</div>
+<div class="hist"><strong style="color:#172033">Double charge on invoice</strong><br>Run #7 · just now</div>
+<div class="hist"><strong style="color:#172033">Can't log in after password reset</strong><br>Run #7 · 12 min ago</div>
+<div class="hist"><strong style="color:#172033">Where is my order?</strong><br>Run #7 · 12 min ago</div>
+<div class="hist"><strong style="color:#172033">API returns 429 on batch</strong><br>Run #5 · yesterday</div>
+<div class="sub" style="margin-top:2px">Eval set · 18 cases</div>
+</aside>
+</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
