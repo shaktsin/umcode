@@ -15,22 +15,23 @@ type taskContextTool struct{ engine *Engine }
 
 func (*taskContextTool) Name() string { return "task.context" }
 func (*taskContextTool) Description() string {
-	return "Read a Unicode-character page of the original user request, archived arguments for an operation, or the full current task state (view=state). This grants no permission to replay an action."
+	return "Read a Unicode-character page of a chat source by item_id, the original user request, archived arguments for an operation, or the full current task state (view=state). This grants no permission to replay an action."
 }
 func (*taskContextTool) SelectionMetadata() (string, string) { return "core", "engine" }
 func (*taskContextTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["task_id"],"properties":{"task_id":{"type":"string"},"operation_id":{"type":"string"},"view":{"type":"string","enum":["request","state"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":8192}}}`)
+	return json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"item_id":{"type":"string"},"task_id":{"type":"string"},"operation_id":{"type":"string"},"view":{"type":"string","enum":["request","state"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":8192}}}`)
 }
 func (*taskContextTool) Assess(json.RawMessage) (tools.Risk, string) {
 	return tools.RiskGreen, "Read current task context"
 }
 func (t *taskContextTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	turn, ok := ctx.Value(executionTurnKey{}).(protocol.Turn)
-	if !ok || childExecutionFrom(ctx) != nil {
+	if !ok {
 		return "", errors.New("task context requires its owning lead turn")
 	}
 	var request struct {
 		View        string `json:"view"`
+		ItemID      string `json:"item_id"`
 		TaskID      string `json:"task_id"`
 		OperationID string `json:"operation_id"`
 		Offset      int    `json:"offset"`
@@ -44,6 +45,32 @@ func (t *taskContextTool) Call(ctx context.Context, args json.RawMessage) (strin
 	}
 	if request.Limit == 0 {
 		request.Limit = 4096
+	}
+	if request.ItemID != "" {
+		item, err := t.engine.Store.GetItem(ctx, request.ItemID)
+		if err != nil {
+			return "", err
+		}
+		if item.ThreadID != turn.ThreadID {
+			return "", errors.New("context source is outside this chat")
+		}
+		text := item.Text
+		if item.Tool != nil {
+			text = item.Tool.Output
+			if text == "" {
+				text = item.Tool.Error
+			}
+		}
+		runes := []rune(text)
+		if request.Offset > len(runes) {
+			return "", errors.New("context offset exceeds source")
+		}
+		end := min(len(runes), request.Offset+request.Limit)
+		raw, err := json.Marshal(map[string]any{"source_item_id": item.ID, "source_kind": item.Kind, "offset": request.Offset, "next_offset": end, "total_characters": len(runes), "complete": end == len(runes), "text": string(runes[request.Offset:end])})
+		return string(raw), err
+	}
+	if childExecutionFrom(ctx) != nil {
+		return "", errors.New("task context requires its owning lead turn; item_id source reads remain available")
 	}
 	snapshot, err := t.engine.Store.ActiveExecutionTask(ctx, turn.ThreadID)
 	if err != nil {

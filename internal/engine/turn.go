@@ -37,6 +37,8 @@ const historyLimit = 60
 // resolved is the concrete choice for a turn: the route being used now, and
 // the ones the router lined up behind it.
 type resolved struct {
+	workingMessages       []llm.Message
+	contextReduced        bool
 	approved              candidateSet
 	approvedCredentialID  string
 	approvedCredentialIDs []string
@@ -708,16 +710,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			}
 		}
 		req.System = joinLayers(layers)
-		// Old tool output is the first thing to go when the request nears the
-		// window; the newest results stay.
-		if n := trimToolResults(msgs, tokens(req.System)+toolSpecTokens(specs), int(float64(res.meta.ContextWindow)*contextTrimFraction)); n > 0 {
-			log.Info("dropped old tool results to save context", "count", n)
-		}
 		// The work record is re-read for every call, so an edit made earlier in
 		// this turn reaches the model as a stale criterion rather than a pass.
 		packets := RequestPackets{}
 		req.Messages = msgs
-		if out, ok := e.compile(ctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems, p.Text, scopeRoot(ctx)); ok {
+		if out, ok := e.compile(ctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems, p.Text, scopeRoot(ctx)); ok && !res.contextReduced {
 			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
 			packets = out.packets
 		}
@@ -733,6 +730,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		}
 		recorderFrom(ctx).prepare(diagnostic)
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
+		if res.contextReduced {
+			msgs = cloneModelRequest(llm.Request{Messages: res.workingMessages}).Messages
+			liveFrom = 0
+		}
 		if err != nil {
 			if budget.shared != nil {
 				if accountingErr := budget.shared.Err(); accountingErr != nil {
@@ -997,6 +998,9 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 		prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, res, req, role, budget)
 		if err != nil {
 			return modelOutput{}, err
+		}
+		if res.contextReduced {
+			res.workingMessages = prepared.Messages
 		}
 		out, err := e.streamPrepared(ctx, sctx, turn, *res, res.cred, provider, prepared, report, role, budget)
 		if err == nil {
@@ -2047,7 +2051,14 @@ func historyMessages(items []protocol.Item, currentTurn string, limit int) []llm
 				msgs = appendText(msgs, llm.RoleAssistant, it.Text)
 			}
 		case protocol.ItemContextCompaction:
-			msgs = []llm.Message{llm.Text(llm.RoleUser, "Earlier conversation summary (the full transcript remains visible in UMCode):\n"+it.Text)}
+			var checkpoint struct {
+				WorkingMessages []llm.Message `json:"workingMessages"`
+			}
+			if json.Unmarshal(it.Data, &checkpoint) == nil && len(checkpoint.WorkingMessages) > 0 {
+				msgs = checkpoint.WorkingMessages
+			} else {
+				msgs = []llm.Message{llm.Text(llm.RoleUser, "Earlier conversation summary (the full transcript remains visible in UMCode):\n"+it.Text)}
+			}
 		}
 	}
 	// Providers need the history to start with a user message.

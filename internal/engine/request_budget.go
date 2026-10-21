@@ -17,6 +17,7 @@ type requestBudgetReport struct {
 	SystemTokens, ToolSchemaTokens, ConversationTokens, ToolResultTokens, MediaTokens, ProtocolTokens int
 	EstimateOrigin                                                                                    string
 	CalibrationFactor                                                                                 float64
+	Reductions                                                                                        int
 }
 type requestCapacityError struct {
 	Report requestBudgetReport
