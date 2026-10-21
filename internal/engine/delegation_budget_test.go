@@ -479,7 +479,7 @@ func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(details.Diagnostics.Requests) != 2 || details.Diagnostics.Requests[1].Fallback != "error" || details.Diagnostics.Requests[1].MeasurementOrigin != "provider" {
+			if len(details.Diagnostics.Requests) != 1 || details.Diagnostics.Requests[0].Fallback != "error" || details.Diagnostics.Requests[0].MeasurementOrigin != "provider" {
 				t.Fatalf("reported error diagnostics lost: %+v", details.Diagnostics)
 			}
 		})
