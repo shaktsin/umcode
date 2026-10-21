@@ -99,6 +99,17 @@ code { background: var(--surface); border: 1px solid var(--line); border-radius:
 }
 .btn:hover { background: var(--accent-strong); color: var(--on-accent); text-decoration: none; }
 .btn:active { transform: translateY(1px); }
+.download-group { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.download-badge {
+  display: inline-flex; align-items: center; gap: 9px; min-height: 52px;
+  padding: 0 16px; border: 1px solid #86EFAC; border-radius: 12px;
+  background: #DCFCE7; color: #166534; white-space: nowrap;
+}
+.download-badge[hidden] { display: none; }
+.download-badge svg { width: 20px; height: 20px; flex: none; }
+.download-badge strong { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.download-badge span { font-size: 14px; font-weight: 500; }
+@media (max-width: 480px) { .download-group { flex-direction: column; align-items: flex-start; } }
 .link-quiet { color: var(--ink-soft); font-weight: 550; }
 .fine { margin: 14px 0 0; font-size: .92rem; color: var(--muted); }
 
@@ -226,12 +237,16 @@ footer a { color: var(--ink-soft); }
     <h1>A coding agent that doesn't stop at rate limits.</h1>
     <p class="lede">UMCode is a Mac app for coding tasks with the models you choose: hosted providers, or local models running in Ollama or llama.cpp. Put models in a pool and it moves to the next one when a model hits its limit, while token optimization keeps each task's context lean.</p>
     <div class="actions">
+      <div class="download-group">
       <a class="btn" id="dl" href="https://github.com/shaktsin/umcode/releases/latest/download/UMCode.dmg">Download for Mac</a>
+        <div class="download-badge" id="download-stats" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg>
+          <strong id="download-total"></strong><span id="download-label">downloads</span>
+        </div>
+      </div>
       <a class="link-quiet" href="https://github.com/shaktsin/umcode">View the source on GitHub</a>
     </div>
     <p class="fine" id="dl-note">Free and open source (MIT). Needs macOS 14 or later. Apple Silicon and Intel.</p>
-
-    <p class="fine" id="download-stats" hidden></p>
 
     <figure class="shot">
       <img src="app.webp" width="2000" height="1256" alt="The UMCode window: a project list in the sidebar, a chat about a llama.cpp project folder with a work log and a token and cost line under the reply, and a message box with model and effort selectors.">
@@ -378,7 +393,8 @@ make app-build</code></pre>
     .then(function (stats) {
       if (!stats || !Number.isSafeInteger(stats.total) || stats.total < 0) return;
       var count = document.getElementById('download-stats');
-      count.textContent = stats.total.toLocaleString() + (stats.total === 1 ? ' download' : ' downloads');
+      document.getElementById('download-total').textContent = stats.total.toLocaleString();
+      document.getElementById('download-label').textContent = stats.total === 1 ? 'download' : 'downloads';
       count.title = 'Installer downloads across all releases, including repeat downloads. Updated ' + stats.updatedAt;
       count.hidden = false;
     })
