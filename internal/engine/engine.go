@@ -47,6 +47,8 @@ import (
 
 // Engine is the UMCode core.
 type Engine struct {
+	capacityMu       sync.Mutex
+	capacityCache    map[capacityKey]capacityCacheEntry
 	evaluationPolicy *optimization.Policy
 	selectionHook    func() // instance-local failure seam, set before use
 	discoveryHook    func()

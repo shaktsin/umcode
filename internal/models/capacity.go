@@ -11,11 +11,12 @@ import (
 )
 
 type Capacity struct {
-	Window     int
-	MaxOutput  int
-	Source     string
-	ObservedAt time.Time
-	EndpointID string
+	ResponseReserve int
+	Window          int
+	MaxOutput       int
+	Source          string
+	ObservedAt      time.Time
+	EndpointID      string
 }
 
 // EndpointIdentity is opaque: authentication/query values can distinguish
