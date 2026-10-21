@@ -53,16 +53,20 @@ export function isProvisionalExecution(item: Item): boolean {
 }
 
 export function executionOutcomePresentation(items: Item[], turnStatus: string): { text: string; details: string; show: boolean } {
+  if (items.some(item => item.data && typeof item.data === 'object'
+    && (item.data as { executionPolicy?: string }).executionPolicy === 'model_driven_v1')) {
+    return { text: '', details: '', show: false };
+  }
   const final = [...items].reverse().find(item => item.kind === 'agentMessage' && !isProvisionalExecution(item)
     && item.data && typeof item.data === 'object' && typeof (item.data as { taskOutcome?: { status?: unknown } }).taskOutcome?.status === 'string');
   const outcome = final?.data && typeof final.data === 'object'
     ? (final.data as { taskOutcome?: { status?: unknown; evidenceIds?: unknown } }).taskOutcome : undefined;
   let text = '';
   switch (outcome?.status) {
-    case 'not_executed': text = 'The model did not execute the requested action.'; break;
-    case 'unverified': text = 'Changes ran; verification of the requested result is incomplete.'; break;
+    case 'not_executed': text = 'Legacy engine reported that the model did not execute the requested action.'; break;
+    case 'unverified': text = 'Legacy engine reported incomplete verification of the requested result.'; break;
     case 'satisfied':
-      if (Array.isArray(outcome.evidenceIds) && outcome.evidenceIds.length > 0) text = 'Verified the requested result.';
+      if (Array.isArray(outcome.evidenceIds) && outcome.evidenceIds.length > 0) text = 'Legacy engine recorded verification evidence.';
       break;
   }
   return {

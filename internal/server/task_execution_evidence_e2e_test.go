@@ -30,14 +30,14 @@ func TestExecutionEvidenceEndToEnd(t *testing.T) {
 				h.fake.push(textReply("[Created docs/plans/example.md]\n[earlier tool call file.write: denied]\nI cannot create files due to permission restrictions."))
 			}
 			first := runWorkTurn(h, th, "Save the implementation plan to docs/plans/example.md")
-			if first.Status != protocol.TurnFailed {
+			if first.Status != protocol.TurnCompleted {
 				t.Fatalf("invented receipt completed: %+v", first)
 			}
 			if _, err := os.Stat(filepath.Join(h.ws, "docs/plans/example.md")); !os.IsNotExist(err) {
 				t.Fatalf("narration created file: %v", err)
 			}
 			snap, err := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
-			if err != nil || len(snap.Operations) != 0 || len(snap.Expectations) != 1 {
+			if err != nil || len(snap.Operations) != 0 || len(snap.Expectations) != 0 {
 				t.Fatalf("unsupported claims became effects: %+v %v", snap, err)
 			}
 			restartWorkflowHarness(h)
@@ -55,8 +55,17 @@ func TestExecutionEvidenceEndToEnd(t *testing.T) {
 				t.Fatalf("recovery failed: %+v bytes=%q err=%v", second, body, err)
 			}
 			snap, err = h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
-			if err != nil || snap.Expectations[0].Status != "satisfied" || len(snap.Expectations[0].EvidenceIDs) != 2 {
-				t.Fatalf("no actual evidence: %+v %v", snap, err)
+			if err != nil || len(snap.Expectations) != 0 || snap.Task.ExecutionPolicy != protocol.ModelDrivenExecutionPolicy {
+				t.Fatalf("semantic contract recreated: %+v %v", snap, err)
+			}
+			observed := false
+			for _, op := range snap.Operations {
+				if op.Status == "succeeded" && op.VerificationStatus == "passed" && len(op.EvidenceIDs) > 0 {
+					observed = true
+				}
+			}
+			if !observed {
+				t.Fatal("actual read-back evidence was lost")
 			}
 			items, _ := h.eng.Store.ListItems(h.ctx, th.ID, 0)
 			verifiedSummary := false
@@ -76,8 +85,8 @@ func TestExecutionEvidenceEndToEnd(t *testing.T) {
 					}
 				}
 			}
-			if !verifiedSummary {
-				t.Fatal("verified outcome missing from public items")
+			if verifiedSummary {
+				t.Fatal("engine certified semantic completion")
 			}
 		})
 	}
@@ -97,7 +106,7 @@ func TestExecutionEvidenceAuthority(t *testing.T) {
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Design a new architecture, then save notes.txt after the required review"}, &started)
 	approvals := 0
 	finished, _, _ := h.waitTurn(started.Turn.ID, func(a protocol.Approval) bool { approvals++; return false })
-	if approvals == 0 || finished.Status != protocol.TurnFailed {
+	if approvals == 0 || finished.Status != protocol.TurnCompleted {
 		items, _ := h.eng.Store.ListItems(h.ctx, th.ID, 0)
 		for _, it := range items {
 			if it.Tool != nil {
@@ -109,14 +118,14 @@ func TestExecutionEvidenceAuthority(t *testing.T) {
 	h.fake.mu.Lock()
 	executionCalls := len(h.fake.calls)
 	h.fake.mu.Unlock()
-	if executionCalls != 2 {
-		t.Fatalf("execution continued after rejected workflow review: %d calls", executionCalls)
+	if executionCalls < 3 {
+		t.Fatalf("model did not receive the rejected tool result: %d calls", executionCalls)
 	}
 	if _, err := os.Stat(filepath.Join(h.ws, "notes.txt")); !os.IsNotExist(err) {
 		t.Fatalf("rejected action ran: %v", err)
 	}
 	snap, err := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
-	if err != nil || len(snap.Expectations) != 1 || snap.Expectations[0].Status != "pending" {
+	if err != nil || len(snap.Expectations) != 0 {
 		t.Fatalf("denial manufactured completion: %+v %v", snap, err)
 	}
 }

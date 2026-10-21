@@ -545,3 +545,55 @@ func (s *Store) TransitionTaskOperation(ctx context.Context, id string, change p
 	}
 	return op, tx.Commit()
 }
+
+// AdoptModelDrivenTask changes only execution-policy metadata and obsolete
+// interpretation prompts. Operation results and real tool permissions are untouched.
+func (s *Store) AdoptModelDrivenTask(ctx context.Context, taskID string) (protocol.TaskSnapshot, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return protocol.TaskSnapshot{}, err
+	}
+	defer tx.Rollback()
+	task, err := readExecutionTask(ctx, tx, taskID)
+	if err != nil {
+		return protocol.TaskSnapshot{}, err
+	}
+	var current bool
+	if err = tx.QueryRowContext(ctx, `SELECT current FROM engine_tasks WHERE id=?`, taskID).Scan(&current); err != nil {
+		return protocol.TaskSnapshot{}, err
+	}
+	if !current {
+		return protocol.TaskSnapshot{}, ErrTaskConflict
+	}
+	if task.ExecutionPolicy != protocol.ModelDrivenExecutionPolicy {
+		revision := task.Revision
+		task.ExecutionPolicy = protocol.ModelDrivenExecutionPolicy
+		task.Revision++
+		task.UpdatedAt = time.Now().UTC()
+		raw, encodeErr := taskJSON(task)
+		if encodeErr != nil {
+			return protocol.TaskSnapshot{}, encodeErr
+		}
+		result, updateErr := tx.ExecContext(ctx, `UPDATE engine_tasks SET revision=?,data_json=? WHERE id=? AND revision=? AND current=1`, task.Revision, raw, taskID, revision)
+		if updateErr != nil {
+			return protocol.TaskSnapshot{}, updateErr
+		}
+		n, countErr := result.RowsAffected()
+		if countErr != nil {
+			return protocol.TaskSnapshot{}, countErr
+		}
+		if n != 1 {
+			return protocol.TaskSnapshot{}, ErrTaskConflict
+		}
+	}
+	// Policy-origin requirements refer to explicit configured policy. Never expire
+	// those or actual tool/workflow decisions because an interpretation was retired.
+	_, err = tx.ExecContext(ctx, `UPDATE approvals SET status='expired',decided_by='model_driven_policy_migration',decided_at=? WHERE thread_id=? AND status='pending' AND (kind='task_interpretation' OR (kind='task_requirement' AND node_id IN (SELECT id FROM task_requirements WHERE task_id=? AND COALESCE(json_extract(data_json,'$.origin'),'')<>'policy')))`, Now(), task.ThreadID, taskID)
+	if err != nil {
+		return protocol.TaskSnapshot{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return protocol.TaskSnapshot{}, err
+	}
+	return s.ActiveExecutionTask(ctx, task.ThreadID)
+}

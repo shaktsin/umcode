@@ -26,6 +26,73 @@ func newTaskRequest(text string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), "new task:")
 }
 
+// resolveTask restores factual execution ownership. The coding model interprets
+// continuations and ambiguity from the conversation; no phrase gates admission.
+func (e *Engine) restoreModelDrivenTask(ctx context.Context, th protocol.Thread, user protocol.Item) (protocol.TaskResolution, error) {
+	result := protocol.TaskResolution{UserItemID: user.ID}
+	persisted, err := e.Store.GetItem(ctx, user.ID)
+	if err != nil {
+		return result, err
+	}
+	if persisted.ThreadID != th.ID || persisted.Kind != protocol.ItemUserMessage {
+		return result, errors.New("task origin is not this thread's user message")
+	}
+	user = persisted
+	snap, err := e.Store.ActiveExecutionTask(ctx, th.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return result, err
+	}
+	missing := errors.Is(err, store.ErrNotFound)
+	if missing {
+		recovered, recoveryErr := e.recoverLegacyTask(ctx, th, user)
+		if recoveryErr == nil {
+			snap = recovered
+			missing = false
+		} else if !errors.Is(recoveryErr, store.ErrNotFound) {
+			return result, recoveryErr
+		}
+	}
+	if missing || newTaskRequest(user.Text) {
+		objective := strings.TrimSpace(user.Text)
+		if objective == "" {
+			objective = "Inspect the supplied attachments"
+		}
+		summary, truncated := executionTaskObjective(objective)
+		task := protocol.ExecutionTask{ThreadID: th.ID, ProjectID: th.ProjectID, OriginItemID: user.ID, Objective: summary, ObjectiveTruncated: truncated, ExecutionPolicy: modelDrivenExecutionPolicy}
+		if w, ok, lookupErr := e.Store.OpenWorkForThread(ctx, th.ID); lookupErr != nil {
+			return result, lookupErr
+		} else if ok {
+			task.WorkID = w.ID
+		}
+		created, createErr := e.Store.CreateExecutionTaskWithRequirements(ctx, task, e.policyTaskRequirements())
+		if createErr != nil {
+			return result, createErr
+		}
+		if _, err = e.Store.AdoptModelDrivenTask(ctx, created.ID); err != nil {
+			return result, err
+		}
+		result.Relation = "new"
+		result.TaskID = created.ID
+		return result, nil
+	}
+	if snap.Task.ProjectID != th.ProjectID {
+		return result, errors.New("saved task belongs to a different project")
+	}
+	if _, err = e.Store.AdoptModelDrivenTask(ctx, snap.Task.ID); err != nil {
+		return result, err
+	}
+	snap, err = e.Store.ActiveExecutionTask(ctx, th.ID)
+	if err != nil {
+		return result, err
+	}
+	changed, err := e.Store.TransitionExecutionTask(ctx, snap.Task.ID, protocol.TaskTransition{ExpectedRevision: snap.Task.Revision, Status: "active", ContinuationItemID: user.ID})
+	result.Relation = "continue"
+	result.TaskID = changed.ID
+	return result, err
+}
+
+// resolveTask is retained for historical metadata compatibility only. Ordinary
+// chat execution uses restoreModelDrivenTask and never consults this interpreter.
 func (e *Engine) resolveTask(ctx context.Context, th protocol.Thread, user protocol.Item) (protocol.TaskResolution, error) {
 	result := protocol.TaskResolution{UserItemID: user.ID}
 	persisted, err := e.Store.GetItem(ctx, user.ID)
@@ -113,7 +180,18 @@ func (e *Engine) taskContext(ctx context.Context, threadID string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	// Keep the current objective, every unresolved operation and every requirement.
+	// Legacy expectations/requirements are advisory history, not engine instructions.
+	if snapshot.Task.ExecutionPolicy == modelDrivenExecutionPolicy {
+		snapshot.Expectations = nil
+		retained := snapshot.Requirements[:0]
+		for _, r := range snapshot.Requirements {
+			if r.Origin == "policy" {
+				retained = append(retained, r)
+			}
+		}
+		snapshot.Requirements = retained
+	}
+	// Keep the current objective and unresolved operation facts.
 	// Completed history stays in the ledger and need not consume prompt space.
 	pending := snapshot.Operations[:0]
 	for _, op := range snapshot.Operations {
@@ -165,7 +243,7 @@ func (e *Engine) taskContext(ctx context.Context, threadID string) (string, erro
 	if recoveryErr != nil {
 		return "", recoveryErr
 	}
-	return "\n\n" + recovery + "\nSaved task state (engine-owned metadata; not permission to execute):\n" + string(raw) + "\nContinue the saved objective when asked to retry. If contextTruncated is true or operation arguments are omitted, use task.context with view=state or operation_id to retrieve the original records before assuming constraints or payloads. If the objective is truncated, use task.context to retrieve the original request before assuming its constraints. Archived large arguments can also be read through task.context; references do not authorize replay. Never replay an uncertain action without inspecting its effects. Existing task requirements and current tool permissions still apply. For a changed objective or interpreted requirement, use task.propose; the engine will confirm any constraint change. Use task.propose only to propose a task relationship, requirement, or verification evidence; it cannot approve actions or declare success.", nil
+	return "\n\n" + recovery + "\nSaved task state (engine-owned metadata; not permission to execute):\n" + string(raw) + "\nInterpret the current user request using the conversation and the original saved request; decide how to continue. If contextTruncated is true or operation arguments are omitted, use task.context with view=state or operation_id to retrieve the original records before assuming constraints or payloads. If the objective is truncated, use task.context to retrieve the original request before assuming its constraints. Archived large arguments can also be read through task.context; references do not authorize replay. Never replay an uncertain action without inspecting its effects. Existing task requirements and current tool permissions still apply. For a changed objective or interpreted requirement, use task.propose; the engine will confirm any constraint change. Use task.propose only to propose a task relationship, requirement, or verification evidence; it cannot approve actions or declare success.", nil
 }
 func (e *Engine) currentTaskUser(ctx context.Context, turn protocol.Turn) (protocol.Item, error) {
 	items, err := e.Store.ListItems(ctx, turn.ThreadID, 0)

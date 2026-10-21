@@ -152,7 +152,7 @@ func TestDelegationBudgetInheritedAcrossFollowups(t *testing.T) {
 	if len(p.budgets) != 2 || p.budgets[0] == nil || p.budgets[0] != p.budgets[1] {
 		t.Fatalf("follow-up lost shared owner: %+v", p.budgets)
 	}
-	if got := p.budgets[1].Usage(); got.InputTokens != 25 || got.OutputTokens != 45 || got.Requests != 3 {
+	if got := p.budgets[1].Usage(); got.InputTokens != 20 || got.OutputTokens != 40 || got.Requests != 2 {
 		t.Fatalf("usage reset/doubled: %+v", got)
 	}
 	child := WithDelegationChild(delegation.WithBudget(t.Context(), p.budgets[0]))
@@ -404,10 +404,10 @@ func TestDelegationBudgetTaskGeneratedTitleRetainsContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for shared.Usage().Requests < 3 && time.Now().Before(deadline) {
+	for shared.Usage().Requests < 2 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if got := shared.Usage(); got.Requests != 3 || got.InputTokens != 25 || got.OutputTokens != 45 {
+	if got := shared.Usage(); got.Requests != 2 || got.InputTokens != 20 || got.OutputTokens != 40 {
 		t.Fatalf("background title lost task context: %+v", got)
 	}
 }
@@ -457,7 +457,7 @@ func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := shared.Usage(); got.InputTokens != tc.input+5 || got.OutputTokens != tc.output+5 || got.Requests != 2 {
+			if got := shared.Usage(); got.InputTokens != tc.input || got.OutputTokens != tc.output || got.Requests != 1 {
 				t.Fatalf("reported error usage replaced by estimates: %+v", got)
 			}
 			if tc.exhausted && shared.StopReason() == "" {

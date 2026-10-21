@@ -824,7 +824,7 @@ func TestCuratedMemoryE2ERestartAfterRename(t *testing.T) {
 	if err := reopened.DB.QueryRow(`SELECT COUNT(*) FROM memory_promotion_ops WHERE id=? AND state='committed'`, ops[0].ID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("operation not committed count=%d err=%v", count, err)
 	}
-	if err := reopened.DB.QueryRow(`SELECT COUNT(*) FROM llm_usage`).Scan(&count); err != nil || count != 2 || len(provider.requests) != 1 {
+	if err := reopened.DB.QueryRow(`SELECT COUNT(*) FROM llm_usage`).Scan(&count); err != nil || count != 1 || len(provider.requests) != 1 {
 		t.Fatalf("restart added model call usage=%d calls=%d err=%v", count, len(provider.requests), err)
 	}
 	if !bytes.Equal(memoryRead(t, filepath.Join(p.Root, "UMCODE.md")), written) {

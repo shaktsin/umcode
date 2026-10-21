@@ -618,10 +618,10 @@ func TestRejectedDecisionKeepsTaskBlockedAndAllowsReplacement(t *testing.T) {
 		return true
 	})
 	d := workflowDetail(h, th.ID)
-	if deniedTurn.Status != protocol.TurnFailed || denied != 1 || workflowNode(t, d, "decision", "").Status != "rejected" || workflowNode(t, d, "task", "").Status != "blocked" || len(items) != 1 || items[0].Status != protocol.ItemDenied || !strings.Contains(items[0].Tool.Error, "review was not approved") {
+	if deniedTurn.Status != protocol.TurnCompleted || denied != 1 || workflowNode(t, d, "decision", "").Status != "rejected" || workflowNode(t, d, "task", "").Status != "blocked" || len(items) != 2 || items[0].Status != protocol.ItemDenied || items[1].Status != protocol.ItemDenied || !strings.Contains(items[0].Tool.Error, "review was not approved") {
 		t.Fatalf("rejection=%+v items=%+v denied=%d", d, items, denied)
 	}
-	// Rejection ends the turn immediately; discard responses that were never requested.
+	// The model received the denial; begin a new scripted continuation.
 	h.fake.mu.Lock()
 	h.fake.scripts = nil
 	h.fake.mu.Unlock()

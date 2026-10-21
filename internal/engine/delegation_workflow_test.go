@@ -283,9 +283,6 @@ func testDelegationWorkflowEndToEnd(t *testing.T, mode string) {
 	select {
 	case turn := <-done:
 		wantStatus := protocol.TurnCompleted
-		if mode != "" && mode != "cleanup" {
-			wantStatus = protocol.TurnFailed
-		}
 		if turn.Status != wantStatus {
 			t.Fatalf("lead turn status=%s want=%s: %+v", turn.Status, wantStatus, turn)
 		}

@@ -5,8 +5,11 @@ import (
 	"time"
 )
 
+const ModelDrivenExecutionPolicy = "model_driven_v1"
+
 // ExecutionTask is durable user work, distinct from scheduled Task jobs.
 type ExecutionTask struct {
+	ExecutionPolicy     string          `json:"executionPolicy,omitempty"`
 	ExpectationsVersion int             `json:"expectationsVersion,omitempty"`
 	ObjectiveTruncated  bool            `json:"objectiveTruncated,omitempty"`
 	ID                  string          `json:"id"`

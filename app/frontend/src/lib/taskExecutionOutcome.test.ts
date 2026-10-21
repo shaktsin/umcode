@@ -29,10 +29,19 @@ describe('authoritative execution outcomes', () => {
  });
  it('leaves explanations quiet and reports actual verification evidence', () => {
   expect(executionOutcomePresentation([item('explain','Explanation',{taskOutcome:{status:'satisfied',evidenceIds:[]}})],'completed').show).toBe(false);
-  expect(executionOutcomePresentation([item('verified','',{taskOutcome:{status:'satisfied',evidenceIds:['actual-read']}})],'completed').text).toContain('Verified');
+  expect(executionOutcomePresentation([item('verified','',{taskOutcome:{status:'satisfied',evidenceIds:['actual-read']}})],'completed').text).toContain('Legacy');
  });
  it('renders the same authoritative state after stream replacement and reload', () => {
   const items=[item('draft','fake receipt',{provisionalExecution:true}),item('final','',{taskOutcome:{status:'not_executed'}})];
   expect(executionOutcomePresentation(items,'failed')).toEqual(executionOutcomePresentation(JSON.parse(JSON.stringify(items)),'failed'));
  });
+});
+
+it('does not infer semantic completion from compatibility metadata in model-driven turns', () => {
+ const final=item('new','The model reported its result.',{executionPolicy:'model_driven_v1',taskOutcome:{status:'satisfied',evidenceIds:['read']}});
+ expect(executionOutcomePresentation([final],'completed').show).toBe(false);
+});
+it('attributes historical outcome badges to the legacy engine rather than certifying the request', () => {
+ const final=item('old','',{taskOutcome:{status:'satisfied',evidenceIds:['read']}});
+ expect(executionOutcomePresentation([final],'completed').text).toContain('Legacy');
 });

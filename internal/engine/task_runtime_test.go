@@ -89,7 +89,7 @@ func (p *taskScriptProvider) Stream(_ context.Context, _ llm.Credential, req llm
 		}
 	case "denied":
 		if p.calls == 1 {
-			call("file__edit", map[string]string{"path": "notes.txt", "old_string": "before", "new_string": "after"})
+			call("file__edit", map[string]string{"path": "../notes.txt", "old_string": "before", "new_string": "after"})
 		} else {
 			text("The action was denied; the file is unchanged.")
 		}

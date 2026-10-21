@@ -90,7 +90,7 @@ func TestTaskLegacyWorkflowDenialVerifiedWriteActualTurn(t *testing.T) {
 		t.Fatalf("historical denial rewritten: %+v %v", preserved, err)
 	}
 	snap, err = e.Store.ActiveExecutionTask(t.Context(), th.ID)
-	if err != nil || snap.Task.Status != "completed" {
+	if err != nil || snap.Task.Status == "completed" {
 		t.Fatalf("task=%+v %v", snap.Task, err)
 	}
 	verified := false

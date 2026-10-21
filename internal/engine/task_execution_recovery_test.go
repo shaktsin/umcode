@@ -88,45 +88,50 @@ func executionEvidenceFixture(t *testing.T, mode, kind string) (*Engine, protoco
 	return e, th, root, p
 }
 
-// Removing the no-call evidence gate recreates this production false-success bug.
+// Prose is preserved as model output, never executed or certified by the engine.
 func TestTaskNarrationWithoutExecution(t *testing.T) {
 	e, th, root, p := executionEvidenceFixture(t, "narration", "mutation")
-	finished := runTaskRuntimeTurn(t, e, th, "retry")
-	if finished.Status != protocol.TurnFailed {
-		t.Fatalf("fake receipt completed: %+v", finished)
-	}
+	turn := runTaskRuntimeTurn(t, e, th, "retry")
 	body, _ := os.ReadFile(filepath.Join(root, "notes.txt"))
-	if string(body) != "before" {
-		t.Fatal("narration executed an effect")
-	}
-	if p.executionCalls != 3 || p.intentCalls != 1 {
-		t.Fatalf("unbounded/missing correction: execution=%d interpretation=%d", p.executionCalls, p.intentCalls)
+	if turn.Status != protocol.TurnCompleted || string(body) != "before" || p.executionCalls != 1 || p.intentCalls != 0 {
+		t.Fatalf("narration caused execution/classification: status=%s bytes=%q calls=%d/%d", turn.Status, body, p.executionCalls, p.intentCalls)
 	}
 	items, _ := e.Store.ListItems(t.Context(), th.ID, 0)
-	found := false
 	for _, it := range items {
-		if it.TurnID == finished.ID && it.Kind == protocol.ItemAgentMessage && strings.Contains(it.Text, "The model did not execute the requested action.") {
-			found = true
-		}
 		if it.Kind == protocol.ItemToolCall {
-			t.Fatal("prose was executed as a tool")
+			t.Fatal("prose executed as a tool")
+		}
+		if it.Kind == protocol.ItemAgentMessage && strings.Contains(it.Text, "The model did not execute the requested action.") {
+			t.Fatal("engine replaced model output")
 		}
 	}
-	if !found {
-		t.Fatal("missing authoritative not-executed explanation")
+	snap, _ := e.Store.ActiveExecutionTask(t.Context(), th.ID)
+	if snap.Task.Status == "completed" || len(snap.Expectations) != 0 {
+		t.Fatal("narration received engine semantic certification")
 	}
 }
 func TestTaskNarrationRecovery(t *testing.T) {
 	e, th, root, p := executionEvidenceFixture(t, "recover", "mutation")
-	finished := runTaskRuntimeTurn(t, e, th, "retry")
+	runTaskRuntimeTurn(t, e, th, "retry")
+	finished := runTaskRuntimeTurn(t, e, th, "continue")
 	body, _ := os.ReadFile(filepath.Join(root, "notes.txt"))
 	if finished.Status != protocol.TurnCompleted || string(body) != "after" || p.executionCalls != 4 {
 		t.Fatalf("recovery=%+v bytes=%q calls=%d", finished, body, p.executionCalls)
 	}
 	snap, _ := e.Store.ActiveExecutionTask(t.Context(), th.ID)
-	if len(snap.Expectations) != 1 || snap.Expectations[0].Status != "satisfied" || len(snap.Expectations[0].EvidenceIDs) < 2 {
-		t.Fatalf("completion lacks proof: %+v", snap.Expectations)
+	if len(snap.Expectations) != 0 {
+		t.Fatal("engine reconstructed an intent contract")
 	}
+	observed := false
+	for _, op := range snap.Operations {
+		if op.Status == "succeeded" && op.VerificationStatus == "passed" && len(op.EvidenceIDs) > 0 {
+			observed = true
+		}
+	}
+	if !observed {
+		t.Fatal("actual read-back evidence was lost")
+	}
+
 }
 func TestTaskExplanationNeedsNoTools(t *testing.T) {
 	e, th, _, p := executionEvidenceFixture(t, "narration", "explanation")
@@ -180,11 +185,14 @@ func TestTaskIntentMigrationThenInquiry(t *testing.T) {
 	}
 }
 
-func TestTaskSilentResponseHasTypedOutcome(t *testing.T) {
+func TestTaskSilentResponseDoesNotInventOutcome(t *testing.T) {
 	e, th, _, p := executionEvidenceFixture(t, "silent", "mutation")
-	finished := runTaskRuntimeTurn(t, e, th, "retry")
-	var failure protocol.ActionFailure
-	if finished.Status != protocol.TurnFailed || json.Unmarshal([]byte(finished.Error), &failure) != nil || failure.Category != "not_executed" || p.executionCalls != 3 {
-		t.Fatalf("empty response lost typed outcome: %+v", finished)
+	turn := runTaskRuntimeTurn(t, e, th, "retry")
+	if turn.Status != protocol.TurnCompleted || turn.Error != "" || p.executionCalls != 1 || p.intentCalls != 0 {
+		t.Fatalf("empty response triggered semantic correction: status=%s calls=%d/%d error=%s", turn.Status, p.executionCalls, p.intentCalls, turn.Error)
+	}
+	snap, _ := e.Store.ActiveExecutionTask(t.Context(), th.ID)
+	if len(snap.Operations) != 0 || snap.Task.Status == "completed" {
+		t.Fatal("empty response certified effects")
 	}
 }

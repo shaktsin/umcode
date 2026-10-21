@@ -470,8 +470,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			}
 		}
 		if taskErr == nil {
+			taskErr = e.adoptExecutionPolicy(sctx, th.ID)
+		}
+		if taskErr == nil {
 			var resolution protocol.TaskResolution
-			resolution, taskErr = e.resolveTask(sctx, th, user)
+			resolution, taskErr = e.restoreModelDrivenTask(sctx, th, user)
 			if taskErr == nil && resolution.Relation == "clarify" {
 				item, itemErr := e.newItem(sctx, turn, protocol.ItemAgentMessage)
 				if itemErr == nil {

@@ -205,6 +205,9 @@ func (e *Engine) checkTaskAuthority(ctx context.Context, th protocol.Thread, sna
 	}
 	result := protocol.AuthorityDecision{Outcome: "allow"}
 	for _, req := range latest.Requirements {
+		if latest.Task.ExecutionPolicy == modelDrivenExecutionPolicy && req.Origin != "policy" {
+			continue
+		}
 		var scope taskRequirementScope
 		var condition taskRequirementCondition
 		if err := strictTaskJSON(req.Scope, &scope); err != nil {

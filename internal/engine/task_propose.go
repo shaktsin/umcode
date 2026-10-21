@@ -90,6 +90,12 @@ func (e *Engine) applyTaskProposal(ctx context.Context, turn protocol.Turn, args
 	if proposal.UserItemID != "" && proposal.UserItemID != user.ID {
 		return "", errors.New("only the current submitted user item may define task intent")
 	}
+	// Legacy semantic proposals are advisory under the new runtime policy. They
+	// cannot create an approval, enforce a task category, or widen permissions.
+	if snapshot.Task.ExecutionPolicy == modelDrivenExecutionPolicy && (proposal.Relation != "" || len(proposal.Requirement) > 0) {
+		raw, _ := json.Marshal(map[string]any{"advisory": true, "task_id": snapshot.Task.ID, "executionPolicy": snapshot.Task.ExecutionPolicy, "message": "Plans and task requirements are model-owned context. Follow the original user instructions; this metadata does not create an execution gate or permission."})
+		return string(raw), nil
+	}
 	if len(proposal.Resolution) > 0 {
 		var request struct {
 			OperationID string   `json:"operation_id"`
