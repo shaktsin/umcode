@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -108,23 +107,31 @@ func TestTaskInterruptedShellCannotReplay(t *testing.T) {
 		t.Fatalf("unsafe replay: %+v %q", out, b)
 	}
 }
-func TestTaskPersistedBlockerCorrectsLaterSummary(t *testing.T) {
-	e, th, _, provider := taskRuntimeFixture(t, "edit_conflict", false)
-	// First fail one edit; then the next request ends the turn without fixing it.
-	provider.mode = "loop"
-	provider.calls = 3
+func TestTaskPersistedBlockerPreservesLaterModelSummary(t *testing.T) {
+	e, th, _, p := taskRuntimeFixture(t, "loop", false)
+	p.calls = 3
 	runTaskRuntimeTurn(t, e, th, "retry")
-	provider.mode = "summary_only"
-	provider.calls = 0
-	finished := runTaskRuntimeTurn(t, e, th, "retry")
-	if finished.Status != protocol.TurnFailed {
-		t.Fatalf("persisted blocker allowed completion: %+v", finished)
+	p.mode = "summary_only"
+	p.calls = 0
+	turn := runTaskRuntimeTurn(t, e, th, "retry")
+	if turn.Status != protocol.TurnCompleted {
+		t.Fatalf("prior failure blocked response: %s", turn.Error)
 	}
-	items, _ := e.Store.ListItems(t.Context(), th.ID, 0)
-	for _, it := range items {
-		if it.TurnID == finished.ID && it.Kind == protocol.ItemAgentMessage && strings.Contains(it.Text, "successfully") {
-			t.Fatalf("false summary survived: %s", it.Text)
+	if got := modelDrivenAnswer(t, e, th, turn); got != "I successfully updated and verified the file." {
+		t.Fatalf("model summary replaced: %q", got)
+	}
+	snap, err := e.Store.ActiveExecutionTask(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := false
+	for _, op := range snap.Operations {
+		if op.Status == "failed" {
+			failed = true
 		}
+	}
+	if !failed || snap.Task.Status == "completed" {
+		t.Fatal("model summary altered factual failure state")
 	}
 }
 func TestTaskRetryOpaqueAndArchivedAmbiguity(t *testing.T) {

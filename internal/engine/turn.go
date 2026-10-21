@@ -589,29 +589,6 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		finish(fmt.Errorf("blocked by plugin hook: %s", startHooks.Reason))
 		return
 	}
-	if childExecutionFrom(ctx) == nil && continuationRequest(p.Text) {
-		saved, lookupErr := e.Store.ActiveExecutionTask(sctx, th.ID)
-		if lookupErr != nil {
-			finish(lookupErr)
-			return
-		}
-		blocker, checkErr := e.unchangedTaskBlocker(ctx, th, saved)
-		if checkErr != nil {
-			finish(checkErr)
-			return
-		}
-		if blocker != nil {
-			item, itemErr := e.newItem(sctx, turn, protocol.ItemAgentMessage)
-			if itemErr == nil {
-				item.Status = protocol.ItemFailed
-				item.Text = "Execution remains blocked: " + blocker.Message + " " + blocker.NextStep
-				item.Data, _ = json.Marshal(map[string]any{"actionFailure": blocker})
-				itemErr = e.saveAndPublish(sctx, item, protocol.NotifyItemCompleted)
-			}
-			finish(errors.Join(&taskActionError{Failure: *blocker}, itemErr))
-			return
-		}
-	}
 	user := llm.Message{Role: llm.RoleUser}
 	if p.Text != "" {
 		user.Parts = append(user.Parts, llm.Part{Type: "text", Text: p.Text})
@@ -682,24 +659,13 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
 	}
 
-	if childExecutionFrom(ctx) == nil {
-		if intentErr := e.prepareExecutionExpectations(ctx, sctx, th, turn, &res, p, budget); intentErr != nil {
-			finish(e.finishIntentClarification(sctx, turn, intentErr))
-			return
-		}
-	}
 	var turnErr error
-	var executionEvaluation *protocol.TaskExpectationEvaluation
-	inquirySatisfied := false
 	var reductions ToolReductions
 	if e.Cfg != nil && e.optimizationPolicy(ctx).ToolResultReducers {
 		reductions = make(ToolReductions)
 	}
 	toolOccurrences := make(map[string]int)
 	instructionHint := ""
-	var workflowRecovery workflowRecoveryState
-	var taskRecovery taskRecoveryState
-	lastMessageID := ""
 	for {
 		if childExecutionFrom(ctx) != nil {
 			var followErr error
@@ -774,9 +740,6 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		}
 		recorderFrom(ctx).prepare(diagnostic)
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
-		if out.messageID != "" {
-			lastMessageID = out.messageID
-		}
 		if err != nil {
 			if budget.shared != nil {
 				if accountingErr := budget.shared.Err(); accountingErr != nil {
@@ -809,56 +772,6 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			break
 		}
 		if len(out.calls) == 0 {
-			if childExecutionFrom(ctx) == nil {
-				saved, lookupErr := e.Store.ActiveExecutionTask(sctx, th.ID)
-				if lookupErr != nil {
-					turnErr = lookupErr
-					break
-				}
-				correction, retry, evaluation, correctionErr := e.nextExecutionCorrection(sctx, saved.Task.ID, turn.ID)
-				executionEvaluation = &evaluation
-				if correctionErr != nil {
-					turnErr = correctionErr
-					break
-				}
-				inquirySatisfied = evaluation.Status == "satisfied" && taskInquiryOnly(saved, turn.ID)
-				if inquirySatisfied {
-					taskRecovery.pending = nil
-				}
-				if retry {
-					if markErr := e.markExecutionProvisional(sctx, lastMessageID); markErr != nil {
-						turnErr = markErr
-						break
-					}
-					msgs = appendText(msgs, llm.RoleAssistant, out.text)
-					msgs = appendText(msgs, llm.RoleUser, correction)
-					continue
-				}
-				if evaluation.Status != "satisfied" {
-					if lastMessageID == "" {
-						item, createErr := e.newItem(sctx, turn, protocol.ItemAgentMessage)
-						if createErr != nil {
-							turnErr = createErr
-							break
-						}
-						if saveErr := e.Store.SaveItem(sctx, item); saveErr != nil {
-							turnErr = saveErr
-							break
-						}
-						lastMessageID = item.ID
-					}
-					turnErr = e.finalizeExecutionExpectation(sctx, turn, lastMessageID, evaluation)
-					break
-				}
-			}
-			if failure := taskRecovery.failure(); failure != nil {
-				turnErr = &taskActionError{Failure: *failure}
-				break
-			}
-			if workflowRecovery.pending != nil {
-				turnErr = workflowRecovery.pending
-				break
-			}
 			if childExecutionFrom(ctx) != nil {
 				var added bool
 				var followErr error
@@ -885,26 +798,6 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			toolResult := e.runTool(ctx, sctx, th, turn, call, snapshot)
 			result, isErr := toolResult.Output, toolResult.IsError
 			hookContext = append(hookContext, toolResult.HookContext...)
-			if toolResult.ActionFailure != nil {
-				if taskRecovery.observe(*toolResult.ActionFailure, toolResult.WorkflowAction) {
-					turnErr = &taskActionError{Failure: *toolResult.ActionFailure}
-				}
-			} else if !toolResult.IsError {
-				taskRecovery.resolved(toolResult.WorkflowAction)
-			}
-
-			if toolResult.WorkflowBlocker != nil {
-				if workflowRecovery.observe(toolResult.WorkflowBlocker, toolResult.WorkflowAction) {
-					turnErr = toolResult.WorkflowBlocker
-				}
-			} else if !toolResult.IsError {
-				workflowRecovery.resolved(toolResult.WorkflowAction)
-			}
-			if childExecutionFrom(ctx) == nil {
-				if refreshErr := e.refreshTaskRecovery(sctx, th.ID, &taskRecovery); refreshErr != nil {
-					turnErr = refreshErr
-				}
-			}
 			if hint := instructionPathHint(call.Args); hint != "" {
 				instructionHint = hint
 			}
@@ -935,68 +828,6 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		if repeats >= 3 {
 			pause("the same tool round repeating three times without progress")
 			break
-		}
-	}
-	if childExecutionFrom(ctx) == nil {
-		if saved, lookupErr := e.Store.ActiveExecutionTask(sctx, th.ID); lookupErr == nil {
-			outcome, outcomeErr := e.reconcileTaskOutcome(sctx, saved.Task.ID)
-			if outcomeErr != nil {
-				turnErr = errors.Join(turnErr, outcomeErr)
-			} else if outcome == "blocked" && turnErr == nil && !inquirySatisfied {
-				for _, op := range saved.Operations {
-					if op.ResolvedByID == "" && op.Failure != nil && !op.Failure.Advisory && !e.taskWorkflowConditionCleared(sctx, th.ID, op) {
-						turnErr = &taskActionError{Failure: *op.Failure}
-						break
-					}
-				}
-				if lastMessageID == "" {
-					if item, createErr := e.newItem(sctx, turn, protocol.ItemAgentMessage); createErr == nil {
-						item.Status = protocol.ItemInProgress
-						_ = e.Store.SaveItem(sctx, item)
-						lastMessageID = item.ID
-					}
-				}
-			} else if (outcome == "unverified" || outcome == "not_executed") && turnErr == nil && !inquirySatisfied {
-				item, itemErr := e.Store.GetItem(sctx, lastMessageID)
-				if itemErr != nil {
-					item, itemErr = e.newItem(sctx, turn, protocol.ItemAgentMessage)
-				}
-				if itemErr == nil {
-					item.Status = protocol.ItemCompleted
-					item.Text = taskOutcomeText(outcome)
-					mergeTaskItemData(&item, "taskOutcome", map[string]string{"status": outcome})
-					itemErr = e.saveAndPublish(sctx, item, protocol.NotifyItemCompleted)
-				}
-				if itemErr != nil {
-					turnErr = errors.Join(turnErr, itemErr)
-				}
-			}
-		} else if !errors.Is(lookupErr, store.ErrNotFound) {
-			turnErr = errors.Join(turnErr, lookupErr)
-		}
-	}
-	var terminalTaskError *taskActionError
-	if taskRecovery.failure() == nil && errors.As(turnErr, &terminalTaskError) {
-		turnErr = errors.Join(turnErr, e.blockTaskSummary(sctx, lastMessageID, terminalTaskError.Failure))
-	}
-	if failure := taskRecovery.failure(); failure != nil {
-		var existing *taskActionError
-		if !errors.As(turnErr, &existing) {
-			turnErr = errors.Join(turnErr, &taskActionError{Failure: *failure})
-		}
-		turnErr = errors.Join(turnErr, e.blockTaskSummary(sctx, lastMessageID, *failure))
-	}
-	if workflowRecovery.pending != nil {
-		if !errors.Is(turnErr, errWorkflowNotReady) {
-			turnErr = errors.Join(turnErr, workflowRecovery.pending)
-		}
-		turnErr = errors.Join(turnErr, e.blockWorkflowSummary(sctx, lastMessageID, workflowRecovery.pending))
-	}
-	if executionEvaluation != nil && childExecutionFrom(ctx) == nil {
-		// The old operation reconciliation may have corrected this same message.
-		// Finalize from the requested-outcome evaluation after preserving its audit.
-		if turnErr == nil && executionEvaluation.Status == "satisfied" {
-			turnErr = e.finalizeExecutionExpectation(sctx, turn, lastMessageID, *executionEvaluation)
 		}
 	}
 	if turnErr != nil {

@@ -88,8 +88,11 @@ func (p *taskScriptProvider) Stream(_ context.Context, _ llm.Credential, req llm
 			text("I successfully updated and verified the file.")
 		}
 	case "denied":
-		text("I successfully updated the file.")
-		call("file__edit", map[string]string{"path": "notes.txt", "old_string": "before", "new_string": "after"})
+		if p.calls == 1 {
+			call("file__edit", map[string]string{"path": "notes.txt", "old_string": "before", "new_string": "after"})
+		} else {
+			text("The action was denied; the file is unchanged.")
+		}
 	case "loop":
 		if p.calls == 2 {
 			call("file__read", map[string]string{"path": "notes.txt"})
@@ -210,32 +213,33 @@ func runTaskRuntimeTurn(t *testing.T, e *Engine, th protocol.Thread, text string
 func TestTaskRecoveryActualTurn(t *testing.T) {
 	for _, mode := range []string{"denied", "loop"} {
 		t.Run(mode, func(t *testing.T) {
-			e, th, root, provider := taskRuntimeFixture(t, mode, mode == "denied")
-			finished := runTaskRuntimeTurn(t, e, th, "/superpowers:using-superpowers retry")
-			if finished.Status != protocol.TurnFailed {
-				t.Fatalf("unresolved operation completed: %+v", finished)
-			}
-			expected := 1
+			e, th, root, p := taskRuntimeFixture(t, mode, mode == "denied")
+			turn := runTaskRuntimeTurn(t, e, th, "/superpowers:using-superpowers retry")
+			want := 2
 			if mode == "loop" {
-				expected = 4
+				want = 5
 			}
-			if provider.calls != expected {
-				t.Fatalf("no-progress guard escaped: calls=%d want=%d", provider.calls, expected)
+			if turn.Status != protocol.TurnCompleted || p.calls != want {
+				t.Fatalf("model response interrupted: status=%s calls=%d want=%d", turn.Status, p.calls, want)
 			}
-			b, err := os.ReadFile(filepath.Join(root, "notes.txt"))
-			if err != nil || string(b) != "before" {
-				t.Fatalf("denied/failed operation modified file: %q %v", b, err)
+			body, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+			if err != nil || string(body) != "before" {
+				t.Fatalf("denied/failed action changed file: %q %v", body, err)
 			}
-			items, err := e.Store.ListItems(t.Context(), th.ID, 0)
+			snap, err := e.Store.ActiveExecutionTask(t.Context(), th.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, item := range items {
-				if item.Kind == protocol.ItemAgentMessage && item.Status == protocol.ItemCompleted && strings.Contains(item.Text, "successfully updated") {
-					t.Fatal("unsupported success remained in chat")
+			failed := false
+			for _, op := range snap.Operations {
+				if op.Status == "failed" || op.Status == "blocked" {
+					failed = true
 				}
 			}
-			if !strings.Contains(provider.systems[0], "Update notes.txt with the requested correction") {
+			if !failed {
+				t.Fatal("actual failure disappeared from operation history")
+			}
+			if !strings.Contains(p.systems[0], "Update notes.txt with the requested correction") {
 				t.Fatal("retry lost original objective")
 			}
 		})
@@ -245,16 +249,16 @@ func TestTaskRecoveryActualTurn(t *testing.T) {
 func TestTaskRetryUnchangedBlocker(t *testing.T) {
 	e, th, root, p := taskRuntimeFixture(t, "denied", true)
 	first := runTaskRuntimeTurn(t, e, th, "retry")
-	if first.Status != protocol.TurnFailed {
-		t.Fatal("first denial not recorded")
+	if first.Status != protocol.TurnCompleted {
+		t.Fatal("model could not explain denial")
 	}
 	calls := p.calls
 	second := runTaskRuntimeTurn(t, e, th, "retry")
-	if second.Status != protocol.TurnFailed || p.calls != calls {
-		t.Fatalf("unchanged blocker consumed another model call: status=%s calls=%d before=%d", second.Status, p.calls, calls)
+	if second.Status != protocol.TurnCompleted || p.calls != calls+1 {
+		t.Fatalf("prior denial blocked discussion: status=%s calls=%d before=%d", second.Status, p.calls, calls)
 	}
-	b, err := os.ReadFile(filepath.Join(root, "notes.txt"))
-	if err != nil || string(b) != "before" {
+	body, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+	if err != nil || string(body) != "before" {
 		t.Fatal("retry changed denied file", err)
 	}
 }
@@ -274,7 +278,7 @@ func TestTaskSelectionFailureActualTurn(t *testing.T) {
 				}
 			}
 			finished := runTaskRuntimeTurn(t, e, th, "retry")
-			if finished.Status != protocol.TurnFailed || tool.calls.Load() != 0 {
+			if finished.Status != protocol.TurnCompleted || tool.calls.Load() != 0 {
 				t.Fatalf("selection denial concealed: status=%s effects=%d", finished.Status, tool.calls.Load())
 			}
 			b, err := os.ReadFile(filepath.Join(root, "notes.txt"))

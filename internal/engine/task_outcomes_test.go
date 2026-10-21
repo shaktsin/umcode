@@ -20,40 +20,19 @@ func TestTaskOutcomes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+			body, err := os.ReadFile(filepath.Join(root, "notes.txt"))
 			if err != nil {
 				t.Fatal(err)
 			}
+			want := "after"
 			if mode == "unrelated" {
-				if finished.Status != protocol.TurnFailed || string(b) != "before\n// unrelated comment" || snap.Task.Status != "blocked" {
-					t.Fatalf("unrelated success concealed pending edit: %+v %+v file=%q", finished, snap.Task, b)
-				}
-				return
+				want = "before\n// unrelated comment"
 			}
-			if string(b) != "after" {
-				t.Fatalf("effect absent: %q", b)
+			if string(body) != want {
+				t.Fatalf("recorded effect: %q want %q", body, want)
 			}
-			if mode == "unverified" {
-				if snap.Task.Status == "completed" {
-					t.Fatal("unverified effect completed the task")
-				}
-				items, err := e.Store.ListItems(t.Context(), th.ID, 0)
-				if err != nil {
-					t.Fatal(err)
-				}
-				last := ""
-				for _, item := range items {
-					if item.Kind == protocol.ItemAgentMessage {
-						last = item.Text
-					}
-				}
-				if strings.Contains(last, "successfully updated and verified") || !strings.Contains(strings.ToLower(last), "verification") {
-					t.Fatalf("unverified success not corrected: %q", last)
-				}
-				return
-			}
-			if finished.Status != protocol.TurnCompleted || snap.Task.Status != "completed" {
-				t.Fatalf("verified outcome remained blocked: %+v %+v", finished, snap.Task)
+			if finished.Status != protocol.TurnCompleted || snap.Task.Status == "completed" {
+				t.Fatalf("response lifecycle certified semantic task completion: turn=%s task=%s", finished.Status, snap.Task.Status)
 			}
 			verified := false
 			for _, op := range snap.Operations {
@@ -61,8 +40,14 @@ func TestTaskOutcomes(t *testing.T) {
 					verified = true
 				}
 			}
-			if !verified {
-				t.Fatal("completion lacks recorded read-back evidence")
+			if mode != "unverified" && !verified {
+				t.Fatal("actual read-back evidence was lost")
+			}
+			if mode == "unverified" && verified {
+				t.Fatal("unobserved write acquired read-back evidence")
+			}
+			if mode == "unverified" && modelDrivenAnswer(t, e, th, finished) != "I successfully updated and verified the file." {
+				t.Fatal("engine rewrote the model's conclusion")
 			}
 		})
 	}
@@ -113,7 +98,7 @@ func TestTaskLargeWriteRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(root, "notes.txt"))
-	if err != nil || string(b) != strings.Repeat("new content\n", 16000) || snap.Task.Status != "completed" || finished.Status != protocol.TurnCompleted {
+	if err != nil || string(b) != strings.Repeat("new content\n", 16000) || snap.Task.Status == "completed" || finished.Status != protocol.TurnCompleted {
 		t.Fatalf("large write: %v %v %+v", err, finished, snap.Task)
 	}
 	if snap.Operations[0].ArgsRef == "" {
@@ -135,8 +120,8 @@ func TestTaskInvalidCallCannotComplete(t *testing.T) {
 			last = it.Text
 		}
 	}
-	if strings.Contains(last, "successfully") {
-		t.Fatalf("false completion: %s", last)
+	if last != "I successfully updated and verified the file." {
+		t.Fatalf("model response rewritten: %s", last)
 	}
 }
 
@@ -178,8 +163,8 @@ func TestTaskOutcomesBlockedReadback(t *testing.T) {
 					last = it.Text
 				}
 			}
-			if strings.Contains(last, "successfully") || !strings.Contains(last, "verification") {
-				t.Fatalf("unsupported partial summary: %s", last)
+			if last != "I successfully updated and verified the file." {
+				t.Fatalf("model response rewritten despite preserved failed observation: %s", last)
 			}
 			if mode == "read_denied" {
 				b, _ := os.ReadFile(filepath.Join(root, "notes.txt"))
