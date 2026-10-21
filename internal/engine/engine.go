@@ -47,35 +47,36 @@ import (
 
 // Engine is the UMCode core.
 type Engine struct {
-	capacityMu       sync.Mutex
-	capacityCache    map[capacityKey]capacityCacheEntry
-	evaluationPolicy *optimization.Policy
-	selectionHook    func() // instance-local failure seam, set before use
-	discoveryHook    func()
-	Cfg              *config.Config
-	Store            *store.Store
-	LLMs             *llm.Registry
-	Catalog          *models.Catalog
-	Creds            *credentials.Service
-	Secrets          secrets.Store
-	Tools            *tools.Registry
-	Skills           *skills.Registry
-	MCP              *mcp.Manager
-	Plugins          *plugins.Manager
-	Installer        *plugins.Installer
-	Hooks            *hooks.Runner
-	Projects         *projects.Service
-	Router           *router.Router
-	Tasks            *tasks.Service
-	Worktrees        *worktree.Manager
-	Previews         *preview.Manager
-	VisualQA         *visualqa.Manager
-	ComputerUse      *computeruse.Manager
-	Exec             *tools.ExecManager
-	Bus              *Bus
-	Log              *slog.Logger
-	Work             *work.Service
-	Memory           *memory.Service
+	requestCalibration map[capacityKey]float64
+	capacityMu         sync.Mutex
+	capacityCache      map[capacityKey]capacityCacheEntry
+	evaluationPolicy   *optimization.Policy
+	selectionHook      func() // instance-local failure seam, set before use
+	discoveryHook      func()
+	Cfg                *config.Config
+	Store              *store.Store
+	LLMs               *llm.Registry
+	Catalog            *models.Catalog
+	Creds              *credentials.Service
+	Secrets            secrets.Store
+	Tools              *tools.Registry
+	Skills             *skills.Registry
+	MCP                *mcp.Manager
+	Plugins            *plugins.Manager
+	Installer          *plugins.Installer
+	Hooks              *hooks.Runner
+	Projects           *projects.Service
+	Router             *router.Router
+	Tasks              *tasks.Service
+	Worktrees          *worktree.Manager
+	Previews           *preview.Manager
+	VisualQA           *visualqa.Manager
+	ComputerUse        *computeruse.Manager
+	Exec               *tools.ExecManager
+	Bus                *Bus
+	Log                *slog.Logger
+	Work               *work.Service
+	Memory             *memory.Service
 
 	gate      *policy.Gate
 	started   time.Time
