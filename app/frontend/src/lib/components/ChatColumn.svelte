@@ -230,19 +230,6 @@
   async function openProject() {
     await createProject();
   }
-
-  const approvalLabel: Record<string, string> = {
-    '': 'Ask every time',
-    normal: 'Ask every time',
-    auto_workspace: 'Auto-approve workspace',
-    auto_all: 'Auto-approve all',
-  };
-
-  async function setApprovalMode(e: Event) {
-    if (!view.id) return;
-    const mode = (e.currentTarget as HTMLSelectElement).value as 'normal' | 'auto_workspace' | 'auto_all';
-    await app.try('thread/setApprovalMode', { threadId: view.id, mode });
-  }
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col">
@@ -260,18 +247,6 @@
             <span class="shrink-0">compute {threadProject.tools.compute ? 'on' : 'off'}</span>
           {:else}
             <span>No project</span><span>read-only workspace</span>
-          {/if}
-          {#if view.thread}
-            <select
-              class="shrink-0 bg-transparent border border-line rounded px-1 py-0.5 text-[10px] text-muted hover:text-ink-soft"
-              title="Approval and auto-approve behavior for this chat"
-              value={view.thread.approvalMode || 'normal'}
-              onchange={setApprovalMode}
-            >
-              <option value="normal">{approvalLabel.normal}</option>
-              <option value="auto_workspace">{approvalLabel.auto_workspace}</option>
-              <option value="auto_all">{approvalLabel.auto_all}</option>
-            </select>
           {/if}
         </div>
       </div>

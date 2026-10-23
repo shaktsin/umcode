@@ -7,6 +7,7 @@
   import { projects } from '$lib/stores/projects.svelte';
   import PopupSurface from './PopupSurface.svelte';
   import ModelPicker from './ModelPicker.svelte';
+  import ApprovalModePill from './ApprovalModePill.svelte';
   import type { Attachment, SkillInfo } from '$lib/types';
   import { errMsg } from '$lib/format';
   import { composerPlaceholder } from '$lib/firstRun';
@@ -288,6 +289,7 @@
         }}
       />
       <ModelPicker value={view.selection} onchange={(v) => view.setSelection(v)} compact={compact} />
+      <ApprovalModePill {view} />
       {#if blockedReason}
         <span class="composer-error" role="status" title={blockedReason}>No model available</span>
       {/if}

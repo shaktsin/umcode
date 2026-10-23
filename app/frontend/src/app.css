@@ -429,7 +429,7 @@ html, body, #app { overflow: hidden; }
 
 .composer-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 6px; padding: 8px 12px 12px; }
 .composer-toolbar > .model-picker-controls { flex: 0 1 auto; min-width: 0; }
-.model-picker-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; }
+.model-picker-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 100%; }
 .composer-toolbar .select { height: var(--ui-compact); }
 .pill-button { display: inline-flex; align-items: center; gap: 6px; height: var(--ui-compact); padding-inline: 9px; border: 1px solid var(--color-line-strong); border-radius: var(--ui-control-radius); background: var(--color-paper); color: var(--color-ink-soft); font-size: 12px; line-height: 16px; white-space: nowrap; }
 .pill-button:hover:not(:disabled) { background: var(--color-raised); }
