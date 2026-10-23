@@ -9,6 +9,7 @@
   import ModelPicker from './ModelPicker.svelte';
   import type { Attachment, SkillInfo } from '$lib/types';
   import { errMsg } from '$lib/format';
+  import { composerPlaceholder } from '$lib/firstRun';
   import { filterSkills, selectSkill, slashQuery } from '$lib/skillPicker';
 
   let { view, compact = false }: { view: ThreadView; compact?: boolean } = $props();
@@ -97,7 +98,7 @@
   });
 
   function submit() {
-    if (busy || offline || view.delegation.pending) return;
+    if (busy || offline || app.needsProvider || view.delegation.pending) return;
     const t = text;
     const a = files;
     if (!t.trim() && a.length === 0) return;
@@ -267,7 +268,7 @@
       aria-activedescendant={pickerOpen && matches[activeSkill] && !skillsLoading && !skillsError ? `${pickerId}-${activeSkill}` : undefined}
       onpaste={onPaste}
       rows="1"
-      placeholder={`${placeholder} · / for skills`}
+      placeholder={app.needsProvider ? composerPlaceholder(placeholder, true) : `${placeholder} · / for skills`}
       class="composer-input w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint"
       style="field-sizing: content; min-height: 2.75rem"
     ></textarea>
@@ -305,7 +306,7 @@
             class="icon-button compact rounded-full bg-clay text-white hover:brightness-110 disabled:opacity-30"
             title="Send (Enter)"
             aria-label="Send"
-            disabled={offline || view.delegation.pending || (!text.trim() && files.length === 0)}
+            disabled={offline || app.needsProvider || view.delegation.pending || (!text.trim() && files.length === 0)}
             onclick={submit}
           >
             <ArrowUp class="w-4 h-4" />

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { app } from '$lib/stores/app.svelte';
   import Keys from './settings/Keys.svelte';
   import Models from './settings/Models.svelte';
   import ComplexityTab from './settings/Complexity.svelte';
@@ -7,7 +8,7 @@
  import TokenOptimization from './settings/TokenOptimization.svelte';
 
   const tabs = [
-    { id: 'keys', label: 'API keys' },
+    { id: 'keys', label: 'Providers' },
     { id: 'models', label: 'Models' },
     { id: 'complexity', label: 'Complexity' },
     { id: 'computer-use', label: 'Computer Use' },
@@ -18,6 +19,12 @@
 </script>
 
 <h1 class="page-title mb-3">Settings</h1>
+{#if app.needsProvider}
+  <div role="status" class="mb-4 rounded-lg px-4 py-3 bg-accent-soft">
+    <div class="text-sm font-medium text-ink">Welcome to UMCode</div>
+    <div class="text-sm text-muted">Connect one model provider to start chatting. You can add more later.</div>
+  </div>
+{/if}
 <div class="flex flex-wrap gap-1 border-b border-line mb-4">
   {#each tabs as t}
     <button

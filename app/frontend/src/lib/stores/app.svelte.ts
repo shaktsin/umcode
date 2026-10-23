@@ -28,6 +28,7 @@ class AppState {
   providers = $state<Provider[]>([]);
   models = $state<Model[]>([]);
   credentials = $state<Credential[]>([]);
+  catalogReady = $state(false);
   complexity = $state<ComplexityDefaults | null>(null);
   /** The models the user has approved, and how they are pooled. */
   routing = $state<RoutingConfig>({ models: [], pools: [] });
@@ -155,6 +156,7 @@ class AppState {
     this.credentials = c.credentials ?? [];
     this.complexity = x;
     this.routing = r;
+    this.catalogReady = true;
   }
 
   async respondApproval(id: string, approve: boolean, remember = false) {
@@ -168,6 +170,15 @@ class AppState {
 
   credentialsFor(provider: string): Credential[] {
     return this.credentials.filter((c) => c.provider === provider && c.enabled);
+  }
+
+  get hasEnabledCredential(): boolean {
+    return this.credentials.some((c) => c.enabled);
+  }
+
+  /** Connected and loaded, but no provider can answer yet. */
+  get needsProvider(): boolean {
+    return this.conn === 'open' && this.catalogReady && !this.hasEnabledCredential;
   }
 
   /** Providers that have at least one enabled key. */
