@@ -2,7 +2,7 @@
 
 Date: 2026-10-20
 
-Status: Written specification approved by the user on 2026-10-20, including automatic-only compaction with visible progress. Implementation plan pending user review and execution-method selection.
+Status: Written specification approved by the user on 2026-10-20, including automatic-only compaction with visible progress. All 12 implementation tasks completed and verified on 2026-10-23 using native inline execution. See docs/model-capacity-and-compaction.md for verification, review findings, and implementation tradeoffs.
 
 Source baseline: UMCode `88ce931`; local Codex reference checkout `c7234c1174`.
 
