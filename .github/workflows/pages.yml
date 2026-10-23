@@ -3,7 +3,9 @@ name: Pages
 on:
   push:
     branches: [master]
-    paths: [site/**, .github/workflows/pages.yml]
+    paths: [site/**, scripts/download-stats*, .github/workflows/pages.yml]
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -23,6 +25,15 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test download statistics
+        run: node --test scripts/download-stats.test.mjs
+      - name: Refresh download statistics
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/download-stats.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

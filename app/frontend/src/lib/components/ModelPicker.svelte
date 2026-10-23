@@ -2,6 +2,7 @@
   import { Check, ChevronDown, Layers3 } from '@lucide/svelte';
   import PopupSurface from './PopupSurface.svelte';
   import { app } from '$lib/stores/app.svelte';
+  import { modelPickerOptions, poolModelIds } from '$lib/modelPickerOptions';
   import type { Complexity, ConfiguredModel, ModelPool, ModelSelection, RoutingConfig } from '$lib/types';
 
   let { value, onchange, compact = false }: { value: ModelSelection; onchange: (v: ModelSelection) => void; compact?: boolean } = $props();
@@ -21,11 +22,12 @@
     claude: 'Anthropic API', openai: 'OpenAI API', gemini: 'Google Gemini', openai_compatible: 'OpenAI-compatible',
   };
   const pools = $derived(app.routing?.pools ?? []);
-  const configured = $derived(app.routing?.models ?? []);
+  const pickerModels = $derived(modelPickerOptions(app.models, app.routing?.models ?? [], app.credentials));
+  const visiblePools = $derived(pools.filter((pool) => pool.enabled && pool.models.some((id) => pickerModels.some((model) => model.id === id))));
   const configuredByProvider = $derived.by(() => {
     const groups: Record<string, ConfiguredModel[]> = {};
-    for (const model of configured) {
-      if (model.enabled) (groups[model.provider] ??= []).push(model);
+    for (const model of pickerModels) {
+      (groups[model.provider] ??= []).push(model);
     }
     return Object.entries(groups);
   });
@@ -34,7 +36,7 @@
   const modelLabel = $derived.by(() => {
     if (poolName) return poolName;
     if (value.provider && value.model) {
-      const model = configured.find((item) => item.provider === value.provider && item.model === value.model);
+      const model = pickerModels.find((item) => item.provider === value.provider && item.model === value.model);
       return model?.name || value.model;
     }
     return 'Default model';
@@ -42,9 +44,9 @@
 
   function syncSelected() {
     if (value.provider === 'pool') {
-      selected = [...(pools.find((pool) => pool.id === value.model)?.models ?? [])];
+      selected = (pools.find((pool) => pool.id === value.model)?.models ?? []).filter((id) => pickerModels.some((model) => model.id === id));
     } else if (value.provider && value.model) {
-      const model = configured.find((item) => item.provider === value.provider && item.model === value.model);
+      const model = pickerModels.find((item) => item.provider === value.provider && item.model === value.model);
       selected = model ? [model.id] : [];
     } else {
       selected = [];
@@ -63,7 +65,7 @@
 
   async function applySelected(next: string[]) {
     selected = next;
-    const available = configured.filter((model) => model.enabled && next.includes(model.id));
+    const available = pickerModels.filter((model) => next.includes(model.id));
     if (available.length === 0) {
       onchange({ ...value, provider: undefined, model: undefined, credentialId: undefined });
       return;
@@ -77,7 +79,7 @@
     busy = true;
     try {
       const draft: RoutingConfig = structuredClone($state.snapshot(app.routing));
-      const selectedIds = available.map((model) => model.id);
+      const selectedIds = poolModelIds(draft.models, available, () => `model_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`);
       let pool = draft.pools.find((item) => item.enabled && item.models.length === selectedIds.length && item.models.every((id, index) => id === selectedIds[index]));
       if (!pool) {
         pool = { id: `pool_${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`, name: `Chat pool · ${available.length} models`, strategy: 'priority', models: [], enabled: true };
@@ -107,6 +109,7 @@
   $effect(() => {
     void value.provider;
     void value.model;
+    void pickerModels;
     syncSelected();
   });
 
@@ -129,10 +132,10 @@
         <button class="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-xs hover:bg-raised {selected.length === 0 ? 'text-accent-strong' : 'text-ink-soft'}" onclick={() => { selected = []; onchange({ ...value, provider: undefined, model: undefined, credentialId: undefined }); open = false; }}>
           <span class="w-4 h-4 flex items-center justify-center">{#if selected.length === 0}<Check class="w-3.5 h-3.5" />{/if}</span>Default model
         </button>
-        {#if pools.filter((pool) => pool.enabled).length}
+        {#if visiblePools.length}
           <div class="mt-2 border-t border-line pt-2">
             <p class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted">Pools</p>
-            {#each pools.filter((pool) => pool.enabled) as pool (pool.id)}
+            {#each visiblePools as pool (pool.id)}
               <button class="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-xs hover:bg-raised" onclick={() => usePool(pool)}>
                 <Layers3 class="w-3.5 h-3.5 text-muted" />
                 <span class="flex-1 truncate">{pool.name}</span>
@@ -154,7 +157,7 @@
             {/each}
           </div>
         {/each}
-        {#if configuredByProvider.length === 0}<p class="px-2 py-3 text-xs text-muted">Add models in Settings → Models to choose them here.</p>{/if}
+        {#if configuredByProvider.length === 0}<p class="px-2 py-3 text-xs text-muted">Connect and enable a provider in Settings → Providers to choose models here.</p>{/if}
         {#if selected.length > 1}<p class="px-2 pt-2 text-[10px] text-muted">{selected.length} selected · UMCode will try them in pool order if a quota is reached.</p>{/if}
       </div>
     </PopupSurface>
