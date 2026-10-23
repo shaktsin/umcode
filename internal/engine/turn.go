@@ -1012,6 +1012,16 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 		start := time.Now()
 		prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, res, req, role, budget)
 		if err != nil {
+			d := budgetDiagnostics(recorderFrom(ctx).template(), report)
+			d.Phase = role
+			d.Provider = res.sel.Provider
+			d.Model = res.sel.Model
+			d.CostState = "unavailable"
+			d.MeasurementOrigin = "unavailable"
+			d.Fallback = "capacity_admission"
+			attempted := false
+			d.Attempted = &attempted
+			recorderFrom(ctx).recordRequest(d)
 			return modelOutput{}, err
 		}
 		if res.contextReduced {
@@ -1180,6 +1190,16 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 		settle(totals)
 		budget.addUsage(totals)
 		diagnostic := recorderFrom(ctx).template()
+		diagnostic = budgetDiagnostics(diagnostic, report)
+		attempted := true
+		diagnostic.Attempted = &attempted
+		diagnostic.ToolNames = nil
+		for _, spec := range req.Tools {
+			diagnostic.ToolNames = append(diagnostic.ToolNames, spec.Name)
+		}
+		if status == "output_limit" {
+			diagnostic.InterruptionKind = string(classifyOutputInterruption(stopReason, u, report, false))
+		}
 		diagnostic.Phase, diagnostic.Provider, diagnostic.Model = role, res.sel.Provider, res.sel.Model
 		diagnostic.InputTokens, diagnostic.CachedInputTokens = &totals.InputTokens, &totals.CachedInputTokens
 		diagnostic.OutputTokens, diagnostic.ReasoningTokens = &totals.OutputTokens, &totals.ReasoningTokens

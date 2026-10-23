@@ -13,6 +13,8 @@ import (
 var errRequestOverCapacity = errors.New("request exceeds model serving capacity")
 
 type requestBudgetReport struct {
+	CapacitySource                                                                                    string
+	RetryCause                                                                                        string
 	Window, EstimatedInput, BaseEstimatedInput, ReservedOutput, Margin                                int
 	SystemTokens, ToolSchemaTokens, ConversationTokens, ToolResultTokens, MediaTokens, ProtocolTokens int
 	EstimateOrigin                                                                                    string
@@ -106,6 +108,7 @@ func budgetRequest(req llm.Request, capacity models.Capacity, configuredReserve 
 func budgetCalibratedRequest(req llm.Request, capacity models.Capacity, configuredReserve int, factor float64, measuredInput *int) (llm.Request, requestBudgetReport, error) {
 	r, err := countRequestInput(req)
 	r.Window = capacity.Window
+	r.CapacitySource = capacity.Source
 	if err != nil {
 		return llm.Request{}, r, &requestCapacityError{Report: r, Reason: "invalid_schema"}
 	}

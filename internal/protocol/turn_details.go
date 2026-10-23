@@ -30,6 +30,17 @@ type ContextSourceRef struct {
 // Nullable measurements preserve unknown versus measured zero. No prompt or
 // tool-output bodies belong in this persisted diagnostic schema.
 type RequestDiagnostics struct {
+	CapacityWindow          *int               `json:"capacityWindow,omitempty"`
+	CapacitySource          string             `json:"capacitySource,omitempty"`
+	InputEstimateTokens     *int               `json:"inputEstimateTokens,omitempty"`
+	InputEstimateOrigin     string             `json:"inputEstimateOrigin,omitempty"`
+	ReservedOutputTokens    *int               `json:"reservedOutputTokens,omitempty"`
+	CapacityMargin          *int               `json:"capacityMargin,omitempty"`
+	CalibrationFactor       *float64           `json:"calibrationFactor,omitempty"`
+	ContextReductions       *int               `json:"contextReductions,omitempty"`
+	RetryCause              string             `json:"retryCause,omitempty"`
+	InterruptionKind        string             `json:"interruptionKind,omitempty"`
+	Attempted               *bool              `json:"attempted,omitempty"`
 	StopReason              string             `json:"stopReason,omitempty"`
 	Ordinal                 int                `json:"ordinal"`
 	Phase                   string             `json:"phase"`

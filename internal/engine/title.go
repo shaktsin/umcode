@@ -113,6 +113,7 @@ func (e *Engine) llmTitle(ctx context.Context, turn protocol.Turn, first, reply 
 		diagnostic.CostState = "known"
 		diagnostic.CostUSD = &totals.CostUSD
 	}
+	diagnostic = budgetDiagnostics(diagnostic, report)
 	recorderFrom(ctx).recordRequest(diagnostic)
 	_ = e.Store.InsertUsage(ctx, store.UsageRecord{CredentialID: cred.Record.ID, Provider: provider, Model: model,
 		ThreadID: turn.ThreadID, TurnID: turn.ID, Role: "title", Usage: totals,

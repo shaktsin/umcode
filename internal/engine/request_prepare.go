@@ -54,6 +54,7 @@ func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Tu
 		}
 		if fitErr == nil {
 			report.Reductions = pass
+			report.RetryCause = res.retryCause
 			if pass > 0 {
 				if err := compactionPhase(ctx, "restoring"); err != nil {
 					return llm.Request{}, report, err
