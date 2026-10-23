@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/optimization"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -104,7 +105,7 @@ func TestAutomaticWorkflowPendingGateRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, _ := st.GetWorkDetail(ctx, g.WorkID)
-	if err := e.recoverWorkflowGate(ctx, ctx, turn, protocol.Item{}, "file.write", &d); err != errWorkflowNotReady {
+	if err := e.recoverWorkflowGate(ctx, ctx, turn, protocol.Item{}, "file.write", &d); !errors.Is(err, errWorkflowNotReady) {
 		t.Fatalf("recovery=%v", err)
 	}
 	rows, _ := st.ListApprovals(ctx, "")

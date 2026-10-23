@@ -1,14 +1,15 @@
 <script lang="ts">
-  import type { TurnDetailsResult } from '$lib/turnDetails';
+  import { requestCapacitySummary,type TurnDetailsResult } from '$lib/turnDetails';
   let { details }: { details: TurnDetailsResult } = $props();
   const diagnostics = $derived(details.diagnostics);
-  const format = (n?: number) => n === undefined ? 'Not recorded for this turn' : n.toLocaleString();
+  const format = (n?: number|null) => typeof n !== 'number' ? 'Unavailable' : n.toLocaleString();
   const duration = $derived(details.turn.finishedAt ? Math.max(0, Date.parse(details.turn.finishedAt)-Date.parse(details.turn.startedAt)) : undefined);
 </script>
 <div class="p-4 space-y-5 text-xs min-w-0">
   <section class="space-y-1">
     <h2 class="text-sm font-semibold">Turn overview</h2>
     <p>Status: {details.turn.status} · Model: {details.turn.resolved.provider || '—'} / {details.turn.resolved.model || '—'}</p>
+    <p>Selected: {details.turn.selection.provider || 'Default'} / {details.turn.selection.model || 'Default'}</p>
     <p>Duration: {duration === undefined ? 'Still running' : `${duration.toLocaleString()} ms`}</p>
     {#if diagnostics}<p>Optimization policy at start: {Object.entries(diagnostics.policy).filter(([key]) => key !== 'source').map(([key,value]) => `${key}: ${value}`).join(' · ') || 'Not recorded'} ({diagnostics.policy.source || 'unknown'})</p>{:else}<p>Not recorded for this turn</p>{/if}
   </section>
@@ -16,7 +17,7 @@
     <h3 class="font-medium">Tokens and cost</h3>
     <p>Input {format(details.turn.usage.inputTokens)} · Cached {format(details.turn.usage.cachedInputTokens)} · Output {format(details.turn.usage.outputTokens)} · Reasoning {format(details.turn.usage.reasoningTokens)} · Requests {format(details.turn.usage.requests)}</p>
     <p>{#if diagnostics && diagnostics.requests.length}
-      {#each diagnostics.requests as request, i (request.ordinal)}{#if i > 0} · {/if}{#if request.costUsd !== undefined}${request.costUsd.toFixed(6)}{request.costState === 'partial' ? ' (partial)' : ''}{request.measurementOrigin === 'estimated' ? ' (estimated)' : ''}{:else}Cost unavailable{/if}{/each}
+      {#each diagnostics.requests as request, i (request.ordinal)}{#if i > 0} · {/if}{#if typeof request.costUsd === 'number'}${request.costUsd.toFixed(6)}{request.costState === 'partial' ? ' (partial)' : ''}{request.measurementOrigin === 'estimated' ? ' (estimated)' : ''}{:else}Cost unavailable{/if}{/each}
     {:else}Cost unavailable{/if}</p>
   </section>
   {#if diagnostics}
@@ -25,6 +26,11 @@
       {#each diagnostics.requests as request (request.ordinal)}
         <article class="rounded-md bg-raised p-2 space-y-1 min-w-0">
           <p class="font-medium">{request.phase} · {request.provider}/{request.model}</p>
+          <p>{requestCapacitySummary(request)}</p>
+          {#if request.retryCause}<p>Retry cause: {request.retryCause}</p>{/if}
+          {#if request.interruptionKind}<p>Interruption: {request.interruptionKind}</p>{/if}
+          {#if request.contextReductions}<p>Context reductions: {request.contextReductions}</p>{/if}
+          {#if request.attempted === false}<p>Rejected before provider dispatch</p>{/if}
           {#if request.stopReason}<p>Stop reason: {request.stopReason}</p>{/if}
           {#if request.fallback}<p>Fallback: {request.fallback}</p>{/if}
           {#if request.estimates}<p>Estimated context: {Object.entries(request.estimates).map(([key,value]) => `${key} ${value}`).join(' · ')}</p>{/if}

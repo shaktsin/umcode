@@ -20,6 +20,7 @@ type Scope struct {
 	ReadOnly         bool
 	ThreadID         string
 	ProjectID        string
+	ProjectRoot      string // selected source project, distinct from a managed execution checkout
 	ProjectName      string
 	Root             string
 	AllowNet         bool

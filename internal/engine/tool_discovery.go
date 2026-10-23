@@ -15,7 +15,8 @@ type discoveryTool struct {
 	before func(context.Context) error
 }
 
-func (*discoveryTool) Name() string { return "tools.discover" }
+func (*discoveryTool) SelectionMetadata() (string, string) { return "core", "engine" }
+func (*discoveryTool) Name() string                        { return "tools.discover" }
 func (*discoveryTool) Description() string {
 	return "Find permitted tools by query or exact canonical/wire names and load their schemas on the next provider request. Provide a non-empty query or at least one name. Does not execute tools."
 }

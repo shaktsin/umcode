@@ -8,6 +8,7 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/tools"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -31,14 +32,7 @@ func TestDelegationWorkflowReachable(t *testing.T) {
 		t.Error("ordinary prompt gained delegation authority")
 	}
 }
-func containsWorkflow(s string) bool {
-	for i := 0; i+len("agent.integrate") <= len(s); i++ {
-		if s[i:i+len("agent.integrate")] == "agent.integrate" {
-			return true
-		}
-	}
-	return false
-}
+func containsWorkflow(s string) bool { return strings.Contains(s, "Delegation tools are available") }
 
 func TestDelegationWorkflowStartup(t *testing.T) {
 	e, th, _, _ := delegationFixture(t)
@@ -86,12 +80,13 @@ func TestDelegationWorkflowCatalog(t *testing.T) {
 }
 
 type workflowProvider struct {
-	e          *Engine
-	t          *testing.T
-	mu         sync.Mutex
-	calls      map[string]int
-	parentStep int
-	mode       string
+	goBin, goCache string
+	e              *Engine
+	t              *testing.T
+	mu             sync.Mutex
+	calls          map[string]int
+	parentStep     int
+	mode           string
 }
 
 func (*workflowProvider) ID() string { return "claude" }
@@ -99,6 +94,9 @@ func (*workflowProvider) ListModels(context.Context, llm.Credential) ([]string, 
 	return []string{"deterministic"}, nil
 }
 func (p *workflowProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	events := []llm.Event{{Type: llm.EventTextDelta, Text: "done"}, {Type: llm.EventDone}}
@@ -121,7 +119,7 @@ func (p *workflowProvider) Stream(ctx context.Context, _ llm.Credential, req llm
 			call("file.write", map[string]any{"path": "value.go", "content": fmt.Sprintf("package fixture\nfunc Value()int{return %d}\n", value)})
 		}
 		if x.child.Role == protocol.AgentRoleImplementer && n == 1 {
-			call("verification.run", map[string]any{"checks": []map[string]any{{"label": "worker compile", "command": "mkdir -p .cache && go tool compile -o .cache/value.o value.go", "required_command": "go"}}})
+			call("verification.run", map[string]any{"checks": []map[string]any{{"label": "worker compile", "command": "mkdir -p .cache && GOCACHE=" + taskFixtureQuote(p.goCache) + " " + taskFixtureQuote(p.goBin) + " tool compile -o .cache/value.o value.go", "required_command": "go"}}})
 		}
 		if x.child.Role == protocol.AgentRoleImplementer && n == 2 {
 			last := req.Messages[len(req.Messages)-1]
@@ -165,7 +163,7 @@ func (p *workflowProvider) Stream(ctx context.Context, _ llm.Credential, req llm
 					p.t.Logf("actual verification: %s", m.Result)
 				}
 				expectedError := step == 5 || step == 11 || (step == 13 && p.mode != "" && p.mode != "cleanup")
-				if strings.HasPrefix(m.Result, "Error:") != expectedError {
+				if m.IsError != expectedError {
 					p.t.Errorf("step %d last tool %s: %s", step, m.ToolName, m.Result)
 				}
 				break
@@ -246,6 +244,7 @@ func TestDelegationWorkflowRequiredChecks(t *testing.T) {
 }
 
 func testDelegationWorkflowEndToEnd(t *testing.T, mode string) {
+	goBin, goCache := taskFixtureGoCache(t)
 	e, th, root, _ := delegationFixture(t)
 	valueTest := "package fixture\nimport \"testing\"\nfunc TestValue(t *testing.T){if Value()!=2{t.Fatal(Value())}}\n"
 	if mode == "failed" {
@@ -261,7 +260,7 @@ func testDelegationWorkflowEndToEnd(t *testing.T, mode string) {
 	if err := e.Store.UpdateThread(t.Context(), th.ID, map[string]any{"approval_mode": "auto_all"}); err != nil {
 		t.Fatal(err)
 	}
-	p := &workflowProvider{e: e, t: t, calls: map[string]int{}, mode: mode}
+	p := &workflowProvider{e: e, t: t, calls: map[string]int{}, mode: mode, goBin: goBin, goCache: goCache}
 	e.LLMs.Register(p)
 	sub := &childSubscriber{make(chan childEvent, 1024)}
 	e.Bus.Add(sub)
@@ -276,8 +275,9 @@ func testDelegationWorkflowEndToEnd(t *testing.T, mode string) {
 	}
 	select {
 	case turn := <-done:
-		if turn.Status != protocol.TurnCompleted {
-			t.Fatalf("lead turn %+v", turn)
+		wantStatus := protocol.TurnCompleted
+		if turn.Status != wantStatus {
+			t.Fatalf("lead turn status=%s want=%s: %+v", turn.Status, wantStatus, turn)
 		}
 	case <-time.After(90 * time.Second):
 		t.Fatal("workflow timeout")
@@ -378,4 +378,31 @@ func testDelegationWorkflowEndToEnd(t *testing.T, mode string) {
 	if !found {
 		t.Error("verified completion did not publish a task-only workflow update")
 	}
+}
+
+// Use the real Go binary with a permitted temporary build cache. The app's
+// sanitized command environment intentionally does not import GOCACHE.
+func taskFixtureGoCache(t *testing.T) (string, string) {
+	t.Helper()
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := os.Getenv("GOCACHE")
+	if cache == "" || (!strings.HasPrefix(cache, os.TempDir()+string(os.PathSeparator)) && !strings.HasPrefix(cache, "/tmp/")) {
+		cache = filepath.Join(os.TempDir(), "umcode-task-fixture-go-cache")
+	}
+	shim := t.TempDir()
+	quote := taskFixtureQuote
+	script := "#!/bin/sh\nexport GOCACHE=" + quote(cache) + "\nexec " + quote(goBin) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shim, "go"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return goBin, cache
+}
+func taskFixtureQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+
+func (*workflowProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
 }

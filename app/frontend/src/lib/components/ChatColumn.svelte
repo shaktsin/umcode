@@ -1,4 +1,5 @@
 <script lang="ts">
+ import CompactionProgress from './CompactionProgress.svelte';
   import { tick } from 'svelte';
   import { Sparkles, KeyRound, FolderPlus, Undo2, Check, Circle, LoaderCircle, FileText, ShieldCheck } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
@@ -9,6 +10,7 @@
   import { usageLine, fmtUsd } from '$lib/format';
   import ItemView from './ItemView.svelte';
   import ChatError from './ChatError.svelte';
+  import { taskFailurePresentation, executionOutcomePresentation, isProvisionalExecution } from '$lib/taskOutcome';
   import ToolCall from './ToolCall.svelte';
   import { recordLine, recordsFor } from '$lib/approvalDock';
   import ComputerUseView from './ComputerUseView.svelte';
@@ -124,7 +126,6 @@
   let reviewedTurnId = $state('');
   let changesKept = $state(false);
   let workspaceDiscarded = $state(false);
-  let compacting = $state(false);
 
   $effect(() => {
     const id = latestTurn?.id ?? '';
@@ -151,13 +152,14 @@
   function workLogItems(g: Group): Item[] {
     const lastToolCall = Math.max(0, ...g.items.filter((i) => i.kind === 'toolCall').map((i) => i.seq));
     return g.items.filter((i) =>
-      i.kind === 'toolCall' || i.kind === 'fileChange' ||
+      i.kind === 'toolCall' || i.kind === 'fileChange' || isProvisionalExecution(i) ||
       (i.kind === 'agentMessage' && i.seq < lastToolCall && Boolean(i.text?.trim())),
     );
   }
 
   function progressText(item: Item): string {
-    const text = (item.text ?? '').trim();
+    const provisional = item.data && typeof item.data === "object" ? (item.data as { provisionalText?: unknown }).provisionalText : undefined;
+    const text = (isProvisionalExecution(item) && typeof provisional === 'string' ? provisional : item.text ?? '').trim();
     return text.length > 480 ? `${text.slice(0, 480).trimEnd()}…` : text;
   }
 
@@ -168,6 +170,7 @@
   }
 
   function isVisibleChatMessage(item: Item): boolean {
+    if (isProvisionalExecution(item)) return false;
     return item.kind === 'userMessage' ||
       item.kind === 'contextCompaction' ||
       (item.kind === 'agentMessage' && Boolean(item.text?.trim()));
@@ -209,16 +212,6 @@
     }
   }
 
-  async function compactChat() {
-    if (!view.id || compacting || view.sending) return;
-    compacting = true;
-    try {
-      await app.try('thread/compact', { threadId: view.id }, 'Chat context compacted. Earlier messages remain visible.');
-    } finally {
-      compacting = false;
-    }
-  }
-
   async function openProject() {
     await createProject();
   }
@@ -247,11 +240,7 @@
           {fmtUsd(view.thread.usage.costUsd)} / {view.thread.usage.requests} requests
         </span>
       {/if}
-      {#if view.id}
-        <button class="btn-ghost btn-sm shrink-0" disabled={compacting || view.sending} title="Summarize earlier context for future turns; the transcript stays visible" onclick={compactChat}>
-          {compacting ? 'Compacting…' : 'Compact chat'}
-        </button>
-      {/if}
+
       </div>
       {#if latestTurn}
         <div class="mt-2 flex items-center gap-2 text-[10px]" aria-label="Chat lifecycle">
@@ -309,15 +298,22 @@
     {:else}
       <div class="{variant === 'main' ? 'max-w-3xl' : ''} mx-auto px-4 py-4 space-y-4">
         {#each groups as g (g.turnId)}
+          {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '')}
+          {@const executionOutcome = executionOutcomePresentation(g.items, g.turn?.status || '')}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}
-              {#if it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim()))}
+              {#if !isProvisionalExecution(it) && !taskFailure.hiddenItemIds.includes(it.id) && (it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim())))}
                 {#if isVisibleChatMessage(it) && hasPreviousChatMessage(g, index)}
                   <div class="h-px bg-line/70 my-2" aria-hidden="true"></div>
                 {/if}
                 <ItemView item={it} highlight={view.highlightItem === it.id} {view} />
               {/if}
             {/each}
+            {#if taskFailure.failure}
+              <ChatError text={taskFailure.text} details={[taskFailure.details, executionOutcome.details].filter(Boolean).join("\n\n")} />
+            {:else if executionOutcome.show}
+              <p class="text-xs text-muted" role="status">{executionOutcome.text}</p>
+            {/if}
             {#each recordsFor(app.approvalRecords, view.id ?? '', g.turnId) as record (record.id)}
               <div class="flex items-center gap-2 text-xs {record.decision === 'denied' ? 'text-rust' : 'text-sage'}">
                 <span aria-hidden="true">{record.decision === 'denied' ? '✕' : '✓'}</span><span>{recordLine(record)}</span>
@@ -329,7 +325,7 @@
                 <span>{currentActivity(g)}…</span>
               </div>
             {:else if g.turn}
-              {#if g.turn.status === 'failed' && !g.items.some((item) => item.kind === 'error')}
+              {#if g.turn.status === 'failed' && taskFailure.showTurnError && !g.items.some((item) => item.kind === 'error' && item.text === g.turn?.error)}
                 <ChatError text={g.turn.error || ''} />
               {/if}
               <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint [overflow-wrap:anywhere]">
@@ -380,7 +376,7 @@
                     <li class="pl-1">
                       {#if action.kind === 'agentMessage'}
                         <div class="text-ink-soft">
-                          <span class="block text-[10px] uppercase tracking-wide text-faint">Progress update</span>
+                          <span class="block text-[10px] uppercase tracking-wide text-faint">{isProvisionalExecution(action) ? 'Unverified model narration' : 'Progress update'}</span>
                           <p class="mt-0.5 whitespace-pre-wrap">{progressText(action)}</p>
                         </div>
                       {:else if action.kind === 'toolCall' && action.tool}
@@ -403,5 +399,6 @@
   </div>
 
   {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} />{/if}
+  <CompactionProgress state={view.compaction} />
   <Composer {view} compact={variant === 'side'} />
 </div>

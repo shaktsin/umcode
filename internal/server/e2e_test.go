@@ -29,16 +29,25 @@ import (
 
 // fakeProvider replays scripted responses. Each call pops the next script.
 type fakeProvider struct {
-	id      string
-	mu      sync.Mutex
-	scripts []func(req llm.Request, key string) ([]llm.Event, error)
-	calls   []llm.Request
-	keys    []string
+	intentCalls []llm.Request
+	intentKind  string
+	intentPath  string
+	id          string
+	mu          sync.Mutex
+	scripts     []func(req llm.Request, key string) ([]llm.Event, error)
+	calls       []llm.Request
+	keys        []string
 }
 
 func (f *fakeProvider) ID() string { return f.id }
 
 func (f *fakeProvider) Stream(ctx context.Context, cred llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := serverIntentReply(req, f.intentKind, f.intentPath); ok {
+		f.mu.Lock()
+		f.intentCalls = append(f.intentCalls, req)
+		f.mu.Unlock()
+		return reply, nil
+	}
 	f.mu.Lock()
 	f.calls = append(f.calls, req)
 	f.keys = append(f.keys, cred.APIKey)
@@ -361,7 +370,7 @@ func TestDeniedToolAndHistory(t *testing.T) {
 	h.fake.mu.Lock()
 	req := h.fake.calls[len(h.fake.calls)-1]
 	h.fake.mu.Unlock()
-	if req.Messages[0].JoinedText() != "delete it" || req.Reasoning != llm.ReasoningOff {
+	if !strings.HasPrefix(req.Messages[0].JoinedText(), "delete it") || !strings.Contains(req.Messages[0].JoinedText(), "Historical execution records") || req.Reasoning != llm.ReasoningOff {
 		t.Fatalf("history/reasoning: %+v", req)
 	}
 }
@@ -386,6 +395,10 @@ func TestAgentFixLoop(t *testing.T) {
 	turn, text, items := h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { return true })
 	if turn.Status != protocol.TurnCompleted || !strings.Contains(text, "reran the check successfully") {
 		t.Fatalf("turn=%+v text=%q", turn, text)
+	}
+	snapshot, snapshotErr := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
+	if snapshotErr != nil || snapshot.Task.ExecutionPolicy != protocol.ModelDrivenExecutionPolicy || snapshot.Task.Status == "completed" {
+		t.Fatalf("verified correction did not complete task: %+v %v", snapshot.Task, snapshotErr)
 	}
 	var statuses []string
 	for _, item := range items {
@@ -528,7 +541,7 @@ func TestProjectContainment(t *testing.T) {
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "read that file for me please"}, &res)
 	_, _, tools := h.waitTurn(res.Turn.ID, nil)
-	if len(tools) != 1 || tools[0].Status != protocol.ItemFailed || !strings.Contains(tools[0].Tool.Error, "outside the project") {
+	if len(tools) != 1 || tools[0].Status != protocol.ItemDenied || !strings.Contains(tools[0].Tool.Error, "outside the project") {
 		t.Fatalf("tools = %+v", tools)
 	}
 }
@@ -1114,4 +1127,8 @@ func TestPoolFailover(t *testing.T) {
 	if turn.Status != protocol.TurnCompleted || text != "default pool fallback" || turn.Resolved.Provider != "openai" {
 		t.Fatalf("default pool budget fallback failed: turn=%+v text=%q", turn, text)
 	}
+}
+
+func (*fakeProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
 }

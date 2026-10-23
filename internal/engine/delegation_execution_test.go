@@ -631,6 +631,9 @@ func (*controlledChildProvider) ListModels(context.Context, llm.Credential) ([]s
 	return nil, nil
 }
 func (p *controlledChildProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.requests = append(p.requests, req)
 	ch := make(chan llm.Event, 2)
 	if len(p.requests) == 1 {
@@ -728,4 +731,8 @@ func TestChildExecutionFollowupAndCancellation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (*controlledChildProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
 }

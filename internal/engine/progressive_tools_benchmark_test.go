@@ -38,6 +38,7 @@ func measureProgressiveRequests(reqs []llm.Request) progressiveMeasurement {
 }
 func runProgressiveFixture(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn, text string) {
 	t.Helper()
+	persistTaskTestUser(t, e, th, turn, text)
 	e.runTurn(t.Context(), th, turn, resolved{sel: protocol.ModelSelection{Provider: "memory-script", Model: "deterministic"}, meta: models.Meta{ContextWindow: 200000, Tools: true}, limits: protocol.ExecutionLimits{MaxDurationMinutes: 2, MaxTokens: 1000000, MaxCostUSD: 100, MaxToolRounds: 10}}, protocol.TurnStartParams{Text: text}, func() {})
 	turns, err := e.Store.ListTurns(t.Context(), th.ID)
 	if err != nil {
@@ -103,7 +104,7 @@ func progressiveCoding(t *testing.T, progressive, retrieval, selectionFailure, r
 	runProgressiveFixture(t, e, th, turn, "Complete the QUASAR repository change and verify it.")
 	m := measureProgressiveRequests(provider.requests)
 	if selectionFailure || retrievalFailure {
-		if got := requestHasTool(provider.requests[0], "special0.action"); got != (!progressive || selectionFailure) {
+		if got := requestHasTool(provider.requests[0], "special0.action"); got != !progressive {
 			t.Fatal("one feature failure disabled the independent selector")
 		}
 	}

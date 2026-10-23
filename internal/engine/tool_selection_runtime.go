@@ -194,10 +194,54 @@ func (e *Engine) refreshToolSelection(ctx context.Context, s *turnSelection) {
 	}
 }
 func (s *turnSelection) specs() []llm.ToolSpec {
+	specs := s.baseline
+	fallback := s.fallback != ""
 	if s.state != nil {
-		return s.state.Specs()
+		specs = s.state.Specs()
+		fallback = s.state.Report().Fallback != ""
 	}
-	return append([]llm.ToolSpec(nil), s.baseline...)
+	if !fallback {
+		return append([]llm.ToolSpec(nil), specs...)
+	}
+	// A failed selector must not flood a small model with every integration.
+	// Keep original-source retrieval and discovery before other direct tools.
+	priority := map[string]int{tools.ToWire("task.context"): 0, tools.ToWire("tools.discover"): 1, tools.ToWire("file.read"): 2, tools.ToWire("file.write"): 3, tools.ToWire("file.edit"): 4, tools.ToWire("shell.run"): 5}
+	chosen := append([]llm.ToolSpec(nil), specs...)
+	sort.SliceStable(chosen, func(i, j int) bool {
+		a, ok := priority[chosen[i].Name]
+		if !ok {
+			a = 10
+		}
+		b, ok := priority[chosen[j].Name]
+		if !ok {
+			b = 10
+		}
+		return a < b
+	})
+	var out []llm.ToolSpec
+	used := 0
+	for _, spec := range chosen {
+		core := false
+		name := ""
+		for _, c := range s.actual {
+			if c.spec.Name == spec.Name {
+				family, _ := catalogMetadata(c)
+				core = family == "core"
+				name = c.tool.Name()
+				break
+			}
+		}
+		if !core && (name == "" || !strings.Contains(s.request, name)) {
+			continue
+		}
+		cost := requestTextTokens(spec.Description+string(spec.Schema)+spec.Name) + 24
+		if len(out) >= 32 || used+cost > 4000 {
+			continue
+		}
+		out = append(out, spec)
+		used += cost
+	}
+	return out
 }
 func resolveTurnTool(catalog []turnTool, name string) (turnTool, bool) {
 	var found turnTool
@@ -245,7 +289,20 @@ func (e *Engine) selectionFailure(ctx context.Context, turn protocol.Turn, call 
 		it.Status = protocol.ItemDenied
 		_ = e.saveAndPublish(ctx, it, protocol.NotifyItemCompleted)
 	}
-	return toolRunResult{Output: reason, ModelOutput: reason, IsError: true}
+	failure := protocol.ActionFailure{Category: "policy_denied", Message: reason, NextStep: "Respect the current tool permission or availability constraint; clarify it rather than claiming execution.", OperationID: it.ID}
+	if saved, lookupErr := e.Store.ActiveExecutionTask(ctx, turn.ThreadID); lookupErr == nil && it.ID != "" {
+		operation, createErr := e.Store.CreateTaskOperation(ctx, protocol.TaskOperation{TaskID: saved.Task.ID, TurnID: turn.ID, ItemID: it.ID, Tool: name, Args: call.Args, ImplementationID: name})
+		if createErr == nil {
+			failure.OperationID = operation.ID
+			_, _ = e.Store.TransitionTaskOperation(ctx, operation.ID, protocol.OperationTransition{ExpectedRevision: operation.Revision, Status: "blocked", Failure: &failure})
+		}
+	}
+	if it.ID != "" {
+		it.Data, _ = json.Marshal(map[string]any{"actionFailure": failure})
+		_ = e.saveAndPublish(ctx, it, protocol.NotifyItemCompleted)
+	}
+	raw, _ := json.Marshal(failure)
+	return toolRunResult{Output: reason, ModelOutput: string(raw), IsError: true, ActionFailure: &failure, WorkflowAction: workflowActionKey(ctx, name, call.Args)}
 }
 func (e *Engine) runDiscovery(ctx, sctx context.Context, turn protocol.Turn, call llm.ToolCall, tool *discoveryTool) toolRunResult {
 	if tool == nil {

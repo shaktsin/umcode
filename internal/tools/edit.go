@@ -11,6 +11,15 @@ import (
 	"unicode/utf8"
 )
 
+// IsFileMutationSource identifies built-in file editing, not plugin tools with similar names.
+func IsFileMutationSource(t Tool) bool {
+	switch t.(type) {
+	case *fileEdit, *fileWrite:
+		return true
+	}
+	return false
+}
+
 // maxEditSize is the largest file file.edit will change: the same limit as the
 // snapshot used for diffs and undo.
 const maxEditSize = 1 << 20

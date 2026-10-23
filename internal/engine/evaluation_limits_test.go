@@ -13,7 +13,13 @@ func TestEvaluationWireOutputLimit(t *testing.T) {
 		for range ch {
 		}
 	}
-	if err == nil {
-		t.Fatal("provider-expanded output limit bypassed declared bound")
+	if err != nil {
+		t.Fatal("bounded wire output was rejected", err)
+	}
+	if limit := llm.EffectiveOutputLimit("claude", llm.Request{MaxTokens: 1000, Reasoning: llm.ReasoningMedium, ReasoningStyle: "budget"}); limit != 1000 {
+		t.Fatal("wire output grew", limit)
+	}
+	if _, err = p.Stream(t.Context(), llm.Credential{}, llm.Request{Model: "claude-3-7-sonnet", MaxTokens: 1001}); err == nil {
+		t.Fatal("output above declared maximum admitted")
 	}
 }

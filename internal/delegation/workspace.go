@@ -288,6 +288,15 @@ func (s *WorkspaceService) BindReviewer(ctx context.Context, taskID, reviewerID,
 }
 func (s *WorkspaceService) prepareReviewer(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild) (WorkspaceRef, error) {
 	id, rev, err := s.Store.AgentReviewerSource(ctx, t.ID, c.ID)
+	if errors.Is(err, store.ErrNotFound) && c.WorkspaceID != "" {
+		admitted, readErr := s.Store.AgentWorkspace(ctx, c.WorkspaceID)
+		if readErr != nil {
+			return WorkspaceRef{}, readErr
+		}
+		if admitted.Kind == "reviewer" && admitted.SourceID == "lead_snapshot" {
+			return s.prepareStandaloneReviewer(ctx, t, c)
+		}
+	}
 	if err != nil {
 		return WorkspaceRef{}, fmt.Errorf("reviewer requires an explicit submitted revision binding: %w", err)
 	}
@@ -661,4 +670,64 @@ func (s *WorkspaceService) ValidateIntegrated(ctx context.Context, taskID, child
 		return errors.New("integration not applied")
 	}
 	return s.verifyApplied(ctx, t, w)
+}
+
+// A focused optional review snapshots the lead's current tree into a distinct
+// checkout. It grants neither mutation permission nor integration approval.
+func (s *WorkspaceService) prepareStandaloneReviewer(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild) (WorkspaceRef, error) {
+	id := "delegation-standalone-review-" + t.ID + "-" + c.ID
+	planned := s.Manager.Path(id)
+	if pathutil.Within(t.ParentRoot, planned) || pathutil.Within(planned, t.ParentRoot) || pathutil.Within(t.BaseRoot, planned) || pathutil.Within(planned, t.BaseRoot) {
+		return WorkspaceRef{}, errors.New("review checkout must be isolated from parent")
+	}
+	w, err := s.Store.AgentWorkspace(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		snapshot, err := s.Manager.Ensure(ctx, id, t.ParentRoot)
+		if err != nil {
+			return WorkspaceRef{}, err
+		}
+		w = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: c.ID, Kind: "reviewer", SourceID: "lead_snapshot", Root: snapshot.Path, ParentRoot: t.ParentRoot, BaseRevision: snapshot.BaselineCommit, ResultRevision: snapshot.BaselineCommit}
+		if err = s.Store.SaveAgentWorkspace(ctx, w); err != nil {
+			return WorkspaceRef{}, err
+		}
+	} else if err != nil {
+		return WorkspaceRef{}, err
+	}
+	if w.Cleaned || w.TaskID != t.ID || w.ChildID != c.ID || w.Root != planned || w.SourceID != "lead_snapshot" {
+		return WorkspaceRef{}, errors.New("review snapshot ownership changed")
+	}
+	if err = validatePrivate(ctx, w.Root); err != nil {
+		return ref(w), err
+	}
+	if err = worktree.ValidateCommitted(ctx, w.Root, w.ResultRevision); err != nil {
+		return ref(w), err
+	}
+	if err = s.attach(ctx, t, c, w.ID); err != nil {
+		return ref(w), err
+	}
+	return ref(w), nil
+}
+
+// PrepareStandaloneReview explicitly admits a lead snapshot before execution;
+// missing submitted-revision provenance never implicitly grants this path.
+func (s *WorkspaceService) PrepareStandaloneReview(ctx context.Context, task protocol.AgentTask, child protocol.AgentChild) (WorkspaceRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.task(ctx, task)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	c, err := s.Store.AgentChild(ctx, t.ID, child.ID)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	if c.Role != protocol.AgentRoleReviewer || child.TaskID != t.ID {
+		return WorkspaceRef{}, errors.New("standalone review requires its owning reviewer child")
+	}
+	if _, _, err = s.Store.AgentReviewerSource(ctx, t.ID, c.ID); err == nil {
+		return WorkspaceRef{}, errors.New("reviewer already bound to submitted revision")
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return WorkspaceRef{}, err
+	}
+	return s.prepareStandaloneReviewer(ctx, t, c)
 }

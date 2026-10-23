@@ -113,11 +113,11 @@ func TestDelegationRPCEndToEnd(t *testing.T) {
 				if role == "reviewer" {
 					switch n % 3 {
 					case 0:
-						return call("shell.run", map[string]any{"command": "printf forbidden > reviewer-write.txt"})
+						return call("file.read", map[string]any{"path": "value.go"})
 					case 1:
 						last := req.Messages[len(req.Messages)-1]
-						if !strings.Contains(last.Result, "blocked") {
-							t.Errorf("reviewer command gained execution: %s", last.Result)
+						if last.IsError || !strings.Contains(last.Result, "func Value") {
+							t.Errorf("reviewer could not inspect committed change: %s", last.Result)
 						}
 						verdict := "approved"
 						findings := []protocol.AgentFinding{}
@@ -133,13 +133,13 @@ func TestDelegationRPCEndToEnd(t *testing.T) {
 				// Failure boundaries must actually fail through the public tool path.
 				if n == 13 {
 					last := req.Messages[len(req.Messages)-1]
-					if strings.HasPrefix(last.Result, "Error:") {
+					if last.IsError {
 						t.Logf("final completion response: %s", last.Result)
 					}
 				}
 				if n == 5 || n == 11 {
 					last := req.Messages[len(req.Messages)-1]
-					if !strings.HasPrefix(last.Result, "Error:") {
+					if !last.IsError {
 						t.Errorf("step %d accepted premature integration/completion: %s", n, last.Result)
 					}
 				}
@@ -199,7 +199,7 @@ func TestDelegationRPCEndToEnd(t *testing.T) {
 				case 10:
 					if activation == "dirty_parent" {
 						last := req.Messages[len(req.Messages)-1]
-						if !strings.HasPrefix(last.Result, "Error:") {
+						if !last.IsError {
 							t.Errorf("dirty parent integrated: %s", last.Result)
 						}
 						return done()
@@ -229,7 +229,9 @@ func TestDelegationRPCEndToEnd(t *testing.T) {
 			var started protocol.TurnStartResult
 			h.call(protocol.MethodTurnStart, params, &started)
 			turn, _, _ := h.waitTurnWithin(started.Turn.ID, func(protocol.Approval) bool { return true }, 90*time.Second)
-			if turn.Status != protocol.TurnCompleted {
+			wantStatus := protocol.TurnCompleted
+
+			if turn.Status != wantStatus {
 				t.Fatalf("lead status: %+v", turn)
 			}
 			var list protocol.DelegationListResult
@@ -288,12 +290,13 @@ func TestDelegationRPCEndToEnd(t *testing.T) {
 			mu.Unlock()
 			h.fake.mu.Lock()
 			calls := len(h.fake.calls)
+			intentCalls := len(h.fake.intentCalls)
 			h.fake.mu.Unlock()
 			if !countsOK || calls != wantCalls {
 				t.Errorf("unexpected provider attempts: %d %s, want %d", calls, gotCounts, wantCalls)
 			}
 			// Shared usage includes the lead's final answer even after durable completion.
-			if !snapshot.BudgetAvailable || snapshot.Usage.Requests != int64(wantCalls) || snapshot.Usage.InputTokens != int64(wantCalls*11) || snapshot.Usage.OutputTokens != int64(wantCalls*3) {
+			if !snapshot.BudgetAvailable || snapshot.Usage.Requests != int64(wantCalls+intentCalls) || snapshot.Usage.InputTokens != int64(wantCalls*11+intentCalls*5) || snapshot.Usage.OutputTokens != int64(wantCalls*3+intentCalls*5) {
 				t.Errorf("shared actual usage: %+v", snapshot)
 			}
 			h.call("delegation/cancel", protocol.DelegationCancelParams{ThreadID: th.ID, TaskID: taskID}, nil)

@@ -37,6 +37,11 @@ const historyLimit = 60
 // resolved is the concrete choice for a turn: the route being used now, and
 // the ones the router lined up behind it.
 type resolved struct {
+	currentInput          llm.Message
+	workingMessages       []llm.Message
+	contextReduced        bool
+	forceCompaction       bool
+	retryCause            string
 	approved              candidateSet
 	approvedCredentialID  string
 	approvedCredentialIDs []string
@@ -139,6 +144,18 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 		kept := plan.Routes[:0]
 		for _, route := range plan.Routes {
 			if slices.Contains(x.credentialIDs, route.Cred.Record.ID) {
+				kept = append(kept, route)
+			}
+		}
+		plan.Routes = kept
+	}
+	if pick.poolID == "" && len(plan.Routes) > 0 {
+		first := plan.Routes[0]
+		anchor, _ := capacityIdentity(resolved{sel: protocol.ModelSelection{Provider: first.Provider, Model: first.Model}, cred: first.Cred})
+		kept := plan.Routes[:0]
+		for _, route := range plan.Routes {
+			identity, err := capacityIdentity(resolved{sel: protocol.ModelSelection{Provider: route.Provider, Model: route.Model}, cred: route.Cred})
+			if err == nil && route.Provider == first.Provider && route.Model == first.Model && identity.EndpointID == anchor.EndpointID {
 				kept = append(kept, route)
 			}
 		}
@@ -426,6 +443,7 @@ func (e *Engine) saveAndPublish(ctx context.Context, it protocol.Item, method st
 // runTurn is the agent loop.
 func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.Turn, res resolved, p protocol.TurnStartParams, release func()) {
 	defer recorderFrom(ctx).finish()
+	ctx = context.WithValue(ctx, executionTurnKey{}, turn)
 	budget := newTurnBudget(res.limits)
 	ctx, cancelTurn := context.WithTimeout(ctx, time.Duration(res.limits.MaxDurationMinutes)*time.Minute)
 	defer cancelTurn()
@@ -458,6 +476,37 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	log := e.Log.With("thread", th.ID, "turn", turn.ID)
 	if e.Work != nil && childExecutionFrom(ctx) == nil {
 		_ = e.Work.Begin(sctx, th, p.Text) // failures are logged and counted by the service
+	}
+	if childExecutionFrom(ctx) == nil {
+		user, taskErr := e.currentTaskUser(sctx, turn)
+		if taskErr == nil {
+			if existing, lookupErr := e.Store.ActiveExecutionTask(sctx, th.ID); lookupErr == nil {
+				taskErr = e.recoverInterruptedTask(sctx, existing.Task.ID)
+			} else if !errors.Is(lookupErr, store.ErrNotFound) {
+				taskErr = lookupErr
+			}
+		}
+		if taskErr == nil {
+			taskErr = e.adoptExecutionPolicy(sctx, th.ID)
+		}
+		if taskErr == nil {
+			var resolution protocol.TaskResolution
+			resolution, taskErr = e.restoreModelDrivenTask(sctx, th, user)
+			if taskErr == nil && resolution.Relation == "clarify" {
+				item, itemErr := e.newItem(sctx, turn, protocol.ItemAgentMessage)
+				if itemErr == nil {
+					item.Status = protocol.ItemCompleted
+					item.Text = resolution.Question
+					itemErr = e.saveAndPublish(sctx, item, protocol.NotifyItemCompleted)
+				}
+				e.finishTurn(sctx, th, turn, itemErr, release)
+				return
+			}
+		}
+		if taskErr != nil {
+			e.finishTurn(sctx, th, turn, fmt.Errorf("restore task: %w", taskErr), release)
+			return
+		}
 	}
 	pause := func(reason string) {
 		e.markPaused(turn.ID)
@@ -516,7 +565,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			e.publishFileChange(sctx, turn, c)
 		})
 		scope := &tools.Scope{
-			ThreadID: th.ID, ProjectID: p.ID, ProjectName: p.Name, Root: taskProject.Root,
+			ThreadID: th.ID, ProjectID: p.ID, ProjectName: p.Name, Root: taskProject.Root, ProjectRoot: p.Root,
 			AllowComputerUse: computerEnabled,
 			AllowNet:         boolOr(p.Tools.Network, false),
 			UseCompute:       boolOr(p.Tools.Compute, false),
@@ -569,17 +618,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			user.Parts = append(user.Parts, llm.Part{Type: "image", MimeType: a.MimeType, DataB64: a.DataB64})
 		}
 	}
-	// A long conversation is summarized before the new message so the turn
-	// starts with room to work. Failure is not fatal: the history limit and
-	// tool-result trimming still bound the request.
-	if overWindow(msgs, 0, res.meta.ContextWindow, contextCompactFraction) {
-		if err := e.compactLocked(ctx, sctx, th.ID, turn.ID, snapshot); err != nil {
-			log.Warn("automatic context compaction failed", "err", err)
-		} else if h, err := e.history(sctx, th.ID, turn.ID); err == nil {
-			msgs = h
-			log.Info("conversation context compacted automatically", "window", res.meta.ContextWindow)
-		}
-	}
+	e.invalidateCapacity(res) // Refresh the actual serving allocation at admission.
 	// turnItems is this thread's transcript, read once: the compiler reuses it
 	// for every model call in the loop instead of re-reading it each time.
 	var turnItems []protocol.Item
@@ -598,6 +637,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	// model's tool calls and their results. The compiler replaces what came
 	// before it, never this live suffix.
 	liveFrom := len(msgs)
+	res.currentInput = cloneModelRequest(llm.Request{Messages: []llm.Message{user}}).Messages[0]
 	msgs = append(msgs, user)
 
 	var selection *turnSelection
@@ -640,7 +680,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	for {
 		if childExecutionFrom(ctx) != nil {
 			var followErr error
-			msgs, _, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
+			var added bool
+			msgs, added, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
+			if added {
+				res.currentInput = cloneModelRequest(llm.Request{Messages: msgs[len(msgs)-1:]}).Messages[0]
+			}
 			if followErr != nil {
 				turnErr = followErr
 				break
@@ -675,17 +719,22 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		if identity.Text != "" {
 			layers = append(layers, identity)
 		}
-		req.System = joinLayers(layers)
-		// Old tool output is the first thing to go when the request nears the
-		// window; the newest results stay.
-		if n := trimToolResults(msgs, tokens(req.System)+toolSpecTokens(specs), int(float64(res.meta.ContextWindow)*contextTrimFraction)); n > 0 {
-			log.Info("dropped old tool results to save context", "count", n)
+		if childExecutionFrom(ctx) == nil {
+			taskText, taskErr := e.taskContext(sctx, th.ID)
+			if taskErr != nil {
+				turnErr = taskErr
+				break
+			}
+			if taskText != "" {
+				layers = append(layers, promptLayer{Name: "task_state", Text: taskText})
+			}
 		}
+		req.System = joinLayers(layers)
 		// The work record is re-read for every call, so an edit made earlier in
 		// this turn reaches the model as a stale criterion rather than a pass.
 		packets := RequestPackets{}
 		req.Messages = msgs
-		if out, ok := e.compile(ctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems, p.Text, scopeRoot(ctx)); ok {
+		if out, ok := e.compile(ctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems, p.Text, scopeRoot(ctx)); ok && !res.contextReduced {
 			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
 			packets = out.packets
 		}
@@ -701,6 +750,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		}
 		recorderFrom(ctx).prepare(diagnostic)
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
+		if res.contextReduced {
+			msgs = cloneModelRequest(llm.Request{Messages: res.workingMessages}).Messages
+			liveFrom = 0
+		}
 		if err != nil {
 			if budget.shared != nil {
 				if accountingErr := budget.shared.Err(); accountingErr != nil {
@@ -738,6 +791,9 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				var followErr error
 				msgs = appendText(msgs, llm.RoleAssistant, out.text)
 				msgs, added, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
+				if added {
+					res.currentInput = cloneModelRequest(llm.Request{Messages: msgs[len(msgs)-1:]}).Messages[0]
+				}
 				if followErr != nil {
 					turnErr = followErr
 					break
@@ -775,6 +831,12 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				}
 			}
 			results = append(results, result)
+			if turnErr != nil {
+				break
+			}
+		}
+		if turnErr != nil {
+			break
 		}
 		repeats := budget.observeToolRound(out.calls, results)
 		if repeats == 2 && lastToolMsg >= 0 {
@@ -920,6 +982,7 @@ func outputLimitStop(reason string) bool {
 }
 
 type modelOutput struct {
+	messageID string
 	attempted bool // provider boundary was crossed; admission-only failures remain false
 	text      string
 	thinking  []llm.Thinking
@@ -932,6 +995,7 @@ type modelOutput struct {
 // plan and says so, rather than failing the turn.
 func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *resolved,
 	req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
+	contextRetried := false
 	for {
 		if x := childExecutionFrom(ctx); x != nil {
 			if err := e.recordChildModel(sctx, x, res.sel); err != nil {
@@ -955,7 +1019,24 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			req.Reasoning, req.ReasoningStyle = "", ""
 		}
 		start := time.Now()
-		out, err := e.streamOnce(ctx, sctx, turn, *res, res.cred, provider, req, role, budget)
+		prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, res, req, role, budget)
+		if err != nil {
+			d := budgetDiagnostics(recorderFrom(ctx).template(), report)
+			d.Phase = role
+			d.Provider = res.sel.Provider
+			d.Model = res.sel.Model
+			d.CostState = "unavailable"
+			d.MeasurementOrigin = "unavailable"
+			d.Fallback = "capacity_admission"
+			attempted := false
+			d.Attempted = &attempted
+			recorderFrom(ctx).recordRequest(d)
+			return modelOutput{}, err
+		}
+		if res.contextReduced {
+			res.workingMessages = prepared.Messages
+		}
+		out, err := e.streamPrepared(ctx, sctx, turn, *res, res.cred, provider, prepared, report, role, budget)
 		if err == nil {
 			e.Router.Succeeded(sctx, res.route, time.Since(start))
 			res.trail = append(res.trail, step(res.route, "used", "", time.Since(start)))
@@ -963,6 +1044,20 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 		}
 		if ctx.Err() != nil {
 			return out, err
+		}
+		if confirmedContextOverflow(err) {
+			if budget.stopReason() != "" {
+				return out, err
+			}
+			if contextRetried {
+				return out, err
+			}
+			contextRetried = true
+			e.invalidateCapacity(*res)
+			res.forceCompaction = true
+			res.retryCause = "context_exhausted"
+			req.Messages = prepared.Messages
+			continue
 		}
 		status := e.Router.Failed(sctx, res.route, err)
 		res.trail = append(res.trail, step(res.route, status, err.Error(), time.Since(start)))
@@ -1028,6 +1123,15 @@ func switchNote(from, to router.Route, status string) string {
 
 func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res resolved, cred credentials.Resolved,
 	provider llm.Provider, req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
+	res.cred = cred
+	prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, &res, req, role, budget)
+	if err != nil {
+		return modelOutput{}, err
+	}
+	return e.streamPrepared(ctx, sctx, turn, res, cred, provider, prepared, report, role, budget)
+}
+
+func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, res resolved, cred credentials.Resolved, provider llm.Provider, req llm.Request, report requestBudgetReport, role string, budget *turnBudget) (modelOutput, error) {
 	var out modelOutput
 	settle := func(protocol.UsageTotals) {}
 	if budget.shared != nil {
@@ -1042,7 +1146,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 			ctx = linked
 		}
 		remaining, cost := budget.shared.Remaining()
-		input := estimateInput(req)
+		input := int64(report.EstimatedInput)
 		output := int64(req.MaxTokens)
 		if output <= 0 {
 			output = int64(res.preset.MaxOutputTokens)
@@ -1076,10 +1180,11 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 	start := time.Now()
 	stopReason := ""
 	record := func(u llm.Usage, status string) {
+		e.observeRequestUsage(res, report, u.InputTokens, u.Reported)
 		totals := protocol.UsageTotals{InputTokens: u.InputTokens, CachedInputTokens: u.CachedInputTokens,
 			OutputTokens: u.OutputTokens, ReasoningTokens: u.ReasoningTokens, Requests: 1, Estimated: !u.Reported}
 		if !u.Reported {
-			totals.InputTokens = estimateInput(req)
+			totals.InputTokens = int64(report.EstimatedInput)
 			totals.OutputTokens = llm.EstimateTokens(out.text)
 			for _, call := range out.calls {
 				totals.OutputTokens += llm.EstimateTokens(string(call.Args))
@@ -1097,6 +1202,16 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 		settle(totals)
 		budget.addUsage(totals)
 		diagnostic := recorderFrom(ctx).template()
+		diagnostic = budgetDiagnostics(diagnostic, report)
+		attempted := true
+		diagnostic.Attempted = &attempted
+		diagnostic.ToolNames = nil
+		for _, spec := range req.Tools {
+			diagnostic.ToolNames = append(diagnostic.ToolNames, spec.Name)
+		}
+		if status == "output_limit" {
+			diagnostic.InterruptionKind = string(classifyOutputInterruption(stopReason, u, report, false))
+		}
 		diagnostic.Phase, diagnostic.Provider, diagnostic.Model = role, res.sel.Provider, res.sel.Model
 		diagnostic.InputTokens, diagnostic.CachedInputTokens = &totals.InputTokens, &totals.CachedInputTokens
 		diagnostic.OutputTokens, diagnostic.ReasoningTokens = &totals.OutputTokens, &totals.ReasoningTokens
@@ -1146,7 +1261,7 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 	for ev := range ch { // always drain so the adapter goroutine exits
 		switch ev.Type {
 		case llm.EventTextDelta:
-			if role == "title" || role == "compaction" {
+			if role == "title" || role == "compaction" || role == "task_intent" {
 				text.WriteString(ev.Text)
 				continue
 			}
@@ -1191,14 +1306,20 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 		it.Status = protocol.ItemCompleted
 		if failed {
 			it.Status = protocol.ItemFailed
+			if body != "" {
+				it.Data, _ = json.Marshal(map[string]any{"interrupted": true, "interruptionKind": classifyOutputInterruption(stopReason, llm.Usage{}, report, confirmedContextOverflow(streamErr))})
+			}
 		}
 		_ = e.saveAndPublish(sctx, *it, protocol.NotifyItemCompleted)
 	}
 	if streamErr == nil && done != nil && outputLimitStop(done.StopReason) {
-		streamErr = errModelOutputLimit
+		streamErr = &outputInterruptionError{Kind: classifyOutputInterruption(done.StopReason, done.Usage, report, false)}
 	}
 	failed := streamErr != nil || ctx.Err() != nil
 	finish(msgItem, out.text, failed)
+	if msgItem != nil {
+		out.messageID = msgItem.ID
+	}
 	if done != nil {
 		status := "ok"
 		if errors.Is(streamErr, errModelOutputLimit) {
@@ -1222,6 +1343,9 @@ func (e *Engine) streamOnce(ctx, sctx context.Context, turn protocol.Turn, res r
 	}
 	if budget.shared != nil {
 		streamErr = errors.Join(streamErr, budget.shared.Err())
+	}
+	if streamErr != nil {
+		out.calls = nil
 	}
 	return out, streamErr
 }
@@ -1279,11 +1403,14 @@ type turnTool struct {
 }
 
 type toolRunResult struct {
-	Output      string
-	ModelOutput string
-	Reduction   toolreduce.Report
-	IsError     bool
-	HookContext []string
+	Output          string
+	ModelOutput     string
+	Reduction       toolreduce.Report
+	IsError         bool
+	HookContext     []string
+	WorkflowBlocker *workflowBlocker
+	WorkflowAction  string
+	ActionFailure   *protocol.ActionFailure
 }
 
 func (e *Engine) turnTools(snapshot pluginSnapshot) []turnTool {
@@ -1352,7 +1479,12 @@ func (e *Engine) runTurnCompleteHooks(ctx context.Context, snapshot pluginSnapsh
 
 // runTool executes one tool call, asking for approval when policy requires it.
 func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn protocol.Turn, call llm.ToolCall, snapshot pluginSnapshot) toolRunResult {
+	if e.Cfg != nil && e.Cfg.Policy.RequireWorkflowApproval {
+		ctx = optimization.WithPolicy(ctx, e.optimizationPolicy(ctx))
+	}
 	name := call.Name
+	var taskOperation protocol.TaskOperation
+	var taskFailure *protocol.ActionFailure
 	if !childToolAllowed(ctx, name) {
 		return e.selectionFailure(sctx, turn, call, name, childPolicyError(name).Error())
 	}
@@ -1369,10 +1501,12 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	ctx = tools.WithAgentCallID(ctx, call.ID)
 	var tool tools.Tool
 	var ok bool
+	var toolIsPlugin bool
 	if selection := selectionFrom(ctx); selection != nil {
 		candidate, found := resolveTurnTool(selection.actual, call.Name)
 		if found {
 			tool, ok = candidate.tool, true
+			toolIsPlugin = candidate.plugin
 			if discovery, owned := tool.(*discoveryTool); owned {
 				return e.runDiscovery(ctx, sctx, turn, call, discovery)
 			}
@@ -1394,6 +1528,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		tool, ok = e.Tools.Get(call.Name)
 		if !ok && snapshot != nil {
 			tool, ok = snapshot.Tool(call.Name)
+			toolIsPlugin = ok
 		}
 	}
 
@@ -1407,7 +1542,32 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	invocation := hooks.Invocation{ProjectID: th.ProjectID, ThreadID: th.ID, TurnID: turn.ID, ToolName: name, ToolArgs: call.Args}
 	result := func(output string, isError bool, contextValues ...string) toolRunResult {
 		model, reduction := e.reduceToolResultFor(ctx, name, call.Args, output, isError)
-		return toolRunResult{Output: output, ModelOutput: model, Reduction: reduction, IsError: isError, HookContext: contextValues}
+		var failure *protocol.ActionFailure
+		if isError && (taskOperation.ID != "" || taskFailure != nil) {
+			f := classifyActionFailure(taskOperation.ID, errors.New(output))
+			if taskFailure != nil {
+				f = *taskFailure
+				if taskOperation.ID != "" {
+					f.OperationID = taskOperation.ID
+				}
+			}
+			f.Advisory = f.Advisory || workflowDiscoveryTool(name) && f.Retryable
+			f = e.taskReadbackFailure(ctx, taskOperation, f)
+			if f.BlockerID == "" {
+				var a struct {
+					Path string `json:"path"`
+				}
+				if json.Unmarshal(call.Args, &a) == nil && a.Path != "" {
+					f.BlockerID = "resource:" + workflowActionKey(ctx, "file.write", json.RawMessage(fmt.Sprintf(`{"path":%q}`, a.Path)))
+				}
+			}
+			f = e.taskFailureState(sctx, taskOperation.TaskID, f)
+			failure = &f
+			raw, _ := json.Marshal(f)
+			model = string(raw)
+		}
+
+		return toolRunResult{Output: output, ModelOutput: model, Reduction: reduction, IsError: isError, HookContext: contextValues, WorkflowAction: workflowActionKey(ctx, name, call.Args), ActionFailure: failure}
 	}
 	var assessedRisk tools.Risk
 	var assessedSummary string
@@ -1420,7 +1580,9 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return result(err.Error(), true)
 		}
 	}
-	workflow, gateErr := e.workflowDetail(sctx, th.ID, name)
+	var workflow *protocol.WorkDetail
+	var gateErr error
+	workflow, gateErr = e.workflowDetail(sctx, th.ID, name)
 	if gateErr != nil {
 		return result(gateErr.Error(), true)
 	}
@@ -1451,13 +1613,66 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return result("internal error: "+err.Error(), true)
 	}
 	it.Tool = &protocol.ToolCallData{CallID: call.ID, Name: name, Args: call.Args}
+	source := ""
+	if tools.IsFileMutationSource(tool) {
+		source = "builtin_file_mutation"
+	} else if name == "file.read" && tools.IsFileObservationSource(tool) {
+		source = "builtin_file_read"
+	} else if tools.IsFileListingSource(tool) {
+		source = "builtin_file_list"
+	} else if tools.IsVerificationSource(tool) {
+		source = "builtin_verification"
+	} else if tools.IsAgentControlSource(tool) {
+		source = "engine_control"
+	}
+	if source != "" {
+		mergeTaskItemData(&it, "engineToolSource", source)
+	}
+
+	var taskSnapshot *protocol.TaskSnapshot
+	if childExecutionFrom(ctx) == nil {
+		saved, lookupErr := e.Store.ActiveExecutionTask(sctx, th.ID)
+		if lookupErr == nil {
+			taskSnapshot = &saved
+			if saveErr := e.Store.SaveItem(sctx, it); saveErr != nil {
+				return result(saveErr.Error(), true)
+			}
+			taskOperation, lookupErr = e.Store.CreateTaskOperation(sctx, protocol.TaskOperation{TaskID: saved.Task.ID, TurnID: turn.ID, ItemID: it.ID, Tool: name, Args: call.Args, ImplementationID: name, Resources: func() json.RawMessage {
+				if delegated, ok := DelegationTaskFromContext(ctx); ok {
+					raw, _ := json.Marshal(map[string]string{"agent_task_id": delegated.ID})
+					return raw
+				}
+				return nil
+			}()})
+			if lookupErr != nil {
+				it.Status = protocol.ItemFailed
+				it.Tool.Error = lookupErr.Error()
+				_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+				return result(lookupErr.Error(), true)
+			}
+			defer e.finishTaskToolOperation(sctx, taskOperation.ID, it.ID)
+		} else if !errors.Is(lookupErr, store.ErrNotFound) {
+			return result(lookupErr.Error(), true)
+		}
+	}
+
 	if err := e.recoverWorkflowGate(ctx, sctx, turn, it, name, workflow); err != nil {
+		f := taskWorkflowFailure(taskOperation.ID, err)
+		taskFailure = &f
+		mergeTaskItemData(&it, "actionFailure", f)
 		it.Status, it.Tool.Error = protocol.ItemDenied, err.Error()
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
-		return result(err.Error(), true)
+		out := result(err.Error(), true)
+		var blocker *workflowBlocker
+		if errors.As(err, &blocker) {
+			out.WorkflowBlocker = blocker
+		}
+		return out
 	}
 	if !ok {
 		it.Status, it.Tool.Error = protocol.ItemFailed, "unknown tool "+name
+		taskFailure = &protocol.ActionFailure{Category: "execution_failed", OperationID: taskOperation.ID, Message: it.Tool.Error, Retryable: true, Advisory: true, NextStep: "Discover a registered tool and correct its schema before retrying."}
+		mergeTaskItemData(&it, "actionFailure", taskFailure)
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, nil)
 	}
@@ -1498,6 +1713,41 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 	}
 
+	if childExecutionFrom(ctx) != nil {
+		inherited, inheritErr := e.checkChildTaskAuthority(ctx, protocol.TaskOperation{ID: it.ID, Tool: name, Args: call.Args})
+		if inheritErr != nil || inherited.Outcome != "allow" {
+			taskFailure = inherited.Failure
+			if inheritErr == nil {
+				if inherited.Outcome == "ask" {
+					taskFailure = &protocol.ActionFailure{Category: "approval_required", OperationID: it.ID, Message: "The lead task requires a user approval before this child action.", NextStep: "Return to the lead chat; a child cannot approve or replace parent requirements."}
+				}
+				if taskFailure != nil {
+					inheritErr = &taskActionError{Failure: *taskFailure}
+				} else {
+					inheritErr = errors.New("parent task permission unavailable")
+				}
+			}
+			it.Status = protocol.ItemDenied
+			it.Tool.Error = inheritErr.Error()
+			mergeTaskItemData(&it, "actionFailure", taskFailure)
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+		}
+	}
+	if taskSnapshot != nil {
+		beforeApproval, checkErr := e.checkTaskAuthority(ctx, th, *taskSnapshot, taskOperation)
+		if checkErr != nil || beforeApproval.Outcome == "deny" || beforeApproval.Outcome == "blocked" {
+			taskFailure = beforeApproval.Failure
+			if checkErr == nil {
+				checkErr = &taskActionError{Failure: *taskFailure}
+			}
+			it.Status = protocol.ItemDenied
+			it.Tool.Error = checkErr.Error()
+			mergeTaskItemData(&it, "actionFailure", taskFailure)
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+		}
+	}
 	approvalMode := normalizedApprovalMode(th.ApprovalMode)
 	decision, reason := e.gate.Check(name, risk, th.Channel == "listener", approvalMode)
 	if decision == policy.Ask {
@@ -1517,6 +1767,34 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 	}
 
+	if gateErr := e.checkWorkflowGate(ctx, th.ID, name); gateErr != nil {
+		f := taskWorkflowFailure(taskOperation.ID, gateErr)
+		taskFailure = &f
+		mergeTaskItemData(&it, "actionFailure", f)
+		it.Status, it.Tool.Error = protocol.ItemDenied, gateErr.Error()
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+	}
+	if taskSnapshot != nil {
+		authorized, authorityErr := e.authorizeTaskOperation(ctx, sctx, th, turn, it, *taskSnapshot, taskOperation)
+		if authorityErr != nil || authorized.Outcome != "allow" {
+			taskFailure = authorized.Failure
+			if authorityErr == nil {
+				if authorized.Failure != nil {
+					authorityErr = &taskActionError{Failure: *authorized.Failure}
+				} else {
+					authorityErr = errors.New("task approval required")
+				}
+			}
+			it.Status = protocol.ItemDenied
+			it.Tool.Error = authorityErr.Error()
+			if taskFailure != nil {
+				mergeTaskItemData(&it, "actionFailure", taskFailure)
+			}
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+		}
+	}
 	// An approval wait or plugin hook can outlive policy changes. Check again
 	// immediately before action, against the same frozen implementation.
 	ctx, th, childPolicyErr = e.narrowChildToolAuthority(ctx, th)
@@ -1525,12 +1803,47 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 	}
+	if childExecutionFrom(ctx) == nil {
+		currentThread, currentErr := e.Store.GetThread(sctx, th.ID)
+		if currentErr != nil {
+			return result(currentErr.Error(), true)
+		}
+		if currentThread.ProjectID != th.ProjectID {
+			it.Status = protocol.ItemDenied
+			it.Tool.Error = "project changed before action"
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+		}
+		if decision == policy.Allow {
+			if currentDecision, _ := e.gate.Check(name, risk, currentThread.Channel == "listener", normalizedApprovalMode(currentThread.ApprovalMode)); currentDecision != policy.Allow {
+				it.Status = protocol.ItemDenied
+				it.Tool.Error = "approval policy narrowed before action; explicitly retry for approval"
+				_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+				return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+			}
+		}
+		th = currentThread
+	}
 	if childExecutionFrom(ctx) != nil && decision == policy.Allow {
 		if currentDecision, _ := e.gate.Check(name, risk, th.Channel == "listener", normalizedApprovalMode(th.ApprovalMode)); currentDecision != policy.Allow {
 			it.Status, it.Tool.Error = protocol.ItemDenied, "parent approval policy narrowed before action; explicitly retry for approval"
 			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 		}
+	}
+	if childExecutionFrom(ctx) == nil && th.ProjectID != "" && e.Projects != nil {
+		currentProject, policyErr := e.Projects.Get(sctx, th.ProjectID)
+		if policyErr == nil && currentProject.Tools.ComputerUse == nil {
+			enabled := e.ComputerUseDefault(sctx).Enabled
+			currentProject.Tools.ComputerUse = &enabled
+		}
+		if policyErr != nil || !e.permittedToolFor(ctx, turnTool{tool: tool, plugin: toolIsPlugin}, &currentProject) {
+			it.Status = protocol.ItemDenied
+			it.Tool.Error = "tool is no longer permitted by current project policy"
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
+		}
+		ctx = currentSelectionScope(ctx, &currentProject)
 	}
 	if selection := selectionFrom(ctx); selection != nil {
 		candidate, found := resolveTurnTool(selection.actual, call.Name)
@@ -1541,6 +1854,23 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 		}
 		ctx = currentSelectionScope(ctx, p)
+	}
+	finalAuthority, finalErr := e.revalidateTaskAction(ctx, th, taskSnapshot, protocol.TaskOperation{ID: taskOperation.ID, TaskID: taskOperation.TaskID, Tool: name, Args: call.Args})
+	if finalErr != nil || finalAuthority.Outcome != "allow" {
+		taskFailure = finalAuthority.Failure
+		if finalErr == nil {
+			if taskFailure != nil {
+				finalErr = &taskActionError{Failure: *taskFailure}
+			} else {
+				finalErr = errors.New("task authority changed before execution")
+			}
+		}
+		it.Status, it.Tool.Error = protocol.ItemDenied, finalErr.Error()
+		if taskFailure != nil {
+			mergeTaskItemData(&it, "actionFailure", taskFailure)
+		}
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 	}
 	toolCtx := ctx
 	if scope := tools.ScopeFrom(ctx); scope != nil {
@@ -1565,8 +1895,18 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		}
 		toolCtx = tools.WithScope(ctx, &streamScope)
 	}
+	toolCtx = context.WithValue(toolCtx, executionItemKey{}, it)
 	toolCtx, sink = tools.WithRawSink(toolCtx)
 	sink.CaptureExcerpts = e.optimizationPolicy(ctx).ContextRetrieval && tools.IsFileObservationSource(tool)
+	if taskOperation.ID != "" {
+		currentOp, opErr := e.Store.GetTaskOperation(sctx, taskOperation.ID)
+		if opErr == nil {
+			_, opErr = e.Store.TransitionTaskOperation(sctx, currentOp.ID, protocol.OperationTransition{ExpectedRevision: currentOp.Revision, Status: "running"})
+		}
+		if opErr != nil {
+			return result(opErr.Error(), true)
+		}
+	}
 	var output string
 	workflowDenied := false
 	if updater, ok := tool.(tools.WorkflowUpdateTool); ok && e.optimizationPolicy(ctx).DesignedWorkflow {
@@ -1606,15 +1946,64 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			}
 		}
 	}
+	if sink != nil && sink.FileListing != nil && source == "builtin_file_list" {
+		mergeTaskItemData(&it, "fileListing", sink.FileListing)
+	}
+	if sink != nil && sink.FileExistence != nil && source == "builtin_file_read" {
+		mergeTaskItemData(&it, "fileExistence", sink.FileExistence)
+	}
+	if sink != nil && sink.OutcomeUnknown {
+		err = &taskActionError{Failure: protocol.ActionFailure{Category: "outcome_unknown", OperationID: taskOperation.ID, Message: "The action was interrupted after it started; its effects are uncertain.", NextStep: "Inspect the actual effects before any further mutation; do not replay it."}}
+	}
+	if err != nil && taskOperation.ID != "" {
+		f := classifyActionFailure(taskOperation.ID, err)
+		taskFailure = &f
+		mergeTaskItemData(&it, "actionFailure", f)
+	}
 	if err != nil {
 		it.Status, it.Tool.Error = protocol.ItemFailed, err.Error()
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 		return observe(hooks.ToolUseFailed, "Error: "+err.Error(), err.Error(), before.Context)
 	}
 	if workflowDenied {
+		f := protocol.ActionFailure{AuthoritySource: "work_graph", Category: "workflow_requirement", OperationID: taskOperation.ID, Message: "The required workflow review was not approved.", Retryable: false, NextStep: "Obtain a new explicit review decision before continuing this action."}
+		if work, found, lookupErr := e.Store.OpenWorkForThread(sctx, th.ID); lookupErr == nil && found {
+			f.BlockerID = work.ID
+		}
+		f.State = json.RawMessage(output)
+		taskFailure = &f
+		mergeTaskItemData(&it, "actionFailure", f)
+		it.Tool.Error = f.Message
 		it.Status, it.Tool.Output = protocol.ItemDenied, output
 		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 		return result(output, true, before.Context...)
+	}
+	if taskOperation.ID != "" && sink != nil && sink.FileRead != nil && source == "builtin_file_read" {
+		if proofErr := e.attachTaskFileProof(sctx, taskOperation.TaskID, *sink.FileRead, &it); proofErr != nil {
+			return result(proofErr.Error(), true)
+		}
+	}
+	if taskOperation.ID != "" && source == "builtin_verification" {
+		var report struct {
+			Status string `json:"status"`
+		}
+		raw := output
+		if sink != nil && sink.Text != "" {
+			raw = sink.Text
+		}
+		if json.Unmarshal([]byte(raw), &report) == nil && report.Status == "passed" {
+			if proofErr := e.captureVerificationFiles(sctx, taskOperation.TaskID, &it); proofErr != nil {
+				return result(proofErr.Error(), true)
+			}
+		}
+	}
+	if _, firstParty := tool.(*taskProposalTool); firstParty {
+		var proposalResult struct {
+			Resolution *taskOpaqueResolution `json:"resolution"`
+		}
+		if json.Unmarshal([]byte(output), &proposalResult) == nil && proposalResult.Resolution != nil {
+			mergeTaskItemData(&it, "taskResolution", proposalResult.Resolution)
+		}
 	}
 	it.Status, it.Tool.Output = protocol.ItemCompleted, output
 	_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
@@ -1636,6 +2025,10 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 		turn.Status, turn.Error = protocol.TurnFailed, err.Error()
 		if it, ierr := e.newItem(ctx, turn, protocol.ItemError); ierr == nil {
 			it.Status, it.Text = protocol.ItemCompleted, err.Error()
+			var failure *taskActionError
+			if errors.As(err, &failure) {
+				mergeTaskItemData(&it, "actionFailure", failure.Failure)
+			}
 			_ = e.saveAndPublish(ctx, it, protocol.NotifyItemCompleted)
 		}
 	}
@@ -1655,6 +2048,11 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 		turn.Status = protocol.TurnFailed
 		turn.Error = "child execution paused at its budget or progress limit"
 		_ = e.Store.FinishTurn(ctx, turn)
+	}
+	if errors.Is(err, context.Canceled) && childExecutionFrom(ctx) == nil {
+		if saved, lookupErr := e.Store.ActiveExecutionTask(ctx, th.ID); lookupErr == nil {
+			_, _ = e.Store.TransitionExecutionTask(ctx, saved.Task.ID, protocol.TaskTransition{ExpectedRevision: saved.Task.Revision, Status: "cancelled"})
+		}
 	}
 	if e.Work != nil && childExecutionFrom(ctx) == nil {
 		completedID, _ := e.Work.End(ctx, th.ID, turn.Status, paused, scopeRoot(ctx))
@@ -1701,6 +2099,7 @@ func (e *Engine) history(ctx context.Context, threadID, currentTurn string) ([]l
 // historyMessages applies the latest explicit compaction marker while keeping
 // the original transcript in storage and available to the UI.
 func historyMessages(items []protocol.Item, currentTurn string, limit int) []llm.Message {
+	items = historicalEvidenceItems(items, currentTurn)
 	var msgs []llm.Message
 	for _, it := range items {
 		if it.TurnID == currentTurn || it.Status == protocol.ItemInProgress {
@@ -1714,18 +2113,23 @@ func historyMessages(items []protocol.Item, currentTurn string, limit int) []llm
 		case protocol.ItemAgentMessage:
 			if it.Text != "" && it.Status == protocol.ItemCompleted {
 				msgs = appendText(msgs, llm.RoleAssistant, it.Text)
-			}
-		case protocol.ItemToolCall:
-			if it.Tool != nil {
-				note := fmt.Sprintf("[earlier tool call %s: %s]", it.Tool.Name, it.Status)
-				msgs = appendText(msgs, llm.RoleAssistant, note)
-			}
-		case protocol.ItemFileChange:
-			if it.Text != "" {
-				msgs = appendText(msgs, llm.RoleAssistant, "["+it.Text+"]")
+			} else if it.Text != "" && it.Status == protocol.ItemFailed {
+				var data struct {
+					Interrupted bool `json:"interrupted"`
+				}
+				if json.Unmarshal(it.Data, &data) == nil && data.Interrupted {
+					msgs = appendText(msgs, llm.RoleAssistant, "[Interrupted partial model output; not evidence of execution.]\n"+it.Text)
+				}
 			}
 		case protocol.ItemContextCompaction:
-			msgs = []llm.Message{llm.Text(llm.RoleUser, "Earlier conversation summary (the full transcript remains visible in UMCode):\n"+it.Text)}
+			var checkpoint struct {
+				WorkingMessages []llm.Message `json:"workingMessages"`
+			}
+			if json.Unmarshal(it.Data, &checkpoint) == nil && len(checkpoint.WorkingMessages) > 0 {
+				msgs = checkpoint.WorkingMessages
+			} else {
+				msgs = []llm.Message{llm.Text(llm.RoleUser, "Earlier conversation summary (the full transcript remains visible in UMCode):\n"+it.Text)}
+			}
 		}
 	}
 	// Providers need the history to start with a user message.

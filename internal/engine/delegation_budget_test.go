@@ -24,6 +24,9 @@ type budgetProvider struct {
 func (*budgetProvider) ID() string                                                   { return "claude" }
 func (*budgetProvider) ListModels(context.Context, llm.Credential) ([]string, error) { return nil, nil }
 func (p *budgetProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.requests = append(p.requests, req)
 	p.budgets = append(p.budgets, delegation.BudgetFromContext(ctx))
 	if p.err != nil {
@@ -77,7 +80,7 @@ func TestDelegationBudgetProviderAttempts(t *testing.T) {
 			budget := newTurnBudget(protocol.ExecutionLimits{MaxTokens: 1000, MaxCostUSD: 1, MaxDurationMinutes: 5})
 			budget.shared = shared
 			_, _ = e.streamOnce(t.Context(), t.Context(), tr, res, res.cred, p, llm.Request{MaxTokens: 500}, "chat", budget)
-			if len(p.requests) != 1 || p.requests[0].MaxTokens != 100 {
+			if len(p.requests) != 1 || p.requests[0].MaxTokens != 84 {
 				t.Fatalf("response not capped to remaining task tokens: %+v", p.requests)
 			}
 			got := shared.Usage()
@@ -116,7 +119,7 @@ func TestDelegationBudgetCostCapAndAdmissionFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	res.meta = models.Meta{In: 1_000_000, Out: 1_000_000}
-	shared := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100, MaxCostUSD: 5}, protocol.UsageTotals{}, nil)
+	shared := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100, MaxCostUSD: 21}, protocol.UsageTotals{}, nil)
 	b := newTurnBudget(protocol.ExecutionLimits{MaxDurationMinutes: 5})
 	b.shared = shared
 	p := &budgetProvider{err: errors.New("refused")}
@@ -296,7 +299,7 @@ func TestDelegationBudgetSettlesEveryFailoverAttempt(t *testing.T) {
 			if len(p.requests) != tt.attempts || shared.Usage().Requests != int64(tt.attempts) {
 				t.Fatalf("attempt settlement: requests=%d usage=%+v err=%v", len(p.requests), shared.Usage(), err)
 			}
-			if tt.attempts == 2 && p.requests[1].MaxTokens != 70 {
+			if tt.attempts == 2 && p.requests[1].MaxTokens != 54 {
 				t.Fatalf("retry reused initial reservation: %+v", p.requests)
 			}
 			wantIn, wantOut := int64(10), int64(20)
@@ -316,7 +319,10 @@ func (*waitingDelegationProvider) ID() string { return "claude" }
 func (*waitingDelegationProvider) ListModels(context.Context, llm.Credential) ([]string, error) {
 	return nil, nil
 }
-func (p *waitingDelegationProvider) Stream(ctx context.Context, _ llm.Credential, _ llm.Request) (<-chan llm.Event, error) {
+func (p *waitingDelegationProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	p.started <- ctx
 	ch := make(chan llm.Event)
 	go func() { <-ctx.Done(); close(ch) }()
@@ -413,7 +419,7 @@ func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing
 		exhausted            bool
 	}{
 		{name: "within allowance", limit: 100_000, input: 10, output: 20},
-		{name: "actual overrun", limit: 3000, input: 100, output: 4096, exhausted: true},
+		{name: "actual overrun", limit: 20000, input: 100, output: 30000, exhausted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, th, _, _ := delegationFixture(t)
@@ -478,4 +484,12 @@ func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing
 			}
 		})
 	}
+}
+
+func (*budgetProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}
+
+func (*waitingDelegationProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
 }

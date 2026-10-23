@@ -47,33 +47,36 @@ import (
 
 // Engine is the UMCode core.
 type Engine struct {
-	evaluationPolicy *optimization.Policy
-	selectionHook    func() // instance-local failure seam, set before use
-	discoveryHook    func()
-	Cfg              *config.Config
-	Store            *store.Store
-	LLMs             *llm.Registry
-	Catalog          *models.Catalog
-	Creds            *credentials.Service
-	Secrets          secrets.Store
-	Tools            *tools.Registry
-	Skills           *skills.Registry
-	MCP              *mcp.Manager
-	Plugins          *plugins.Manager
-	Installer        *plugins.Installer
-	Hooks            *hooks.Runner
-	Projects         *projects.Service
-	Router           *router.Router
-	Tasks            *tasks.Service
-	Worktrees        *worktree.Manager
-	Previews         *preview.Manager
-	VisualQA         *visualqa.Manager
-	ComputerUse      *computeruse.Manager
-	Exec             *tools.ExecManager
-	Bus              *Bus
-	Log              *slog.Logger
-	Work             *work.Service
-	Memory           *memory.Service
+	requestCalibration map[capacityKey]float64
+	capacityMu         sync.Mutex
+	capacityCache      map[capacityKey]capacityCacheEntry
+	evaluationPolicy   *optimization.Policy
+	selectionHook      func() // instance-local failure seam, set before use
+	discoveryHook      func()
+	Cfg                *config.Config
+	Store              *store.Store
+	LLMs               *llm.Registry
+	Catalog            *models.Catalog
+	Creds              *credentials.Service
+	Secrets            secrets.Store
+	Tools              *tools.Registry
+	Skills             *skills.Registry
+	MCP                *mcp.Manager
+	Plugins            *plugins.Manager
+	Installer          *plugins.Installer
+	Hooks              *hooks.Runner
+	Projects           *projects.Service
+	Router             *router.Router
+	Tasks              *tasks.Service
+	Worktrees          *worktree.Manager
+	Previews           *preview.Manager
+	VisualQA           *visualqa.Manager
+	ComputerUse        *computeruse.Manager
+	Exec               *tools.ExecManager
+	Bus                *Bus
+	Log                *slog.Logger
+	Work               *work.Service
+	Memory             *memory.Service
 
 	gate      *policy.Gate
 	started   time.Time
@@ -219,10 +222,15 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		e.Bus.PublishAdmin(protocol.NotifyTaskUpdated, protocol.TaskEvent{Task: t})
 	})
 	e.Tasks.Register(reg)
+	reg.Add(&taskProposalTool{engine: e})
+	reg.Add(&taskContextTool{engine: e})
 	if err := e.loadComplexity(ctx); err != nil {
 		return nil, err
 	}
 	if err := e.loadRouting(ctx); err != nil {
+		return nil, err
+	}
+	if err := o.Store.ReconcileCompactions(ctx); err != nil {
 		return nil, err
 	}
 	if err := o.Store.ReconcileAgentChildren(ctx); err != nil {
@@ -376,7 +384,28 @@ func (e *Engine) ReadThread(ctx context.Context, id string) (protocol.ThreadRead
 	if err != nil {
 		return protocol.ThreadReadResult{}, err
 	}
-	return protocol.ThreadReadResult{Thread: t, Turns: turns, Items: items}, nil
+	compaction, err := e.Store.LatestCompactionState(ctx, id)
+	if err != nil {
+		return protocol.ThreadReadResult{}, err
+	}
+	if compaction != nil && !compaction.Terminal() {
+		active := false
+		for _, turn := range turns {
+			if turn.ID == compaction.TurnID && turn.Status == protocol.TurnRunning {
+				active = true
+			}
+		}
+		if !active {
+			compaction.Sequence++
+			compaction.Status = "interrupted"
+			compaction.Error = "Automatic compaction was interrupted."
+			compaction.UpdatedAt = time.Now().UTC()
+			if err = e.Store.SaveCompactionState(ctx, *compaction); err != nil {
+				return protocol.ThreadReadResult{}, err
+			}
+		}
+	}
+	return protocol.ThreadReadResult{Thread: t, Turns: turns, Items: items, Compaction: compaction}, nil
 }
 
 func (e *Engine) resolveLegacyWorkspaceMode(ctx context.Context, th protocol.Thread) (protocol.Thread, error) {
@@ -958,7 +987,7 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 	if x := childExecutionFrom(ctx); x != nil {
 		review := ""
 		if x.child.Role == protocol.AgentRoleReviewer {
-			review = " Submit agent.review_report with your explicit verdict, findings, and exact revision " + x.workspace.Revision + ". An approved summary is not a review report. "
+			review = " You may submit agent.review_report for a structured review with findings and exact revision " + x.workspace.Revision + ". Clearly attribute your review conclusions. "
 		}
 		return []promptLayer{{Name: layerCore, Text: review + "You are a scoped UMCode child agent. Complete only the supplied assignment and acceptance criteria. The supplied guidance and references are your context. Read applicable nested UMCODE.md and explicitly requested skills through scoped read tools. No delegation or activation is permitted. Report the result, changed paths, findings and actual verification evidence; never claim blocked checks passed. Reviewer command, script, hook and plugin execution is blocked because a read-only command sandbox is unavailable. All file access is confined to the owned checkout: " + x.workspace.Root}}
 	}
@@ -986,9 +1015,9 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 	flush(layerClock)
 	if e.optimizationPolicy(ctx).DesignedWorkflow {
 		if e.optimizationPolicy(ctx).AutomaticWorkflow {
-			b.WriteString("\nAutomatic workflow: maintain compact internal plans, decisions, tasks and verification evidence through work.update. Resolve proposed decisions autonomously using revision-checked transitions; these are agent decisions, never user approval. Do not ask for optimization activation, planning or design approval merely because workflow classification escalates. Preserve explicit user review requirements and the chat's normal action permissions. For simple tasks keep this lightweight. Missing evidence or runnable tasks must be repaired internally before implementation; do not claim unperformed checks passed.\n")
+			b.WriteString("\nAutomatic workflow: maintain compact internal plans, decisions, tasks and verification evidence through work.update. Resolve proposed decisions autonomously using revision-checked transitions; these are agent decisions, never user approval. Do not ask for optimization activation, planning or design approval merely because workflow classification escalates. Preserve explicit user review requirements and the chat's normal action permissions. For simple tasks keep this lightweight. Planning depth and graph readiness are advisory. Missing planning metadata alone must not block an otherwise permitted action. The engine enforces explicit task requirements and action permissions; never manufacture approval or claim unperformed checks passed.\n")
 		} else {
-			b.WriteString("\nWorkflow: Direct work should call work.update only when semantic structure or classification changes. Before Guided or Designed implementation, call verification.plan to establish applicable criteria, inspect with discovery tools for supporting evidence, then record the first sufficient solution rung, linked criteria and evidence, the current task, and blocking unknowns. Use the canonical identity context for work/node revisions and evidence IDs. Without a project, the planned approval criterion verifies only human acceptance of its linked decision, not execution or unrelated outcomes. Keep updates compact; the engine derives readiness and enforces gates.\n")
+			b.WriteString("\nWorkflow: Direct work should call work.update only when semantic structure or classification changes. For Guided or Designed work, use verification.plan and discovery tools when useful to establish criteria and supporting evidence, and record the first sufficient solution rung, linked criteria and evidence, the current task, and blocking unknowns. Planning classification and readiness are advisory, not permission requirements. Use the canonical identity context for work/node revisions and evidence IDs. Without a project, the planned approval criterion verifies only human acceptance of its linked decision, not execution or unrelated outcomes. Keep updates compact; the engine derives readiness for planning and enforces gates only for explicit task requirements and current action permissions. Do not invent a user requirement from a model suggestion; task.propose interpretations require engine-mediated confirmation.\n")
 		}
 		flush(layerWorkflow)
 	}

@@ -68,7 +68,7 @@ func (e *Engine) compile(ctx context.Context, th protocol.Thread, turnID string,
 	// write-back: running git for every model call would cost a turn latency.
 	in := ctxcompiler.Input{Detail: d, Stale: work.Staleness(d, ""),
 		DesignedWorkflow: e.optimizationPolicy(ctx).DesignedWorkflow,
-		Active:           work.ActiveEvidence(d), Items: items, TurnID: turnID, Window: window, HistoryTokens: historyTokens}
+		Active:           work.ActiveEvidence(d), Items: historicalEvidenceItems(items, turnID), TurnID: turnID, Window: window, HistoryTokens: historyTokens}
 	if e.optimizationPolicy(ctx).ContextRetrieval {
 		scope := retrieval.Scope{ThreadID: th.ID, WorkID: d.Work.ID, ProjectID: th.ProjectID, TurnID: turnID}
 		candidates, report, retrievalErr := e.retrieve(ctx, scope, d, request, root, items, turnID)

@@ -238,6 +238,18 @@ export interface ToolCallData {
   risk?: string;
 }
 
+export interface ActionFailure {
+  authoritySource?: string;
+  category: string;
+  operationId?: string;
+  blockerId?: string;
+  message: string;
+  retryable: boolean;
+  advisory?: boolean;
+  nextStep?: string;
+  state?: unknown;
+}
+
 export interface Item {
   id: string;
   threadId: string;
@@ -258,6 +270,7 @@ export interface Attachment {
 }
 
 export interface Approval {
+  kind?: string;
   agentTaskId?: string;
   agentChildId?: string;
   id: string;
@@ -593,4 +606,25 @@ export interface TurnStartParams {
   override?: ModelSelection;
   delegationActivationToken?: string;
   delegationTaskId?: string;
+}
+
+// Engine-owned execution outcome. Model prose does not create this metadata.
+export interface TaskExecutionOutcome {
+  status: 'satisfied' | 'not_executed' | 'unverified' | 'blocked' | 'clarify';
+  expectationIds?: string[];
+  evidenceIds?: string[];
+  denialIds?: string[];
+}
+
+export interface ModelCapacityProfile {
+ provider: string; endpointId: string; model: string; backend: 'generic' | 'ollama';
+ contextWindow?: number; maxOutputTokens?: number; responseReserveTokens?: number;
+}
+export interface ModelCapacityResult {
+ profile: ModelCapacityProfile; effectiveContextWindow?: number; source: string; observedAt?: string;
+}
+
+export interface CompactionState {
+ id:string;threadId:string;turnId:string;sequence:number;
+ status:string;startedAt:string;updatedAt:string;error?:string;
 }

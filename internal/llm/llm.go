@@ -110,6 +110,12 @@ type Request struct {
 	ReasoningStyle string
 }
 
+// RequestTokenCounter is an optional exact serving-tokenizer capability.
+// Token counting is metadata work, not a second generation request.
+type RequestTokenCounter interface {
+	CountRequestTokens(context.Context, Credential, Request) (int, error)
+}
+
 // Usage is token usage reported by a provider for one request.
 type Usage struct {
 	InputTokens       int64 // all prompt tokens, including cached

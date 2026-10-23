@@ -31,7 +31,10 @@ func (*delegationProvider) ID() string { return "claude" }
 func (*delegationProvider) ListModels(context.Context, llm.Credential) ([]string, error) {
 	return []string{"deterministic"}, nil
 }
-func (p *delegationProvider) Stream(ctx context.Context, _ llm.Credential, _ llm.Request) (<-chan llm.Event, error) {
+func (p *delegationProvider) Stream(ctx context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	task, ok := DelegationTaskFromContext(ctx)
 	id := ""
 	if ok {
@@ -678,4 +681,8 @@ func TestDelegationWorkspaceDefaultRunner(t *testing.T) {
 	if _, err = e.Store.GetThread(t.Context(), execution.ThreadID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("owned execution not hidden: %v", err)
 	}
+}
+
+func (*delegationProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
 }

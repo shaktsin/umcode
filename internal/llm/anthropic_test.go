@@ -50,3 +50,16 @@ func TestAnthropicPreservesEmptySignedThinking(t *testing.T) {
 		t.Fatalf("signature lost: %s", body)
 	}
 }
+
+func TestAnthropicNeverExpandsExplicitOutputCap(t *testing.T) {
+	for _, limit := range []int{512, 1024, 2048, 4096, 8192} {
+		req := Request{Model: "bounded", MaxTokens: limit, Reasoning: ReasoningMedium, ReasoningStyle: "budget"}
+		wire := buildAnthropicRequest(req)
+		if wire.MaxTokens != limit {
+			t.Fatalf("reserved %d, wire sends %d", limit, wire.MaxTokens)
+		}
+		if wire.Thinking != nil && (wire.Thinking.BudgetTokens < 1024 || wire.Thinking.BudgetTokens >= limit) {
+			t.Fatal("invalid bounded thinking", wire.Thinking)
+		}
+	}
+}

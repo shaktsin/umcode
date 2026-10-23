@@ -72,7 +72,7 @@ func TestEvaluationBundleMatrix(t *testing.T) {
 		}
 		arm, _ := m.Arm(r.Unit.ArmID)
 		want, _ := evaluation.EffectivePolicy(arm)
-		if len(r.Policies) != 1 || r.Policies[0] != want || len(r.Attempts) != 2 {
+		if len(r.Policies) != 1 || r.Policies[0] != want || len(r.Attempts) != 3 {
 			t.Fatalf("policy/accounting %s %+v", arm.ID, r)
 		}
 	}
