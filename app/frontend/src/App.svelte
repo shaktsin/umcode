@@ -19,6 +19,7 @@
   import { app } from '$lib/stores/app.svelte';
   import { chat } from '$lib/stores/chat.svelte';
   import { inspector } from '$lib/stores/inspector.svelte';
+  import { shouldRedirectToProviders } from '$lib/firstRun';
 
   // Column widths are per project, and only a convenience, so a browser that
   // refuses storage simply gets the defaults.
@@ -33,6 +34,12 @@
   const layout = $derived(resolveShellLayout({width:viewportWidth,height:viewportHeight,railCollapsedPreference,sideRequested:chat.sides.length>0,inspectorRequested:inspector.open,sidePreferredWidth:sideWidth,inspectorPreferredWidth:inspectorWidth,activeAuxiliary}));
   $effect(() => { void chat.activeSideId; if(chat.activeSideId) activeAuxiliary='side'; });
   $effect(() => { void inspector.revealVersion; void inspector.activeId; if(inspector.activeId) activeAuxiliary='inspector'; });
+  let firstRunHandled = false;
+  $effect(() => {
+    if (!app.catalogReady || firstRunHandled) return;
+    firstRunHandled = true;
+    if (shouldRedirectToProviders({ conn: app.conn, catalogReady: app.catalogReady, hasEnabledCredential: app.hasEnabledCredential })) app.view = 'settings';
+  });
   $effect(() => { try { localStorage.setItem('umcode.railCollapsed',railCollapsedPreference?'1':'0'); } catch { /* optional */ } });
   function showPanel(panel:Auxiliary) { activeAuxiliary=panel; void tick().then(()=>document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus()); }
 

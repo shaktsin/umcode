@@ -13,11 +13,16 @@ umcode engine &                            # against that home
 #   label them "primary" and "backup", and add a project
 UMCODE_ENGINE_WS_PORT=<port> npm run dev & # the UI, pointed at that engine
 
+node e2e/first-run.mjs   # needs an engine home with NO credentials: welcome strip, Providers tiles, connect prompt in the composer
 node e2e/chat.mjs        # project edits, diffs, side chats, approvals, undo
 node e2e/routing.mjs     # the route chip, failover across keys and models
 node e2e/pools.mjs       # configuring models and pools, then routing through one
 SCHEME=light node e2e/chat.mjs   # the same again in the light theme
 ```
+
+`first-run.mjs` connects a key, so run it against a throwaway home before the
+keys are added for the other scripts (it adds an `openai_compatible` key
+pointing at `http://127.0.0.1:18997/v1`, which is what the others expect too).
 
 The fake provider rate-limits the key labelled `primary`, and rate-limits every
 key for `local-llama` when the message contains "drop down", which is how the

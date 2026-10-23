@@ -12,7 +12,7 @@
   import ChatError from './ChatError.svelte';
   import { taskFailurePresentation, executionOutcomePresentation, isProvisionalExecution } from '$lib/taskOutcome';
   import ToolCall from './ToolCall.svelte';
-  import ApprovalCard from './ApprovalCard.svelte';
+  import { recordLine, recordsFor } from '$lib/approvalDock';
   import ComputerUseView from './ComputerUseView.svelte';
   import Composer from './Composer.svelte';
   import Agents from './Agents.svelte';
@@ -68,14 +68,6 @@
       document.getElementById(`item-${id}`)?.scrollIntoView({ block: 'center' });
       stick = false;
       setTimeout(() => (view.highlightItem = null), 2500);
-    });
-  });
-
-  $effect(() => {
-    const pending = app.approvals.find((approval) => approval.threadId === view.id);
-    if (!pending || view.loading) return;
-    tick().then(() => {
-      document.getElementById(`approval-${pending.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
   });
 
@@ -172,7 +164,7 @@
   }
 
   function currentActivity(g: Group): string {
-    if (app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId)) return 'Waiting for your approval';
+    if (app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId)) return 'Waiting for your approval';
     const active = [...g.items].reverse().find((i) => i.kind === 'toolCall' && i.status === 'inProgress');
     return active ? actionLabel(active) : 'Working through the request';
   }
@@ -223,19 +215,6 @@
   async function openProject() {
     await createProject();
   }
-
-  const approvalLabel: Record<string, string> = {
-    '': 'Ask every time',
-    normal: 'Ask every time',
-    auto_workspace: 'Auto-approve workspace',
-    auto_all: 'Auto-approve all',
-  };
-
-  async function setApprovalMode(e: Event) {
-    if (!view.id) return;
-    const mode = (e.currentTarget as HTMLSelectElement).value as 'normal' | 'auto_workspace' | 'auto_all';
-    await app.try('thread/setApprovalMode', { threadId: view.id, mode });
-  }
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col">
@@ -253,18 +232,6 @@
             <span class="shrink-0">compute {threadProject.tools.compute ? 'on' : 'off'}</span>
           {:else}
             <span>No project</span><span>read-only workspace</span>
-          {/if}
-          {#if view.thread}
-            <select
-              class="shrink-0 bg-transparent border border-line rounded px-1 py-0.5 text-[10px] text-muted hover:text-ink-soft"
-              title="Approval and auto-approve behavior for this chat"
-              value={view.thread.approvalMode || 'normal'}
-              onchange={setApprovalMode}
-            >
-              <option value="normal">{approvalLabel.normal}</option>
-              <option value="auto_workspace">{approvalLabel.auto_workspace}</option>
-              <option value="auto_all">{approvalLabel.auto_all}</option>
-            </select>
           {/if}
         </div>
       </div>
@@ -347,15 +314,10 @@
             {:else if executionOutcome.show}
               <p class="text-xs text-muted" role="status">{executionOutcome.text}</p>
             {/if}
-            {#each app.approvals.filter((approval) => approval.threadId === view.id && approval.turnId === g.turnId) as approval (approval.id)}
-              <section id={`approval-${approval.id}`} class="rounded-xl border border-amber-warm/40 bg-clay-soft/20 p-3 shadow-sm" aria-live="assertive">
-                <div class="flex items-center gap-2 mb-2">
-                  <ShieldCheck class="w-4 h-4 text-amber-warm" />
-                  <h3 class="text-sm font-semibold text-ink">Waiting for your approval</h3>
-                  <span class="ml-auto text-[10px] uppercase tracking-wide text-amber-warm">{approval.risk} risk</span>
-                </div>
-                <ApprovalCard {approval} chatContext />
-              </section>
+            {#each recordsFor(app.approvalRecords, view.id ?? '', g.turnId) as record (record.id)}
+              <div class="flex items-center gap-2 text-xs {record.decision === 'denied' ? 'text-rust' : 'text-sage'}">
+                <span aria-hidden="true">{record.decision === 'denied' ? '✕' : '✓'}</span><span>{recordLine(record)}</span>
+              </div>
             {/each}
             {#if g.turn?.status === 'running'}
               <div class="flex items-center gap-2 text-xs text-muted" aria-live="polite">
