@@ -10,6 +10,10 @@
   let open = $state(false);
   let trigger: HTMLButtonElement | undefined = $state();
 
+  export function focus() {
+    trigger?.focus();
+  }
+
   function choose(id: string) {
     open = false;
     onselect(id);

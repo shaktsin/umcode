@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Approval } from '$lib/types';
 import { buildRecord, dockState, recordLine, recordsFor, type ApprovalRecord } from './approvalDock';
 
@@ -46,4 +46,14 @@ it('filters records by thread and turn keeping order', () => {
   const mk = (id: string, threadId: string, turnId: string): ApprovalRecord => ({ id, threadId, turnId, summary: id, decision: 'approved' });
   const out = recordsFor([mk('1', 't1', 'u1'), mk('2', 't2', 'u1'), mk('3', 't1', 'u2'), mk('4', 't1', 'u1')], 't1', 'u1');
   expect(out.map((r) => r.id)).toEqual(['1', '4']);
+});
+
+import { dockFocusTarget } from './approvalDock';
+describe('dockFocusTarget', () => {
+  const p = { viewId: 't1', dockId: 'a1' };
+  it('moves into the dock for the next approval', () => expect(dockFocusTarget(p, { viewId: 't1', dockId: 'a2' }, true)).toBe('dock'));
+  it('returns to the input when the dock closes', () => expect(dockFocusTarget(p, { viewId: 't1', dockId: null }, true)).toBe('input'));
+  it('never moves focus on a thread switch', () => expect(dockFocusTarget(p, { viewId: 't2', dockId: null }, true)).toBeNull());
+  it('does not steal focus from elsewhere', () => expect(dockFocusTarget(p, { viewId: 't1', dockId: null }, false)).toBeNull());
+  it('ignores a dock that just opened', () => expect(dockFocusTarget({ viewId: 't1', dockId: null }, p, true)).toBeNull());
 });

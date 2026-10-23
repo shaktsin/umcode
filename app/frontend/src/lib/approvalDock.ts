@@ -37,3 +37,15 @@ export function recordLine(record: ApprovalRecord): string {
 export function recordsFor(records: ApprovalRecord[], threadId: string, turnId: string): ApprovalRecord[] {
   return records.filter((r) => r.threadId === threadId && r.turnId === turnId);
 }
+
+/** Where focus should go when the dock's current approval changes; null leaves focus alone. */
+export function dockFocusTarget(
+  prev: { viewId: string | null; dockId: string | null },
+  next: { viewId: string | null; dockId: string | null },
+  focusFree: boolean,
+): 'dock' | 'input' | null {
+  if (prev.viewId !== next.viewId || !focusFree) return null;
+  if (next.dockId && prev.dockId && next.dockId !== prev.dockId) return 'dock';
+  if (!next.dockId && prev.dockId) return 'input';
+  return null;
+}

@@ -10,7 +10,7 @@
   import ApprovalModePill from './ApprovalModePill.svelte';
   import AgentsMenu from './AgentsMenu.svelte';
   import ApprovalDock from './ApprovalDock.svelte';
-  import { dockState } from '$lib/approvalDock';
+  import { dockFocusTarget, dockState } from '$lib/approvalDock';
   import type { Attachment, SkillInfo } from '$lib/types';
   import { errMsg } from '$lib/format';
   import { composerPlaceholder } from '$lib/firstRun';
@@ -34,13 +34,16 @@
 
   const MAX_FILE = 15 * 1024 * 1024;
   let dockHost: HTMLDivElement | undefined = $state();
-  let lastDockId: string | null = null;
+  let lastDock = { viewId: null as string | null, dockId: null as string | null };
   $effect(() => {
-    const id = dockState(app.approvals, view.id).current?.id ?? null;
-    const prev = lastDockId;
-    lastDockId = id;
-    if (id && prev && id !== prev) void tick().then(() => dockHost?.querySelector<HTMLElement>('[data-approval-dock] button')?.focus());
-    else if (!id && prev) void tick().then(() => input?.focus());
+    const next = { viewId: view.id, dockId: dockState(app.approvals, view.id).current?.id ?? null };
+    const prev = lastDock;
+    lastDock = next;
+    const active = document.activeElement;
+    const focusFree = !active || active === document.body || Boolean(dockHost?.contains(active));
+    const target = dockFocusTarget(prev, next, focusFree);
+    if (target === 'dock') void tick().then(() => dockHost?.querySelector<HTMLElement>('[data-approval-dock] button')?.focus());
+    else if (target === 'input') void tick().then(() => input?.focus());
   });
   const docked = $derived(Boolean(dockState(app.approvals, view.id).current));
   const busy = $derived(view.sending || !!view.running);
