@@ -239,6 +239,9 @@
 }
 .icon-button:hover { color: var(--color-ink); background: var(--color-raised); }
 .icon-button:active { transform: scale(.96); }
+.icon-button.send-button { background: var(--color-clay); color: #fff; }
+.icon-button.send-button:hover:not(:disabled) { background: var(--color-clay); color: #fff; filter: brightness(1.1); }
+.icon-button.send-button:disabled { background: var(--color-raised); color: var(--color-muted); cursor: not-allowed; }
 .new-chat-button {
   width: 100%;
   height: 34px;
@@ -427,12 +430,16 @@ html, body, #app { overflow: hidden; }
 
 .auxiliary-panel[hidden] { display: none; }
 
-.composer-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; padding: 8px 12px 12px; }
-.composer-toolbar > .model-picker-controls { flex: 1; min-width: 0; }
-.model-picker-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; }
+.composer-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 6px; padding: 8px 12px 12px; }
+.composer-toolbar > .model-picker-controls { flex: 0 1 auto; min-width: 0; }
+.model-picker-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 100%; }
 .composer-toolbar .select { height: var(--ui-compact); }
-.complexity-control { height: var(--ui-compact); flex: none; }
-.complexity-control button { font-size: 13px; line-height: 20px; min-width: 28px; }
+.pill-button { display: inline-flex; align-items: center; gap: 6px; height: var(--ui-compact); padding-inline: 9px; border: 1px solid var(--color-line-strong); border-radius: var(--ui-control-radius); background: var(--color-paper); color: var(--color-ink-soft); font-size: 12px; line-height: 16px; white-space: nowrap; }
+.pill-button:hover:not(:disabled) { background: var(--color-raised); }
+.pill-button:disabled { opacity: .5; }
+.pill-button[aria-expanded="true"] { border-color: var(--color-accent); }
+.pill-button.icon-only { width: 32px; justify-content: center; padding-inline: 0; }
 .composer-input { max-height: min(240px, 30dvh); overflow-y: auto; }
 .composer-error { font-size: 12px; line-height: 16px; color: var(--color-rust); max-width: 160px; }
 [data-composer] { border-radius: var(--ui-composer-radius); }
+[data-composer].composer-docked { border-top-left-radius: 0; border-top-right-radius: 0; border-top-color: color-mix(in srgb, var(--color-amber-warm) 50%, transparent); }

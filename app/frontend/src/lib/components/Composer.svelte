@@ -7,8 +7,13 @@
   import { projects } from '$lib/stores/projects.svelte';
   import PopupSurface from './PopupSurface.svelte';
   import ModelPicker from './ModelPicker.svelte';
+  import ApprovalModePill from './ApprovalModePill.svelte';
+  import AgentsMenu from './AgentsMenu.svelte';
+  import ApprovalDock from './ApprovalDock.svelte';
+  import { dockFocusTarget, dockState } from '$lib/approvalDock';
   import type { Attachment, SkillInfo } from '$lib/types';
   import { errMsg } from '$lib/format';
+  import { composerPlaceholder } from '$lib/firstRun';
   import { filterSkills, selectSkill, slashQuery } from '$lib/skillPicker';
 
   let { view, compact = false }: { view: ThreadView; compact?: boolean } = $props();
@@ -28,6 +33,19 @@
   let retry = $state(0);
 
   const MAX_FILE = 15 * 1024 * 1024;
+  let dockHost: HTMLDivElement | undefined = $state();
+  let lastDock = { viewId: null as string | null, dockId: null as string | null };
+  $effect(() => {
+    const next = { viewId: view.id, dockId: dockState(app.approvals, view.id).current?.id ?? null };
+    const prev = lastDock;
+    lastDock = next;
+    const active = document.activeElement;
+    const focusFree = !active || active === document.body || Boolean(dockHost?.contains(active));
+    const target = dockFocusTarget(prev, next, focusFree);
+    if (target === 'dock') void tick().then(() => dockHost?.querySelector<HTMLElement>('[data-approval-dock] button')?.focus());
+    else if (target === 'input') void tick().then(() => input?.focus());
+  });
+  const docked = $derived(Boolean(dockState(app.approvals, view.id).current));
   const busy = $derived(view.sending || !!view.running);
   const offline = $derived(app.conn !== 'open');
   const isMain = $derived(view === chat.main);
@@ -97,7 +115,7 @@
   });
 
   function submit() {
-    if (busy || offline || view.delegation.pending) return;
+    if (busy || offline || app.needsProvider || view.delegation.pending) return;
     const t = text;
     const a = files;
     if (!t.trim() && a.length === 0) return;
@@ -191,8 +209,11 @@
 </script>
 
 <div class="px-4 pb-4 pt-2 shrink-0">
+  <div bind:this={dockHost} class="{compact ? '' : 'max-w-3xl'} mx-auto">
+    <ApprovalDock approvals={app.approvals} threadId={view.id} />
+  </div>
   <div
-    class="relative {compact ? '' : 'max-w-3xl'} mx-auto bg-surface border border-line rounded-2xl focus-within:border-line-strong transition-colors"
+    class="relative {compact ? '' : 'max-w-3xl'} mx-auto {docked ? 'composer-docked' : ''} bg-surface border border-line rounded-2xl focus-within:border-line-strong transition-colors"
     role="region"
     aria-label="Message composer"
     ondragover={(e) => e.preventDefault()}
@@ -267,11 +288,11 @@
       aria-activedescendant={pickerOpen && matches[activeSkill] && !skillsLoading && !skillsError ? `${pickerId}-${activeSkill}` : undefined}
       onpaste={onPaste}
       rows="1"
-      placeholder={`${placeholder} · / for skills`}
+      placeholder={app.needsProvider ? composerPlaceholder(placeholder, true) : `${placeholder} · / for skills`}
       class="composer-input w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint"
       style="field-sizing: content; min-height: 2.75rem"
     ></textarea>
-    <DelegationActivation state={view.delegation} {busy} onenable={() => chat.enableDelegation(view)} />
+    <DelegationActivation state={view.delegation} />
     <div class="composer-toolbar">
       <button class="btn-ghost btn-sm" title="Attach files" aria-label="Attach files" onclick={() => fileInput?.click()}>
         <Paperclip class="w-4 h-4" />
@@ -287,6 +308,8 @@
         }}
       />
       <ModelPicker value={view.selection} onchange={(v) => view.setSelection(v)} compact={compact} />
+      <ApprovalModePill {view} />
+      <AgentsMenu state={view.delegation} {busy} onenable={() => chat.enableDelegation(view)} />
       {#if blockedReason}
         <span class="composer-error" role="status" title={blockedReason}>No model available</span>
       {/if}
@@ -302,10 +325,10 @@
           </button>
         {:else}
           <button
-            class="icon-button compact rounded-full bg-clay text-white hover:brightness-110 disabled:opacity-30"
+            class="icon-button compact send-button rounded-full"
             title="Send (Enter)"
             aria-label="Send"
-            disabled={offline || view.delegation.pending || (!text.trim() && files.length === 0)}
+            disabled={offline || app.needsProvider || view.delegation.pending || (!text.trim() && files.length === 0)}
             onclick={submit}
           >
             <ArrowUp class="w-4 h-4" />

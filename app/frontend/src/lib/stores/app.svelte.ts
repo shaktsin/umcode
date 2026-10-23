@@ -1,6 +1,7 @@
 import { RpcClient, PROTOCOL_VERSION, type ConnState } from '$lib/rpc';
 import { fetchConnection } from '$lib/connection';
 import { errMsg } from '$lib/format';
+import { buildRecord, type ApprovalRecord } from '$lib/approvalDock';
 import type {
   Approval, BudgetWarning, ComplexityDefaults, Credential, EngineStatus, Model, Provider, RoutingConfig,
 } from '$lib/types';
@@ -25,9 +26,12 @@ class AppState {
   status = $state<EngineStatus | null>(null);
   view = $state<View>('chat');
   approvals = $state<Approval[]>([]);
+  /** This session's answered approvals, shown as lines in the thread. Not restored after restart. */
+  approvalRecords = $state<ApprovalRecord[]>([]);
   providers = $state<Provider[]>([]);
   models = $state<Model[]>([]);
   credentials = $state<Credential[]>([]);
+  catalogReady = $state(false);
   complexity = $state<ComplexityDefaults | null>(null);
   /** The models the user has approved, and how they are pooled. */
   routing = $state<RoutingConfig>({ models: [], pools: [] });
@@ -155,11 +159,15 @@ class AppState {
     this.credentials = c.credentials ?? [];
     this.complexity = x;
     this.routing = r;
+    this.catalogReady = true;
   }
 
   async respondApproval(id: string, approve: boolean, remember = false) {
+    const approval = this.approvals.find((a) => a.id === id);
     const r = await this.try('approval/respond', { approvalId: id, approve, remember });
-    if (r !== undefined) this.approvals = this.approvals.filter((a) => a.id !== id);
+    if (r === undefined) return;
+    this.approvals = this.approvals.filter((a) => a.id !== id);
+    if (approval && !approval.agentChildId) this.approvalRecords = [...this.approvalRecords, buildRecord(approval, approve, remember)];
   }
 
   modelsFor(provider: string): Model[] {
@@ -168,6 +176,15 @@ class AppState {
 
   credentialsFor(provider: string): Credential[] {
     return this.credentials.filter((c) => c.provider === provider && c.enabled);
+  }
+
+  get hasEnabledCredential(): boolean {
+    return this.credentials.some((c) => c.enabled);
+  }
+
+  /** Connected and loaded, but no provider can answer yet. */
+  get needsProvider(): boolean {
+    return this.conn === 'open' && this.catalogReady && !this.hasEnabledCredential;
   }
 
   /** Providers that have at least one enabled key. */

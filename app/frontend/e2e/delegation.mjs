@@ -74,9 +74,10 @@ try {
     const shot = name => page.screenshot({ path: `${artifacts}/${name}-${theme}-${width}.png` });
     try {
       await page.goto(server.url + '?scenario=delegation');
-      const enable = page.getByRole('button', { name: 'Enable agents for next message', exact: true });
-      await enable.focus(); await page.keyboard.press('Enter');
-      await page.getByText('Agents enabled for the next message', { exact: true }).waitFor();
+      const more = page.getByRole('button', { name: 'More options', exact: true });
+      await more.focus(); await page.keyboard.press('Enter');
+      await page.getByRole('menuitem', { name: /Agents for next message/ }).click();
+      await page.getByTitle('Agents are on for the next message', { exact: true }).waitFor();
       assert.equal(await page.evaluate(() => window.uiTest.calls.filter(c => c.method === 'thread/start').length), 1);
       assert.equal(await page.evaluate(() => window.uiTest.calls.filter(c => c.method === 'turn/start').length), 0, 'enable never submits');
       const input = page.getByRole('textbox', { name: 'Message', exact: true }).first();
