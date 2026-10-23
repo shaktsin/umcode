@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { Check, ChevronDown, Layers3 } from '@lucide/svelte';
+  import { Check, ChevronDown, Layers3, Zap } from '@lucide/svelte';
   import PopupSurface from './PopupSurface.svelte';
+  import PillMenu from './PillMenu.svelte';
+  import { COMPLEXITY_LEVELS, complexityPillLabel, nextComplexity } from '$lib/complexityPill';
   import { app } from '$lib/stores/app.svelte';
   import { modelPickerOptions, poolModelIds } from '$lib/modelPickerOptions';
   import type { Complexity, ConfiguredModel, ModelPool, ModelSelection, RoutingConfig } from '$lib/types';
@@ -11,13 +13,6 @@
   let busy = $state(false);
   let selected = $state<string[]>([]);
 
-  const levels: { id: Complexity; label: string; hint: string }[] = [
-    { id: 'auto', label: 'Auto', hint: 'Pick per message' },
-    { id: 'quick', label: 'Quick', hint: 'Fast, little or no thinking' },
-    { id: 'standard', label: 'Standard', hint: 'Balanced' },
-    { id: 'deep', label: 'Deep', hint: 'More thinking for complex work' },
-  ];
-  const defaultComplexity = $derived(app.complexity?.default || 'auto');
   const providerNames: Record<string, string> = {
     claude: 'Anthropic API', openai: 'OpenAI API', gemini: 'Google Gemini', openai_compatible: 'OpenAI-compatible',
   };
@@ -51,10 +46,6 @@
     } else {
       selected = [];
     }
-  }
-
-  function setComplexity(c: Complexity) {
-    onchange({ ...value, complexity: c === value.complexity ? undefined : c });
   }
 
   function usePool(pool: ModelPool) {
@@ -163,13 +154,13 @@
     </PopupSurface>
   </div>
 
-  <div class="complexity-control inline-flex rounded-lg border border-line-strong overflow-hidden" role="group" aria-label="Complexity">
-    {#each levels as level}
-      {@const on = (value.complexity || '') === level.id}
-      {@const inherited = !value.complexity && defaultComplexity === level.id}
-      <button class="px-2 py-0 text-xs transition-colors {on ? 'bg-clay text-white' : inherited ? 'bg-raised text-ink' : 'text-muted hover:bg-raised'}" title={`${level.hint}${inherited ? ' (default)' : ''}`} aria-pressed={on} onclick={() => setComplexity(level.id)}>
-        {compact ? level.label[0] : level.label}
-      </button>
-    {/each}
-  </div>
+  <PillMenu
+    ariaLabel="Complexity"
+    title="Complexity"
+    label={complexityPillLabel(value.complexity, app.complexity?.default, compact)}
+    items={COMPLEXITY_LEVELS.map((level) => ({ id: level.id, label: level.label, hint: level.hint, checked: (value.complexity || '') === level.id }))}
+    onselect={(id) => onchange({ ...value, complexity: nextComplexity(value.complexity, id as Complexity) })}
+  >
+    {#snippet icon()}<Zap class="w-3.5 h-3.5 shrink-0" />{/snippet}
+  </PillMenu>
 </div>
