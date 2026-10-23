@@ -28,7 +28,6 @@
     if (!signin || r.sessionId !== signin.sessionId) return;
     signin = null;
     if (r.ok) {
-      openProvider = null;
       app.toast('info', 'Signed in with ChatGPT.');
       await refresh();
       if (r.credential) await test(r.credential);
@@ -70,7 +69,6 @@
       secret = '';
       label = '';
       baseUrl = '';
-      openProvider = null;
       await refresh();
       await test(c);
     } catch (e) {

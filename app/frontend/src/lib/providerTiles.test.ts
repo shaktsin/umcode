@@ -33,3 +33,11 @@ it('uses displayName and a generic subtitle for unknown providers', () => {
   const t = providerTiles([prov('foo', 'Foo AI')], []);
   expect(t[0]).toMatchObject({ id: 'foo', name: 'Foo AI', subtitle: 'API key', connected: false, isAdd: false });
 });
+
+it('adds a tile for credentials whose provider is not listed, before the add tile', () => {
+  const t = providerTiles([prov('claude'), prov('openai_compatible')], [cred('legacy'), cred('legacy'), cred('legacy', false)]);
+  expect(t.map((x) => x.id)).toEqual(['claude', 'legacy', 'openai_compatible']);
+  expect(t[1]).toMatchObject({ name: 'legacy', subtitle: '2 keys', connected: true, keyCount: 2, isAdd: false });
+  const off = providerTiles([], [cred('legacy', false)]).find((x) => x.id === 'legacy')!;
+  expect(off).toMatchObject({ connected: false, subtitle: 'API key' });
+});
