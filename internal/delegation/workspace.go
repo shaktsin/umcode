@@ -288,6 +288,9 @@ func (s *WorkspaceService) BindReviewer(ctx context.Context, taskID, reviewerID,
 }
 func (s *WorkspaceService) prepareReviewer(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild) (WorkspaceRef, error) {
 	id, rev, err := s.Store.AgentReviewerSource(ctx, t.ID, c.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return s.prepareStandaloneReviewer(ctx, t, c)
+	}
 	if err != nil {
 		return WorkspaceRef{}, fmt.Errorf("reviewer requires an explicit submitted revision binding: %w", err)
 	}
@@ -661,4 +664,40 @@ func (s *WorkspaceService) ValidateIntegrated(ctx context.Context, taskID, child
 		return errors.New("integration not applied")
 	}
 	return s.verifyApplied(ctx, t, w)
+}
+
+// A focused optional review snapshots the lead's current tree into a distinct
+// checkout. It grants neither mutation permission nor integration approval.
+func (s *WorkspaceService) prepareStandaloneReviewer(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild) (WorkspaceRef, error) {
+	id := "delegation-standalone-review-" + t.ID + "-" + c.ID
+	planned := s.Manager.Path(id)
+	if pathutil.Within(t.ParentRoot, planned) || pathutil.Within(planned, t.ParentRoot) || pathutil.Within(t.BaseRoot, planned) || pathutil.Within(planned, t.BaseRoot) {
+		return WorkspaceRef{}, errors.New("review checkout must be isolated from parent")
+	}
+	w, err := s.Store.AgentWorkspace(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		snapshot, err := s.Manager.Ensure(ctx, id, t.ParentRoot)
+		if err != nil {
+			return WorkspaceRef{}, err
+		}
+		w = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: c.ID, Kind: "reviewer", Root: snapshot.Path, ParentRoot: t.ParentRoot, BaseRevision: snapshot.BaselineCommit, ResultRevision: snapshot.BaselineCommit}
+		if err = s.Store.SaveAgentWorkspace(ctx, w); err != nil {
+			return WorkspaceRef{}, err
+		}
+	} else if err != nil {
+		return WorkspaceRef{}, err
+	}
+	if w.Cleaned || w.TaskID != t.ID || w.ChildID != c.ID || w.Root != planned {
+		return WorkspaceRef{}, errors.New("review snapshot ownership changed")
+	}
+	if err = validatePrivate(ctx, w.Root); err != nil {
+		return ref(w), err
+	}
+	if err = worktree.ValidateCommitted(ctx, w.Root, w.ResultRevision); err != nil {
+		return ref(w), err
+	}
+	if err = s.attach(ctx, t, c, w.ID); err != nil {
+		return ref(w), err
+	}
+	return ref(w), nil
 }

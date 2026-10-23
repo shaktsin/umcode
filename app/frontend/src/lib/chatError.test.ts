@@ -27,3 +27,9 @@ describe('chat error presentation', () => {
     expect(formatChatError('HTTP 429: {"error":{"type":"usage_limit_reached","resets_in_seconds":10,"resets_at":"bad"}}').resetAt).toBeUndefined();
   });
 });
+
+it('does not replace an unknown length cause with output-limit advice',()=>{
+ const raw='model response interrupted at a provider length limit; work is incomplete. The provider did not identify whether context or output capacity was exhausted.';
+ expect(formatChatError(raw).message).toBe(raw);
+ expect(formatChatError(raw).message).not.toContain('larger response');
+});

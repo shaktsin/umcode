@@ -39,6 +39,8 @@ const historyLimit = 60
 type resolved struct {
 	workingMessages       []llm.Message
 	contextReduced        bool
+	forceCompaction       bool
+	retryCause            string
 	approved              candidateSet
 	approvedCredentialID  string
 	approvedCredentialIDs []string
@@ -984,6 +986,7 @@ type modelOutput struct {
 // plan and says so, rather than failing the turn.
 func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *resolved,
 	req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
+	contextRetried := false
 	for {
 		if x := childExecutionFrom(ctx); x != nil {
 			if err := e.recordChildModel(sctx, x, res.sel); err != nil {
@@ -1022,6 +1025,17 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 		}
 		if ctx.Err() != nil {
 			return out, err
+		}
+		if confirmedContextOverflow(err) {
+			if contextRetried {
+				return out, err
+			}
+			contextRetried = true
+			e.invalidateCapacity(*res)
+			res.forceCompaction = true
+			res.retryCause = "context_exhausted"
+			req.Messages = prepared.Messages
+			continue
 		}
 		status := e.Router.Failed(sctx, res.route, err)
 		res.trail = append(res.trail, step(res.route, status, err.Error(), time.Since(start)))
@@ -1260,11 +1274,14 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 		it.Status = protocol.ItemCompleted
 		if failed {
 			it.Status = protocol.ItemFailed
+			if body != "" {
+				it.Data, _ = json.Marshal(map[string]any{"interrupted": true, "interruptionKind": classifyOutputInterruption(stopReason, llm.Usage{}, report, confirmedContextOverflow(streamErr))})
+			}
 		}
 		_ = e.saveAndPublish(sctx, *it, protocol.NotifyItemCompleted)
 	}
 	if streamErr == nil && done != nil && outputLimitStop(done.StopReason) {
-		streamErr = errModelOutputLimit
+		streamErr = &outputInterruptionError{Kind: classifyOutputInterruption(done.StopReason, done.Usage, report, false)}
 	}
 	failed := streamErr != nil || ctx.Err() != nil
 	finish(msgItem, out.text, failed)
@@ -1294,6 +1311,9 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 	}
 	if budget.shared != nil {
 		streamErr = errors.Join(streamErr, budget.shared.Err())
+	}
+	if streamErr != nil {
+		out.calls = nil
 	}
 	return out, streamErr
 }
@@ -2061,6 +2081,13 @@ func historyMessages(items []protocol.Item, currentTurn string, limit int) []llm
 		case protocol.ItemAgentMessage:
 			if it.Text != "" && it.Status == protocol.ItemCompleted {
 				msgs = appendText(msgs, llm.RoleAssistant, it.Text)
+			} else if it.Text != "" && it.Status == protocol.ItemFailed {
+				var data struct {
+					Interrupted bool `json:"interrupted"`
+				}
+				if json.Unmarshal(it.Data, &data) == nil && data.Interrupted {
+					msgs = appendText(msgs, llm.RoleAssistant, "[Interrupted partial model output; not evidence of execution.]\n"+it.Text)
+				}
 			}
 		case protocol.ItemContextCompaction:
 			var checkpoint struct {

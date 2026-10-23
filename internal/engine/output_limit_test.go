@@ -81,7 +81,7 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 			select {
 			case finished := <-wait:
 				if tc.failed {
-					if finished.Status != protocol.TurnFailed || !strings.Contains(finished.Error, "output limit") {
+					if finished.Status != protocol.TurnFailed || !strings.Contains(finished.Error, "work is incomplete") {
 						t.Fatalf("truncated turn incorrectly completed: %+v", finished)
 					}
 				} else if finished.Status != protocol.TurnCompleted {
@@ -147,7 +147,7 @@ func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T)
 	}
 	select {
 	case finished := <-wait:
-		if finished.Status != protocol.TurnFailed || !strings.Contains(finished.Error, "output limit") {
+		if finished.Status != protocol.TurnFailed || !strings.Contains(finished.Error, "work is incomplete") {
 			t.Fatalf("delegated truncation incorrectly completed/paused: %+v", finished)
 		}
 	case <-time.After(15 * time.Second):

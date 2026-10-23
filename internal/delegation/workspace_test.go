@@ -622,3 +622,23 @@ func TestWorkspaceReadSnapshotScope(t *testing.T) {
 		t.Fatal("cleaned snapshot substituted parent")
 	}
 }
+
+func TestStandaloneReviewerUsesIsolatedCurrentSnapshot(t *testing.T) {
+	service, st, task, _ := workspaceFixture(t)
+	workspaceWrite(t, task.ParentRoot, "tracked", "changed by lead\n")
+	child, err := st.CreateAgentChild(t.Context(), protocol.AgentChild{ID: "standalone-review", TaskID: task.ID, Role: protocol.AgentRoleReviewer, Assignment: protocol.AgentAssignment{Prompt: "Review the current change"}}, "review-call")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.Prepare(t.Context(), task, child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Root == task.ParentRoot {
+		t.Fatal("review shares mutable parent checkout")
+	}
+	data, err := os.ReadFile(filepath.Join(got.Root, "tracked"))
+	if err != nil || string(data) != "changed by lead\n" {
+		t.Fatal(string(data), err)
+	}
+}

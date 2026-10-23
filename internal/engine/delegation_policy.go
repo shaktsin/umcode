@@ -18,7 +18,7 @@ func childToolAllowed(ctx context.Context, name string) bool {
 	if x == nil {
 		return true
 	}
-	safe := []string{"file.read", "file.list", "file.search", "skill.get_instructions"}
+	safe := []string{"file.read", "file.list", "file.search", "skill.get_instructions", "task.context"}
 	if x.child.Role == "reviewer" {
 		safe = append(safe, "agent.review_report")
 	}

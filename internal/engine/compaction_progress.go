@@ -26,7 +26,7 @@ func (p *compactionProgress) save(ctx context.Context) error {
 	if err := p.engine.Store.SaveCompactionState(ctx, p.state); err != nil {
 		return err
 	}
-	p.engine.Bus.Publish(p.state.ThreadID, protocol.NotifyCompactionUpdated, p.state)
+	p.engine.publishTurnEvent(ctx, p.state.ThreadID, protocol.NotifyCompactionUpdated, p.state)
 	return nil
 }
 func (p *compactionProgress) phase(ctx context.Context, status string) error {

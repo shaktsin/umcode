@@ -987,7 +987,7 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 	if x := childExecutionFrom(ctx); x != nil {
 		review := ""
 		if x.child.Role == protocol.AgentRoleReviewer {
-			review = " Submit agent.review_report with your explicit verdict, findings, and exact revision " + x.workspace.Revision + ". An approved summary is not a review report. "
+			review = " You may submit agent.review_report for a structured review with findings and exact revision " + x.workspace.Revision + ". Clearly attribute your review conclusions. "
 		}
 		return []promptLayer{{Name: layerCore, Text: review + "You are a scoped UMCode child agent. Complete only the supplied assignment and acceptance criteria. The supplied guidance and references are your context. Read applicable nested UMCODE.md and explicitly requested skills through scoped read tools. No delegation or activation is permitted. Report the result, changed paths, findings and actual verification evidence; never claim blocked checks passed. Reviewer command, script, hook and plugin execution is blocked because a read-only command sandbox is unavailable. All file access is confined to the owned checkout: " + x.workspace.Root}}
 	}

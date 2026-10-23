@@ -48,6 +48,10 @@ func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Tu
 			}
 		}
 		prepared, report, fitErr := budgetCalibratedRequest(req, capacity, capacity.ResponseReserve, e.requestEstimatorFactor(*res), measured)
+		if res.forceCompaction && phase == "chat" && pass == 0 {
+			res.forceCompaction = false
+			fitErr = &requestCapacityError{Report: report, Reason: "capacity"}
+		}
 		if fitErr == nil {
 			report.Reductions = pass
 			if pass > 0 {

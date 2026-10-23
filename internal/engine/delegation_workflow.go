@@ -14,7 +14,7 @@ import (
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
-const delegationWorkflowPrompt = `Explicit delegated development is active. Use agent.spawn for one implementer with a bounded assignment and acceptance checks, then agent.wait. Spawn an independent reviewer after the implementer finishes; its exact source revision is bound by the engine. The reviewer must submit agent.review_report. For changes_requested, send corrections with agent.followup to the SAME implementer (maximum two correction rounds), wait, then spawn a fresh reviewer. Missing reports, failed workers, stale revisions and unresolved findings block integration. Use agent.integrate after approval; normal action approvals still apply. Run every returned check with verification.run, or browser.verify for browser checks, in this lead context. Worker tests and summaries cannot complete the task. Then call agent.complete. Report each check as passed, failed, blocked or not_run, and preserve cleanup warnings. Do not claim completion before agent.complete succeeds. Never push, merge, publish or release as part of this workflow.`
+const delegationWorkflowPrompt = `Delegation tools are available for scoped work when useful. You decide whether to use an implementer or an independent reviewer, what to check, and when the user's request is satisfied. Give each child focused requirements and relevant file/diff references; its context is fresh. Findings and check results are evidence for your judgment, not engine certification. Existing workspace isolation, permissions, cancellation and shared resource limits apply. Never claim a blocked check passed.`
 
 // Policy runs under the coordinator lifecycle lock: storage-only, never a
 // workspace call. Injected runners/resolvers retain the generic lifecycle seam.
@@ -54,11 +54,17 @@ func (e *Engine) delegationWorkflowPolicy(ctx context.Context, t protocol.AgentT
 		}
 		return nil
 	}
+	if role == protocol.AgentRoleReviewer && impl == nil {
+		return nil
+	}
 	if role != protocol.AgentRoleReviewer || impl == nil || impl.State != protocol.AgentStateCompleted || impl.Revision == "" {
 		return errors.New("review requires a completed submitted implementer revision")
 	}
 	return nil
 }
+
+var errNoImplementer = errors.New("implementer required")
+
 func (e *Engine) workflowImplementer(ctx context.Context, taskID string) (protocol.AgentChild, error) {
 	children, err := e.Store.AgentChildren(ctx, taskID)
 	if err != nil {
@@ -74,7 +80,7 @@ func (e *Engine) workflowImplementer(ctx context.Context, taskID string) (protoc
 		}
 	}
 	if impl.ID == "" {
-		return impl, errors.New("implementer required")
+		return impl, errNoImplementer
 	}
 	return impl, nil
 }
@@ -86,21 +92,25 @@ func (r workflowRunner) Run(ctx context.Context, t protocol.AgentTask, c protoco
 	_, managed := e.DelegationWorkspaces.(managedChildWorkspaces)
 	if managed && c.Role == protocol.AgentRoleReviewer {
 		impl, err := e.workflowImplementer(ctx, t.ID)
-		if err != nil {
+		if err != nil && !errors.Is(err, errNoImplementer) {
 			return protocol.AgentResult{}, err
 		}
-		if err = e.DelegationWorkspaceService.BindReviewer(ctx, t.ID, c.ID, impl.ID); err != nil {
-			return protocol.AgentResult{}, err
+		if err == nil {
+			if err = e.DelegationWorkspaceService.BindReviewer(ctx, t.ID, c.ID, impl.ID); err != nil {
+				return protocol.AgentResult{}, err
+			}
 		}
 	}
 	result, err := (childRunner{engine: e}).Run(ctx, t, c)
 	if managed && c.Role == protocol.AgentRoleReviewer {
 		report, reportErr := e.Store.AgentReviewReport(context.WithoutCancel(ctx), t.ID, c.ID)
-		if reportErr != nil {
-			return result, errors.Join(err, fmt.Errorf("reviewer did not submit a valid structured report: %w", reportErr))
+		if reportErr != nil && !errors.Is(reportErr, store.ErrNotFound) {
+			return result, errors.Join(err, reportErr)
 		}
-		result.Review = &report
-		result.Findings = report.Findings
+		if reportErr == nil {
+			result.Review = &report
+			result.Findings = report.Findings
+		}
 	}
 	return result, err
 }
