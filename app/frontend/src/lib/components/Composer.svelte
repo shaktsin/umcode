@@ -8,6 +8,7 @@
   import PopupSurface from './PopupSurface.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import ApprovalModePill from './ApprovalModePill.svelte';
+  import AgentsMenu from './AgentsMenu.svelte';
   import ApprovalDock from './ApprovalDock.svelte';
   import { dockState } from '$lib/approvalDock';
   import type { Attachment, SkillInfo } from '$lib/types';
@@ -279,7 +280,7 @@
       class="composer-input w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint"
       style="field-sizing: content; min-height: 2.75rem"
     ></textarea>
-    <DelegationActivation state={view.delegation} {busy} onenable={() => chat.enableDelegation(view)} />
+    <DelegationActivation state={view.delegation} />
     <div class="composer-toolbar">
       <button class="btn-ghost btn-sm" title="Attach files" aria-label="Attach files" onclick={() => fileInput?.click()}>
         <Paperclip class="w-4 h-4" />
@@ -296,6 +297,7 @@
       />
       <ModelPicker value={view.selection} onchange={(v) => view.setSelection(v)} compact={compact} />
       <ApprovalModePill {view} />
+      <AgentsMenu state={view.delegation} {busy} onenable={() => chat.enableDelegation(view)} />
       {#if blockedReason}
         <span class="composer-error" role="status" title={blockedReason}>No model available</span>
       {/if}
