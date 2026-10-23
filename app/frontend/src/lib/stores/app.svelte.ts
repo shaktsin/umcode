@@ -167,7 +167,7 @@ class AppState {
     const r = await this.try('approval/respond', { approvalId: id, approve, remember });
     if (r === undefined) return;
     this.approvals = this.approvals.filter((a) => a.id !== id);
-    if (approval) this.approvalRecords = [...this.approvalRecords, buildRecord(approval, approve, remember)];
+    if (approval && !approval.agentChildId) this.approvalRecords = [...this.approvalRecords, buildRecord(approval, approve, remember)];
   }
 
   modelsFor(provider: string): Model[] {

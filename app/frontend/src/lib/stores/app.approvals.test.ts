@@ -20,6 +20,14 @@ it('keeps the approval pending and writes no record when approval/respond fails'
   expect(app.approvalRecords).toEqual([]);
 });
 
+it('removes an agent-child approval without writing a record', async () => {
+  app.approvals = [{ ...seed, agentChildId: 'c1' }];
+  vi.spyOn(app, 'try').mockResolvedValue({});
+  await app.respondApproval('a1', true);
+  expect(app.approvals).toEqual([]);
+  expect(app.approvalRecords).toEqual([]);
+});
+
 it('removes the approval and records the decision on success', async () => {
   vi.spyOn(app, 'try').mockResolvedValue({});
   await app.respondApproval('a1', false);

@@ -44,7 +44,7 @@ await p.screenshot({ path: scheme + '-04-sidechat.png' });
 await step('approval offers to remember the decision', async () => {
   await p.getByPlaceholder(/Ask about demo/).fill('please run a command');
   await p.keyboard.press('Enter');
-  const dock = p.locator('#approval-dock');
+  const dock = p.locator('[data-approval-dock]');
   await dock.waitFor({ timeout: 15000 });
   const approve = dock.getByRole('button', { name: 'Allow once', exact: true });
   await approve.waitFor({ timeout: 5000 });
@@ -75,10 +75,10 @@ await step('undo turn puts the file back', async () => {
 });
 
 await step('complexity pill picks a level from its menu', async () => {
-  const pill = p.getByRole('button', { name: /^(Auto|Quick|Standard|Deep)$/ }).first();
+  const pill = p.getByRole('button', { name: /^Complexity: (Auto|Quick|Standard|Deep)$/ }).first();
   await pill.click();
   await p.getByRole('menuitem', { name: /^Deep/ }).click();
-  await p.getByRole('button', { name: /^Deep$/ }).first().waitFor({ timeout: 5000 });
+  await p.getByRole('button', { name: 'Complexity: Deep', exact: true }).first().waitFor({ timeout: 5000 });
 });
 
 console.log('console errors:', errors.length ? errors.slice(0, 5) : 'none');

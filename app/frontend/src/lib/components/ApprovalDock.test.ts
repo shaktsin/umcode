@@ -11,7 +11,7 @@ const mk = (id: string, createdAt: string) => ({
 it('renders one pending approval as a region without a count', () => {
   const { body } = render(ApprovalDock, { props: { approvals: [mk('a1', '2026-10-23T10:00:00Z')], threadId: 't1' } });
   expect(body).toContain('role="region"');
-  expect(body).toContain('id="approval-dock"');
+  expect(body).toContain('data-approval-dock');
   expect(body).toContain('id="approval-a1"');
   expect(body).toContain('high risk');
   expect(body).toContain('cmd a1');

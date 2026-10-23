@@ -33,6 +33,15 @@
   let retry = $state(0);
 
   const MAX_FILE = 15 * 1024 * 1024;
+  let dockHost: HTMLDivElement | undefined = $state();
+  let lastDockId: string | null = null;
+  $effect(() => {
+    const id = dockState(app.approvals, view.id).current?.id ?? null;
+    const prev = lastDockId;
+    lastDockId = id;
+    if (id && prev && id !== prev) void tick().then(() => dockHost?.querySelector<HTMLElement>('[data-approval-dock] button')?.focus());
+    else if (!id && prev) void tick().then(() => input?.focus());
+  });
   const docked = $derived(Boolean(dockState(app.approvals, view.id).current));
   const busy = $derived(view.sending || !!view.running);
   const offline = $derived(app.conn !== 'open');
@@ -197,7 +206,7 @@
 </script>
 
 <div class="px-4 pb-4 pt-2 shrink-0">
-  <div class="{compact ? '' : 'max-w-3xl'} mx-auto">
+  <div bind:this={dockHost} class="{compact ? '' : 'max-w-3xl'} mx-auto">
     <ApprovalDock approvals={app.approvals} threadId={view.id} />
   </div>
   <div

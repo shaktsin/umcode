@@ -11,7 +11,7 @@
 
 {#if current}
   <div
-    id="approval-dock"
+    data-approval-dock
     role="region"
     aria-live="assertive"
     aria-label="Approval needed"

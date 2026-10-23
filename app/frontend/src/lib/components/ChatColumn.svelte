@@ -162,7 +162,7 @@
   }
 
   function currentActivity(g: Group): string {
-    if (app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId)) return 'Waiting for your approval';
+    if (app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId)) return 'Waiting for your approval';
     const active = [...g.items].reverse().find((i) => i.kind === 'toolCall' && i.status === 'inProgress');
     return active ? actionLabel(active) : 'Working through the request';
   }
@@ -318,9 +318,6 @@
                 <ItemView item={it} highlight={view.highlightItem === it.id} {view} />
               {/if}
             {/each}
-            {#if app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId)}
-              <div class="flex items-center gap-2 text-xs text-muted"><ShieldCheck class="w-3.5 h-3.5 text-amber-warm" /><span>Waiting for your approval</span></div>
-            {/if}
             {#each recordsFor(app.approvalRecords, view.id ?? '', g.turnId) as record (record.id)}
               <div class="flex items-center gap-2 text-xs {record.decision === 'denied' ? 'text-rust' : 'text-sage'}">
                 <span aria-hidden="true">{record.decision === 'denied' ? '✕' : '✓'}</span><span>{recordLine(record)}</span>

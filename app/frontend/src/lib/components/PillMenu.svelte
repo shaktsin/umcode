@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Check, ChevronDown } from '@lucide/svelte';
-  import type { Snippet } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
   import PopupSurface from './PopupSurface.svelte';
   import type { PillMenuItem } from '$lib/pillMenu';
 
@@ -13,11 +13,12 @@
   function choose(id: string) {
     open = false;
     onselect(id);
+    void tick().then(() => trigger?.focus());
   }
 </script>
 
 <div class="relative">
-  <button bind:this={trigger} type="button" class="pill-button" class:icon-only={!label} {disabled} {title} aria-label={label ? undefined : ariaLabel} aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>
+  <button bind:this={trigger} type="button" class="pill-button" class:icon-only={!label} {disabled} {title} aria-label={label ? `${ariaLabel}: ${label}` : ariaLabel} aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>
     {#if icon}{@render icon()}{/if}
     {#if label}<span class="truncate">{label}</span><ChevronDown class="w-3 h-3 shrink-0" />{/if}
   </button>
