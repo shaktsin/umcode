@@ -194,10 +194,54 @@ func (e *Engine) refreshToolSelection(ctx context.Context, s *turnSelection) {
 	}
 }
 func (s *turnSelection) specs() []llm.ToolSpec {
+	specs := s.baseline
+	fallback := s.fallback != ""
 	if s.state != nil {
-		return s.state.Specs()
+		specs = s.state.Specs()
+		fallback = s.state.Report().Fallback != ""
 	}
-	return append([]llm.ToolSpec(nil), s.baseline...)
+	if !fallback {
+		return append([]llm.ToolSpec(nil), specs...)
+	}
+	// A failed selector must not flood a small model with every integration.
+	// Keep original-source retrieval and discovery before other direct tools.
+	priority := map[string]int{tools.ToWire("task.context"): 0, tools.ToWire("tools.discover"): 1, tools.ToWire("file.read"): 2, tools.ToWire("file.write"): 3, tools.ToWire("file.edit"): 4, tools.ToWire("shell.run"): 5}
+	chosen := append([]llm.ToolSpec(nil), specs...)
+	sort.SliceStable(chosen, func(i, j int) bool {
+		a, ok := priority[chosen[i].Name]
+		if !ok {
+			a = 10
+		}
+		b, ok := priority[chosen[j].Name]
+		if !ok {
+			b = 10
+		}
+		return a < b
+	})
+	var out []llm.ToolSpec
+	used := 0
+	for _, spec := range chosen {
+		core := false
+		name := ""
+		for _, c := range s.actual {
+			if c.spec.Name == spec.Name {
+				family, _ := catalogMetadata(c)
+				core = family == "core"
+				name = c.tool.Name()
+				break
+			}
+		}
+		if !core && (name == "" || !strings.Contains(s.request, name)) {
+			continue
+		}
+		cost := requestTextTokens(spec.Description+string(spec.Schema)+spec.Name) + 24
+		if len(out) >= 32 || used+cost > 4000 {
+			continue
+		}
+		out = append(out, spec)
+		used += cost
+	}
+	return out
 }
 func resolveTurnTool(catalog []turnTool, name string) (turnTool, bool) {
 	var found turnTool

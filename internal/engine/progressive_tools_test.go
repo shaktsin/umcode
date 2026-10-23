@@ -182,7 +182,7 @@ func TestProgressiveFallbackAndPairing(t *testing.T) {
 	}
 }
 
-func TestProgressiveSelectionPanicUsesFullCatalog(t *testing.T) {
+func TestProgressiveSelectionPanicUsesBoundedCore(t *testing.T) {
 	e, th, turn, _ := pluginHookEngine(t)
 	provider := installMemoryProvider(t, e)
 	e.Cfg.Models.ProgressiveTools = true
@@ -190,8 +190,8 @@ func TestProgressiveSelectionPanicUsesFullCatalog(t *testing.T) {
 	e.Tools.Add(target)
 	e.selectionHook = func() { panic("private selector detail") }
 	provider.script = func(req llm.Request) []llm.Event {
-		if !requestHasTool(req, "special.action") {
-			t.Fatal("panic fallback lost permitted tools")
+		if requestHasTool(req, "special.action") || !requestHasTool(req, "tools.discover") {
+			t.Fatal("panic fallback did not retain bounded discovery surface")
 		}
 		return memoryAnswer(req)
 	}
@@ -338,7 +338,7 @@ func TestProgressiveDiscoveryPanicFallback(t *testing.T) {
 		if len(provider.requests) == 1 {
 			return memoryCall("tools.discover", `{"query":"action"}`)
 		}
-		if !requestHasTool(req, target.Name()) || strings.Contains(joined(req.Messages), "private detail") {
+		if requestHasTool(req, target.Name()) || !requestHasTool(req, "task.context") || strings.Contains(joined(req.Messages), "private detail") {
 			t.Fatal("fallback or error bounds failed")
 		}
 		return memoryAnswer(req)

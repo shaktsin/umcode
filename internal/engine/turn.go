@@ -146,6 +146,18 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 		}
 		plan.Routes = kept
 	}
+	if pick.poolID == "" && len(plan.Routes) > 0 {
+		first := plan.Routes[0]
+		anchor, _ := capacityIdentity(resolved{sel: protocol.ModelSelection{Provider: first.Provider, Model: first.Model}, cred: first.Cred})
+		kept := plan.Routes[:0]
+		for _, route := range plan.Routes {
+			identity, err := capacityIdentity(resolved{sel: protocol.ModelSelection{Provider: route.Provider, Model: route.Model}, cred: route.Cred})
+			if err == nil && route.Provider == first.Provider && route.Model == first.Model && identity.EndpointID == anchor.EndpointID {
+				kept = append(kept, route)
+			}
+		}
+		plan.Routes = kept
+	}
 	for _, route := range plan.Routes {
 		if !slices.Contains(r.approvedCredentialIDs, route.Cred.Record.ID) {
 			r.approvedCredentialIDs = append(r.approvedCredentialIDs, route.Cred.Record.ID)

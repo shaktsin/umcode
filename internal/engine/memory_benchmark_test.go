@@ -68,6 +68,7 @@ func installMemoryProvider(t *testing.T, e *Engine) *memoryScriptProvider {
 	e.LLMs.Register(p)
 	e.Router = router.New(e.Store, nil, nil, e.LLMs, e.Cfg, e.Log)
 	e.Cfg.Tools.HostSandbox = "off"
+	e.Tools.Add(&taskContextTool{engine: e})
 	tools.RegisterBuiltins(e.Tools, e.Cfg, tools.NewWorkspaces(e.Cfg), nil)
 	return p
 }
