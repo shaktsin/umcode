@@ -325,7 +325,7 @@
           </button>
         {:else}
           <button
-            class="icon-button compact rounded-full bg-clay text-white hover:brightness-110 disabled:bg-raised disabled:text-muted disabled:opacity-100 disabled:hover:brightness-100 disabled:cursor-not-allowed"
+            class="icon-button compact send-button rounded-full"
             title="Send (Enter)"
             aria-label="Send"
             disabled={offline || app.needsProvider || view.delegation.pending || (!text.trim() && files.length === 0)}
