@@ -44,11 +44,15 @@ await p.screenshot({ path: scheme + '-04-sidechat.png' });
 await step('approval offers to remember the decision', async () => {
   await p.getByPlaceholder(/Ask about demo/).fill('please run a command');
   await p.keyboard.press('Enter');
-  const approve = p.getByRole('button', { name: 'Approve', exact: true }).first();
-  await approve.waitFor({ timeout: 15000 });
-  await p.getByText('always in demo').first().waitFor({ timeout: 5000 });
+  const dock = p.locator('#approval-dock');
+  await dock.waitFor({ timeout: 15000 });
+  const approve = dock.getByRole('button', { name: 'Allow once', exact: true });
+  await approve.waitFor({ timeout: 5000 });
+  await dock.getByRole('button', { name: 'Always allow in this chat', exact: true }).waitFor({ timeout: 5000 });
   await p.screenshot({ path: scheme + '-05-approval.png' });
   await approve.click();
+  await dock.waitFor({ state: 'detached', timeout: 5000 });
+  await p.getByText(/^Approved · /).first().waitFor({ timeout: 5000 });
   await p.getByText('The command printed approved-run.').waitFor({ timeout: 15000 });
 });
 
@@ -68,6 +72,13 @@ await step('undo turn puts the file back', async () => {
   await p.getByText('undo this turn').first().click({ force: true });
   await p.getByRole('button', { name: 'Undo changes' }).click();
   await p.getByText(/Put back notes.txt/).waitFor({ timeout: 10000 });
+});
+
+await step('complexity pill picks a level from its menu', async () => {
+  const pill = p.getByRole('button', { name: /^(Auto|Quick|Standard|Deep)$/ }).first();
+  await pill.click();
+  await p.getByRole('menuitem', { name: /^Deep/ }).click();
+  await p.getByRole('button', { name: /^Deep$/ }).first().waitFor({ timeout: 5000 });
 });
 
 console.log('console errors:', errors.length ? errors.slice(0, 5) : 'none');
