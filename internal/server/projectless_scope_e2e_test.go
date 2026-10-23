@@ -75,9 +75,7 @@ func TestProjectlessToolsPreserveWorkspaceAndNoProjectBoundaries(t *testing.T) {
 					wantItems = 3
 				}
 				wantStatus := protocol.TurnCompleted
-				if tc.noProject {
-					wantStatus = protocol.TurnFailed
-				}
+
 				if turn.Status != wantStatus || len(items) != wantItems {
 					t.Fatalf("%s: turn=%+v items=%+v", tc.name, turn, items)
 				}

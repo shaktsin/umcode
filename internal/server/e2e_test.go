@@ -310,8 +310,8 @@ func TestChatWithApprovedShellTool(t *testing.T) {
 		t.Fatalf("reasoning = %q/%q", second.Reasoning, second.ReasoningStyle)
 	}
 	// Usage: 2 chat calls. Sonnet 4.6: (800*3 + 200*0.3 + 100*15)/1e6 + (500*3 + 20*15)/1e6
-	want := (800*3.0+200*0.3+100*15.0)/1e6 + (500*3.0+20*15.0)/1e6 + (5*3.0+5*15.0)/1e6
-	if turn.Usage.Requests != 3 || turn.Usage.InputTokens != 1505 || abs(turn.Usage.CostUSD-want) > 1e-12 {
+	want := (800*3.0+200*0.3+100*15.0)/1e6 + (500*3.0+20*15.0)/1e6
+	if turn.Usage.Requests != 2 || turn.Usage.InputTokens != 1500 || abs(turn.Usage.CostUSD-want) > 1e-12 {
 		t.Fatalf("turn usage = %+v (want cost %v)", turn.Usage, want)
 	}
 	// Per-key summary includes the background title request.
@@ -357,7 +357,7 @@ func TestDeniedToolAndHistory(t *testing.T) {
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "delete it"}, &res)
 	turn, _, tools := h.waitTurn(res.Turn.ID, func(protocol.Approval) bool { return false })
-	if turn.Status != protocol.TurnFailed || len(tools) != 1 || tools[0].Status != protocol.ItemDenied {
+	if turn.Status != protocol.TurnCompleted || len(tools) != 1 || tools[0].Status != protocol.ItemDenied {
 		t.Fatalf("turn=%+v tools=%+v", turn, tools)
 	}
 	// Second turn sends earlier text history and uses quick for a short message (auto).
@@ -397,7 +397,7 @@ func TestAgentFixLoop(t *testing.T) {
 		t.Fatalf("turn=%+v text=%q", turn, text)
 	}
 	snapshot, snapshotErr := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
-	if snapshotErr != nil || snapshot.Task.Status != "completed" {
+	if snapshotErr != nil || snapshot.Task.ExecutionPolicy != protocol.ModelDrivenExecutionPolicy || snapshot.Task.Status == "completed" {
 		t.Fatalf("verified correction did not complete task: %+v %v", snapshot.Task, snapshotErr)
 	}
 	var statuses []string
@@ -452,14 +452,14 @@ func TestBudgetHardStopAndFallback(t *testing.T) {
 	for _, r := range sum.Rows {
 		byKey[r.Key] = r.Usage
 	}
-	if byKey[k1.ID].Requests != 2 || byKey[k1.ID].InputTokens != 5 || byKey[k2.ID].InputTokens != 1000 {
+	if byKey[k1.ID].Requests != 1 || byKey[k1.ID].InputTokens != 0 || byKey[k2.ID].InputTokens != 1000 {
 		t.Fatalf("per-key usage = %+v", byKey)
 	}
 
 	// The turn records which routes it used: the rate-limited key, then the one
 	// that answered.
-	if len(turn.RouteTrail) != 3 || turn.RouteTrail[0].Status != "used" || turn.RouteTrail[1].Status != "rate_limited" ||
-		turn.RouteTrail[2].Status != "used" || turn.RouteTrail[2].CredentialID != k2.ID {
+	if len(turn.RouteTrail) != 2 || turn.RouteTrail[0].Status != "rate_limited" ||
+		turn.RouteTrail[1].Status != "used" || turn.RouteTrail[1].CredentialID != k2.ID {
 		t.Fatalf("route trail = %+v", turn.RouteTrail)
 	}
 

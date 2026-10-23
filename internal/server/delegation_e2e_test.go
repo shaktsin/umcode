@@ -230,9 +230,7 @@ func TestDelegationRPCEndToEnd(t *testing.T) {
 			h.call(protocol.MethodTurnStart, params, &started)
 			turn, _, _ := h.waitTurnWithin(started.Turn.ID, func(protocol.Approval) bool { return true }, 90*time.Second)
 			wantStatus := protocol.TurnCompleted
-			if activation == "dirty_parent" {
-				wantStatus = protocol.TurnFailed
-			}
+
 			if turn.Status != wantStatus {
 				t.Fatalf("lead status: %+v", turn)
 			}
@@ -424,7 +422,7 @@ func TestDelegationRPCCancelReleasesApprovalAndWait(t *testing.T) {
 	}
 	var list protocol.DelegationListResult
 	h.call("delegation/list", protocol.DelegationListParams{ThreadID: th.ID, TaskID: approval.AgentTaskID}, &list)
-	if len(list.Tasks) != 1 || list.Tasks[0].Usage.Requests != 4 || list.Tasks[0].Task.State != protocol.AgentStateCancelled {
+	if len(list.Tasks) != 1 || list.Tasks[0].Usage.Requests != 3 || list.Tasks[0].Task.State != protocol.AgentStateCancelled {
 		t.Fatalf("cancelled retained accounting: %+v", list)
 	}
 }

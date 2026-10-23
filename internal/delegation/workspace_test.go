@@ -630,6 +630,12 @@ func TestStandaloneReviewerUsesIsolatedCurrentSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = service.Prepare(t.Context(), task, child); err == nil {
+		t.Fatal("standalone source was not explicitly admitted")
+	}
+	if _, err = service.PrepareStandaloneReview(t.Context(), task, child); err != nil {
+		t.Fatal(err)
+	}
 	got, err := service.Prepare(t.Context(), task, child)
 	if err != nil {
 		t.Fatal(err)

@@ -32,14 +32,7 @@ func TestDelegationWorkflowReachable(t *testing.T) {
 		t.Error("ordinary prompt gained delegation authority")
 	}
 }
-func containsWorkflow(s string) bool {
-	for i := 0; i+len("agent.integrate") <= len(s); i++ {
-		if s[i:i+len("agent.integrate")] == "agent.integrate" {
-			return true
-		}
-	}
-	return false
-}
+func containsWorkflow(s string) bool { return strings.Contains(s, "Delegation tools are available") }
 
 func TestDelegationWorkflowStartup(t *testing.T) {
 	e, th, _, _ := delegationFixture(t)

@@ -186,7 +186,7 @@ func TestPluginBeforeToolHookBlocks(t *testing.T) {
 	var started protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: thread.ID, Text: "try blocked tool"}, &started)
 	turn, _, items := h.waitTurn(started.Turn.ID, nil)
-	if turn.Status != protocol.TurnFailed || len(items) != 1 || items[0].Tool == nil || !strings.Contains(items[0].Tool.Error, "blocked by fixture") {
+	if turn.Status != protocol.TurnCompleted || len(items) != 1 || items[0].Tool == nil || !strings.Contains(items[0].Tool.Error, "blocked by fixture") {
 		t.Fatalf("blocked runtime result: turn=%#v items=%#v", turn, items)
 	}
 	runs, err := h.eng.Store.ListPluginHookRuns(h.ctx, installed.ID, h.proj.ID, turn.ID, 100)

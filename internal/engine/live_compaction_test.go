@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -141,5 +142,69 @@ func TestLiveCompactionSummarizesOlderHistoryWithinCapacity(t *testing.T) {
 		if r.EstimatedInput+req.MaxTokens+410 > 8192 {
 			t.Fatal("summary exceeded serving window")
 		}
+	}
+}
+
+func TestOversizedCurrentInputFailsWithoutClipping(t *testing.T) {
+	e, turn := liveFixture(t)
+	res := resolved{sel: protocol.ModelSelection{Provider: "fixture", Model: "small"}, meta: models.Meta{ContextWindow: 8192}}
+	current := llm.Text(llm.RoleUser, strings.Repeat("required instructions ", 1200))
+	current.Parts = append(current.Parts, llm.Part{Type: "image", MimeType: "image/png", DataB64: "original"})
+	req := llm.Request{Messages: []llm.Message{current}, MaxTokens: 2048}
+	_, _, err := e.prepareModelRequest(t.Context(), t.Context(), turn, &res, req, "chat", newTurnBudget(protocol.ExecutionLimits{MaxDurationMinutes: 5, MaxTokens: 100000}))
+	if err == nil {
+		t.Fatal("required current request was clipped into apparent capacity")
+	}
+	if req.Messages[0].JoinedText() != current.JoinedText() || req.Messages[0].Parts[1].DataB64 != "original" {
+		t.Fatal("original input mutated")
+	}
+}
+func TestLiveCompactionSummarizesEarlierRoundsInCurrentTurn(t *testing.T) {
+	e, turn := liveFixture(t)
+	p := &budgetProvider{events: []llm.Event{{Type: llm.EventTextDelta, Text: "Recorded earlier results remain saved. No uncertain mutation was replayed."}, {Type: llm.EventDone, StopReason: "stop", Usage: llm.Usage{Reported: true, InputTokens: 200, OutputTokens: 20}}}}
+	e.LLMs.Register(p)
+	cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic"}, cred: cred}
+	key, _ := capacityIdentity(res)
+	window := 8192
+	if err = e.Store.SetModelCapacityProfile(t.Context(), protocol.ModelCapacityProfile{Provider: key.Provider, EndpointID: key.EndpointID, Model: key.Model, Backend: "generic", ContextWindow: &window}); err != nil {
+		t.Fatal(err)
+	}
+	current := "Keep the exact requested blue theme and preserve unknown operations."
+	msgs := []llm.Message{llm.Text(llm.RoleUser, current)}
+	for i := 0; i < 20; i++ {
+		id := fmt.Sprintf("round-%d", i)
+		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: id, Name: "file__read", Args: []byte(`{}`)}}}, llm.Message{Role: llm.RoleTool, ToolCallID: id, ToolName: "file__read", Result: strings.Repeat("x", 1000)})
+	}
+	got, report, err := e.prepareModelRequest(t.Context(), t.Context(), turn, &res, llm.Request{Messages: msgs, MaxTokens: 2048}, "chat", newTurnBudget(protocol.ExecutionLimits{MaxDurationMinutes: 5, MaxTokens: 1000000, MaxCostUSD: 10}))
+	if err != nil {
+		t.Fatal("same-turn rounds could not compact", err)
+	}
+	if len(p.requests) == 0 || report.Reductions < 1 {
+		t.Fatal("no live summary")
+	}
+	originalFound, newestFound := false, false
+	calls := map[string]bool{}
+	for _, m := range got.Messages {
+		if m.JoinedText() == current {
+			originalFound = true
+		}
+		for _, c := range m.ToolCalls {
+			calls[c.ID] = true
+		}
+		if m.Role == llm.RoleTool {
+			if !calls[m.ToolCallID] {
+				t.Fatal("orphan result", m.ToolCallID)
+			}
+			if m.ToolCallID == "round-19" {
+				newestFound = true
+			}
+		}
+	}
+	if !originalFound || !newestFound {
+		t.Fatal("lost current request or latest result")
 	}
 }

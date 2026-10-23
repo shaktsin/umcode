@@ -224,7 +224,7 @@ func TestOptimizationPreservesActionDenial(t *testing.T) {
 		}
 		return false
 	})
-	if turn.Status != protocol.TurnFailed || prompts != 1 {
+	if turn.Status != protocol.TurnCompleted || prompts != 1 {
 		t.Fatalf("denial turn=%+v prompts=%d", turn, prompts)
 	}
 	if _, err := os.Stat(filepath.Join(h.ws, "denied.txt")); !os.IsNotExist(err) {

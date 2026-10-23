@@ -95,7 +95,11 @@ func (r workflowRunner) Run(ctx context.Context, t protocol.AgentTask, c protoco
 		if err != nil && !errors.Is(err, errNoImplementer) {
 			return protocol.AgentResult{}, err
 		}
-		if err == nil {
+		if errors.Is(err, errNoImplementer) {
+			if _, err = e.DelegationWorkspaceService.PrepareStandaloneReview(ctx, t, c); err != nil {
+				return protocol.AgentResult{}, err
+			}
+		} else if err == nil {
 			if err = e.DelegationWorkspaceService.BindReviewer(ctx, t.ID, c.ID, impl.ID); err != nil {
 				return protocol.AgentResult{}, err
 			}

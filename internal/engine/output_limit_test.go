@@ -21,6 +21,7 @@ type outputLimitProvider struct {
 	reason string
 	tool   bool
 	calls  int
+	output int64
 }
 
 func (*outputLimitProvider) ID() string { return "claude" }
@@ -37,7 +38,11 @@ func (p *outputLimitProvider) Stream(_ context.Context, _ llm.Credential, req ll
 	if p.tool {
 		ch <- llm.Event{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "partial", Name: "file__write", Args: json.RawMessage(`{"path":"never.txt","content":"unfinished`)}}
 	}
-	ch <- llm.Event{Type: llm.EventDone, StopReason: p.reason, Usage: llm.Usage{Reported: true, InputTokens: 100, OutputTokens: 4096}}
+	output := p.output
+	if output == 0 {
+		output = 4096
+	}
+	ch <- llm.Event{Type: llm.EventDone, StopReason: p.reason, Usage: llm.Usage{Reported: true, InputTokens: 100, OutputTokens: output}}
 	close(ch)
 	return ch, nil
 }
@@ -131,10 +136,10 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 // pause, while the same attempt settles shared actuals and suppresses tools.
 func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T) {
 	e, th, _, _ := delegationFixture(t)
-	p := &outputLimitProvider{reason: "max_output_tokens", tool: true}
+	p := &outputLimitProvider{reason: "max_output_tokens", tool: true, output: 30000}
 	e.LLMs.Register(p)
 	e.mu.Lock()
-	e.turnLimits.MaxTokens = 3000
+	e.turnLimits.MaxTokens = 20000
 	e.mu.Unlock()
 	token, err := e.PrepareDelegation(t.Context(), th.ID)
 	if err != nil {
@@ -161,7 +166,7 @@ func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := shared.Usage(); got.InputTokens != 100 || got.OutputTokens != 4096 || got.Requests != 1 {
+	if got := shared.Usage(); got.InputTokens != 100 || got.OutputTokens != 30000 || got.Requests != 1 {
 		t.Fatalf("output-limited attempt lost shared actuals: %+v", got)
 	}
 	if shared.StopReason() == "" {

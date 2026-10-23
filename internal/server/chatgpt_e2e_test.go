@@ -158,6 +158,13 @@ wait:
 		t.Fatalf("test = %+v", test)
 	}
 
+	for _, id := range []string{signed.Credential.ID, key.ID} {
+		var profile protocol.ModelCapacityResult
+		h.call(protocol.MethodModelCapacityGet, protocol.ModelCapacityParams{CredentialID: id, Model: "gpt-5.6-terra"}, &profile)
+		window := 200000
+		profile.Profile.ContextWindow = &window
+		h.call(protocol.MethodModelCapacitySet, protocol.ModelCapacityParams{CredentialID: id, Model: profile.Profile.Model, Profile: &profile.Profile}, nil)
+	}
 	ask := func(credID string) (string, protocol.Turn) {
 		var th protocol.Thread
 		h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &th)

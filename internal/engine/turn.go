@@ -37,6 +37,7 @@ const historyLimit = 60
 // resolved is the concrete choice for a turn: the route being used now, and
 // the ones the router lined up behind it.
 type resolved struct {
+	currentInput          llm.Message
 	workingMessages       []llm.Message
 	contextReduced        bool
 	forceCompaction       bool
@@ -636,6 +637,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	// model's tool calls and their results. The compiler replaces what came
 	// before it, never this live suffix.
 	liveFrom := len(msgs)
+	res.currentInput = cloneModelRequest(llm.Request{Messages: []llm.Message{user}}).Messages[0]
 	msgs = append(msgs, user)
 
 	var selection *turnSelection
@@ -678,7 +680,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	for {
 		if childExecutionFrom(ctx) != nil {
 			var followErr error
-			msgs, _, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
+			var added bool
+			msgs, added, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
+			if added {
+				res.currentInput = cloneModelRequest(llm.Request{Messages: msgs[len(msgs)-1:]}).Messages[0]
+			}
 			if followErr != nil {
 				turnErr = followErr
 				break
@@ -785,6 +791,9 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				var followErr error
 				msgs = appendText(msgs, llm.RoleAssistant, out.text)
 				msgs, added, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
+				if added {
+					res.currentInput = cloneModelRequest(llm.Request{Messages: msgs[len(msgs)-1:]}).Messages[0]
+				}
 				if followErr != nil {
 					turnErr = followErr
 					break
@@ -1037,6 +1046,9 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return out, err
 		}
 		if confirmedContextOverflow(err) {
+			if budget.stopReason() != "" {
+				return out, err
+			}
 			if contextRetried {
 				return out, err
 			}

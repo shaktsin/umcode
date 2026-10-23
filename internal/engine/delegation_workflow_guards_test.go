@@ -235,8 +235,8 @@ func TestDelegationWorkflowRejectsInvalidReview(t *testing.T) {
 				t.Fatalf("implementer %+v", impl)
 			}
 			review := workflowWorker(t, e, task, protocol.AgentRoleReviewer, "review")
-			if review.State != protocol.AgentStateFailed || review.Result.Blocker == "" {
-				t.Fatalf("invalid review accepted %+v", review)
+			if review.State != protocol.AgentStateCompleted {
+				t.Fatalf("review worker did not finish independently of report validity %+v", review)
 			}
 			if _, err := e.delegationWorkflowCall(workflowParentContext(t, e, th, root, task), "integrate", json.RawMessage(`{}`)); err == nil {
 				t.Fatal("invalid review integrated")
@@ -257,8 +257,9 @@ func TestDelegationWorkflowOrderingAndCorrections(t *testing.T) {
 	task := childExecutionTask(t, e, th)
 	p := &workflowScriptProvider{script: workflowChildScript("approved")}
 	e.LLMs.Register(p)
-	if _, err := e.DelegationCoordinator.Spawn(t.Context(), task.ID, "early", protocol.AgentRoleReviewer, protocol.AgentAssignment{Prompt: "review"}); err == nil {
-		t.Fatal("review admitted before implementation")
+	early := workflowWorker(t, e, task, protocol.AgentRoleReviewer, "early")
+	if early.State != protocol.AgentStateCompleted {
+		t.Fatal("optional standalone review did not finish", early.Result.Blocker)
 	}
 	impl := workflowWorker(t, e, task, protocol.AgentRoleImplementer, "impl")
 	if _, err := e.DelegationCoordinator.Spawn(t.Context(), task.ID, "second", protocol.AgentRoleImplementer, protocol.AgentAssignment{Prompt: "replacement"}); err == nil {
@@ -335,7 +336,7 @@ func TestDelegationWorkflowFailedWorker(t *testing.T) {
 			}}
 			e.LLMs.Register(p)
 			child := workflowWorker(t, e, task, protocol.AgentRoleImplementer, "impl")
-			if child.State != protocol.AgentStateFailed || !strings.Contains(child.Result.Blocker, "output limit") || !strings.Contains(child.Result.Summary, "Partial findings") || child.WorkspaceID == "" {
+			if child.State != protocol.AgentStateFailed || !strings.Contains(child.Result.Blocker, "work is incomplete") || !strings.Contains(child.Result.Summary, "Partial findings") || child.WorkspaceID == "" {
 				t.Fatalf("failure evidence lost %+v", child)
 			}
 			if child.Usage.OutputTokens == 0 {
@@ -554,8 +555,8 @@ func TestDelegationWorkflowLatestReviewAuthoritative(t *testing.T) {
 		t.Fatalf("fresh approval missing %+v", fresh)
 	}
 	missing := workflowWorker(t, e, task, protocol.AgentRoleReviewer, "missing-report")
-	if missing.State != protocol.AgentStateFailed {
-		t.Fatalf("missing report did not fail: %+v", missing)
+	if missing.State != protocol.AgentStateCompleted || missing.Result.Review != nil {
+		t.Fatalf("missing report was treated as structured approval: %+v", missing)
 	}
 	if _, err := e.delegationWorkflowCall(ctx, "integrate", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("new failed bound review reused old approval")

@@ -44,6 +44,8 @@ export class ThreadView {
   /** What the next message would run on, and what it would fall back to. */
   route = $state<ModelRouteResult | null>(null);
   private routeSeq = 0;
+  private compactionVersion=0;
+  private terminalCompactionTurns=new Set<string>();
 
   get running(): Turn | undefined {
     return this.turns.find((t) => t.status === 'running');
@@ -55,7 +57,7 @@ export class ThreadView {
 
   reset() {
     void this.delegation.bind(null);
-    this.compaction=null;
+    this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();
     this.id = null;
     this.thread = null;
     this.workspaceMode = 'local';
@@ -67,13 +69,16 @@ export class ThreadView {
   }
 
   async load(id: string) {
-    if (this.id !== id) {this.compaction=null;void this.delegation.bind(id);}
+    if (this.id !== id) {this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();void this.delegation.bind(id);}
     this.id = id;
     this.loading = true;
+    const compactionVersion=this.compactionVersion;
     try {
       const r = await app.call<{ thread: Thread; turns: Turn[]; items: Item[]; compaction?:CompactionState }>('thread/read', { threadId: id });
       if (this.id !== id) return;
-      this.compaction=r.compaction?applyCompactionUpdate(this.compaction,r.compaction):null;
+      for(const turn of r.turns??[])if(turn.status!=='running')this.terminalCompactionTurns.add(turn.id);
+      if(r.compaction)this.applyCompaction(r.compaction);
+      else if(this.compactionVersion===compactionVersion)this.compaction=null;
       this.thread = r.thread;
       void this.delegation.bind(id, r.thread.projectId);
       this.workspaceMode = r.thread.workspaceMode || 'local';
@@ -92,13 +97,14 @@ export class ThreadView {
   applyCompaction(state:CompactionState) {
     if(state.threadId!==this.id)return;
     const turn=this.turns.find(t=>t.id===state.turnId);
-    if(turn&&turn.status!=='running'&&compactionActive(state))return;
+    if((this.terminalCompactionTurns.has(state.turnId)||turn&&turn.status!=='running')&&compactionActive(state))return;
+    this.compactionVersion++;
     this.compaction=applyCompactionUpdate(this.compaction,state);
   }
 
   applyTurn(t: Turn) {
     if (t.threadId !== this.id) return;
-    if(t.status!=='running'&&this.compaction?.turnId===t.id&&compactionActive(this.compaction))this.compaction=null;
+    if(t.status!=='running'){this.terminalCompactionTurns.add(t.id);this.compactionVersion++;if(this.compaction?.turnId===t.id&&compactionActive(this.compaction))this.compaction={...this.compaction,status:'interrupted'};}
     const i = this.turns.findIndex((x) => x.id === t.id);
     if (i >= 0) this.turns[i] = t;
     else this.turns = [...this.turns, t];

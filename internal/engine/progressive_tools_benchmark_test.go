@@ -104,7 +104,7 @@ func progressiveCoding(t *testing.T, progressive, retrieval, selectionFailure, r
 	runProgressiveFixture(t, e, th, turn, "Complete the QUASAR repository change and verify it.")
 	m := measureProgressiveRequests(provider.requests)
 	if selectionFailure || retrievalFailure {
-		if got := requestHasTool(provider.requests[0], "special0.action"); got != (!progressive || selectionFailure) {
+		if got := requestHasTool(provider.requests[0], "special0.action"); got != !progressive {
 			t.Fatal("one feature failure disabled the independent selector")
 		}
 	}

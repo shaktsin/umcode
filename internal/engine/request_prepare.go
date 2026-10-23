@@ -95,7 +95,7 @@ func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Tu
 		next.Messages = reduced
 		after, _ := countRequestInput(next)
 		if after.EstimatedInput >= before.EstimatedInput {
-			return llm.Request{}, report, errCompactionNoReduction
+			return llm.Request{}, report, errors.Join(fitErr, errCompactionNoReduction)
 		}
 		req = next
 	}

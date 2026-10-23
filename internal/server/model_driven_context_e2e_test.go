@@ -144,3 +144,75 @@ func TestSmallContextContinuation(t *testing.T) {
 		t.Fatal(turn.Error)
 	}
 }
+
+func TestPoolFallbackAfterMutationUsesSmallerCapacityExactlyOnce(t *testing.T) {
+	h := newHarness(t, nil)
+	key := h.addKey("claude", "fixture", "test-secret")
+	routing := protocol.RoutingConfig{Models: []protocol.ConfiguredModel{{ID: "large", Provider: "claude", Model: "first", Enabled: true}, {ID: "small", Provider: "claude", Model: "second", Enabled: true}}, Pools: []protocol.ModelPool{{ID: "selected", Name: "Selected", Strategy: protocol.PoolPriority, Models: []string{"large", "small"}, Enabled: true}}}
+	h.call(protocol.MethodRoutingSet, routing, nil)
+	for model, window := range map[string]int{"first": 32768, "second": 16384} {
+		var profile protocol.ModelCapacityResult
+		h.call(protocol.MethodModelCapacityGet, protocol.ModelCapacityParams{CredentialID: key.ID, Model: model}, &profile)
+		profile.Profile.ContextWindow = &window
+		h.call(protocol.MethodModelCapacitySet, protocol.ModelCapacityParams{CredentialID: key.ID, Model: model, Profile: &profile.Profile}, nil)
+	}
+	if err := os.WriteFile(filepath.Join(h.ws, "large.txt"), []byte(strings.Repeat("data\n", 4500)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.push(func(req llm.Request, _ string) ([]llm.Event, error) {
+		return []llm.Event{{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "write-once", Name: "file__write", Args: []byte(`{"path":"once.txt","content":"done"}`)}}, {Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "read-once", Name: "file__read", Args: []byte(`{"path":"large.txt","limit":5000}`)}}, {Type: llm.EventDone, Usage: llm.Usage{InputTokens: 500, OutputTokens: 100, Reported: true}}}, nil
+	}, func(req llm.Request, _ string) ([]llm.Event, error) {
+		if req.Model != "first" {
+			t.Error("initial route unexpectedly changed")
+		}
+		return nil, &llm.Error{Provider: "claude", Status: 503, Body: "unavailable"}
+	}, func(req llm.Request, _ string) ([]llm.Event, error) {
+		if req.Model != "second" {
+			t.Error("fallback did not use pool's smaller model")
+		}
+		found := false
+		for _, m := range req.Messages {
+			if m.Role == llm.RoleTool && m.ToolCallID == "write-once" {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("completed mutation result lost at fallback")
+		}
+		return textReply("Completed once on the selected pool.")(req, "")
+	})
+	var th protocol.Thread
+	selection := protocol.ModelSelection{Provider: protocol.PoolProvider, Model: "selected", Complexity: protocol.ComplexityStandard}
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID, Settings: selection}, &th)
+	var start protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Write done to once.txt exactly once, then read large.txt."}, &start)
+	turn, _, items := h.waitTurn(start.Turn.ID, func(protocol.Approval) bool { return true })
+	if turn.Status != protocol.TurnCompleted || turn.Resolved.Model != "second" {
+		t.Fatal(turn.Error)
+	}
+	writes := 0
+	for _, it := range items {
+		if it.Tool != nil && it.Tool.Name == "file.write" {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Fatalf("mutation count=%d", writes)
+	}
+	var read protocol.ThreadReadResult
+	h.call(protocol.MethodThreadRead, protocol.ThreadIDParams{ThreadID: th.ID}, &read)
+	if read.Thread.Settings != selection {
+		t.Fatal("fallback overwrote persisted pool")
+	}
+	var details protocol.TurnDetailsResult
+	h.call(protocol.MethodTurnDetails, protocol.TurnDetailsParams{ThreadID: th.ID, TurnID: turn.ID}, &details)
+	last := protocol.RequestDiagnostics{}
+	for _, r := range details.Diagnostics.Requests {
+		if r.Phase == "chat" && r.Model == "second" {
+			last = r
+		}
+	}
+	if last.CapacityWindow == nil || *last.CapacityWindow != 16384 || last.ReservedOutputTokens == nil || last.InputEstimateTokens == nil || last.CapacityMargin == nil || *last.InputEstimateTokens+*last.ReservedOutputTokens+*last.CapacityMargin > 16384 {
+		t.Fatal("fallback was not re-budgeted", last)
+	}
+}

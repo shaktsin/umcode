@@ -87,7 +87,17 @@ func TestBillingFailoverAtProviderBoundary(t *testing.T) {
 				if tt.missingKey && provider == "openai" {
 					continue
 				}
-				if _, err := e.Creds.Add(t.Context(), protocol.CredentialAddParams{Provider: provider, Label: "test", Secret: "test-secret", BaseURL: server.URL}); err != nil {
+				record, err := e.Creds.Add(t.Context(), protocol.CredentialAddParams{Provider: provider, Label: "test", Secret: "test-secret", BaseURL: server.URL})
+				if err != nil {
+					t.Fatal(err)
+				}
+				endpoint, _ := models.EndpointIdentity(provider, record.BaseURL)
+				window := 200000
+				model := "claude-sonnet-4-6"
+				if provider == "openai" {
+					model = "gpt-5.6-sol"
+				}
+				if err = e.Store.SetModelCapacityProfile(t.Context(), protocol.ModelCapacityProfile{Provider: provider, EndpointID: endpoint, Model: model, Backend: "generic", ContextWindow: &window}); err != nil {
 					t.Fatal(err)
 				}
 			}
