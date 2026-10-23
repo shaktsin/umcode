@@ -8,6 +8,8 @@
   import PopupSurface from './PopupSurface.svelte';
   import ModelPicker from './ModelPicker.svelte';
   import ApprovalModePill from './ApprovalModePill.svelte';
+  import ApprovalDock from './ApprovalDock.svelte';
+  import { dockState } from '$lib/approvalDock';
   import type { Attachment, SkillInfo } from '$lib/types';
   import { errMsg } from '$lib/format';
   import { composerPlaceholder } from '$lib/firstRun';
@@ -30,6 +32,7 @@
   let retry = $state(0);
 
   const MAX_FILE = 15 * 1024 * 1024;
+  const docked = $derived(Boolean(dockState(app.approvals, view.id).current));
   const busy = $derived(view.sending || !!view.running);
   const offline = $derived(app.conn !== 'open');
   const isMain = $derived(view === chat.main);
@@ -193,8 +196,11 @@
 </script>
 
 <div class="px-4 pb-4 pt-2 shrink-0">
+  <div class="{compact ? '' : 'max-w-3xl'} mx-auto">
+    <ApprovalDock approvals={app.approvals} threadId={view.id} />
+  </div>
   <div
-    class="relative {compact ? '' : 'max-w-3xl'} mx-auto bg-surface border border-line rounded-2xl focus-within:border-line-strong transition-colors"
+    class="relative {compact ? '' : 'max-w-3xl'} mx-auto {docked ? 'composer-docked' : ''} bg-surface border border-line rounded-2xl focus-within:border-line-strong transition-colors"
     role="region"
     aria-label="Message composer"
     ondragover={(e) => e.preventDefault()}

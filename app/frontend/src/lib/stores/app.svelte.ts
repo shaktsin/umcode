@@ -1,6 +1,7 @@
 import { RpcClient, PROTOCOL_VERSION, type ConnState } from '$lib/rpc';
 import { fetchConnection } from '$lib/connection';
 import { errMsg } from '$lib/format';
+import { buildRecord, type ApprovalRecord } from '$lib/approvalDock';
 import type {
   Approval, BudgetWarning, ComplexityDefaults, Credential, EngineStatus, Model, Provider, RoutingConfig,
 } from '$lib/types';
@@ -25,6 +26,8 @@ class AppState {
   status = $state<EngineStatus | null>(null);
   view = $state<View>('chat');
   approvals = $state<Approval[]>([]);
+  /** This session's answered approvals, shown as lines in the thread. Not restored after restart. */
+  approvalRecords = $state<ApprovalRecord[]>([]);
   providers = $state<Provider[]>([]);
   models = $state<Model[]>([]);
   credentials = $state<Credential[]>([]);
@@ -160,8 +163,11 @@ class AppState {
   }
 
   async respondApproval(id: string, approve: boolean, remember = false) {
+    const approval = this.approvals.find((a) => a.id === id);
     const r = await this.try('approval/respond', { approvalId: id, approve, remember });
-    if (r !== undefined) this.approvals = this.approvals.filter((a) => a.id !== id);
+    if (r === undefined) return;
+    this.approvals = this.approvals.filter((a) => a.id !== id);
+    if (approval) this.approvalRecords = [...this.approvalRecords, buildRecord(approval, approve, remember)];
   }
 
   modelsFor(provider: string): Model[] {

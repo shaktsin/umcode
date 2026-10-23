@@ -10,7 +10,7 @@
   import ItemView from './ItemView.svelte';
   import ChatError from './ChatError.svelte';
   import ToolCall from './ToolCall.svelte';
-  import ApprovalCard from './ApprovalCard.svelte';
+  import { recordLine, recordsFor } from '$lib/approvalDock';
   import ComputerUseView from './ComputerUseView.svelte';
   import Composer from './Composer.svelte';
   import Agents from './Agents.svelte';
@@ -66,14 +66,6 @@
       document.getElementById(`item-${id}`)?.scrollIntoView({ block: 'center' });
       stick = false;
       setTimeout(() => (view.highlightItem = null), 2500);
-    });
-  });
-
-  $effect(() => {
-    const pending = app.approvals.find((approval) => approval.threadId === view.id);
-    if (!pending || view.loading) return;
-    tick().then(() => {
-      document.getElementById(`approval-${pending.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
   });
 
@@ -326,15 +318,13 @@
                 <ItemView item={it} highlight={view.highlightItem === it.id} {view} />
               {/if}
             {/each}
-            {#each app.approvals.filter((approval) => approval.threadId === view.id && approval.turnId === g.turnId) as approval (approval.id)}
-              <section id={`approval-${approval.id}`} class="rounded-xl border border-amber-warm/40 bg-clay-soft/20 p-3 shadow-sm" aria-live="assertive">
-                <div class="flex items-center gap-2 mb-2">
-                  <ShieldCheck class="w-4 h-4 text-amber-warm" />
-                  <h3 class="text-sm font-semibold text-ink">Waiting for your approval</h3>
-                  <span class="ml-auto text-[10px] uppercase tracking-wide text-amber-warm">{approval.risk} risk</span>
-                </div>
-                <ApprovalCard {approval} chatContext />
-              </section>
+            {#if app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId)}
+              <div class="flex items-center gap-2 text-xs text-muted"><ShieldCheck class="w-3.5 h-3.5 text-amber-warm" /><span>Waiting for your approval</span></div>
+            {/if}
+            {#each recordsFor(app.approvalRecords, view.id ?? '', g.turnId) as record (record.id)}
+              <div class="flex items-center gap-2 text-xs {record.decision === 'denied' ? 'text-rust' : 'text-sage'}">
+                <span aria-hidden="true">{record.decision === 'denied' ? '✕' : '✓'}</span><span>{recordLine(record)}</span>
+              </div>
             {/each}
             {#if g.turn?.status === 'running'}
               <div class="flex items-center gap-2 text-xs text-muted" aria-live="polite">

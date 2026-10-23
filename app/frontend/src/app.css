@@ -439,3 +439,4 @@ html, body, #app { overflow: hidden; }
 .composer-input { max-height: min(240px, 30dvh); overflow-y: auto; }
 .composer-error { font-size: 12px; line-height: 16px; color: var(--color-rust); max-width: 160px; }
 [data-composer] { border-radius: var(--ui-composer-radius); }
+[data-composer].composer-docked { border-top-left-radius: 0; border-top-right-radius: 0; border-top-color: color-mix(in srgb, var(--color-amber-warm) 50%, transparent); }
