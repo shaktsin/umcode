@@ -3,16 +3,19 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"github.com/shaktsin/umcode/internal/protocol"
-	"github.com/shaktsin/umcode/internal/store"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 )
 
 func taskContextFixture(t *testing.T) (*Engine, protocol.Thread, func(string) protocol.Item) {
 	t.Helper()
-	st, err := store.Open(t.Context(), ":memory:")
+	st, err := teststore.Open(t.Context(), filepath.Join(t.TempDir(), "task-context.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

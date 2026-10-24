@@ -16,6 +16,7 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 )
 
 type workflowRecoveryProvider struct {
@@ -67,7 +68,7 @@ func TestWorkflowRecoveryActualTurn(t *testing.T) {
 			cfg := config.Default(t.TempDir())
 			cfg.LLM.Provider, cfg.LLM.Model = "claude", "deterministic"
 			cfg.Models.DesignedWorkflow = true
-			st, err := store.Open(t.Context(), filepath.Join(cfg.Home, "test.db"))
+			st, err := teststore.Open(t.Context(), filepath.Join(cfg.Home, "test.db"))
 			if err != nil {
 				t.Fatal(err)
 			}

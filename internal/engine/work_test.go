@@ -15,6 +15,7 @@ import (
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 	"github.com/shaktsin/umcode/internal/tools"
 	"github.com/shaktsin/umcode/internal/vault"
 	"github.com/shaktsin/umcode/internal/work"
@@ -372,7 +373,7 @@ func TestFinishTurnClosesOrKeepsOpen(t *testing.T) {
 
 func TestRecordingFailureDoesNotFailTool(t *testing.T) {
 	e, th, turn, _ := workEngine(t)
-	broken, err := store.Open(t.Context(), ":memory:")
+	broken, err := teststore.Open(t.Context(), filepath.Join(t.TempDir(), "broken-recording.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
