@@ -1,7 +1,7 @@
 <script lang="ts">
   import DelegationActivation from './DelegationActivation.svelte';
   import { tick } from 'svelte';
-  import { ArrowUp, Square, Paperclip, X } from '@lucide/svelte';
+  import { ArrowUp, Paperclip, X } from '@lucide/svelte';
   import { chat, type ThreadView } from '$lib/stores/chat.svelte';
   import { app } from '$lib/stores/app.svelte';
   import { projects } from '$lib/stores/projects.svelte';
@@ -314,26 +314,15 @@
         <span class="composer-error" role="status" title={blockedReason}>No model available</span>
       {/if}
       <div class="ml-auto">
-        {#if busy}
-          <button
-            class="icon-button compact rounded-full bg-ink text-paper hover:brightness-110"
-            title="Stop"
-            aria-label="Stop"
-            onclick={() => view.interrupt()}
-          >
-            <Square class="w-3.5 h-3.5 fill-current" />
-          </button>
-        {:else}
-          <button
-            class="icon-button compact send-button rounded-full"
-            title="Send (Enter)"
-            aria-label="Send"
-            disabled={offline || app.needsProvider || view.delegation.pending || (!text.trim() && files.length === 0)}
-            onclick={submit}
-          >
-            <ArrowUp class="w-4 h-4" />
-          </button>
-        {/if}
+        <button
+          class="icon-button compact send-button composer-submit"
+          title={busy ? 'Stop' : 'Send (Enter)'}
+          aria-label={busy ? 'Stop' : 'Send'}
+          disabled={!busy && (offline || app.needsProvider || view.delegation.pending || (!text.trim() && files.length === 0))}
+          onclick={() => busy ? view.interrupt() : submit()}
+        >
+          {#if busy}<span class="stop-glyph" aria-hidden="true"></span>{:else}<ArrowUp class="w-4 h-4" />{/if}
+        </button>
       </div>
     </div>
   </div>

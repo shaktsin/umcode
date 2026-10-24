@@ -299,7 +299,7 @@
     {:else}
       <div class="{variant === 'main' ? 'max-w-3xl' : ''} mx-auto px-4 py-4 space-y-4">
         {#each groups as g (g.turnId)}
-          {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '')}
+          {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '', g.turn?.status || '')}
           {@const executionOutcome = executionOutcomePresentation(g.items, g.turn?.status || '')}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}

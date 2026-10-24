@@ -2,13 +2,13 @@ package engine
 
 import (
 	"encoding/json"
-	"github.com/shaktsin/umcode/internal/tools"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/tools"
 )
 
 func TestTaskOutcomes(t *testing.T) {
@@ -50,6 +50,75 @@ func TestTaskOutcomes(t *testing.T) {
 				t.Fatal("engine rewrote the model's conclusion")
 			}
 		})
+	}
+}
+
+func TestFailedSearchItemKeepsAdvisoryStatus(t *testing.T) {
+	e, th, turn, ctx, _ := expectationEngine(t, "mutation", "file_content")
+	out := expectationTool(t, e, th, turn, ctx, "file.search", `{"path":"notes.txt","pattern":"before"}`)
+	if !out.IsError {
+		t.Fatal("file.search on a file should fail")
+	}
+	items, err := e.Store.ListItems(ctx, th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Kind != protocol.ItemToolCall || item.Tool == nil || item.Tool.Name != "file.search" {
+			continue
+		}
+		f := taskItemMetadata(item).ActionFailure
+		if f == nil || !f.Advisory || !f.Retryable {
+			t.Fatalf("saved tool item lost advisory status: %+v", f)
+		}
+		return
+	}
+	t.Fatal("file.search item was not saved")
+}
+
+func TestVerifiedRetryPublishesResolvedFailureItem(t *testing.T) {
+	e, th, turn, ctx, root := expectationEngine(t, "mutation", "file_content")
+	first := expectationTool(t, e, th, turn, ctx, "file.read", `{"path":"later.txt"}`)
+	if !first.IsError {
+		t.Fatal("missing file read should fail")
+	}
+	items, err := e.Store.ListItems(ctx, th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedID := ""
+	for _, item := range items {
+		if item.Kind == protocol.ItemToolCall && item.Tool != nil && item.Tool.Name == "file.read" {
+			failedID = item.ID
+		}
+	}
+	if failedID == "" {
+		t.Fatal("failed read item missing")
+	}
+	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("ready"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	published := false
+	e.Bus.Add(&memorySubscriber{thread: th.ID, notify: func(method string, params any) {
+		if method != protocol.NotifyItemCompleted {
+			return
+		}
+		event, ok := params.(protocol.ItemEvent)
+		if !ok || event.Item.ID != failedID {
+			return
+		}
+		var data struct {
+			ActionFailureResolvedByID string `json:"actionFailureResolvedById"`
+		}
+		_ = json.Unmarshal(event.Item.Data, &data)
+		published = data.ActionFailureResolvedByID != ""
+	}})
+	second := expectationTool(t, e, th, turn, ctx, "file.read", `{"path":"later.txt"}`)
+	if second.IsError {
+		t.Fatalf("retry failed: %s", second.Output)
+	}
+	if !published {
+		t.Fatal("verified retry did not publish resolved historical item")
 	}
 }
 

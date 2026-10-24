@@ -125,6 +125,68 @@ func TestTaskLedger(t *testing.T) {
 	}
 }
 
+func TestListItemsProjectsVerifiedFailureResolution(t *testing.T) {
+	st, th := workFixture(t)
+	ctx := t.Context()
+	user := protocol.Item{ID: NewID("itm"), ThreadID: th.ID, Kind: protocol.ItemUserMessage, Status: protocol.ItemCompleted, Seq: 1, CreatedAt: time.Now()}
+	if err := st.SaveItem(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	task, err := st.CreateExecutionTask(ctx, protocol.ExecutionTask{ThreadID: th.ID, OriginItemID: user.ID, Objective: "Inspect a file"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := protocol.Turn{ID: NewID("trn"), ThreadID: th.ID, Status: protocol.TurnRunning, StartedAt: time.Now()}
+	if err := st.CreateTurn(ctx, turn); err != nil {
+		t.Fatal(err)
+	}
+	failed := protocol.Item{ID: NewID("itm"), ThreadID: th.ID, TurnID: turn.ID, Kind: protocol.ItemToolCall, Status: protocol.ItemFailed, Seq: 2, CreatedAt: time.Now()}
+	if err := st.SaveItem(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	op, err := st.CreateTaskOperation(ctx, protocol.TaskOperation{TaskID: task.ID, TurnID: turn.ID, ItemID: failed.ID, Tool: "file.search", Args: json.RawMessage(`{"pattern":"needle"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := protocol.ActionFailure{OperationID: op.ID, Category: "execution_failed", Message: "first search failed", Retryable: true}
+	failed.Data, _ = json.Marshal(map[string]any{"actionFailure": f})
+	if err := st.SaveItem(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	op, err = st.TransitionTaskOperation(ctx, op.ID, protocol.OperationTransition{ExpectedRevision: op.Revision, Status: "failed", Failure: &f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryItem := protocol.Item{ID: NewID("itm"), ThreadID: th.ID, TurnID: turn.ID, Kind: protocol.ItemToolCall, Status: protocol.ItemCompleted, Seq: 3, CreatedAt: time.Now()}
+	if err := st.SaveItem(ctx, retryItem); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := st.CreateTaskOperation(ctx, protocol.TaskOperation{TaskID: task.ID, TurnID: turn.ID, ItemID: retryItem.ID, Tool: "file.search", Args: json.RawMessage(`{"pattern":"needle"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err = st.TransitionTaskOperation(ctx, retry.ID, protocol.OperationTransition{ExpectedRevision: retry.Revision, Status: "succeeded", VerificationStatus: "passed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.TransitionTaskOperation(ctx, op.ID, protocol.OperationTransition{ExpectedRevision: op.Revision, Status: "failed", ResolvedByID: retry.ID, Resolution: "satisfied", Failure: &f}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := st.ListItems(ctx, th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data struct {
+		ActionFailureResolvedByID string `json:"actionFailureResolvedById"`
+	}
+	if err := json.Unmarshal(items[1].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.ActionFailureResolvedByID != retry.ID {
+		t.Fatalf("projected resolution = %q, want %q", data.ActionFailureResolvedByID, retry.ID)
+	}
+}
+
 func TestTaskLedgerInterruptedOperation(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "state.db")
