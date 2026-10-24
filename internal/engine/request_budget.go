@@ -163,6 +163,9 @@ func (e *Engine) requestEstimatorFactor(res resolved) float64 {
 	return factor
 }
 func (e *Engine) observeRequestUsage(res resolved, r requestBudgetReport, input int64, reported bool) {
+	if reported {
+		e.raiseObservedWindow(res, r, input)
+	}
 	if !reported || input <= 0 || input > 2147483647 || r.BaseEstimatedInput <= 0 || r.EstimateOrigin == "provider_tokenizer" {
 		return
 	}

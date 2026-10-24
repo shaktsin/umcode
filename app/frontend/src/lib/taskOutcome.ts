@@ -13,7 +13,19 @@ export function parseActionFailure(text: string): ActionFailure | null {
 }
 export function itemActionFailure(item: Item): ActionFailure | null {
   const data = item.data as { actionFailure?: unknown } | undefined;
+  if (resolvedFailure(item)) return null;
   return asFailure(data?.actionFailure) || (item.kind === 'error' ? parseActionFailure(item.text || '') : null);
+}
+function resolvedFailure(item: Item): boolean {
+  const data = item.data as { actionFailureResolvedById?: unknown } | undefined;
+  return typeof data?.actionFailureResolvedById === 'string' && data.actionFailureResolvedById.length > 0;
+}
+function resolvedTurnFailure(items: Item[], failure: ActionFailure | null): boolean {
+  return Boolean(failure?.operationId && items.some(item => {
+    if (!resolvedFailure(item)) return false;
+    const data = item.data as { actionFailure?: unknown } | undefined;
+    return asFailure(data?.actionFailure)?.operationId === failure.operationId;
+  }));
 }
 function correlated(a: ActionFailure | null, b: ActionFailure | null): boolean {
   if (!a || !b) return false;
@@ -21,7 +33,14 @@ function correlated(a: ActionFailure | null, b: ActionFailure | null): boolean {
   // Distinct operations may share one explicit permission blocker.
   return Boolean(a.operationId && a.operationId === b.operationId || a.blockerId && a.blockerId === b.blockerId);
 }
-export function primaryTaskFailure(items: Item[], turnError: string): ActionFailure | null {
+// Older tool records omitted the advisory flag that the engine stored on the
+// corresponding operation. A completed retryable file search is exploratory.
+function legacyAdvisorySearch(item: Item, turnStatus: string): boolean {
+  const failure = itemActionFailure(item);
+  return turnStatus === 'completed' && item.kind === 'toolCall' && item.tool?.name === 'file.search'
+    && failure?.category === 'execution_failed' && failure.retryable && !failure.advisory;
+}
+export function primaryTaskFailure(items: Item[], turnError: string, turnStatus = ''): ActionFailure | null {
   for (const item of [...items].reverse()) {
     if (item.kind !== 'agentMessage') continue;
     const f = itemActionFailure(item);
@@ -29,12 +48,13 @@ export function primaryTaskFailure(items: Item[], turnError: string): ActionFail
   }
   for (const item of [...items].reverse()) {
     const f = itemActionFailure(item);
-    if (f && !f.advisory) return f;
+    if (f && !f.advisory && !legacyAdvisorySearch(item, turnStatus)) return f;
   }
-  return parseActionFailure(turnError);
+  const turnFailure = parseActionFailure(turnError);
+  return (turnFailure?.advisory && turnStatus === 'completed') || resolvedTurnFailure(items, turnFailure) ? null : turnFailure;
 }
-export function taskFailurePresentation(items: Item[], turnError: string) {
-  const failure = primaryTaskFailure(items, turnError);
+export function taskFailurePresentation(items: Item[], turnError: string, turnStatus = '') {
+  const failure = primaryTaskFailure(items, turnError, turnStatus);
   // Without an identity we cannot safely hide historical messages.
   const matching = items.filter(item => correlated(itemActionFailure(item), failure));
   const summary = [...matching].reverse().find(item => item.kind === 'agentMessage');
@@ -42,8 +62,11 @@ export function taskFailurePresentation(items: Item[], turnError: string) {
   return {
     failure, text,
     details: [...items.filter(item => matching.includes(item) || isProvisionalExecution(item)).map(item => JSON.stringify(item, null, 2)), turnError].filter(Boolean).join('\n\n'),
-    hiddenItemIds: matching.filter(item => item.kind === 'agentMessage' || item.kind === 'error').map(item => item.id),
-    showTurnError: Boolean(turnError) && !correlated(parseActionFailure(turnError), failure),
+    hiddenItemIds: items.filter(item => (item.kind === 'agentMessage' || item.kind === 'error')
+      && (matching.includes(item) || resolvedFailure(item) || turnStatus === 'completed' && item.kind === 'error' && itemActionFailure(item)?.advisory)).map(item => item.id),
+    showTurnError: Boolean(turnError) && !resolvedTurnFailure(items, parseActionFailure(turnError))
+      && !(turnStatus === 'completed' && parseActionFailure(turnError)?.advisory)
+      && !correlated(parseActionFailure(turnError), failure),
   };
 }
 

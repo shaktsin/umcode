@@ -392,6 +392,26 @@ func scanItem(sc interface{ Scan(...any) error }) (protocol.Item, error) {
 
 // ListItems returns a thread's items in order. If upToSeq > 0 only items with seq <= upToSeq.
 func (s *Store) ListItems(ctx context.Context, threadID string, upToSeq int64) ([]protocol.Item, error) {
+	resolved := map[string]string{}
+	resolutions, err := s.DB.QueryContext(ctx, `SELECT o.id, json_extract(o.data_json, '$.resolvedById')
+		FROM task_operations o JOIN engine_tasks t ON t.id = o.task_id
+		WHERE t.thread_id = ? AND json_extract(o.data_json, '$.resolvedById') <> ''`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	for resolutions.Next() {
+		var id, by string
+		if err := resolutions.Scan(&id, &by); err != nil {
+			resolutions.Close()
+			return nil, err
+		}
+		resolved[id] = by
+	}
+	if err := resolutions.Err(); err != nil {
+		resolutions.Close()
+		return nil, err
+	}
+	resolutions.Close()
 	q := `SELECT ` + itemCols + ` FROM items WHERE thread_id = ?`
 	args := []any{threadID}
 	if upToSeq > 0 {
@@ -408,6 +428,20 @@ func (s *Store) ListItems(ctx context.Context, threadID string, upToSeq int64) (
 		it, err := scanItem(rows)
 		if err != nil {
 			return nil, err
+		}
+		if len(resolved) > 0 && len(it.Data) > 0 {
+			var data map[string]json.RawMessage
+			if json.Unmarshal(it.Data, &data) == nil {
+				var failure struct {
+					OperationID string `json:"operationId"`
+				}
+				if json.Unmarshal(data["actionFailure"], &failure) == nil {
+					if by := resolved[failure.OperationID]; by != "" {
+						data["actionFailureResolvedById"], _ = json.Marshal(by)
+						it.Data, _ = json.Marshal(data)
+					}
+				}
+			}
 		}
 		out = append(out, it)
 	}

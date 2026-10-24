@@ -15,7 +15,7 @@
  { id: 'optimization', label: 'Token optimization' },
     { id: 'engine', label: 'Engine & app' },
   ] as const;
-  let tab = $state<(typeof tabs)[number]['id']>('keys');
+  let tab = $state<(typeof tabs)[number]['id']>(tabs.some((t) => t.id === app.settingsTab) ? (app.settingsTab as (typeof tabs)[number]['id']) : 'keys');
 </script>
 
 <h1 class="page-title mb-3">Settings</h1>

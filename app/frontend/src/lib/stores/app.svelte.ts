@@ -25,6 +25,8 @@ class AppState {
   shell = $state('browser');
   status = $state<EngineStatus | null>(null);
   view = $state<View>('chat');
+  /** Settings tab to show when the settings view opens; lets other panels deep-link. */
+  settingsTab = $state<string>('keys');
   approvals = $state<Approval[]>([]);
   /** This session's answered approvals, shown as lines in the thread. Not restored after restart. */
   approvalRecords = $state<ApprovalRecord[]>([]);

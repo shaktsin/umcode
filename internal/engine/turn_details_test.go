@@ -8,7 +8,7 @@ import (
 	"github.com/shaktsin/umcode/internal/optimization"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/secrets"
-	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -25,7 +25,7 @@ func TestTurnDetailsFromAdmittedTurnAndReadDoesNotCallProvider(t *testing.T) {
 	home := t.TempDir()
 	cfg := config.Default(home)
 	cfg.LLM.Provider, cfg.LLM.Model = "claude", "deterministic"
-	st, err := store.Open(t.Context(), filepath.Join(home, "details.db"))
+	st, err := teststore.Open(t.Context(), filepath.Join(home, "details.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

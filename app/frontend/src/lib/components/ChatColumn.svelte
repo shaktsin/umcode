@@ -1,5 +1,6 @@
 <script lang="ts">
  import CompactionProgress from './CompactionProgress.svelte';
+ import CapacityNotice from './CapacityNotice.svelte';
   import { tick } from 'svelte';
   import { Sparkles, KeyRound, FolderPlus, Undo2, Check, Circle, LoaderCircle, FileText, ShieldCheck } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
@@ -298,7 +299,7 @@
     {:else}
       <div class="{variant === 'main' ? 'max-w-3xl' : ''} mx-auto px-4 py-4 space-y-4">
         {#each groups as g (g.turnId)}
-          {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '')}
+          {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '', g.turn?.status || '')}
           {@const executionOutcome = executionOutcomePresentation(g.items, g.turn?.status || '')}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}
@@ -400,5 +401,6 @@
 
   {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} />{/if}
   <CompactionProgress state={view.compaction} />
+  <CapacityNotice selection={view.selection} />
   <Composer {view} compact={variant === 'side'} />
 </div>

@@ -1053,6 +1053,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 				return out, err
 			}
 			contextRetried = true
+			e.learnContextOverflow(*res, err, report)
 			e.invalidateCapacity(*res)
 			res.forceCompaction = true
 			res.retryCause = "context_exhausted"
@@ -1957,6 +1958,8 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	}
 	if err != nil && taskOperation.ID != "" {
 		f := classifyActionFailure(taskOperation.ID, err)
+		f.Advisory = f.Advisory || workflowDiscoveryTool(name) && f.Retryable
+		f = e.taskReadbackFailure(ctx, taskOperation, f)
 		taskFailure = &f
 		mergeTaskItemData(&it, "actionFailure", f)
 	}

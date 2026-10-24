@@ -16,6 +16,7 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 )
 
 type taskScriptProvider struct {
@@ -145,7 +146,7 @@ func taskRuntimeFixture(t *testing.T, mode string, restrict bool) (*Engine, prot
 	cfg.LLM.Provider = "claude"
 	cfg.LLM.Model = "deterministic"
 	cfg.Models.DesignedWorkflow = true
-	st, err := store.Open(t.Context(), filepath.Join(cfg.Home, "state.db"))
+	st, err := teststore.Open(t.Context(), filepath.Join(cfg.Home, "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

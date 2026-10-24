@@ -50,6 +50,7 @@ type Engine struct {
 	requestCalibration map[capacityKey]float64
 	capacityMu         sync.Mutex
 	capacityCache      map[capacityKey]capacityCacheEntry
+	observedCapacity   map[capacityKey]observedWindow
 	evaluationPolicy   *optimization.Policy
 	selectionHook      func() // instance-local failure seam, set before use
 	discoveryHook      func()

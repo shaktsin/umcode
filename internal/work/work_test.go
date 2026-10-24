@@ -19,6 +19,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 )
 
 func TestSuccessfulDiscoveryOwnsCompactEvidence(t *testing.T) {
@@ -482,12 +483,12 @@ type fixture struct {
 	th  protocol.Thread
 }
 
-// newFixture builds a service over an in-memory store with a clock that
+// newFixture builds a service over an isolated store with a clock that
 // advances one second per reading, so ordering is deterministic.
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, ":memory:")
+	st, err := teststore.Open(ctx, filepath.Join(t.TempDir(), "work.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

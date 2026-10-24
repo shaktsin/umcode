@@ -272,6 +272,18 @@ func (e *Engine) recordTaskOutcome(ctx context.Context, id string, item protocol
 		if _, err := e.Store.TransitionTaskOperation(ctx, past.ID, protocol.OperationTransition{ExpectedRevision: past.Revision, Status: past.Status, VerificationStatus: "passed", EvidenceIDs: []string{item.ID}, ResolvedByID: op.ID, Resolution: "satisfied", Failure: past.Failure}); err != nil {
 			return err
 		}
+		// Refresh the original chat items as soon as the retry is verified.
+		// ListItems projects the authoritative resolution onto historical items.
+		items, err := e.Store.ListItems(ctx, task.ThreadID, 0)
+		if err != nil {
+			return err
+		}
+		for _, previous := range items {
+			failure := taskItemMetadata(previous).ActionFailure
+			if failure != nil && failure.OperationID == past.ID {
+				e.publishTurnEvent(ctx, task.ThreadID, protocol.NotifyItemCompleted, protocol.ItemEvent{Item: previous})
+			}
+		}
 	}
 	return nil
 }

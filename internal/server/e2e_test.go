@@ -25,6 +25,7 @@ import (
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/server"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 )
 
 // fakeProvider replays scripted responses. Each call pops the next script.
@@ -141,7 +142,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	st, err := store.Open(ctx, filepath.Join(dir, "umcode.db"))
+	st, err := teststore.Open(ctx, filepath.Join(dir, "umcode.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,7 +792,7 @@ func TestWebSocketTransport(t *testing.T) {
 	t.Setenv("UMCODE_HOME", dir)
 	cfg := config.Default(dir)
 	ctx := context.Background()
-	st, err := store.Open(ctx, ":memory:")
+	st, err := teststore.Open(ctx, filepath.Join(dir, "websocket.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

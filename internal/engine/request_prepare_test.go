@@ -32,14 +32,17 @@ func TestFallbackRepreparesForSmallerWindow(t *testing.T) {
 		}
 	}
 }
-func TestCapacityFailureRetainsCurrentRequest(t *testing.T) {
+func TestUnknownCapacityAdmitsRequestWithDefaultWindow(t *testing.T) {
 	e, _, _, _ := taskRuntimeFixture(t, "summary_only", false)
 	req := llm.Request{Messages: []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("preserve me", 1000))}}
 	original := req.Messages[0].Parts[0].Text
 	res := resolved{sel: protocol.ModelSelection{Provider: "openai_compatible", Model: "unknown"}}
-	_, _, err := e.prepareModelRequest(t.Context(), t.Context(), protocol.Turn{}, &res, req, "chat", newTurnBudget(protocol.ExecutionLimits{}))
-	if !errors.Is(err, ErrCapacityUnknown) || req.Messages[0].Parts[0].Text != original {
-		t.Fatal("lost request or missing capacity error", err)
+	prepared, report, err := e.prepareModelRequest(t.Context(), t.Context(), protocol.Turn{}, &res, req, "chat", newTurnBudget(protocol.ExecutionLimits{}))
+	if err != nil || report.CapacitySource != "default" || report.Window != DefaultContextWindow {
+		t.Fatalf("unknown capacity blocked or mislabeled the request: %+v %v", report, err)
+	}
+	if req.Messages[0].Parts[0].Text != original || prepared.Messages[0].Parts[0].Text != original {
+		t.Fatal("request text changed during admission")
 	}
 }
 func TestBudgetingRetainsSharedLimits(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 	"github.com/shaktsin/umcode/internal/vault"
 	"github.com/shaktsin/umcode/internal/work"
 )
@@ -18,7 +19,7 @@ func storageTestEngine(t *testing.T) (*Engine, *store.Store) {
 	t.Helper()
 	home := t.TempDir()
 	cfg := config.Default(home)
-	st, err := store.Open(t.Context(), filepath.Join(home, "storage.db"))
+	st, err := teststore.Open(t.Context(), filepath.Join(home, "storage.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

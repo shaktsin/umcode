@@ -242,6 +242,8 @@
 .icon-button.send-button { background: var(--color-clay); color: #fff; }
 .icon-button.send-button:hover:not(:disabled) { background: var(--color-clay); color: #fff; filter: brightness(1.1); }
 .icon-button.send-button:disabled { background: var(--color-raised); color: var(--color-muted); cursor: not-allowed; }
+.icon-button.composer-submit { border-radius: 50%; }
+.composer-submit .stop-glyph { width: 10px; height: 10px; border-radius: 2px; background: currentColor; }
 .new-chat-button {
   width: 100%;
   height: 34px;

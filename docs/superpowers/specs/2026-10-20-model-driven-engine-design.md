@@ -78,11 +78,11 @@ Resolve total capacity as follows:
 - Prefer trustworthy runtime metadata about the loaded model from a supported server adapter. Discovery is read-only, bounded, and uses the configured endpoint and its existing authorization.
 - A configured per-endpoint/model capacity can supply missing runtime capacity or lower it. It cannot exceed a known runtime allocation; when both exist, use the smaller value.
 - Catalog metadata can supply capacity where appropriate, but an advertised architectural maximum is only an upper bound for a local server, not evidence of its loaded allocation.
-- When no usable capacity is known for a local endpoint, report that capacity is unknown and provide a persistent model-settings field. Do not assign a large fictional window or repeatedly ask for a value in chat. Preserve the user's request so the turn can be retried after configuration.
+- When no usable capacity is known for an endpoint, do not block the turn or require configuration. Assume a 256,000-token window labelled `default`, show a dismissible chat notice, lower the window on a confirmed overflow (using the limit the server states when available) and raise it when successful requests approach it. An optional model-settings field remains for users who know the exact limit. Never repeatedly ask for a value in chat. (Revised 2026-10-24; previously an unknown window was an actionable settings error.)
 
 Refresh on endpoint/model changes, model reload evidence, and explicit settings refresh. Invalidate capacity and request-estimation state on relevant changes. Metadata lookup failure must not discard a previously valid override. A lower newly observed runtime limit wins on the next request.
 
-No provider-specific discovery endpoint is assumed universal. The implementation plan must select supported adapters against their actual response contracts, with fixtures. Unknown OpenAI-compatible servers use the override path when reliable discovery is unavailable.
+No provider-specific discovery endpoint is assumed universal. The implementation plan must select supported adapters against their actual response contracts, with fixtures. Unknown OpenAI-compatible servers use the assumed default and overflow learning, or the optional override, when reliable discovery is unavailable.
 
 ## 6. Request budgeting
 
@@ -224,4 +224,4 @@ The inspected local Codex checkout provides reference behavior, not a dependency
 - `codex-rs/core/src/session/review.rs` and multi-agent handlers: separate review and configurable child context.
 - `codex-rs/protocol/src/openai_models.rs`: model-specific usable windows and compaction thresholds.
 
-Do not copy its 272k fallback window for unknown model IDs. Account for incoming user input and all request components before dispatch, including the pre-compaction accounting gap noted in the inspected source. UMCode's local-model support requires its own validated endpoint capacity and conservative estimation behavior. Codex's configurable stop/approval hooks do not justify reinstating a mandatory UMCode semantic gate.
+UMCode's own fallback is 256k with a visible notice and overflow learning; Codex's 272k fallback is silent apart from a log warning. Account for incoming user input and all request components before dispatch, including the pre-compaction accounting gap noted in the inspected source. UMCode's local-model support requires its own validated endpoint capacity and conservative estimation behavior. Codex's configurable stop/approval hooks do not justify reinstating a mandatory UMCode semantic gate.

@@ -19,6 +19,7 @@ import (
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
@@ -77,7 +78,7 @@ func delegationFixture(t *testing.T) (*Engine, protocol.Thread, string, *delegat
 	cfg := config.Default(home)
 	cfg.LLM.Provider = "claude"
 	cfg.LLM.Model = "deterministic"
-	st, err := store.Open(t.Context(), filepath.Join(home, "test.db"))
+	st, err := teststore.Open(t.Context(), filepath.Join(home, "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

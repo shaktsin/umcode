@@ -4,9 +4,16 @@ UMCode sends the original request to the coding model without an intent-classifi
 
 ## Configure a local endpoint
 
-Open Settings → Models → Model context capacity. Select the credential and model used by the chat. Profiles are bound to a hashed provider/endpoint/model identity; credentials and endpoint secrets are not copied into diagnostic records.
+No setup is required. Settings → Models → Model context window (optional) shows each model's effective window and lets you override it. Profiles are bound to a hashed provider/endpoint/model identity; credentials and endpoint secrets are not copied into diagnostic records.
 
-For Ollama, select the Ollama backend. UMCode reads the loaded model's actual allocation from `/api/ps`, not its advertised maximum training context. A lower configured context window acts as a ceiling. For a generic OpenAI-compatible server without reliable runtime metadata, enter its actual serving context window. Unknown capacity produces an actionable settings error and leaves the request saved.
+For Ollama, select the Ollama backend. UMCode reads the loaded model's actual allocation from `/api/ps`, not its advertised maximum training context. A lower configured context window acts as a ceiling. For a generic OpenAI-compatible server without reliable runtime metadata, you may enter its actual serving context window, but nothing requires it.
+
+When no runtime, catalog, override or learned window exists, UMCode assumes 256,000 tokens (source `default`) and the chat shows a dismissible notice saying so. The assumption never blocks a turn:
+
+- A confirmed context overflow lowers the window. A limit stated in the provider's error text (for example “maximum context length is 32768 tokens” or llama.cpp's `n_ctx`) is used as is and is never raised later. Otherwise the assumed window is halved relative to the rejected request, then compaction retries once.
+- A successful request that used at least 80% of an assumed window raises it to 125% of the reported input, so large-context servers are not compacted early.
+- A configured override, runtime allocation or catalog window is never guessed over; an overflow can only lower it when the server states its limit.
+- Learned windows are kept per endpoint/model identity for the life of the engine process and are not written to saved settings.
 
 Capacity discovery is cached briefly and refreshed at turn admission, explicit Settings refresh, and confirmed context overflow. Changing an override invalidates the matching cache. Different credential/endpoint/model identities do not share observed allocation or estimate calibration.
 
