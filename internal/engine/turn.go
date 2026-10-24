@@ -1053,6 +1053,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 				return out, err
 			}
 			contextRetried = true
+			e.learnContextOverflow(*res, err, report)
 			e.invalidateCapacity(*res)
 			res.forceCompaction = true
 			res.retryCause = "context_exhausted"

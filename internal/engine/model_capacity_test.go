@@ -110,11 +110,62 @@ func TestCapacityDiscoveryFailurePreservesOverride(t *testing.T) {
 		t.Fatalf("discovery failure discarded valid override: %+v %v", got, err)
 	}
 }
-func TestUnknownLocalCapacityIsActionable(t *testing.T) {
+func TestUnknownLocalCapacityUsesDefaultWindow(t *testing.T) {
 	e, res, _ := runtimeCapacityFixture(t, "generic", nil, func(w http.ResponseWriter, r *http.Request) { t.Error("generic metadata must not make a network call") })
-	_, err := e.resolveCapacity(t.Context(), res)
-	if !errors.Is(err, ErrCapacityUnknown) {
-		t.Fatalf("advertised maximum substituted for actual allocation: %v", err)
+	got, err := e.resolveCapacity(t.Context(), res)
+	if err != nil || got.Window != DefaultContextWindow || got.Source != "default" {
+		t.Fatalf("unknown capacity must fall back to the default window without blocking: %+v %v", got, err)
+	}
+}
+func TestOverflowLearnsServerStatedLimit(t *testing.T) {
+	e, res, _ := runtimeCapacityFixture(t, "generic", nil, func(w http.ResponseWriter, r *http.Request) {})
+	failure := &llm.Error{Provider: "openai_compatible", Status: 400, Body: "This model's maximum context length is 32768 tokens"}
+	e.learnContextOverflow(res, failure, requestBudgetReport{CapacitySource: "default", Window: DefaultContextWindow, EstimatedInput: 100000})
+	got, err := e.resolveCapacity(t.Context(), res)
+	if err != nil || got.Window != 32768 || got.Source != "observed" {
+		t.Fatalf("server-stated limit not learned: %+v %v", got, err)
+	}
+	// A later guess must not replace a limit the server stated.
+	e.learnContextOverflow(res, errors.New("context overflow"), requestBudgetReport{CapacitySource: "observed", Window: 32768, EstimatedInput: 20000, ReservedOutput: 8000})
+	if got, _ = e.resolveCapacity(t.Context(), res); got.Window != 32768 {
+		t.Fatalf("guess replaced authoritative limit: %+v", got)
+	}
+}
+func TestOverflowWithoutStatedLimitHalvesAssumedWindow(t *testing.T) {
+	e, res, _ := runtimeCapacityFixture(t, "generic", nil, func(w http.ResponseWriter, r *http.Request) {})
+	e.learnContextOverflow(res, errors.New("context overflow"), requestBudgetReport{CapacitySource: "default", Window: DefaultContextWindow, EstimatedInput: 100000, ReservedOutput: 20000})
+	got, err := e.resolveCapacity(t.Context(), res)
+	if err != nil || got.Window != 60000 || got.Source != "observed" {
+		t.Fatalf("assumed window not reduced: %+v %v", got, err)
+	}
+}
+func TestOverflowNeverGuessesOverConfiguredWindow(t *testing.T) {
+	override := 16384
+	e, res, _ := runtimeCapacityFixture(t, "generic", &override, func(w http.ResponseWriter, r *http.Request) {})
+	e.learnContextOverflow(res, errors.New("context overflow"), requestBudgetReport{CapacitySource: "override", Window: override, EstimatedInput: 10000})
+	got, err := e.resolveCapacity(t.Context(), res)
+	if err != nil || got.Window != override || got.Source != "override" {
+		t.Fatalf("configured window altered by a guess: %+v %v", got, err)
+	}
+}
+func TestSuccessfulUsageRaisesAssumedWindow(t *testing.T) {
+	e, res, _ := runtimeCapacityFixture(t, "generic", nil, func(w http.ResponseWriter, r *http.Request) {})
+	e.observeRequestUsage(res, requestBudgetReport{CapacitySource: "default", Window: DefaultContextWindow}, 100000, true)
+	if got, _ := e.resolveCapacity(t.Context(), res); got.Window != DefaultContextWindow || got.Source != "default" {
+		t.Fatalf("low usage changed the assumed window: %+v", got)
+	}
+	e.observeRequestUsage(res, requestBudgetReport{CapacitySource: "default", Window: DefaultContextWindow}, 240000, true)
+	got, err := e.resolveCapacity(t.Context(), res)
+	if err != nil || got.Window != 300000 || got.Source != "observed" {
+		t.Fatalf("usage near the assumed window did not raise it: %+v %v", got, err)
+	}
+}
+func TestStatedLimitIsNotRaisedByUsage(t *testing.T) {
+	e, res, _ := runtimeCapacityFixture(t, "generic", nil, func(w http.ResponseWriter, r *http.Request) {})
+	e.learnContextOverflow(res, &llm.Error{Status: 400, Body: "maximum context length is 32768 tokens"}, requestBudgetReport{CapacitySource: "default", Window: DefaultContextWindow})
+	e.observeRequestUsage(res, requestBudgetReport{CapacitySource: "observed", Window: 32768}, 32000, true)
+	if got, _ := e.resolveCapacity(t.Context(), res); got.Window != 32768 {
+		t.Fatalf("server-stated limit was raised: %+v", got)
 	}
 }
 func TestCapacityRefreshInvalidatesPriorAllocation(t *testing.T) {

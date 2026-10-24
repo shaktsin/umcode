@@ -1,5 +1,6 @@
 <script lang="ts">
  import CompactionProgress from './CompactionProgress.svelte';
+ import CapacityNotice from './CapacityNotice.svelte';
   import { tick } from 'svelte';
   import { Sparkles, KeyRound, FolderPlus, Undo2, Check, Circle, LoaderCircle, FileText, ShieldCheck } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
@@ -400,5 +401,6 @@
 
   {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} />{/if}
   <CompactionProgress state={view.compaction} />
+  <CapacityNotice selection={view.selection} />
   <Composer {view} compact={variant === 'side'} />
 </div>

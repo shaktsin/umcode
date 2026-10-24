@@ -238,8 +238,8 @@
 {/if}
 
 <details class="card p-4 mb-5">
- <summary class="cursor-pointer text-sm font-medium text-ink">Model context capacity</summary>
- <p class="text-xs text-muted mt-2">Set the actual serving limit for each endpoint. Capacity applies automatically across chats using that endpoint and model.</p>
+ <summary class="cursor-pointer text-sm font-medium text-ink">Model context window (optional)</summary>
+ <p class="text-xs text-muted mt-2">Nothing to set up: UMCode detects or learns each model’s context window automatically. Only change it if you know your server’s exact limit.</p>
  {#each draft.models.filter(m => m.enabled) as m (m.id)}
   <ModelCapacitySettings provider={m.provider} model={m.model} name={m.name} />
  {/each}

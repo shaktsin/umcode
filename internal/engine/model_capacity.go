@@ -115,7 +115,94 @@ func (e *Engine) SetModelCapacity(ctx context.Context, p protocol.ModelCapacityP
 	return e.ModelCapacity(ctx, p)
 }
 
-var ErrCapacityUnknown = errors.New("model serving capacity is unknown; set its context window in Settings → Models → Model context capacity")
+// DefaultContextWindow is assumed when no runtime, catalog, override or learned
+// window exists. It never blocks a turn: a confirmed overflow lowers it to the
+// limit the server reports, and observed usage near it raises it.
+const DefaultContextWindow = 256000
+
+// minLearnedWindow keeps a guessed window from collapsing below a usable size.
+const minLearnedWindow = 8192
+
+// ErrCapacityUnknown is returned only for a request whose capacity has no
+// positive window. resolveCapacity always supplies one, so it is a safety net.
+var ErrCapacityUnknown = errors.New("model context window is not set")
+
+// observedWindow is a window learned from a provider response. Authoritative
+// values were stated by the server and are never raised by later usage.
+type observedWindow struct {
+	Window        int
+	Authoritative bool
+}
+
+func (e *Engine) observedWindowFor(key capacityKey) (observedWindow, bool) {
+	e.capacityMu.Lock()
+	defer e.capacityMu.Unlock()
+	w, ok := e.observedCapacity[key]
+	return w, ok && w.Window > 0
+}
+
+// learnContextOverflow records the serving window after a confirmed context
+// overflow: the limit parsed from the provider error when stated, otherwise
+// half of the rejected request when the window was only assumed.
+func (e *Engine) learnContextOverflow(res resolved, err error, r requestBudgetReport) {
+	key, keyErr := capacityIdentity(res)
+	if keyErr != nil {
+		return
+	}
+	window, authoritative := 0, false
+	var provider *llm.Error
+	if errors.As(err, &provider) {
+		window = llm.ParseContextLimit(provider.Body)
+		authoritative = window > 0
+	}
+	if window == 0 {
+		if r.CapacitySource != "default" && r.CapacitySource != "observed" {
+			return
+		}
+		window = max(minLearnedWindow, (r.EstimatedInput+r.ReservedOutput)/2)
+		if r.Window > 0 && window >= r.Window {
+			return
+		}
+	}
+	e.capacityMu.Lock()
+	defer e.capacityMu.Unlock()
+	if e.observedCapacity == nil {
+		e.observedCapacity = make(map[capacityKey]observedWindow)
+	}
+	cur := e.observedCapacity[key]
+	if !authoritative && cur.Authoritative {
+		return
+	}
+	e.observedCapacity[key] = observedWindow{Window: window, Authoritative: authoritative}
+	delete(e.capacityCache, key)
+}
+
+// raiseObservedWindow lets an assumed window grow when a successful request
+// came close to it, so large-context servers are not compacted needlessly.
+func (e *Engine) raiseObservedWindow(res resolved, r requestBudgetReport, input int64) {
+	if (r.CapacitySource != "default" && r.CapacitySource != "observed") || r.Window <= 0 || input <= 0 {
+		return
+	}
+	if input*10 < int64(r.Window)*8 {
+		return
+	}
+	target := min(input*5/4, int64(2147483647))
+	key, err := capacityIdentity(res)
+	if err != nil {
+		return
+	}
+	e.capacityMu.Lock()
+	defer e.capacityMu.Unlock()
+	if e.observedCapacity == nil {
+		e.observedCapacity = make(map[capacityKey]observedWindow)
+	}
+	cur := e.observedCapacity[key]
+	if cur.Authoritative || target <= int64(max(cur.Window, r.Window)) {
+		return
+	}
+	e.observedCapacity[key] = observedWindow{Window: int(target)}
+	delete(e.capacityCache, key)
+}
 
 type capacityKey struct{ Provider, EndpointID, Model, CredentialID string }
 type capacityCacheEntry struct {
@@ -221,8 +308,16 @@ func (e *Engine) resolveCapacity(ctx context.Context, res resolved) (models.Capa
 			cap.Source = "override"
 		}
 	}
-	if cap.Window <= 0 {
-		return models.Capacity{}, ErrCapacityUnknown
+	if observed, ok := e.observedWindowFor(key); ok {
+		switch {
+		case cap.Window == 0:
+			cap.Window, cap.Source = observed.Window, "observed"
+		case cap.Source != "runtime" && observed.Window < cap.Window:
+			cap.Window, cap.Source = observed.Window, "observed"
+		}
+	}
+	if cap.Window == 0 {
+		cap.Window, cap.Source = DefaultContextWindow, "default"
 	}
 	if profile.MaxOutputTokens != nil && (cap.MaxOutput == 0 || *profile.MaxOutputTokens < cap.MaxOutput) {
 		cap.MaxOutput = *profile.MaxOutputTokens
