@@ -214,7 +214,10 @@ func readError(provider string, resp *http.Response) error {
 }
 
 // HTTPClient is used by all adapters; tests may replace it.
-var HTTPClient = &http.Client{Timeout: 10 * time.Minute}
+// No overall Timeout: http.Client.Timeout bounds the whole exchange including
+// the streamed body, which cuts off slow local models (long prefill + thinking).
+// Cancellation still flows through the request context.
+var HTTPClient = &http.Client{}
 
 // Registry holds adapters by id.
 type Registry struct {

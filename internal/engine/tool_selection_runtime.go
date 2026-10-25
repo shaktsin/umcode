@@ -380,7 +380,9 @@ func currentSelectionScope(ctx context.Context, p *protocol.Project) context.Con
 		return ctx
 	}
 	narrowed := *scope
-	narrowed.AllowNet = scope.AllowNet && boolOr(p.Tools.Network, false)
+	// scope.AllowNet already carries the configured default; only an explicit
+	// project opt-out narrows it further.
+	narrowed.AllowNet = scope.AllowNet && boolOr(p.Tools.Network, true)
 	narrowed.UseCompute = scope.UseCompute && boolOr(p.Tools.Compute, false)
 	narrowed.AllowComputerUse = scope.AllowComputerUse && boolOr(p.Tools.ComputerUse, false)
 	narrowed.ComputeVCPUs = intOr(p.Tools.ComputeVCPUs, 0)
