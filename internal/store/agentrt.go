@@ -206,7 +206,10 @@ func scanAgentPlan(row interface{ Scan(...any) error }) (protocol.AgentPlan, err
 	return p, nil
 }
 
-// SaveAgentPlan inserts a plan or replaces the stored plan with the same ID. It
+// SaveAgentPlan inserts a proposed plan or revises a stored plan that is still
+// proposed. It refuses (ErrAgentTransition) any State other than proposed, a
+// set ApprovedAt, and saving over a plan that is approved or superseded, so an
+// approved plan can never be rewritten and a superseded one never revived. It
 // performs no supersede logic; use ApproveAgentPlan for approval.
 func (s *Store) SaveAgentPlan(ctx context.Context, p protocol.AgentPlan) error {
 	if p.ID == "" || p.ThreadID == "" {
@@ -215,28 +218,39 @@ func (s *Store) SaveAgentPlan(ctx context.Context, p protocol.AgentPlan) error {
 	if p.State == "" {
 		p.State = protocol.PlanProposed
 	}
+	if p.State != protocol.PlanProposed || p.ApprovedAt != nil {
+		return fmt.Errorf("%w: only a proposed, unapproved plan can be saved; use ApproveAgentPlan", ErrAgentTransition)
+	}
 	if p.Agents == nil {
 		p.Agents = []protocol.PlanAgent{}
 	}
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = time.Now().UTC()
 	}
-	approved := ""
-	if p.ApprovedAt != nil {
-		approved = FormatTime(*p.ApprovedAt)
-	}
 	js, err := marshalAll(p.Agents, p.Limits)
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, `INSERT INTO agent_plans (`+agentPlanCols+`) VALUES(?,?,?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET thread_id=excluded.thread_id,task_id=excluded.task_id,agents_json=excluded.agents_json,limits_json=excluded.limits_json,state=excluded.state,created_at=excluded.created_at,approved_at=excluded.approved_at`,
-		p.ID, p.ThreadID, p.TaskID, js[0], js[1], p.State, FormatTime(p.CreatedAt), approved)
-	return err
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO agent_plans (`+agentPlanCols+`) VALUES(?,?,?,?,?,?,?,'')
+ON CONFLICT(id) DO UPDATE SET task_id=excluded.task_id,agents_json=excluded.agents_json,limits_json=excluded.limits_json,created_at=excluded.created_at
+WHERE agent_plans.state='proposed' AND agent_plans.thread_id=excluded.thread_id`,
+		p.ID, p.ThreadID, p.TaskID, js[0], js[1], p.State, FormatTime(p.CreatedAt))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("%w: plan %s exists and is not a proposed plan of this thread", ErrAgentTransition, p.ID)
+	}
+	return nil
 }
 
-// ApproveAgentPlan approves a plan, binds it to taskID and supersedes the
-// thread's other approved plans in a single transaction.
+// ApproveAgentPlan approves a proposed plan, binds it to taskID (which must be
+// a task of the plan's thread) and supersedes the thread's other approved
+// plans in a single transaction. Approving again for the same task is a no-op.
 func (s *Store) ApproveAgentPlan(ctx context.Context, planID, taskID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -261,13 +275,31 @@ func (s *Store) ApproveAgentPlan(ctx context.Context, planID, taskID string) err
 	default:
 		return fmt.Errorf("%w: plan is %s", ErrAgentTransition, state)
 	}
+	var taskThread string
+	if err := tx.QueryRowContext(ctx, `SELECT thread_id FROM agent_tasks WHERE id=?`, taskID).Scan(&taskThread); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("task %s: %w", taskID, ErrNotFound)
+		}
+		return err
+	}
+	if taskThread != threadID {
+		return fmt.Errorf("%w: task %s does not belong to the plan's thread", ErrAgentConflict, taskID)
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE agent_plans SET state=? WHERE thread_id=? AND id<>? AND state=?`,
 		protocol.PlanSuperseded, threadID, planID, protocol.PlanApproved); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE agent_plans SET state=?,task_id=?,approved_at=? WHERE id=?`,
-		protocol.PlanApproved, taskID, Now(), planID); err != nil {
+	res, err := tx.ExecContext(ctx, `UPDATE agent_plans SET state=?,task_id=?,approved_at=? WHERE id=? AND state=?`,
+		protocol.PlanApproved, taskID, Now(), planID, protocol.PlanProposed)
+	if err != nil {
 		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("%w: plan %s is no longer proposed", ErrAgentConflict, planID)
 	}
 	return tx.Commit()
 }

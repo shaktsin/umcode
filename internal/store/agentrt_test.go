@@ -425,3 +425,79 @@ func TestRuntimeAgentsAndMessagesOrderByInsertion(t *testing.T) {
 		t.Fatalf("agents not in insertion order: %+v %v", agents, err)
 	}
 }
+
+func TestSaveAgentPlanOnlyWritesProposedPlans(t *testing.T) {
+	s, task := runtimeFixture(t)
+	now := time.Now().UTC()
+	if err := s.SaveAgentPlan(t.Context(), protocol.AgentPlan{ID: "X1", ThreadID: task.ThreadID, State: protocol.PlanApproved}); !errors.Is(err, ErrAgentTransition) {
+		t.Fatalf("approved state: %v", err)
+	}
+	if err := s.SaveAgentPlan(t.Context(), protocol.AgentPlan{ID: "X2", ThreadID: task.ThreadID, State: protocol.PlanSuperseded}); !errors.Is(err, ErrAgentTransition) {
+		t.Fatalf("superseded state: %v", err)
+	}
+	if err := s.SaveAgentPlan(t.Context(), protocol.AgentPlan{ID: "X3", ThreadID: task.ThreadID, ApprovedAt: &now}); !errors.Is(err, ErrAgentTransition) {
+		t.Fatalf("approvedAt set: %v", err)
+	}
+	// A proposed plan may be revised in place.
+	savePlan(t, s, "A", task.ThreadID)
+	revised := protocol.AgentPlan{ID: "A", ThreadID: task.ThreadID, Agents: []protocol.PlanAgent{{Name: "w"}, {Name: "r"}}, Limits: protocol.DefaultPlanLimits()}
+	if err := s.SaveAgentPlan(t.Context(), revised); err != nil {
+		t.Fatalf("revise proposed: %v", err)
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "A", task.ID); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := s.ApprovedAgentPlanForTask(t.Context(), task.ID)
+	if err != nil || len(approved.Agents) != 2 {
+		t.Fatalf("revision lost: %+v %v", approved, err)
+	}
+	// An approved plan cannot be rewritten or demoted.
+	if err := s.SaveAgentPlan(t.Context(), protocol.AgentPlan{ID: "A", ThreadID: task.ThreadID, Agents: []protocol.PlanAgent{{Name: "evil"}}}); !errors.Is(err, ErrAgentTransition) {
+		t.Fatalf("rewrite approved: %v", err)
+	}
+	after, err := s.ApprovedAgentPlanForTask(t.Context(), task.ID)
+	if err != nil || len(after.Agents) != 2 || after.State != protocol.PlanApproved || after.ApprovedAt == nil {
+		t.Fatalf("approved plan changed: %+v %v", after, err)
+	}
+	// A superseded plan cannot be revived.
+	savePlan(t, s, "B", task.ThreadID)
+	addTasks(t, s, task.ThreadID, "T2")
+	if err := s.ApproveAgentPlan(t.Context(), "B", "T2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveAgentPlan(t.Context(), protocol.AgentPlan{ID: "A", ThreadID: task.ThreadID}); !errors.Is(err, ErrAgentTransition) {
+		t.Fatalf("revive superseded: %v", err)
+	}
+	var state string
+	if err := s.DB.QueryRowContext(t.Context(), `SELECT state FROM agent_plans WHERE id='A'`).Scan(&state); err != nil || state != string(protocol.PlanSuperseded) {
+		t.Fatalf("A state=%q err=%v", state, err)
+	}
+}
+
+func TestApproveAgentPlanRequiresTaskOfPlanThread(t *testing.T) {
+	s, task := runtimeFixture(t)
+	other, err := s.CreateThread(t.Context(), protocol.Thread{Title: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CreateTurn(t.Context(), protocol.Turn{ID: "root2", ThreadID: other.ID, Status: protocol.TurnRunning, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CreateAgentTask(t.Context(), protocol.AgentTask{ID: "foreign", ThreadID: other.ID, RootTurnID: "root2", Activation: protocol.AgentActivationExplicitUser, State: protocol.AgentStateRunning, BaseRevision: "base"}); err != nil {
+		t.Fatal(err)
+	}
+	savePlan(t, s, "A", task.ThreadID)
+	if err := s.ApproveAgentPlan(t.Context(), "A", "foreign"); !errors.Is(err, ErrAgentConflict) {
+		t.Fatalf("foreign task: want ErrAgentConflict, got %v", err)
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "A", "no-such-task"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing task: want ErrNotFound, got %v", err)
+	}
+	var state string
+	if err := s.DB.QueryRowContext(t.Context(), `SELECT state FROM agent_plans WHERE id='A'`).Scan(&state); err != nil || state != string(protocol.PlanProposed) {
+		t.Fatalf("A state=%q err=%v", state, err)
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "A", task.ID); err != nil {
+		t.Fatal(err)
+	}
+}
