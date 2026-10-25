@@ -33,14 +33,23 @@ const (
 )
 
 // Service is the agent runtime as seen by the lead and by runtime agents.
+//
+// callerID (fromID for Message) names the calling agent; "" is the lead. A
+// caller may target only itself or its descendants; the lead may target any
+// agent of the task. Out-of-scope targets fail with ErrOutOfScope. List is
+// task-wide for the lead and returns the caller's descendants otherwise.
 type Service interface {
 	Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, error)
-	List(ctx context.Context, taskID string) ([]protocol.RuntimeAgent, error)
-	Status(ctx context.Context, taskID, id string) (protocol.RuntimeAgent, error)
-	Wait(ctx context.Context, taskID string, ids []string, mode WaitMode) ([]protocol.RuntimeAgent, error)
+	List(ctx context.Context, taskID, callerID string) ([]protocol.RuntimeAgent, error)
+	Status(ctx context.Context, taskID, callerID, id string) (protocol.RuntimeAgent, error)
+	Wait(ctx context.Context, taskID, callerID string, ids []string, mode WaitMode) ([]protocol.RuntimeAgent, error)
 	Message(ctx context.Context, taskID, fromID, toID, body, callID string) (protocol.AgentMessage, error)
-	Cancel(ctx context.Context, taskID, id string) error
+	Cancel(ctx context.Context, taskID, callerID, id string) error
 }
+
+// ErrOutOfScope reports a target that is neither the caller nor one of its
+// descendants.
+var ErrOutOfScope = errors.New("agent is outside the caller's subtree")
 
 // ErrSpawnReplayMismatch reports a spawn whose (TaskID, CallID) was already
 // used by a different request (caller, plan entry or assignment differ).
@@ -86,6 +95,12 @@ func WithResolveOptions(o ResolveOptions) Option {
 	return func(r *Runtime) { r.resolve = o }
 }
 
+// WithLeadCapabilities sets the lead's authority used when the lead (caller
+// "") spawns. The default is RootCapabilities().
+func WithLeadCapabilities(c protocol.AgentCapabilities) Option {
+	return func(r *Runtime) { r.lead = c }
+}
+
 // WithEvents registers a callback for persisted agent changes, including
 // creation. See NewScheduler for ordering guarantees.
 func WithEvents(fn func(protocol.RuntimeAgent)) Option {
@@ -100,6 +115,7 @@ type Runtime struct {
 	sched   *Scheduler
 	resolve ResolveOptions
 	events  func(protocol.RuntimeAgent)
+	lead    protocol.AgentCapabilities
 
 	// lifecycle serialises Spawn so admission, reservation and creation are
 	// atomic with respect to each other.
@@ -109,7 +125,7 @@ type Runtime struct {
 // NewRuntime returns a Runtime whose agents run under contexts derived from
 // base (see NewScheduler).
 func NewRuntime(s AgentStore, r Runner, base context.Context, opts ...Option) *Runtime {
-	rt := &Runtime{store: s}
+	rt := &Runtime{store: s, lead: RootCapabilities()}
 	for _, o := range opts {
 		o(rt)
 	}
@@ -187,7 +203,7 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 	}
 	ledger := RebuildLedger(all)
 
-	caller := protocol.RuntimeAgent{Capabilities: RootCapabilities(), Depth: 0, BudgetShare: 1.0}
+	caller := protocol.RuntimeAgent{Capabilities: r.lead, Depth: 0, BudgetShare: 1.0}
 	if req.CallerAgentID != "" {
 		caller, err = r.store.RuntimeAgent(ctx, req.TaskID, req.CallerAgentID)
 		if errors.Is(err, protocol.ErrNotFound) {
@@ -252,13 +268,74 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 	return res, true, nil
 }
 
-// List returns the task's agents in creation order.
-func (r *Runtime) List(ctx context.Context, taskID string) ([]protocol.RuntimeAgent, error) {
-	return r.store.RuntimeAgents(ctx, taskID)
+// scope loads the task's agents and checks that every target is callerID or
+// one of its descendants; the lead ("") may target any agent of the task.
+// An unknown target or caller is a not-found error.
+func (r *Runtime) scope(ctx context.Context, taskID, callerID string, targets ...string) error {
+	all, err := r.store.RuntimeAgents(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	parent := make(map[string]string, len(all))
+	for _, a := range all {
+		parent[a.ID] = a.ParentAgentID
+	}
+	if callerID != "" {
+		if _, ok := parent[callerID]; !ok {
+			return fmt.Errorf("caller agent %s: %w", callerID, protocol.ErrNotFound)
+		}
+	}
+	for _, id := range targets {
+		if _, ok := parent[id]; !ok {
+			return fmt.Errorf("agent %s: %w", id, protocol.ErrNotFound)
+		}
+		if callerID != "" && !descendsFrom(parent, id, callerID) {
+			return fmt.Errorf("agent %s: %w of %s", id, ErrOutOfScope, callerID)
+		}
+	}
+	return nil
 }
 
-// Status returns one agent of the task.
-func (r *Runtime) Status(ctx context.Context, taskID, id string) (protocol.RuntimeAgent, error) {
+// descendsFrom reports whether id is ancestor or one of its descendants.
+func descendsFrom(parent map[string]string, id, ancestor string) bool {
+	seen := map[string]bool{}
+	for cur := id; cur != "" && !seen[cur]; cur = parent[cur] {
+		if cur == ancestor {
+			return true
+		}
+		seen[cur] = true
+	}
+	return false
+}
+
+// List returns the task's agents in creation order: all of them for the lead,
+// the caller's descendants (excluding itself) otherwise.
+func (r *Runtime) List(ctx context.Context, taskID, callerID string) ([]protocol.RuntimeAgent, error) {
+	all, err := r.store.RuntimeAgents(ctx, taskID)
+	if err != nil || callerID == "" {
+		return all, err
+	}
+	parent := make(map[string]string, len(all))
+	for _, a := range all {
+		parent[a.ID] = a.ParentAgentID
+	}
+	if _, ok := parent[callerID]; !ok {
+		return nil, fmt.Errorf("caller agent %s: %w", callerID, protocol.ErrNotFound)
+	}
+	out := make([]protocol.RuntimeAgent, 0)
+	for _, a := range all {
+		if a.ID != callerID && descendsFrom(parent, a.ID, callerID) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// Status returns one agent of the task within the caller's scope.
+func (r *Runtime) Status(ctx context.Context, taskID, callerID, id string) (protocol.RuntimeAgent, error) {
+	if err := r.scope(ctx, taskID, callerID, id); err != nil {
+		return protocol.RuntimeAgent{}, fmt.Errorf("status: %w", err)
+	}
 	a, err := r.store.RuntimeAgent(ctx, taskID, id)
 	if err != nil {
 		return protocol.RuntimeAgent{}, fmt.Errorf("agent %s: %w", id, err)
@@ -268,14 +345,18 @@ func (r *Runtime) Status(ctx context.Context, taskID, id string) (protocol.Runti
 
 // Wait blocks until any (WaitAny) or all (WaitAll) of the listed agents are
 // terminal, or ctx is done, and returns their current states in ids order.
+// Every id must be within the caller's scope.
 // Waiters are woken only by scheduler-persisted transitions; writers outside
 // the scheduler (such as Recover's reconciliation) do not wake them.
-func (r *Runtime) Wait(ctx context.Context, taskID string, ids []string, mode WaitMode) ([]protocol.RuntimeAgent, error) {
+func (r *Runtime) Wait(ctx context.Context, taskID, callerID string, ids []string, mode WaitMode) ([]protocol.RuntimeAgent, error) {
 	if len(ids) == 0 {
 		return nil, errors.New("wait: no agent ids given")
 	}
 	if mode != WaitAny && mode != WaitAll {
 		return nil, fmt.Errorf("wait: unknown mode %q", mode)
+	}
+	if err := r.scope(ctx, taskID, callerID, ids...); err != nil {
+		return nil, fmt.Errorf("wait: %w", err)
 	}
 	for {
 		// Take the channel before reading state so no change is missed.
@@ -303,10 +384,14 @@ func (r *Runtime) Wait(ctx context.Context, taskID string, ids []string, mode Wa
 	}
 }
 
-// Message queues a message for a live agent of the task. fromID "" is the lead.
-// A non-empty callID makes the message idempotent per (task, callID): a retry
-// returns the stored message instead of queuing a duplicate.
+// Message queues a message for a live agent of the task within the sender's
+// scope. fromID "" is the lead. A non-empty callID makes the message
+// idempotent per (task, callID): a retry returns the stored message instead
+// of queuing a duplicate.
 func (r *Runtime) Message(ctx context.Context, taskID, fromID, toID, body, callID string) (protocol.AgentMessage, error) {
+	if err := r.scope(ctx, taskID, fromID, toID); err != nil {
+		return protocol.AgentMessage{}, fmt.Errorf("message: %w", err)
+	}
 	to, err := r.store.RuntimeAgent(ctx, taskID, toID)
 	if err != nil {
 		return protocol.AgentMessage{}, fmt.Errorf("message: recipient %s: %w", toID, err)
@@ -314,16 +399,15 @@ func (r *Runtime) Message(ctx context.Context, taskID, fromID, toID, body, callI
 	if isTerminal(to.State) {
 		return protocol.AgentMessage{}, fmt.Errorf("message: recipient %s is %s", toID, to.State)
 	}
-	if fromID != "" {
-		if _, err := r.store.RuntimeAgent(ctx, taskID, fromID); err != nil {
-			return protocol.AgentMessage{}, fmt.Errorf("message: sender %s: %w", fromID, err)
-		}
-	}
 	return r.store.EnqueueAgentMessage(ctx, protocol.AgentMessage{TaskID: taskID, FromAgentID: fromID, ToAgentID: toID, Body: body, CallID: callID})
 }
 
-// Cancel cancels an agent and its descendants. Their shares are free from the
-// next Spawn on, since the ledger is rebuilt from stored agents.
-func (r *Runtime) Cancel(ctx context.Context, taskID, id string) error {
+// Cancel cancels an agent within the caller's scope and its descendants.
+// Their shares are free from the next Spawn on, since the ledger is rebuilt
+// from stored agents.
+func (r *Runtime) Cancel(ctx context.Context, taskID, callerID, id string) error {
+	if err := r.scope(ctx, taskID, callerID, id); err != nil {
+		return fmt.Errorf("cancel: %w", err)
+	}
 	return r.sched.Cancel(ctx, taskID, id)
 }

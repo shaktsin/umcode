@@ -23,14 +23,25 @@ func (unavailableRunner) Run(context.Context, protocol.RuntimeAgent) (protocol.A
 }
 
 // registerAgentRuntime builds the agent runtime on base and registers its
-// model-facing tools in place of the legacy delegation agent tools. Every
-// caller is the lead ("") until runtime agents run their own turns.
+// model-facing tools in place of the legacy delegation agent tools. The lead
+// keeps the default RootCapabilities authority (agentrt.WithLeadCapabilities).
 func (e *Engine) registerAgentRuntime(reg *tools.Registry, base context.Context) {
 	e.AgentRuntime = agentrt.NewRuntime(e.Store, unavailableRunner{}, base)
-	lead := func(context.Context) string { return "" }
-	for _, tool := range tools.NewRuntimeAgentTools(e.AgentRuntime, e.authorizeDelegationTool, lead) {
+	for _, tool := range tools.NewRuntimeAgentTools(e.AgentRuntime, e.authorizeDelegationTool, runtimeCaller) {
 		reg.Add(tool)
 	}
+}
+
+// runtimeCaller resolves the calling agent for the runtime agent tools. It
+// fails closed: only the lead's own turn (no child execution marker) resolves,
+// as the lead (""). Child contexts do not resolve until runtime agents run
+// their own turns and carry their agent ID (TODO(Plan 2): resolve the runtime
+// agent's ID from its execution context here).
+func runtimeCaller(ctx context.Context) (string, bool) {
+	if delegationChild(ctx) || childExecutionFrom(ctx) != nil {
+		return "", false
+	}
+	return "", true
 }
 
 type toolOccurrenceKey struct{}

@@ -190,3 +190,18 @@ func TestRuntimeV2SpawnKeyIncludesTurnAndOccurrence(t *testing.T) {
 		t.Fatalf("agents = %d err=%v", len(all), err)
 	}
 }
+
+func TestRuntimeCallerFailsClosedForChildContexts(t *testing.T) {
+	ctx := t.Context()
+	if id, ok := runtimeCaller(ctx); !ok || id != "" {
+		t.Fatalf("lead ctx: id=%q ok=%v", id, ok)
+	}
+	for name, child := range map[string]context.Context{
+		"delegation child": WithDelegationChild(ctx),
+		"child execution":  withChildExecution(ctx, &childExecution{}),
+	} {
+		if id, ok := runtimeCaller(child); ok {
+			t.Fatalf("%s resolved as caller %q", name, id)
+		}
+	}
+}

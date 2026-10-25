@@ -54,7 +54,7 @@ func waitRuntimeState(t *testing.T, rt *Runtime, taskID, id string, want protoco
 	deadline := time.After(10 * time.Second)
 	for {
 		ch := rt.sched.Changed(taskID)
-		a, err := rt.Status(context.Background(), taskID, id)
+		a, err := rt.Status(context.Background(), taskID, "", id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +103,7 @@ func TestSpawnIsIdempotentByCallID(t *testing.T) {
 	if results[0].Agent.ID == "" || results[0].Agent.ID != results[1].Agent.ID {
 		t.Fatalf("ids differ: %q vs %q", results[0].Agent.ID, results[1].Agent.ID)
 	}
-	all, err := rt.List(t.Context(), task.ID)
+	all, err := rt.List(t.Context(), task.ID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestSpawnRefusesUnapprovedPlan(t *testing.T) {
 	if f := admissionField(t, err); f != "plan" {
 		t.Fatalf("field %q", f)
 	}
-	all, err := rt.List(t.Context(), task.ID)
+	all, err := rt.List(t.Context(), task.ID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestSpawnReportsPartialGrant(t *testing.T) {
 	if res.Agent.ID == "" {
 		t.Fatal("agent not created")
 	}
-	if _, err := rt.Status(t.Context(), task.ID, res.Agent.ID); err != nil {
+	if _, err := rt.Status(t.Context(), task.ID, "", res.Agent.ID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -204,7 +204,7 @@ func TestFifthQuarterShareRefused(t *testing.T) {
 	if f := admissionField(t, err); f != "budget.share" {
 		t.Fatalf("field %q", f)
 	}
-	if err := rt.Cancel(t.Context(), task.ID, ids[0]); err != nil {
+	if err := rt.Cancel(t.Context(), task.ID, "", ids[0]); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := rt.Spawn(t.Context(), spawnReq(task, "call-e", "e", 0.25)); err != nil {
@@ -263,7 +263,7 @@ func TestCancelParentWhileChildQueuedReturnsShare(t *testing.T) {
 	if _, err := rt.Spawn(t.Context(), spawnReq(task, "call-n", "next", 1.0)); admissionField(t, err) != "budget.share" {
 		t.Fatalf("expected share refusal, got %v", err)
 	}
-	if err := rt.Cancel(t.Context(), task.ID, parent.Agent.ID); err != nil {
+	if err := rt.Cancel(t.Context(), task.ID, "", parent.Agent.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{parent.Agent.ID, child.Agent.ID} {
@@ -298,14 +298,14 @@ func TestWaitAnyAndAll(t *testing.T) {
 	waitStarted(t, r, "a", "b")
 	ids := []string{a.Agent.ID, b.Agent.ID}
 
-	if _, err := rt.Wait(t.Context(), task.ID, nil, WaitAny); err == nil {
+	if _, err := rt.Wait(t.Context(), task.ID, "", nil, WaitAny); err == nil {
 		t.Fatal("empty ids accepted")
 	}
-	if _, err := rt.Wait(t.Context(), task.ID, []string{"nope"}, WaitAny); err == nil {
+	if _, err := rt.Wait(t.Context(), task.ID, "", []string{"nope"}, WaitAny); err == nil {
 		t.Fatal("unknown id accepted")
 	}
 	short, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	if _, err := rt.Wait(short, task.ID, ids, WaitAny); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := rt.Wait(short, task.ID, "", ids, WaitAny); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want deadline exceeded, got %v", err)
 	}
 	cancel()
@@ -316,8 +316,8 @@ func TestWaitAnyAndAll(t *testing.T) {
 	}
 	anyDone := make(chan out, 1)
 	allDone := make(chan out, 1)
-	go func() { ag, err := rt.Wait(context.Background(), task.ID, ids, WaitAny); anyDone <- out{ag, err} }()
-	go func() { ag, err := rt.Wait(context.Background(), task.ID, ids, WaitAll); allDone <- out{ag, err} }()
+	go func() { ag, err := rt.Wait(context.Background(), task.ID, "", ids, WaitAny); anyDone <- out{ag, err} }()
+	go func() { ag, err := rt.Wait(context.Background(), task.ID, "", ids, WaitAll); allDone <- out{ag, err} }()
 	select {
 	case o := <-anyDone:
 		t.Fatalf("wait(any) returned early: %+v", o)
@@ -372,7 +372,7 @@ func TestMessageDeliversToMailbox(t *testing.T) {
 		agents = append(agents, res.Agent)
 	}
 	a, b, c := agents[0], agents[1], agents[2]
-	m, err := rt.Message(t.Context(), task.ID, a.ID, b.ID, "hello", "")
+	m, err := rt.Message(t.Context(), task.ID, "", b.ID, "hello", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,10 +380,10 @@ func TestMessageDeliversToMailbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].ID != m.ID || pending[0].Body != "hello" || pending[0].FromAgentID != a.ID {
+	if len(pending) != 1 || pending[0].ID != m.ID || pending[0].Body != "hello" || pending[0].FromAgentID != "" {
 		t.Fatalf("pending %+v", pending)
 	}
-	if _, err := rt.Message(t.Context(), task.ID, "", b.ID, "from lead", ""); err != nil {
+	if _, err := rt.Message(t.Context(), task.ID, "", a.ID, "from lead", ""); err != nil {
 		t.Fatalf("lead message: %v", err)
 	}
 	if _, err := rt.Message(t.Context(), task.ID, a.ID, "nope", "x", ""); err == nil {
@@ -392,7 +392,7 @@ func TestMessageDeliversToMailbox(t *testing.T) {
 	waitStarted(t, r, "a", "b", "c")
 	r.finish("c", protocol.AgentResult{Summary: "done"}, nil)
 	waitRuntimeState(t, rt, task.ID, c.ID, protocol.AgentStateCompleted)
-	if _, err := rt.Message(t.Context(), task.ID, a.ID, c.ID, "too late", ""); err == nil {
+	if _, err := rt.Message(t.Context(), task.ID, "", c.ID, "too late", ""); err == nil {
 		t.Fatal("message to completed agent accepted")
 	}
 }
@@ -487,7 +487,7 @@ func TestSpawnRefusesUnknownAndTerminalCaller(t *testing.T) {
 			t.Fatalf("caller %s: field %q", caller, f)
 		}
 	}
-	all, err := rt.List(t.Context(), task.ID)
+	all, err := rt.List(t.Context(), task.ID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +553,7 @@ func TestSpawnReplayWithDifferentRequestIsRefused(t *testing.T) {
 	if err != nil || again.Agent.ID != first.Agent.ID {
 		t.Fatalf("identical replay: %+v %v", again.Agent, err)
 	}
-	if all, _ := rt.List(t.Context(), task.ID); len(all) != 1 {
+	if all, _ := rt.List(t.Context(), task.ID, ""); len(all) != 1 {
 		t.Fatalf("agents = %d", len(all))
 	}
 }
@@ -604,5 +604,100 @@ func TestSpawnQueuedReasonOnlyWhenQueued(t *testing.T) {
 	}
 	if !strings.HasPrefix(second.QueuedReason, "capacity:") {
 		t.Fatalf("second reason %q", second.QueuedReason)
+	}
+}
+
+func TestCallerScopedTargeting(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	r := newFakeRunner()
+	rt := newTestRuntime(t, s, r)
+	spawn := func(call, name, caller string) string {
+		t.Helper()
+		req := spawnReq(task, call, name, 0.2)
+		req.CallerAgentID = caller
+		res, err := rt.Spawn(t.Context(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Agent.ID
+	}
+	a := spawn("call-a", "a", "")
+	b := spawn("call-b", "b", "")
+	waitStarted(t, r, "a", "b")
+	a1 := spawn("call-a1", "a1", a)
+	waitStarted(t, r, "a1")
+	ctx := t.Context()
+
+	refused := func(what string, err error) {
+		t.Helper()
+		if !errors.Is(err, ErrOutOfScope) {
+			t.Fatalf("%s: want ErrOutOfScope, got %v", what, err)
+		}
+	}
+	refused("sibling cancels sibling", rt.Cancel(ctx, task.ID, b, a))
+	refused("child cancels parent", rt.Cancel(ctx, task.ID, a1, a))
+	_, err := rt.Status(ctx, task.ID, a, b)
+	refused("status of sibling", err)
+	_, err = rt.Wait(ctx, task.ID, a, []string{a1, b}, WaitAny)
+	refused("wait including sibling", err)
+	_, err = rt.Message(ctx, task.ID, a, b, "hi", "")
+	refused("message to sibling", err)
+	_, err = rt.Message(ctx, task.ID, a1, a, "hi", "")
+	refused("message to parent", err)
+	if _, err := rt.Status(ctx, task.ID, "ghost", a); err == nil || errors.Is(err, ErrOutOfScope) {
+		t.Fatalf("unknown caller: %v", err)
+	}
+	if got := stateOf(t, s, protocol.RuntimeAgent{TaskID: task.ID, ID: a}); got.State != protocol.AgentStateRunning {
+		t.Fatalf("refused cancel changed a: %s", got.State)
+	}
+
+	if _, err := rt.Status(ctx, task.ID, a, a1); err != nil {
+		t.Fatalf("parent status of child: %v", err)
+	}
+	if _, err := rt.Status(ctx, task.ID, a, a); err != nil {
+		t.Fatalf("self status: %v", err)
+	}
+	if _, err := rt.Message(ctx, task.ID, a, a1, "hi", ""); err != nil {
+		t.Fatalf("parent message to child: %v", err)
+	}
+	mine, err := rt.List(ctx, task.ID, a)
+	if err != nil || len(mine) != 1 || mine[0].ID != a1 {
+		t.Fatalf("non-lead list = %+v %v", mine, err)
+	}
+	if leaf, err := rt.List(ctx, task.ID, a1); err != nil || len(leaf) != 0 {
+		t.Fatalf("leaf list = %+v %v", leaf, err)
+	}
+	all, err := rt.List(ctx, task.ID, "")
+	if err != nil || len(all) != 3 {
+		t.Fatalf("lead list = %d %v", len(all), err)
+	}
+	if err := rt.Cancel(ctx, task.ID, a, a1); err != nil {
+		t.Fatalf("parent cancels child: %v", err)
+	}
+	waitRuntimeState(t, rt, task.ID, a1, protocol.AgentStateCancelled)
+	if err := rt.Cancel(ctx, task.ID, "", b); err != nil {
+		t.Fatalf("lead cancels b: %v", err)
+	}
+	waitRuntimeState(t, rt, task.ID, b, protocol.AgentStateCancelled)
+}
+
+func TestLeadCapabilitiesBoundLeadSpawns(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	lead := RootCapabilities()
+	lead.SpawnMax = 1
+	lead.Files = protocol.FilesRead
+	rt := newTestRuntime(t, s, newFakeRunner(), WithLeadCapabilities(lead))
+	first, err := rt.Spawn(t.Context(), spawnReq(task, "call-1", "a", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Granted.Files != protocol.FilesRead {
+		t.Fatalf("granted files %q exceed the lead's read", first.Granted.Files)
+	}
+	_, err = rt.Spawn(t.Context(), spawnReq(task, "call-2", "b", 0.25))
+	if f := admissionField(t, err); f != "spawn" {
+		t.Fatalf("field %q", f)
 	}
 }

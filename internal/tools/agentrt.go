@@ -18,12 +18,16 @@ type runtimeAgentTool struct {
 	action    string
 	svc       agentrt.Service
 	authorize AgentAuthorize
-	caller    func(context.Context) string
+	caller    func(context.Context) (string, bool)
 }
 
 // NewRuntimeAgentTools returns the model-facing tools of the agent runtime.
 // There is deliberately no role field and no followup tool.
-func NewRuntimeAgentTools(svc agentrt.Service, authorize AgentAuthorize, caller func(context.Context) string) []Tool {
+//
+// caller resolves the calling agent from ctx: ("", true) is the lead, (id,
+// true) a runtime agent. When it reports !ok (or is nil) every tool fails
+// closed without calling the service.
+func NewRuntimeAgentTools(svc agentrt.Service, authorize AgentAuthorize, caller func(context.Context) (string, bool)) []Tool {
 	actions := []string{"spawn", "list", "status", "wait", "message", "cancel"}
 	out := make([]Tool, 0, len(actions))
 	for _, a := range actions {
@@ -126,9 +130,12 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 	if task.ID == "" {
 		return "", errors.New("admitted task required")
 	}
-	callerID := ""
-	if t.caller != nil {
-		callerID = t.caller(ctx)
+	if t.caller == nil {
+		return "", errors.New("agent runtime caller could not be resolved")
+	}
+	callerID, ok := t.caller(ctx)
+	if !ok {
+		return "", errors.New("agent runtime caller could not be resolved for this context")
 	}
 	var result any
 	switch t.action {
@@ -143,6 +150,11 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 		}
 		if strings.TrimSpace(a.PlanEntry) == "" {
 			return "", errors.New("planEntry required")
+		}
+		switch a.Context {
+		case "", "none", "summary", "full":
+		default:
+			return "", fmt.Errorf("unknown context %q; use none, summary or full", a.Context)
 		}
 		req := agentrt.SpawnRequest{
 			TaskID: task.ID, CallID: callID, CallerAgentID: callerID,
@@ -202,7 +214,7 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 		if err = decodeStrict(args, &a); err != nil {
 			return "", err
 		}
-		agents, err := t.svc.List(ctx, task.ID)
+		agents, err := t.svc.List(ctx, task.ID, callerID)
 		if err != nil {
 			return "", err
 		}
@@ -221,14 +233,21 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 			return "", errors.New("agent ID required")
 		}
 		if t.action == "status" {
-			result, err = t.svc.Status(ctx, task.ID, a.ID)
-		} else {
-			err = t.svc.Cancel(ctx, task.ID, a.ID)
-			result = map[string]string{"id": a.ID, "status": "cancelled"}
+			result, err = t.svc.Status(ctx, task.ID, callerID, a.ID)
+			if err != nil {
+				return "", err
+			}
+			break
 		}
+		if err = t.svc.Cancel(ctx, task.ID, callerID, a.ID); err != nil {
+			return "", err
+		}
+		// Report the stored state: a terminal agent stays as it was.
+		stored, err := t.svc.Status(ctx, task.ID, callerID, a.ID)
 		if err != nil {
 			return "", err
 		}
+		result = map[string]string{"id": a.ID, "state": string(stored.State)}
 	case "wait":
 		var a struct {
 			IDs  []string `json:"ids"`
@@ -248,7 +267,7 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 		default:
 			return "", fmt.Errorf("unknown wait mode %q; use any or all", a.Mode)
 		}
-		agents, err := t.svc.Wait(ctx, task.ID, a.IDs, mode)
+		agents, err := t.svc.Wait(ctx, task.ID, callerID, a.IDs, mode)
 		if err != nil {
 			return "", err
 		}
