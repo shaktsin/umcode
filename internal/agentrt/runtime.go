@@ -11,7 +11,7 @@ import (
 
 // SpawnResult is the outcome of a successful Spawn. A replay of an
 // already-spawned (TaskID, CallID) returns the stored agent with its stored
-// granted capabilities and no Rejected list (rejections are not persisted).
+// granted capabilities and stored Rejected list.
 // QueuedReason is set only while the agent waits in the scheduler queue.
 type SpawnResult struct {
 	Agent        protocol.RuntimeAgent
@@ -35,7 +35,7 @@ type Service interface {
 	List(ctx context.Context, taskID string) ([]protocol.RuntimeAgent, error)
 	Status(ctx context.Context, taskID, id string) (protocol.RuntimeAgent, error)
 	Wait(ctx context.Context, taskID string, ids []string, mode WaitMode) ([]protocol.RuntimeAgent, error)
-	Message(ctx context.Context, taskID, fromID, toID, body string) (protocol.AgentMessage, error)
+	Message(ctx context.Context, taskID, fromID, toID, body, callID string) (protocol.AgentMessage, error)
 	Cancel(ctx context.Context, taskID, id string) error
 }
 
@@ -118,7 +118,7 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 	// error is returned rather than risking a second admission.
 	existing, err := r.store.RuntimeAgentForCall(ctx, req.TaskID, req.CallID)
 	if err == nil {
-		return SpawnResult{Agent: existing, Granted: existing.Capabilities}, false, nil
+		return SpawnResult{Agent: existing, Granted: existing.Capabilities, Rejected: existing.Rejected}, false, nil
 	}
 	if !errors.Is(err, protocol.ErrNotFound) {
 		return SpawnResult{}, false, fmt.Errorf("spawn: look up call %s: %w", req.CallID, err)
@@ -174,8 +174,10 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 		Name:           name,
 		Purpose:        adm.Entry.Purpose,
 		PlanID:         plan.ID,
+		PlanEntry:      adm.Entry.Name,
 		Assignment:     req.Assignment,
 		Capabilities:   adm.Granted,
+		Rejected:       adm.Rejected,
 		ModelRequested: adm.Model,
 		BudgetShare:    adm.Share,
 		Depth:          adm.Depth,
@@ -256,7 +258,9 @@ func (r *Runtime) Wait(ctx context.Context, taskID string, ids []string, mode Wa
 }
 
 // Message queues a message for a live agent of the task. fromID "" is the lead.
-func (r *Runtime) Message(ctx context.Context, taskID, fromID, toID, body string) (protocol.AgentMessage, error) {
+// A non-empty callID makes the message idempotent per (task, callID): a retry
+// returns the stored message instead of queuing a duplicate.
+func (r *Runtime) Message(ctx context.Context, taskID, fromID, toID, body, callID string) (protocol.AgentMessage, error) {
 	to, err := r.store.RuntimeAgent(ctx, taskID, toID)
 	if err != nil {
 		return protocol.AgentMessage{}, fmt.Errorf("message: recipient %s: %w", toID, err)
@@ -269,7 +273,7 @@ func (r *Runtime) Message(ctx context.Context, taskID, fromID, toID, body string
 			return protocol.AgentMessage{}, fmt.Errorf("message: sender %s: %w", fromID, err)
 		}
 	}
-	return r.store.EnqueueAgentMessage(ctx, protocol.AgentMessage{TaskID: taskID, FromAgentID: fromID, ToAgentID: toID, Body: body})
+	return r.store.EnqueueAgentMessage(ctx, protocol.AgentMessage{TaskID: taskID, FromAgentID: fromID, ToAgentID: toID, Body: body, CallID: callID})
 }
 
 // Cancel cancels an agent and its descendants. Their shares are free from the

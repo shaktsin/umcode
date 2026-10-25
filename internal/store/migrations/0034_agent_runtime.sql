@@ -6,8 +6,10 @@ CREATE TABLE agents (
  name TEXT NOT NULL,
  purpose TEXT NOT NULL DEFAULT '',
  plan_id TEXT NOT NULL DEFAULT '',
+ plan_entry TEXT NOT NULL DEFAULT '',
  assignment_json TEXT NOT NULL DEFAULT '{}',
  capabilities_json TEXT NOT NULL DEFAULT '{}',
+ rejected_json TEXT NOT NULL DEFAULT '[]',
  model_requested TEXT NOT NULL DEFAULT '',
  model_actual TEXT NOT NULL DEFAULT '',
  route_trail_json TEXT NOT NULL DEFAULT '[]',
@@ -24,7 +26,8 @@ CREATE TABLE agents (
  updated_at TEXT NOT NULL,
  UNIQUE(task_id, call_id)
 );
-CREATE INDEX agents_task ON agents(task_id, created_at);
+-- Agents and messages are read in rowid (insertion) order.
+CREATE INDEX agents_task ON agents(task_id);
 
 CREATE TABLE agent_plans (
  id TEXT PRIMARY KEY,
@@ -44,7 +47,9 @@ CREATE TABLE agent_messages (
  from_agent_id TEXT NOT NULL,
  to_agent_id TEXT NOT NULL,
  body TEXT NOT NULL,
+ call_id TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL,
  delivered_at TEXT
 );
-CREATE INDEX agent_messages_to ON agent_messages(task_id, to_agent_id, created_at);
+CREATE INDEX agent_messages_to ON agent_messages(task_id, to_agent_id);
+CREATE UNIQUE INDEX agent_messages_call ON agent_messages(task_id, call_id) WHERE call_id != '';

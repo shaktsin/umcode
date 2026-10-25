@@ -264,7 +264,9 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 		if strings.TrimSpace(a.To) == "" || strings.TrimSpace(a.Message) == "" {
 			return "", errors.New("to and message required")
 		}
-		result, err = t.svc.Message(ctx, task.ID, callerID, a.To, a.Message)
+		// The provider call ID makes a retried message idempotent.
+		callID, _ := ctx.Value(agentCallKey{}).(string)
+		result, err = t.svc.Message(ctx, task.ID, callerID, a.To, a.Message, callID)
 		if err != nil {
 			return "", err
 		}

@@ -12,12 +12,12 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
-const runtimeAgentCols = `id, task_id, parent_agent_id, name, purpose, plan_id, assignment_json, capabilities_json, model_requested, model_actual, route_trail_json, budget_share, depth, context_mode, workspace_id, revision, state, result_json, usage_json, version, created_at, updated_at`
+const runtimeAgentCols = `id, task_id, parent_agent_id, name, purpose, plan_id, plan_entry, assignment_json, capabilities_json, rejected_json, model_requested, model_actual, route_trail_json, budget_share, depth, context_mode, workspace_id, revision, state, result_json, usage_json, version, created_at, updated_at`
 
 func scanRuntimeAgent(row interface{ Scan(...any) error }) (protocol.RuntimeAgent, error) {
 	var a protocol.RuntimeAgent
-	var assignment, caps, trail, result, usage, created, updated string
-	err := row.Scan(&a.ID, &a.TaskID, &a.ParentAgentID, &a.Name, &a.Purpose, &a.PlanID, &assignment, &caps, &a.ModelRequested, &a.ModelActual, &trail, &a.BudgetShare, &a.Depth, &a.ContextMode, &a.WorkspaceID, &a.Revision, &a.State, &result, &usage, &a.Version, &created, &updated)
+	var assignment, caps, rejected, trail, result, usage, created, updated string
+	err := row.Scan(&a.ID, &a.TaskID, &a.ParentAgentID, &a.Name, &a.Purpose, &a.PlanID, &a.PlanEntry, &assignment, &caps, &rejected, &a.ModelRequested, &a.ModelActual, &trail, &a.BudgetShare, &a.Depth, &a.ContextMode, &a.WorkspaceID, &a.Revision, &a.State, &result, &usage, &a.Version, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -27,7 +27,7 @@ func scanRuntimeAgent(row interface{ Scan(...any) error }) (protocol.RuntimeAgen
 	for _, field := range []struct {
 		data   string
 		target any
-	}{{assignment, &a.Assignment}, {caps, &a.Capabilities}, {trail, &a.RouteTrail}, {result, &a.Result}, {usage, &a.Usage}} {
+	}{{assignment, &a.Assignment}, {caps, &a.Capabilities}, {rejected, &a.Rejected}, {trail, &a.RouteTrail}, {result, &a.Result}, {usage, &a.Usage}} {
 		if err := json.Unmarshal([]byte(field.data), field.target); err != nil {
 			return a, fmt.Errorf("decode runtime agent %s: %w", a.ID, err)
 		}
@@ -86,15 +86,18 @@ func (s *Store) CreateRuntimeAgent(ctx context.Context, a protocol.RuntimeAgent,
 	if a.RouteTrail == nil {
 		a.RouteTrail = []string{}
 	}
+	if a.Rejected == nil {
+		a.Rejected = []protocol.CapabilityRejection{}
+	}
 	a.Version = 1
 	a.CreatedAt = time.Now().UTC()
 	a.UpdatedAt = a.CreatedAt
-	js, err := marshalAll(a.Assignment, a.Capabilities, a.RouteTrail, a.Result, a.Usage)
+	js, err := marshalAll(a.Assignment, a.Capabilities, a.Rejected, a.RouteTrail, a.Result, a.Usage)
 	if err != nil {
 		return protocol.RuntimeAgent{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO agents (`+runtimeAgentCols+`,call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		a.ID, a.TaskID, a.ParentAgentID, a.Name, a.Purpose, a.PlanID, js[0], js[1], a.ModelRequested, a.ModelActual, js[2], a.BudgetShare, a.Depth, a.ContextMode, a.WorkspaceID, a.Revision, a.State, js[3], js[4], a.Version, FormatTime(a.CreatedAt), FormatTime(a.UpdatedAt), callID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO agents (`+runtimeAgentCols+`,call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.ID, a.TaskID, a.ParentAgentID, a.Name, a.Purpose, a.PlanID, a.PlanEntry, js[0], js[1], js[2], a.ModelRequested, a.ModelActual, js[3], a.BudgetShare, a.Depth, a.ContextMode, a.WorkspaceID, a.Revision, a.State, js[4], js[5], a.Version, FormatTime(a.CreatedAt), FormatTime(a.UpdatedAt), callID)
 	if err != nil {
 		return protocol.RuntimeAgent{}, err
 	}
@@ -111,9 +114,9 @@ func (s *Store) RuntimeAgent(ctx context.Context, taskID, id string) (protocol.R
 	return scanRuntimeAgent(s.DB.QueryRowContext(ctx, `SELECT `+runtimeAgentCols+` FROM agents WHERE task_id=? AND id=?`, taskID, id))
 }
 
-// RuntimeAgents returns a task's agents in creation order.
+// RuntimeAgents returns a task's agents in insertion (rowid) order.
 func (s *Store) RuntimeAgents(ctx context.Context, taskID string) ([]protocol.RuntimeAgent, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+runtimeAgentCols+` FROM agents WHERE task_id=? ORDER BY created_at,rowid`, taskID)
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+runtimeAgentCols+` FROM agents WHERE task_id=? ORDER BY rowid`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +282,30 @@ func (s *Store) LatestApprovedAgentPlan(ctx context.Context, threadID string) (p
 	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE thread_id=? AND state=? ORDER BY approved_at DESC,rowid DESC LIMIT 1`, threadID, protocol.PlanApproved))
 }
 
+const agentMessageCols = `id,task_id,from_agent_id,to_agent_id,body,call_id,created_at,delivered_at`
+
+func scanAgentMessage(row interface{ Scan(...any) error }) (protocol.AgentMessage, error) {
+	var m protocol.AgentMessage
+	var created string
+	var delivered sql.NullString
+	err := row.Scan(&m.ID, &m.TaskID, &m.FromAgentID, &m.ToAgentID, &m.Body, &m.CallID, &created, &delivered)
+	if errors.Is(err, sql.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	if err != nil {
+		return m, err
+	}
+	m.CreatedAt = ParseTime(created)
+	if delivered.Valid && delivered.String != "" {
+		t := ParseTime(delivered.String)
+		m.DeliveredAt = &t
+	}
+	return m, nil
+}
+
 // EnqueueAgentMessage stores an undelivered message and returns it with its ID.
+// A message with a CallID is idempotent per (task, call ID): a repeat returns
+// the stored message (delivered or not) and queues nothing.
 func (s *Store) EnqueueAgentMessage(ctx context.Context, m protocol.AgentMessage) (protocol.AgentMessage, error) {
 	if m.TaskID == "" || m.ToAgentID == "" {
 		return protocol.AgentMessage{}, fmt.Errorf("agent message requires task and recipient")
@@ -289,26 +315,36 @@ func (s *Store) EnqueueAgentMessage(ctx context.Context, m protocol.AgentMessage
 	}
 	m.CreatedAt = time.Now().UTC()
 	m.DeliveredAt = nil
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO agent_messages (id,task_id,from_agent_id,to_agent_id,body,created_at) VALUES(?,?,?,?,?,?)`,
-		m.ID, m.TaskID, m.FromAgentID, m.ToAgentID, m.Body, FormatTime(m.CreatedAt))
-	return m, err
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO agent_messages (id,task_id,from_agent_id,to_agent_id,body,call_id,created_at) VALUES(?,?,?,?,?,?,?)
+ON CONFLICT(task_id, call_id) WHERE call_id != '' DO NOTHING`,
+		m.ID, m.TaskID, m.FromAgentID, m.ToAgentID, m.Body, m.CallID, FormatTime(m.CreatedAt))
+	if err != nil {
+		return protocol.AgentMessage{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return protocol.AgentMessage{}, err
+	}
+	if n == 1 {
+		return m, nil
+	}
+	return scanAgentMessage(s.DB.QueryRowContext(ctx, `SELECT `+agentMessageCols+` FROM agent_messages WHERE task_id=? AND call_id=?`, m.TaskID, m.CallID))
 }
 
-// PendingAgentMessages returns undelivered messages for an agent, oldest first.
+// PendingAgentMessages returns undelivered messages for an agent in insertion
+// (rowid) order.
 func (s *Store) PendingAgentMessages(ctx context.Context, taskID, toAgentID string) ([]protocol.AgentMessage, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,task_id,from_agent_id,to_agent_id,body,created_at FROM agent_messages WHERE task_id=? AND to_agent_id=? AND delivered_at IS NULL ORDER BY created_at,rowid`, taskID, toAgentID)
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+agentMessageCols+` FROM agent_messages WHERE task_id=? AND to_agent_id=? AND delivered_at IS NULL ORDER BY rowid`, taskID, toAgentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := make([]protocol.AgentMessage, 0)
 	for rows.Next() {
-		var m protocol.AgentMessage
-		var created string
-		if err := rows.Scan(&m.ID, &m.TaskID, &m.FromAgentID, &m.ToAgentID, &m.Body, &created); err != nil {
+		m, err := scanAgentMessage(rows)
+		if err != nil {
 			return nil, err
 		}
-		m.CreatedAt = ParseTime(created)
 		out = append(out, m)
 	}
 	return out, rows.Err()
