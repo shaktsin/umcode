@@ -188,10 +188,7 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 		return SpawnResult{}, false, fmt.Errorf("spawn: create agent: %w", err)
 	}
 
-	maxConc := plan.Limits.MaxConcurrent
-	if maxConc < 1 {
-		maxConc = 1
-	}
+	maxConc := plan.Limits.Normalized().MaxConcurrent
 	// The agent is stored; a dying caller ctx must not abandon its scheduling.
 	persist := context.WithoutCancel(ctx)
 	r.sched.Submit(persist, created, maxConc)
