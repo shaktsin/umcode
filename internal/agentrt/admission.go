@@ -2,6 +2,7 @@ package agentrt
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 )
@@ -98,6 +99,9 @@ func Admit(in AdmissionInput) (Admission, error) {
 	if share == 0 {
 		share = lim.SliceShare
 	}
+	if math.IsNaN(share) || share < 0 || share > 1 {
+		return Admission{}, refuse("budget.share", "requested share %v is invalid; it must be in (0, 1]", share)
+	}
 	if share > in.ParentShareFree+shareEpsilon {
 		return Admission{}, refuse("budget.share", "requested share %.4g exceeds the free share %.4g", share, in.ParentShareFree)
 	}
@@ -107,7 +111,10 @@ func Admit(in AdmissionInput) (Admission, error) {
 		requested = *in.Request.Capabilities
 	}
 	granted, rejected := Resolve(in.Caller.Capabilities, entry.Capabilities, requested, in.Options)
-	if !lim.Network && (granted.Network || requested.Network) {
+	if !lim.Network && granted.Network {
+		granted.Network = false
+	}
+	if !lim.Network && in.Request.Capabilities != nil && requested.Network {
 		granted.Network = false
 		dup := false
 		for _, r := range rejected {

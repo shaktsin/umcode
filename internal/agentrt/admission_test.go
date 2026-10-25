@@ -2,6 +2,8 @@ package agentrt
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -40,17 +42,17 @@ func TestAdmitRefusals(t *testing.T) {
 		{"spawn limit", func(in *AdmissionInput) {
 			in.Caller = protocol.RuntimeAgent{ID: "a1", Capabilities: protocol.AgentCapabilities{SpawnMax: 1}}
 			in.All = []protocol.RuntimeAgent{{ID: "a2", ParentAgentID: "a1"}}
-		}, "spawn", ""},
+		}, "spawn", "already has 1"},
 		{"depth", func(in *AdmissionInput) {
 			in.Caller.Depth = 3
 			in.Plan.Limits.MaxDepth = 3
-		}, "depth", ""},
-		{"total", func(in *AdmissionInput) { in.All = make([]protocol.RuntimeAgent, 40) }, "total", ""},
-		{"model", func(in *AdmissionInput) { in.Request.Model = "opus" }, "model", "revised plan"},
+		}, "depth", "exceeds"},
+		{"total", func(in *AdmissionInput) { in.All = make([]protocol.RuntimeAgent, 40) }, "total", "40"},
+		{"model", func(in *AdmissionInput) { in.Request.Model = "opus" }, "model", "qwen-coder"},
 		{"share", func(in *AdmissionInput) {
 			in.Request.BudgetShare = 0.5
 			in.ParentShareFree = 0.25
-		}, "budget.share", ""},
+		}, "budget.share", "exceeds the free share"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,6 +68,9 @@ func TestAdmitRefusals(t *testing.T) {
 			}
 			if !strings.Contains(ae.Message, tc.msg) {
 				t.Fatalf("Message %q lacks %q", ae.Message, tc.msg)
+			}
+			if tc.field == "model" && !strings.Contains(ae.Message, "revised plan") {
+				t.Fatalf("Message %q lacks revised plan", ae.Message)
 			}
 			if ae.Error() == "" {
 				t.Fatal("empty Error()")
@@ -122,24 +127,69 @@ func TestAdmitPartialGrantStillAdmits(t *testing.T) {
 	}
 }
 
-func TestAdmitNetworkForcedOffWhenNotRequested(t *testing.T) {
-	in := admitBase() // parent, entry true; request nil -> entry caps (network true)
+func TestAdmitDefaultedNetworkForcedOffWithoutRejection(t *testing.T) {
+	in := admitBase() // nil Capabilities; entry and parent allow network
 	adm, err := Admit(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adm.Granted.Network || countField(adm.Rejected, "capabilities.network") != 1 {
+	if adm.Granted.Network || len(adm.Rejected) != 0 {
 		t.Fatalf("got %+v", adm)
 	}
-	// parent has no network, nothing requests it: no rejection.
-	in = admitBase()
-	in.Caller.Capabilities.Network = false
+}
+
+func TestAdmitExplicitNetworkRequestRejectedOnce(t *testing.T) {
+	in := admitBase()
 	req := entryCaps(in)
-	req.Network = false
+	req.Network = true
 	in.Request.Capabilities = &req
-	adm, err = Admit(in)
-	if err != nil || len(adm.Rejected) != 0 {
-		t.Fatalf("err=%v rej=%+v", err, adm.Rejected)
+	adm, err := Admit(in)
+	if err != nil || adm.Granted.Network || countField(adm.Rejected, "capabilities.network") != 1 {
+		t.Fatalf("err=%v adm=%+v", err, adm)
+	}
+}
+
+func TestAdmitInvalidShares(t *testing.T) {
+	for _, s := range []float64{math.NaN(), -0.1, 1.5} {
+		in := admitBase()
+		in.Request.BudgetShare = s
+		_, err := Admit(in)
+		var ae *AdmissionError
+		if !errors.As(err, &ae) || ae.Field != "budget.share" {
+			t.Fatalf("share %v: got %v", s, err)
+		}
+		if !strings.Contains(ae.Message, fmt.Sprint(s)) {
+			t.Fatalf("message %q does not name %v", ae.Message, s)
+		}
+	}
+}
+
+func TestAdmitShareEpsilonBoundary(t *testing.T) {
+	cases := []struct {
+		delta float64
+		ok    bool
+	}{{0, true}, {0.5e-9, true}, {2e-9, false}}
+	for _, c := range cases {
+		in := admitBase()
+		in.ParentShareFree = 0.25
+		in.Request.BudgetShare = 0.25 + c.delta
+		_, err := Admit(in)
+		if (err == nil) != c.ok {
+			t.Fatalf("delta %v: err=%v want ok=%v", c.delta, err, c.ok)
+		}
+	}
+}
+
+func TestAdmitCallerCapsLimitGrant(t *testing.T) {
+	in := admitBase()
+	in.Plan.Limits.Network = true
+	in.Caller.Capabilities.Shell = protocol.ShellNone
+	adm, err := Admit(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adm.Granted.Shell != protocol.ShellNone {
+		t.Fatalf("shell = %q", adm.Granted.Shell)
 	}
 }
 
