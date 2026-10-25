@@ -801,14 +801,16 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		results := make([]string, 0, len(out.calls))
 		lastToolMsg := -1
 		for _, call := range out.calls {
-			toolResult := e.runTool(ctx, sctx, th, turn, call, snapshot)
+			// Count the occurrence before running so the tool sees it: agent
+			// runtime idempotency keys include it (runtimeAgentCallID).
+			key := nextToolReductionKey(toolOccurrences, call.ID)
+			toolResult := e.runTool(withToolOccurrence(ctx, key.Occurrence), sctx, th, turn, call, snapshot)
 			result, isErr := toolResult.Output, toolResult.IsError
 			hookContext = append(hookContext, toolResult.HookContext...)
 			if hint := instructionPathHint(call.Args); hint != "" {
 				instructionHint = hint
 			}
 			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: toolResult.ModelOutput, IsError: isErr})
-			key := nextToolReductionKey(toolOccurrences, call.ID)
 			if reductions != nil && toolResult.Reduction.Strategy != "" && toolResult.Reduction.OriginalTokens > toolResult.Reduction.SentTokens {
 				reductions[key] = toolResult.Reduction
 			}
@@ -1549,7 +1551,13 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return e.selectionFailure(sctx, turn, call, name, err.Error())
 		}
 	}
-	ctx = tools.WithAgentCallID(ctx, call.ID)
+	agentCallID := call.ID
+	if e.AgentRuntime != nil && isDelegationTool(name) {
+		// Runtime agent tools key idempotency by turn, occurrence and provider
+		// call ID; the legacy delegation tools (flag off) keep the raw ID.
+		agentCallID = runtimeAgentCallID(turn.ID, call.ID, toolOccurrenceFrom(ctx))
+	}
+	ctx = tools.WithAgentCallID(ctx, agentCallID)
 	var tool tools.Tool
 	var ok bool
 	var toolIsPlugin bool

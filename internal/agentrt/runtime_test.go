@@ -527,6 +527,37 @@ func TestSpawnReplayReturnsSameGrant(t *testing.T) {
 	}
 }
 
+func TestSpawnReplayWithDifferentRequestIsRefused(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	r := newFakeRunner()
+	rt := newTestRuntime(t, s, r)
+	first, err := rt.Spawn(t.Context(), spawnReq(task, "call-1", "a", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStarted(t, r, "a")
+	otherAssignment := spawnReq(task, "call-1", "a", 0.25)
+	otherAssignment.Assignment.Prompt = "something else"
+	otherEntry := spawnReq(task, "call-1", "a", 0.25)
+	otherEntry.PlanEntry = "reviewer"
+	otherCaller := spawnReq(task, "call-1", "a", 0.25)
+	otherCaller.CallerAgentID = first.Agent.ID
+	for name, req := range map[string]SpawnRequest{"assignment": otherAssignment, "planEntry": otherEntry, "caller": otherCaller} {
+		if _, err := rt.Spawn(t.Context(), req); !errors.Is(err, ErrSpawnReplayMismatch) {
+			t.Fatalf("%s: want ErrSpawnReplayMismatch, got %v", name, err)
+		}
+	}
+	// An identical retry still replays.
+	again, err := rt.Spawn(t.Context(), spawnReq(task, "call-1", "a", 0.25))
+	if err != nil || again.Agent.ID != first.Agent.ID {
+		t.Fatalf("identical replay: %+v %v", again.Agent, err)
+	}
+	if all, _ := rt.List(t.Context(), task.ID); len(all) != 1 {
+		t.Fatalf("agents = %d", len(all))
+	}
+}
+
 func TestMessageIsIdempotentByCallID(t *testing.T) {
 	s, task := runtimeFixture(t)
 	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)

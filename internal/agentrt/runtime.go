@@ -1,7 +1,10 @@
 package agentrt
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -37,6 +40,42 @@ type Service interface {
 	Wait(ctx context.Context, taskID string, ids []string, mode WaitMode) ([]protocol.RuntimeAgent, error)
 	Message(ctx context.Context, taskID, fromID, toID, body, callID string) (protocol.AgentMessage, error)
 	Cancel(ctx context.Context, taskID, id string) error
+}
+
+// ErrSpawnReplayMismatch reports a spawn whose (TaskID, CallID) was already
+// used by a different request (caller, plan entry or assignment differ).
+var ErrSpawnReplayMismatch = errors.New("spawn call ID was already used for a different request")
+
+// checkReplay verifies that a replayed spawn matches the stored agent, so an
+// idempotency-key collision never silently returns an unrelated agent.
+func checkReplay(existing protocol.RuntimeAgent, req SpawnRequest) error {
+	if existing.ParentAgentID != req.CallerAgentID {
+		return fmt.Errorf("%w: agent %s was spawned by caller %q, not %q", ErrSpawnReplayMismatch, existing.ID, existing.ParentAgentID, req.CallerAgentID)
+	}
+	if existing.PlanEntry != req.PlanEntry {
+		return fmt.Errorf("%w: agent %s was spawned from plan entry %q, not %q", ErrSpawnReplayMismatch, existing.ID, existing.PlanEntry, req.PlanEntry)
+	}
+	stored, err := assignmentHash(existing.Assignment)
+	if err != nil {
+		return err
+	}
+	asked, err := assignmentHash(req.Assignment)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(stored, asked) {
+		return fmt.Errorf("%w: agent %s was spawned with a different assignment", ErrSpawnReplayMismatch, existing.ID)
+	}
+	return nil
+}
+
+func assignmentHash(a protocol.AgentAssignment) ([]byte, error) {
+	b, err := json.Marshal(a)
+	if err != nil {
+		return nil, fmt.Errorf("spawn: encode assignment: %w", err)
+	}
+	sum := sha256.Sum256(b)
+	return sum[:], nil
 }
 
 // Option configures a Runtime.
@@ -92,7 +131,14 @@ func (r *Runtime) Recover(ctx context.Context) error {
 
 // Spawn admits and starts (or queues) an agent. It is idempotent by
 // (TaskID, CallID): a repeated call returns the stored agent without
-// scheduling it again.
+// scheduling it again, provided caller, plan entry and assignment match the
+// stored agent (else ErrSpawnReplayMismatch). CallID must be unique per
+// distinct spawn within the task; the engine derives it from the turn, the
+// provider call ID and its per-turn occurrence.
+//
+// Spawn holds the lifecycle lock while it submits to the scheduler, so the
+// events callback (WithEvents) and the scheduler's onChange must not call
+// back into Spawn synchronously.
 func (r *Runtime) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, error) {
 	if req.TaskID == "" || req.CallID == "" {
 		return SpawnResult{}, errors.New("spawn: task ID and call ID are required")
@@ -118,6 +164,9 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 	// error is returned rather than risking a second admission.
 	existing, err := r.store.RuntimeAgentForCall(ctx, req.TaskID, req.CallID)
 	if err == nil {
+		if err := checkReplay(existing, req); err != nil {
+			return SpawnResult{}, false, err
+		}
 		return SpawnResult{Agent: existing, Granted: existing.Capabilities, Rejected: existing.Rejected}, false, nil
 	}
 	if !errors.Is(err, protocol.ErrNotFound) {
