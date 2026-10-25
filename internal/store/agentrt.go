@@ -176,3 +176,134 @@ func (s *Store) ReconcileRuntimeAgents(ctx context.Context) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE agents SET state='interrupted',version=version+1,updated_at=? WHERE state IN ('queued','running','waiting_approval')`, Now())
 	return err
 }
+
+const agentPlanCols = `id, thread_id, task_id, agents_json, limits_json, state, created_at, approved_at`
+
+func scanAgentPlan(row interface{ Scan(...any) error }) (protocol.AgentPlan, error) {
+	var p protocol.AgentPlan
+	var agents, limits, created, approved string
+	err := row.Scan(&p.ID, &p.ThreadID, &p.TaskID, &agents, &limits, &p.State, &created, &approved)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, ErrNotFound
+	}
+	if err != nil {
+		return p, err
+	}
+	if err := json.Unmarshal([]byte(agents), &p.Agents); err != nil {
+		return p, fmt.Errorf("decode agent plan %s: %w", p.ID, err)
+	}
+	if err := json.Unmarshal([]byte(limits), &p.Limits); err != nil {
+		return p, fmt.Errorf("decode agent plan %s: %w", p.ID, err)
+	}
+	p.CreatedAt = ParseTime(created)
+	if approved != "" {
+		t := ParseTime(approved)
+		p.ApprovedAt = &t
+	}
+	return p, nil
+}
+
+// SaveAgentPlan inserts a plan or replaces the stored plan with the same ID.
+func (s *Store) SaveAgentPlan(ctx context.Context, p protocol.AgentPlan) error {
+	if p.ID == "" || p.ThreadID == "" {
+		return fmt.Errorf("agent plan requires ID and thread ID")
+	}
+	if p.State == "" {
+		p.State = protocol.PlanProposed
+	}
+	if p.Agents == nil {
+		p.Agents = []protocol.PlanAgent{}
+	}
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = time.Now().UTC()
+	}
+	approved := ""
+	if p.ApprovedAt != nil {
+		approved = FormatTime(*p.ApprovedAt)
+	}
+	js, err := marshalAll(p.Agents, p.Limits)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO agent_plans (`+agentPlanCols+`) VALUES(?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET thread_id=excluded.thread_id,task_id=excluded.task_id,agents_json=excluded.agents_json,limits_json=excluded.limits_json,state=excluded.state,created_at=excluded.created_at,approved_at=excluded.approved_at`,
+		p.ID, p.ThreadID, p.TaskID, js[0], js[1], p.State, FormatTime(p.CreatedAt), approved)
+	return err
+}
+
+// ApproveAgentPlan approves a plan, binds it to taskID and supersedes the
+// thread's other approved plans in a single transaction.
+func (s *Store) ApproveAgentPlan(ctx context.Context, planID, taskID string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var threadID string
+	if err := tx.QueryRowContext(ctx, `SELECT thread_id FROM agent_plans WHERE id=?`, planID).Scan(&threadID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_plans SET state=? WHERE thread_id=? AND id<>? AND state=?`,
+		protocol.PlanSuperseded, threadID, planID, protocol.PlanApproved); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_plans SET state=?,task_id=?,approved_at=? WHERE id=?`,
+		protocol.PlanApproved, taskID, Now(), planID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ApprovedAgentPlanForTask returns the approved plan bound to a task.
+func (s *Store) ApprovedAgentPlanForTask(ctx context.Context, taskID string) (protocol.AgentPlan, error) {
+	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE task_id=? AND state=? ORDER BY approved_at DESC,rowid DESC LIMIT 1`, taskID, protocol.PlanApproved))
+}
+
+// LatestApprovedAgentPlan returns the most recently approved plan of a thread.
+func (s *Store) LatestApprovedAgentPlan(ctx context.Context, threadID string) (protocol.AgentPlan, error) {
+	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE thread_id=? AND state=? ORDER BY approved_at DESC,rowid DESC LIMIT 1`, threadID, protocol.PlanApproved))
+}
+
+// EnqueueAgentMessage stores an undelivered message and returns it with its ID.
+func (s *Store) EnqueueAgentMessage(ctx context.Context, m protocol.AgentMessage) (protocol.AgentMessage, error) {
+	if m.TaskID == "" || m.ToAgentID == "" {
+		return protocol.AgentMessage{}, fmt.Errorf("agent message requires task and recipient")
+	}
+	if m.ID == "" {
+		m.ID = NewID("msg")
+	}
+	m.CreatedAt = time.Now().UTC()
+	m.DeliveredAt = nil
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO agent_messages (id,task_id,from_agent_id,to_agent_id,body,created_at) VALUES(?,?,?,?,?,?)`,
+		m.ID, m.TaskID, m.FromAgentID, m.ToAgentID, m.Body, FormatTime(m.CreatedAt))
+	return m, err
+}
+
+// PendingAgentMessages returns undelivered messages for an agent, oldest first.
+func (s *Store) PendingAgentMessages(ctx context.Context, taskID, toAgentID string) ([]protocol.AgentMessage, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,task_id,from_agent_id,to_agent_id,body,created_at FROM agent_messages WHERE task_id=? AND to_agent_id=? AND delivered_at IS NULL ORDER BY created_at,rowid`, taskID, toAgentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]protocol.AgentMessage, 0)
+	for rows.Next() {
+		var m protocol.AgentMessage
+		var created string
+		if err := rows.Scan(&m.ID, &m.TaskID, &m.FromAgentID, &m.ToAgentID, &m.Body, &created); err != nil {
+			return nil, err
+		}
+		m.CreatedAt = ParseTime(created)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// AcknowledgeAgentMessage marks a message delivered; repeating it is a no-op.
+func (s *Store) AcknowledgeAgentMessage(ctx context.Context, taskID, id string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE agent_messages SET delivered_at=? WHERE task_id=? AND id=? AND delivered_at IS NULL`, Now(), taskID, id)
+	return err
+}

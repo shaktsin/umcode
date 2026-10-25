@@ -69,7 +69,7 @@ type AgentPlan struct {
 	Limits     PlanLimits  `json:"limits"`
 	State      PlanState   `json:"state"`
 	CreatedAt  time.Time   `json:"createdAt"`
-	ApprovedAt time.Time   `json:"approvedAt,omitempty"`
+	ApprovedAt *time.Time  `json:"approvedAt,omitempty"`
 }
 
 // RuntimeAgent is a persisted agent of the agent runtime.

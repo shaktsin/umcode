@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -68,8 +69,8 @@ func TestUpdateRuntimeAgentChecksVersionAndTransition(t *testing.T) {
 	}
 	bad := a
 	bad.State = protocol.AgentStateCompleted
-	if err := s.UpdateRuntimeAgent(t.Context(), bad, 1); err == nil {
-		t.Fatal("queued -> completed must fail")
+	if err := s.UpdateRuntimeAgent(t.Context(), bad, 1); !errors.Is(err, ErrAgentTransition) {
+		t.Fatalf("queued -> completed: want ErrAgentTransition, got %v", err)
 	}
 	a.State = protocol.AgentStateRunning
 	if err := s.UpdateRuntimeAgent(t.Context(), a, 1); err != nil {
@@ -79,8 +80,8 @@ func TestUpdateRuntimeAgentChecksVersionAndTransition(t *testing.T) {
 	if got.Version != 2 || got.State != protocol.AgentStateRunning {
 		t.Fatalf("version=%d state=%s", got.Version, got.State)
 	}
-	if err := s.UpdateRuntimeAgent(t.Context(), a, 1); err == nil {
-		t.Fatal("stale version must fail")
+	if err := s.UpdateRuntimeAgent(t.Context(), a, 1); !errors.Is(err, ErrAgentConflict) {
+		t.Fatalf("stale version: want ErrAgentConflict, got %v", err)
 	}
 	got, _ = s.RuntimeAgent(t.Context(), task.ID, a.ID)
 	if got.Version != 2 {
@@ -145,5 +146,95 @@ func TestReconcileRuntimeAgentsInterruptsActive(t *testing.T) {
 		if err != nil || got.State != want {
 			t.Fatalf("%s: state=%s err=%v want %s", name, got.State, err, want)
 		}
+	}
+}
+
+func savePlan(t *testing.T, s *Store, id, threadID string) protocol.AgentPlan {
+	t.Helper()
+	p := protocol.AgentPlan{ID: id, ThreadID: threadID, State: protocol.PlanProposed, Limits: protocol.DefaultPlanLimits(), CreatedAt: time.Now().UTC(),
+		Agents: []protocol.PlanAgent{{Name: "w", Purpose: "p"}}}
+	if err := s.SaveAgentPlan(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestApproveAgentPlanSupersedesPreviousAndBindsTask(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, "A", task.ThreadID)
+	savePlan(t, s, "B", task.ThreadID)
+	if err := s.ApproveAgentPlan(t.Context(), "A", "T"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ApprovedAgentPlanForTask(t.Context(), "T"); err != nil || got.ID != "A" || got.ApprovedAt == nil || got.State != protocol.PlanApproved {
+		t.Fatalf("A: %+v %v", got, err)
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "B", "T2"); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := s.DB.QueryRowContext(t.Context(), `SELECT state FROM agent_plans WHERE id='A'`).Scan(&state); err != nil || state != string(protocol.PlanSuperseded) {
+		t.Fatalf("A state=%q err=%v", state, err)
+	}
+	if got, err := s.ApprovedAgentPlanForTask(t.Context(), "T2"); err != nil || got.ID != "B" || len(got.Agents) != 1 || got.Limits.MaxTotal != 40 {
+		t.Fatalf("B: %+v %v", got, err)
+	}
+	if _, err := s.ApprovedAgentPlanForTask(t.Context(), "T"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("T: want ErrNotFound, got %v", err)
+	}
+	if got, err := s.LatestApprovedAgentPlan(t.Context(), task.ThreadID); err != nil || got.ID != "B" {
+		t.Fatalf("latest: %+v %v", got, err)
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "missing", "T3"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing plan: %v", err)
+	}
+}
+
+func TestProposedPlanIsNotReturnedAsApproved(t *testing.T) {
+	s, task := runtimeFixture(t)
+	p := savePlan(t, s, "P", task.ThreadID)
+	if _, err := s.ApprovedAgentPlanForTask(t.Context(), p.TaskID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("task getter: %v", err)
+	}
+	if _, err := s.LatestApprovedAgentPlan(t.Context(), task.ThreadID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("thread getter: %v", err)
+	}
+}
+
+func TestAgentMessagesDeliverOnceInOrder(t *testing.T) {
+	s, task := runtimeFixture(t)
+	var ms []protocol.AgentMessage
+	for _, c := range [][2]string{{"X", "m1"}, {"X", "m2"}, {"Y", "m3"}} {
+		m, err := s.EnqueueAgentMessage(t.Context(), protocol.AgentMessage{TaskID: task.ID, FromAgentID: "root", ToAgentID: c[0], Body: c[1]})
+		if err != nil || m.ID == "" {
+			t.Fatalf("enqueue: %+v %v", m, err)
+		}
+		ms = append(ms, m)
+	}
+	ids := func(to string) []string {
+		got, err := s.PendingAgentMessages(t.Context(), task.ID, to)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, m := range got {
+			out = append(out, m.Body)
+		}
+		return out
+	}
+	if g := ids("X"); len(g) != 2 || g[0] != "m1" || g[1] != "m2" {
+		t.Fatalf("X=%v", g)
+	}
+	if err := s.AcknowledgeAgentMessage(t.Context(), task.ID, ms[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if g := ids("X"); len(g) != 1 || g[0] != "m2" {
+		t.Fatalf("X after ack=%v", g)
+	}
+	if err := s.AcknowledgeAgentMessage(t.Context(), task.ID, ms[0].ID); err != nil {
+		t.Fatalf("re-ack: %v", err)
+	}
+	if g := ids("Y"); len(g) != 1 || g[0] != "m3" {
+		t.Fatalf("Y=%v", g)
 	}
 }
