@@ -49,6 +49,9 @@ type fakeRunner struct {
 	release map[string]chan runOutcome
 	calls   []string
 	started chan string
+	// onCtxDone, when set before the first Submit, runs inside Run after its
+	// context is cancelled and before it returns.
+	onCtxDone func(a protocol.RuntimeAgent)
 }
 
 func newFakeRunner() *fakeRunner {
@@ -76,6 +79,9 @@ func (f *fakeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (protocol
 	case o := <-c:
 		return o.res, o.err
 	case <-ctx.Done():
+		if f.onCtxDone != nil {
+			f.onCtxDone(a)
+		}
 		return protocol.AgentResult{Summary: "partial"}, ctx.Err()
 	}
 }
@@ -376,6 +382,131 @@ func TestSchedulerBaseContextStopsEverything(t *testing.T) {
 		t.Fatalf("b state %s", st)
 	}
 	if calls := r.Calls(); len(calls) != 1 {
+		t.Fatalf("calls %v", calls)
+	}
+}
+
+func waitState(t *testing.T, s *store.Store, sch *Scheduler, a protocol.RuntimeAgent, want protocol.AgentState) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		ch := sch.Changed(a.TaskID)
+		if stateOf(t, s, a).State == want {
+			return
+		}
+		select {
+		case <-ch:
+		case <-deadline:
+			t.Fatalf("%s never reached %s (now %s)", a.Name, want, stateOf(t, s, a).State)
+		}
+	}
+}
+
+func TestSchedulerChildSubmittedAfterParentCancelIsCancelled(t *testing.T) {
+	s, task := runtimeFixture(t)
+	r := newFakeRunner()
+	sch := newTestScheduler(t, s, r, nil)
+	parent := createAgent(t, s, task, "parent", "")
+	// The parent's runner, mid-flight when cancelled, spawns a child.
+	r.onCtxDone = func(a protocol.RuntimeAgent) {
+		if a.Name != "parent" {
+			return
+		}
+		child, err := s.CreateRuntimeAgent(context.Background(), protocol.RuntimeAgent{TaskID: task.ID, Name: "child", Purpose: "p", ParentAgentID: parent.ID, Assignment: protocol.AgentAssignment{Prompt: "do it"}}, "call-child")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		sch.Submit(context.Background(), child, 2)
+	}
+	sch.Submit(t.Context(), parent, 2)
+	waitStarted(t, r, "parent")
+	if err := sch.Cancel(t.Context(), task.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	sch.Wait()
+	child, err := s.RuntimeAgentForCall(t.Context(), task.ID, "call-child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.State != protocol.AgentStateCancelled {
+		t.Fatalf("child state %s", child.State)
+	}
+	if calls := r.Calls(); len(calls) != 1 || calls[0] != "parent" {
+		t.Fatalf("calls %v", calls)
+	}
+	if n := sch.Active(task.ID); n != 0 {
+		t.Fatalf("active=%d", n)
+	}
+}
+
+func TestSchedulerResubmitFromOnChangeRunsAgain(t *testing.T) {
+	s, task := runtimeFixture(t)
+	r := newFakeRunner()
+	var sch *Scheduler
+	var mu sync.Mutex
+	readmitted := false
+	sch = newTestScheduler(t, s, r, func(a protocol.RuntimeAgent) {
+		if a.State != protocol.AgentStateCompleted {
+			return
+		}
+		mu.Lock()
+		first := !readmitted
+		readmitted = true
+		mu.Unlock()
+		if !first {
+			return
+		}
+		// Re-admit terminal -> queued in the store, then resubmit the same ID.
+		a.State = protocol.AgentStateQueued
+		if err := s.UpdateRuntimeAgent(context.Background(), a, a.Version); err != nil {
+			t.Error(err)
+			return
+		}
+		a.Version++
+		sch.Submit(context.Background(), a, 1)
+	})
+	a := createAgent(t, s, task, "re", "")
+	sch.Submit(t.Context(), a, 1)
+	waitStarted(t, r, "re")
+	r.finish("re", protocol.AgentResult{Summary: "first"}, nil)
+	waitStarted(t, r, "re")
+	r.finish("re", protocol.AgentResult{Summary: "second"}, nil)
+	sch.Wait()
+	if calls := r.Calls(); len(calls) != 2 {
+		t.Fatalf("calls %v", calls)
+	}
+	got := stateOf(t, s, a)
+	if got.State != protocol.AgentStateCompleted || got.Result.Summary != "second" {
+		t.Fatalf("got %s %+v", got.State, got.Result)
+	}
+	if n := sch.Active(task.ID); n != 0 {
+		t.Fatalf("active=%d", n)
+	}
+}
+
+func TestSchedulerCancelTerminalParentCancelsRunningChild(t *testing.T) {
+	s, task := runtimeFixture(t)
+	r := newFakeRunner()
+	sch := newTestScheduler(t, s, r, nil)
+	parent := createAgent(t, s, task, "parent", "")
+	child := createAgent(t, s, task, "child", parent.ID)
+	sch.Submit(t.Context(), parent, 2)
+	sch.Submit(t.Context(), child, 2)
+	waitStarted(t, r, "parent", "child")
+	r.finish("parent", protocol.AgentResult{Summary: "done"}, nil)
+	waitState(t, s, sch, parent, protocol.AgentStateCompleted)
+	if err := sch.Cancel(t.Context(), task.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	sch.Wait()
+	if st := stateOf(t, s, parent).State; st != protocol.AgentStateCompleted {
+		t.Fatalf("parent state %s", st)
+	}
+	if st := stateOf(t, s, child).State; st != protocol.AgentStateCancelled {
+		t.Fatalf("child state %s", st)
+	}
+	if calls := r.Calls(); len(calls) != 2 {
 		t.Fatalf("calls %v", calls)
 	}
 }
