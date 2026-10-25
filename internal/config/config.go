@@ -96,8 +96,17 @@ type ToolsConfig struct {
 	// HostSandbox confines host shell commands (Seatbelt on macOS,
 	// bubblewrap on Linux): "auto" (default) uses it when available, "off"
 	// runs commands unconfined.
-	HostSandbox string            `yaml:"host_sandbox"`
-	Workspaces  []WorkspaceConfig `yaml:"workspaces"`
+	HostSandbox string `yaml:"host_sandbox"`
+	// DefaultNetwork is the sandboxed shell's network access for projects that
+	// do not set their own. Unset means on; set false to default to off.
+	DefaultNetwork *bool             `yaml:"default_network"`
+	Workspaces     []WorkspaceConfig `yaml:"workspaces"`
+}
+
+// NetworkDefault reports whether sandboxed shell commands get network access
+// when a project has no explicit setting. It defaults to true.
+func (t ToolsConfig) NetworkDefault() bool {
+	return t.DefaultNetwork == nil || *t.DefaultNetwork
 }
 
 type PolicyConfig struct {

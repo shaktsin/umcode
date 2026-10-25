@@ -567,7 +567,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		scope := &tools.Scope{
 			ThreadID: th.ID, ProjectID: p.ID, ProjectName: p.Name, Root: taskProject.Root, ProjectRoot: p.Root,
 			AllowComputerUse: computerEnabled,
-			AllowNet:         boolOr(p.Tools.Network, false),
+			AllowNet:         boolOr(p.Tools.Network, e.Cfg == nil || e.Cfg.Tools.NetworkDefault()),
 			UseCompute:       boolOr(p.Tools.Compute, false),
 			ComputeVCPUs:     intOr(p.Tools.ComputeVCPUs, 0),
 			ComputeMemoryMiB: intOr(p.Tools.ComputeMemoryMiB, 0),
