@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	"github.com/shaktsin/umcode/internal/agentrt"
@@ -36,7 +37,7 @@ func (t *runtimeAgentTool) Name() string                        { return "agent.
 func (t *runtimeAgentTool) Description() string {
 	switch t.action {
 	case "spawn":
-		return "Start one agent from an entry of the approved plan, with an assignment and optional narrower capabilities, model, context mode and budget share. The result lists what was granted and what was rejected."
+		return "Start one agent from an entry of the approved plan, with an assignment and optional model, context mode and budget share. Omit capabilities entirely to inherit the approved plan entry's capabilities; supply all four fields (files, shell, network, spawnMax) only to narrow them. The result lists what was granted and what was rejected."
 	case "list":
 		return "List the agents of this task with their states."
 	case "status":
@@ -57,7 +58,7 @@ func (t *runtimeAgentTool) Schema() json.RawMessage {
 			`"name":{"type":"string"},` +
 			`"planEntry":{"type":"string","minLength":1,"description":"Name of an agent in the approved plan."},` +
 			`"assignment":{"type":"object","additionalProperties":false,"required":["prompt"],"properties":{"prompt":{"type":"string","minLength":1},"acceptanceChecks":{"type":"array","items":{"type":"string"}},"contextRefs":{"type":"array","items":{"type":"string","description":"Opaque scoped context reference ID; does not grant filesystem authority."}}}},` +
-			`"capabilities":{"type":"object","additionalProperties":false,"properties":{"files":{"type":"string","enum":["none","read","read-write"]},"shell":{"type":"string","enum":["none","read-only","read-write"]},"network":{"type":"boolean"},"spawnMax":{"type":"integer","minimum":0}}},` +
+			`"capabilities":{"type":"object","additionalProperties":false,"required":["files","shell","network","spawnMax"],"properties":{"files":{"type":"string","enum":["none","read","read-write"]},"shell":{"type":"string","enum":["none","read-only","read-write"]},"network":{"type":"boolean"},"spawnMax":{"type":"integer","minimum":0}}},` +
 			`"model":{"type":"string"},` +
 			`"context":{"type":"string","enum":["none","summary","full"]},` +
 			`"budget":{"type":"object","additionalProperties":false,"properties":{"share":{"type":"number","minimum":0,"maximum":1}}}}}`)
@@ -102,10 +103,10 @@ type spawnArgs struct {
 	PlanEntry    string                   `json:"planEntry"`
 	Assignment   protocol.AgentAssignment `json:"assignment"`
 	Capabilities *struct {
-		Files    string `json:"files"`
-		Shell    string `json:"shell"`
-		Network  bool   `json:"network"`
-		SpawnMax int    `json:"spawnMax"`
+		Files    *string `json:"files"`
+		Shell    *string `json:"shell"`
+		Network  *bool   `json:"network"`
+		SpawnMax *int    `json:"spawnMax"`
 	} `json:"capabilities"`
 	Model   string `json:"model"`
 	Context string `json:"context"`
@@ -148,16 +149,32 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 			Name: a.Name, PlanEntry: a.PlanEntry, Assignment: a.Assignment,
 			Model: a.Model, ContextMode: a.Context,
 		}
-		if a.Capabilities != nil {
+		if c := a.Capabilities; c != nil {
+			switch {
+			case c.Files == nil:
+				return "", errors.New("capabilities.files required when capabilities is supplied")
+			case c.Shell == nil:
+				return "", errors.New("capabilities.shell required when capabilities is supplied")
+			case c.Network == nil:
+				return "", errors.New("capabilities.network required when capabilities is supplied")
+			case c.SpawnMax == nil:
+				return "", errors.New("capabilities.spawnMax required when capabilities is supplied")
+			case *c.SpawnMax < 0:
+				return "", errors.New("capabilities.spawnMax must be >= 0")
+			}
 			req.Capabilities = &protocol.AgentCapabilities{
-				Files:    protocol.FileAccess(a.Capabilities.Files),
-				Shell:    protocol.ShellAccess(a.Capabilities.Shell),
-				Network:  a.Capabilities.Network,
-				SpawnMax: a.Capabilities.SpawnMax,
+				Files:    protocol.FileAccess(*c.Files),
+				Shell:    protocol.ShellAccess(*c.Shell),
+				Network:  *c.Network,
+				SpawnMax: *c.SpawnMax,
 			}
 		}
 		if a.Budget != nil {
-			req.BudgetShare = a.Budget.Share
+			sh := a.Budget.Share
+			if math.IsNaN(sh) || sh < 0 || sh > 1 {
+				return "", errors.New("budget.share must be between 0 and 1")
+			}
+			req.BudgetShare = sh
 		}
 		res, err := t.svc.Spawn(ctx, req)
 		if err != nil {
@@ -179,6 +196,9 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 		}
 	case "list":
 		var a struct{}
+		if len(bytes.TrimSpace(args)) == 0 {
+			args = json.RawMessage(`{}`)
+		}
 		if err = decodeStrict(args, &a); err != nil {
 			return "", err
 		}
