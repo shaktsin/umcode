@@ -11,6 +11,7 @@ import (
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
 )
@@ -203,5 +204,43 @@ func TestRuntimeCallerFailsClosedForChildContexts(t *testing.T) {
 		if id, ok := runtimeCaller(child); ok {
 			t.Fatalf("%s resolved as caller %q", name, id)
 		}
+	}
+}
+
+func TestEngineStartReconcilesRuntimeAgentsWithFlagOff(t *testing.T) {
+	e, th, _, _ := delegationFixture(t)
+	st := e.Store
+	turn := protocol.Turn{ID: store.NewID("turn"), ThreadID: th.ID, Status: protocol.TurnCompleted, StartedAt: time.Now()}
+	if err := st.CreateTurn(t.Context(), turn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.ExecContext(t.Context(), `INSERT INTO agent_tasks (id,thread_id,root_turn_id,activation,state,base_revision,base_root,project_id,created_at,updated_at,parent_root) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		"task-old", th.ID, turn.ID, protocol.AgentActivationExplicitUser, protocol.AgentStateRunning, "base", "", th.ProjectID, store.Now(), store.Now(), ""); err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.CreateRuntimeAgent(t.Context(), protocol.RuntimeAgent{TaskID: "task-old", Name: "left-running"}, "call-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.State = protocol.AgentStateRunning
+	if err := st.UpdateRuntimeAgent(t.Context(), a, a.Version); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default(t.TempDir())
+	cfg.LLM.Provider = "claude"
+	cfg.LLM.Model = "deterministic"
+	reg := llm.NewRegistry()
+	reg.Register(&delegationProvider{})
+	restarted, err := New(t.Context(), Options{Config: cfg, Store: st, Secrets: secrets.NewMemoryStore(), LLMs: reg, DisableMCP: true, DisableScheduler: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.Shutdown(context.Background()) })
+	if restarted.AgentRuntime != nil {
+		t.Fatal("runtime constructed with runtime_v2 off")
+	}
+	got, err := st.RuntimeAgent(t.Context(), "task-old", a.ID)
+	if err != nil || got.State != protocol.AgentStateInterrupted {
+		t.Fatalf("state=%s err=%v; want interrupted after restart with the flag off", got.State, err)
 	}
 }
