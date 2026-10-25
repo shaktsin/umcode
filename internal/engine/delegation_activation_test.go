@@ -73,11 +73,20 @@ func delegationGit(t *testing.T, root string, args ...string) string {
 }
 func delegationFixture(t *testing.T) (*Engine, protocol.Thread, string, *delegationProvider) {
 	t.Helper()
+	return delegationFixtureWith(t, nil)
+}
+
+// delegationFixtureWith is delegationFixture with a config hook applied before the engine is built.
+func delegationFixtureWith(t *testing.T, configure func(*config.Config)) (*Engine, protocol.Thread, string, *delegationProvider) {
+	t.Helper()
 	home := t.TempDir()
 	root := t.TempDir()
 	cfg := config.Default(home)
 	cfg.LLM.Provider = "claude"
 	cfg.LLM.Model = "deterministic"
+	if configure != nil {
+		configure(cfg)
+	}
 	st, err := teststore.Open(t.Context(), filepath.Join(home, "test.db"))
 	if err != nil {
 		t.Fatal(err)

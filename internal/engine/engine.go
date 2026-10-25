@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/agentrt"
 	"github.com/shaktsin/umcode/internal/compute"
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
@@ -96,6 +97,8 @@ type Engine struct {
 	// The default uses owned Git checkouts. Tests may inject an explicit resolver.
 	DelegationWorkspaces       WorkspaceResolver
 	DelegationWorkspaceService *delegation.WorkspaceService
+	// AgentRuntime is set only when agents.runtime_v2 is on.
+	AgentRuntime *agentrt.Runtime
 
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
@@ -212,8 +215,12 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		e.DelegationWorkspaces = managedChildWorkspaces{service: e.DelegationWorkspaceService}
 	}
 	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus), delegation.WithRunner(workflowRunner{engine: e}), delegation.WithWorkflowPolicy(e.delegationWorkflowPolicy))
-	for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
-		reg.Add(tool)
+	if o.Config.Agents.RuntimeV2 {
+		e.registerAgentRuntime(reg, base)
+	} else {
+		for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
+			reg.Add(tool)
+		}
 	}
 	for _, tool := range tools.NewAgentWorkflowTools(e.delegationWorkflowCall) {
 		reg.Add(tool)
@@ -238,6 +245,12 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	}
 	if err := o.Store.ReconcileAgentChildren(ctx); err != nil {
 		return nil, err
+	}
+	if e.AgentRuntime != nil {
+		// Like ReconcileAgentChildren: reconcile stored statuses only, never run agents.
+		if err := e.AgentRuntime.Recover(ctx); err != nil {
+			return nil, err
+		}
 	}
 	if n, err := o.Store.MarkStaleTurns(ctx); err != nil {
 		return nil, err
