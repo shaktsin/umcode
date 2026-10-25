@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -22,6 +21,7 @@ import (
 	"github.com/ncruces/go-sqlite3"
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
+	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
@@ -40,8 +40,9 @@ func init() {
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// ErrNotFound is returned when a row does not exist.
-var ErrNotFound = errors.New("not found")
+// ErrNotFound is returned when a row does not exist. It is
+// protocol.ErrNotFound, so consumers can match it without importing store.
+var ErrNotFound = protocol.ErrNotFound
 
 // Store wraps the database.
 type Store struct {

@@ -510,3 +510,31 @@ func TestSchedulerCancelTerminalParentCancelsRunningChild(t *testing.T) {
 		t.Fatalf("calls %v", calls)
 	}
 }
+
+func TestSchedulerQueuedReportsQueueMembership(t *testing.T) {
+	s, task := runtimeFixture(t)
+	r := newFakeRunner()
+	sch := newTestScheduler(t, s, r, nil)
+	a1, a2 := createAgent(t, s, task, "a1", ""), createAgent(t, s, task, "a2", "")
+	if sch.Queued(task.ID, a1.ID) {
+		t.Fatal("unsubmitted agent reported queued")
+	}
+	sch.Submit(t.Context(), a1, 1)
+	sch.Submit(t.Context(), a2, 1)
+	if sch.Queued(task.ID, a1.ID) {
+		t.Fatal("agent holding a slot reported queued")
+	}
+	if !sch.Queued(task.ID, a2.ID) {
+		t.Fatal("waiting agent not reported queued")
+	}
+	if sch.Queued("other-task", a2.ID) {
+		t.Fatal("queued reported for another task")
+	}
+	waitStarted(t, r, "a1")
+	r.finish("a1", protocol.AgentResult{}, nil)
+	waitStarted(t, r, "a2")
+	if sch.Queued(task.ID, a2.ID) {
+		t.Fatal("promoted agent still reported queued")
+	}
+	r.finish("a2", protocol.AgentResult{}, nil)
+}

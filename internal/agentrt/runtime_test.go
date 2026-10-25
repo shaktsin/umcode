@@ -395,3 +395,125 @@ func TestRecoverInterruptsActiveAgents(t *testing.T) {
 		t.Fatalf("runner invoked: %v", calls)
 	}
 }
+
+// failingCallStore injects an error from RuntimeAgentForCall and records
+// whether admission-time lookups happened.
+type failingCallStore struct {
+	AgentStore
+	callErr      error
+	planLookedUp bool
+}
+
+func (f *failingCallStore) RuntimeAgentForCall(ctx context.Context, taskID, callID string) (protocol.RuntimeAgent, error) {
+	return protocol.RuntimeAgent{}, f.callErr
+}
+
+func (f *failingCallStore) ApprovedAgentPlanForTask(ctx context.Context, taskID string) (protocol.AgentPlan, error) {
+	f.planLookedUp = true
+	return f.AgentStore.ApprovedAgentPlanForTask(ctx, taskID)
+}
+
+func TestSpawnReturnsStoreErrorFromCallLookup(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	boom := errors.New("disk on fire")
+	fs := &failingCallStore{AgentStore: s, callErr: boom}
+	base, cancel := context.WithCancel(context.Background())
+	rt := NewRuntime(fs, newFakeRunner(), base)
+	t.Cleanup(func() { cancel(); rt.sched.Wait() })
+	_, err := rt.Spawn(t.Context(), spawnReq(task, "call-1", "a", 0.25))
+	if !errors.Is(err, boom) {
+		t.Fatalf("want wrapped store error, got %v", err)
+	}
+	var ae *AdmissionError
+	if errors.As(err, &ae) {
+		t.Fatalf("store error reported as admission refusal: %v", err)
+	}
+	if fs.planLookedUp {
+		t.Fatal("fell through to admission")
+	}
+	all, err := s.RuntimeAgents(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("agent stored: %d", len(all))
+	}
+}
+
+func TestSpawnRefusesUnknownAndTerminalCaller(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	r := newFakeRunner()
+	rt := newTestRuntime(t, s, r)
+	done, err := rt.Spawn(t.Context(), spawnReq(task, "call-d", "done", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStarted(t, r, "done")
+	r.finish("done", protocol.AgentResult{Summary: "ok"}, nil)
+	waitRuntimeState(t, rt, task.ID, done.Agent.ID, protocol.AgentStateCompleted)
+
+	for _, caller := range []string{"no-such-agent", done.Agent.ID} {
+		req := spawnReq(task, "call-x-"+caller, "x", 0.1)
+		req.CallerAgentID = caller
+		_, err := rt.Spawn(t.Context(), req)
+		if f := admissionField(t, err); f != "caller" {
+			t.Fatalf("caller %s: field %q", caller, f)
+		}
+	}
+	all, err := rt.List(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("want only the completed agent, got %d", len(all))
+	}
+}
+
+func TestSpawnReplayReturnsSameGrant(t *testing.T) {
+	s, task := runtimeFixture(t)
+	lim := protocol.DefaultPlanLimits()
+	lim.Network = false
+	savePlan(t, s, task, lim, true)
+	rt := newTestRuntime(t, s, newFakeRunner())
+	req := spawnReq(task, "call-1", "a", 0.25)
+	req.Capabilities = &protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone, Network: true}
+	first, err := rt.Spawn(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := rt.Spawn(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Agent.ID != first.Agent.ID || again.Granted != first.Granted {
+		t.Fatalf("replay differs: %+v vs %+v", again.Granted, first.Granted)
+	}
+	if len(again.Rejected) != 0 {
+		t.Fatalf("replay rejected %v", again.Rejected)
+	}
+}
+
+func TestSpawnQueuedReasonOnlyWhenQueued(t *testing.T) {
+	s, task := runtimeFixture(t)
+	lim := protocol.DefaultPlanLimits()
+	lim.MaxConcurrent = 1
+	savePlan(t, s, task, lim, true)
+	r := newFakeRunner()
+	rt := newTestRuntime(t, s, r)
+	first, err := rt.Spawn(t.Context(), spawnReq(task, "call-a", "a", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.QueuedReason != "" {
+		t.Fatalf("first spawn holds a slot but reason %q", first.QueuedReason)
+	}
+	second, err := rt.Spawn(t.Context(), spawnReq(task, "call-b", "b", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(second.QueuedReason, "capacity:") {
+		t.Fatalf("second reason %q", second.QueuedReason)
+	}
+}

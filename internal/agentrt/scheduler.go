@@ -389,3 +389,20 @@ func (s *Scheduler) Active(taskID string) int {
 func (s *Scheduler) Wait() {
 	s.wg.Wait()
 }
+
+// Queued reports whether the agent is waiting in the task's in-memory queue,
+// i.e. it was submitted but holds no running slot yet.
+func (s *Scheduler) Queued(taskID, agentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[taskID]
+	if !ok {
+		return false
+	}
+	for _, a := range t.queue {
+		if a.ID == agentID {
+			return true
+		}
+	}
+	return false
+}
