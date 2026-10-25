@@ -1,3 +1,4 @@
+import { defaultApprovalMode } from '$lib/approvalModes';
 import { applyCompactionUpdate,compactionActive } from '$lib/compaction';
 import type { CompactionState } from '$lib/types';
 import { DelegationState } from './delegation.svelte';
@@ -38,6 +39,8 @@ export class ThreadView {
   sending = $state(false);
   selection = $state<ModelSelection>({});
   workspaceMode = $state<'local' | 'worktree'>('local');
+  /** Approval mode picked before the chat exists; sent with thread/start. */
+  approvalMode = $state<'normal' | 'auto_workspace' | 'auto_all'>(defaultApprovalMode());
   /** What this side chat was opened about, shown above the first message. */
   context = $state('');
   highlightItem = $state<string | null>(null);
@@ -61,6 +64,7 @@ export class ThreadView {
     this.id = null;
     this.thread = null;
     this.workspaceMode = 'local';
+    this.approvalMode = defaultApprovalMode();
     this.turns = [];
     this.items = [];
     this.sending = false;
@@ -332,6 +336,7 @@ class ChatState {
     const th = await app.call<Thread>('thread/start', {
       channel: 'app', projectId: projects.activeId ?? undefined,
       workspaceMode: this.main.workspaceMode, settings: this.main.selection,
+      approvalMode: this.main.approvalMode,
     });
     this.upsertThread(th);
     return th;
