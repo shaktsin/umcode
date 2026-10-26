@@ -25,9 +25,10 @@ type Scheduler struct {
 	base     context.Context
 	onChange func(protocol.RuntimeAgent)
 
-	mu    sync.Mutex
-	tasks map[string]*taskSched
-	wg    sync.WaitGroup
+	mu     sync.Mutex
+	tasks  map[string]*taskSched
+	wg     sync.WaitGroup
+	closed bool // no agent starts after Close
 }
 
 type runningAgent struct {
@@ -149,7 +150,7 @@ func (s *Scheduler) Submit(ctx context.Context, a protocol.RuntimeAgent, maxConc
 // promoteLocked starts queued agents while the task has free slots; s.mu
 // must be held. Agents removed from the queue by Cancel are never started.
 func (s *Scheduler) promoteLocked(t *taskSched) {
-	for len(t.running) < t.max && len(t.queue) > 0 && s.base.Err() == nil {
+	for len(t.running) < t.max && len(t.queue) > 0 && s.base.Err() == nil && !s.closed {
 		a := t.queue[0]
 		t.queue = t.queue[1:]
 		ctx, cancel := context.WithCancel(s.base)
@@ -388,6 +389,59 @@ func (s *Scheduler) Active(taskID string) int {
 // Wait blocks until every agent goroutine has exited.
 func (s *Scheduler) Wait() {
 	s.wg.Wait()
+}
+
+// Close stops the scheduler from starting any more agents and cancels every
+// queued and running agent (with their descendants), then waits for the
+// runners to return until ctx ends, in which case it returns ctx.Err().
+// Calling it again waits again and is otherwise a no-op.
+func (s *Scheduler) Close(ctx context.Context) error {
+	type target struct{ task, id string }
+	s.mu.Lock()
+	s.closed = true
+	var targets []target
+	for taskID, t := range s.tasks {
+		for _, a := range t.queue {
+			targets = append(targets, target{taskID, a.ID})
+		}
+		for id := range t.running {
+			targets = append(targets, target{taskID, id})
+		}
+	}
+	s.mu.Unlock()
+	// The persisted cancellations are short writes that must land even when
+	// the caller's deadline is about to expire.
+	persist := context.WithoutCancel(ctx)
+	var firstErr error
+	for _, tg := range targets {
+		if err := s.Cancel(persist, tg.task, tg.id); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	done := make(chan struct{})
+	go func() { s.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return firstErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Update applies mutate to a stored agent under optimistic versioning, for
+// writers outside the scheduler (the runner): a persisted change signals
+// Changed and onChange exactly like a scheduler transition, so waiters wake
+// and the events callback sees it. mutate returns false to skip the write.
+func (s *Scheduler) Update(ctx context.Context, taskID, id string, mutate func(*protocol.RuntimeAgent) bool) error {
+	wanted := false
+	_, wrote := s.transition(ctx, taskID, id, func(cur *protocol.RuntimeAgent) bool {
+		wanted = mutate(cur)
+		return wanted
+	}, nil)
+	if wanted && !wrote {
+		return fmt.Errorf("update agent %s: not persisted", id)
+	}
+	return nil
 }
 
 // Queued reports whether the agent is waiting in the task's in-memory queue,

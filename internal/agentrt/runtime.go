@@ -51,6 +51,9 @@ type Service interface {
 // descendants.
 var ErrOutOfScope = errors.New("agent is outside the caller's subtree")
 
+// ErrClosed reports a spawn after the runtime was closed.
+var ErrClosed = errors.New("agent runtime is closed")
+
 // ErrSpawnReplayMismatch reports a spawn whose (TaskID, CallID) was already
 // used by a different request (caller, plan entry or assignment differ).
 var ErrSpawnReplayMismatch = errors.New("spawn call ID was already used for a different request")
@@ -120,6 +123,7 @@ type Runtime struct {
 	// lifecycle serialises Spawn so admission, reservation and creation are
 	// atomic with respect to each other.
 	lifecycle sync.Mutex
+	closed    bool // guarded by lifecycle
 }
 
 // NewRuntime returns a Runtime whose agents run under contexts derived from
@@ -143,6 +147,27 @@ func (r *Runtime) emit(a protocol.RuntimeAgent) {
 // starts a runner.
 func (r *Runtime) Recover(ctx context.Context) error {
 	return r.store.ReconcileRuntimeAgents(ctx)
+}
+
+// Close stops admitting spawns (later Spawns fail with ErrClosed), cancels
+// every queued and running agent and waits for their runners to return until
+// ctx ends, in which case it returns ctx.Err(). It is idempotent: a second
+// call has nothing left to cancel and returns once the runners are gone.
+func (r *Runtime) Close(ctx context.Context) error {
+	// Taking the lifecycle lock makes the closed flag atomic with any Spawn
+	// already past admission, so its agent is submitted before we cancel.
+	r.lifecycle.Lock()
+	r.closed = true
+	r.lifecycle.Unlock()
+	return r.sched.Close(ctx)
+}
+
+// Update applies mutate to an agent from outside the scheduler, such as the
+// runner recording its model, workspace or usage. Unlike a direct store write
+// it wakes Wait and reports the change through WithEvents. mutate returns
+// false to skip the write.
+func (r *Runtime) Update(ctx context.Context, taskID, id string, mutate func(*protocol.RuntimeAgent) bool) error {
+	return r.sched.Update(ctx, taskID, id, mutate)
 }
 
 // Spawn admits and starts (or queues) an agent. It is idempotent by
@@ -175,6 +200,9 @@ func (r *Runtime) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResult, bool, error) {
 	r.lifecycle.Lock()
 	defer r.lifecycle.Unlock()
+	if r.closed {
+		return SpawnResult{}, false, ErrClosed
+	}
 
 	// Only protocol.ErrNotFound means "not spawned yet"; any other store
 	// error is returned rather than risking a second admission.

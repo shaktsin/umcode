@@ -822,6 +822,34 @@ func (s *WorkspaceService) attachRuntime(ctx context.Context, t protocol.AgentTa
 	return store.ErrAgentConflict
 }
 
+// DiscardRuntimeView removes the read-only view checkout of a stopped runtime
+// agent (completed, failed or cancelled). It refuses anything but a runtime
+// view owned by that agent: a write-capable agent's workspace is kept for
+// integration and is never touched. The checkout must still be exactly the
+// base revision and clean (DiscardCommitted), else it is retained.
+func (s *WorkspaceService) DiscardRuntimeView(ctx context.Context, taskID, agentID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, err := s.Store.RuntimeAgent(ctx, taskID, agentID)
+	if err != nil {
+		return err
+	}
+	if a.WorkspaceID == "" {
+		return nil
+	}
+	w, err := s.Store.AgentWorkspace(ctx, a.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	if w.TaskID != taskID || w.ChildID != agentID || w.Kind != "reviewer" || w.SourceID != runtimeBaseSource {
+		return errors.New("workspace is not a runtime view checkout of this agent")
+	}
+	if w.Cleaned {
+		return nil
+	}
+	return s.discardVerified(ctx, w)
+}
+
 // SnapshotRuntime is SnapshotOwned for a stopped runtime agent: a writable
 // checkout is committed privately and reports its changed paths; a read-only
 // checkout must still be exactly the base revision and reports none.

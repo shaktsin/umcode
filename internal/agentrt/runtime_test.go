@@ -701,3 +701,156 @@ func TestLeadCapabilitiesBoundLeadSpawns(t *testing.T) {
 		t.Fatalf("field %q", f)
 	}
 }
+
+func TestSpawnAfterCloseFails(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	rt := newTestRuntime(t, s, newFakeRunner())
+	if err := rt.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := rt.Spawn(t.Context(), spawnReq(task, "late", "late", 0.25))
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("spawn after close: %v, want ErrClosed", err)
+	}
+	if all, _ := rt.List(t.Context(), task.ID, ""); len(all) != 0 {
+		t.Fatalf("agent created after close: %d", len(all))
+	}
+}
+
+func TestCloseCancelsRunningAndQueuedAgents(t *testing.T) {
+	s, task := runtimeFixture(t)
+	limits := protocol.DefaultPlanLimits()
+	limits.MaxConcurrent = 1
+	savePlan(t, s, task, limits, true)
+	r := newFakeRunner()
+	rt := newTestRuntime(t, s, r)
+	run, err := rt.Spawn(t.Context(), spawnReq(task, "c1", "running", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStarted(t, r, "running")
+	queued, err := rt.Spawn(t.Context(), spawnReq(task, "c2", "queued", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.QueuedReason == "" {
+		t.Fatal("second agent was not queued")
+	}
+	if err := rt.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{run.Agent.ID, queued.Agent.ID} {
+		a, err := rt.Status(t.Context(), task.ID, "", id)
+		if err != nil || a.State != protocol.AgentStateCancelled {
+			t.Fatalf("agent %s: state %q err %v, want cancelled", id, a.State, err)
+		}
+	}
+	if calls := r.Calls(); len(calls) != 1 {
+		t.Fatalf("queued agent ran after close: %v", calls)
+	}
+	if rt.sched.Active(task.ID) != 0 {
+		t.Fatal("running slot still held after close")
+	}
+}
+
+// slowRunner ignores cancellation for a while, then returns.
+type slowRunner struct {
+	started chan struct{}
+	release chan struct{}
+	exited  chan struct{}
+}
+
+func (r *slowRunner) Run(ctx context.Context, _ protocol.RuntimeAgent) (protocol.AgentResult, error) {
+	close(r.started)
+	<-r.release
+	close(r.exited)
+	return protocol.AgentResult{}, ctx.Err()
+}
+
+func TestCloseWaitsAndIsIdempotent(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	r := &slowRunner{started: make(chan struct{}), release: make(chan struct{}), exited: make(chan struct{})}
+	rt := newTestRuntime(t, s, r)
+	if _, err := rt.Spawn(t.Context(), spawnReq(task, "c1", "slow", 0.25)); err != nil {
+		t.Fatal(err)
+	}
+	<-r.started
+
+	// A bounded Close returns the context error while the runner is stuck.
+	short, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := rt.Close(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close with stuck runner: %v, want deadline exceeded", err)
+	}
+	// It waits for the runner: release it shortly and Close must only return after.
+	go func() { time.Sleep(100 * time.Millisecond); close(r.release) }()
+	if err := rt.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.exited:
+	default:
+		t.Fatal("Close returned before the runner exited")
+	}
+	// Idempotent: a further Close is a no-op.
+	if err := rt.Close(t.Context()); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+}
+
+func TestUpdateWakesWaitersAndEmitsEvent(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	r := newFakeRunner()
+	var mu sync.Mutex
+	var seen []protocol.RuntimeAgent
+	rt := newTestRuntime(t, s, r, WithEvents(func(a protocol.RuntimeAgent) { mu.Lock(); seen = append(seen, a); mu.Unlock() }))
+	res, err := rt.Spawn(t.Context(), spawnReq(task, "c1", "u", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStarted(t, r, "u")
+	// Wait for a state no scheduler transition produces: only the runner-side
+	// update below changes the agent's model, and the waiter must notice.
+	woke := make(chan protocol.RuntimeAgent, 1)
+	go func() {
+		for {
+			ch := rt.sched.Changed(task.ID)
+			a, _ := rt.Status(context.Background(), task.ID, "", res.Agent.ID)
+			if a.ModelActual == "p/m" {
+				woke <- a
+				return
+			}
+			<-ch
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if err := rt.Update(t.Context(), task.ID, res.Agent.ID, func(a *protocol.RuntimeAgent) bool { a.ModelActual = "p/m"; return true }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case a := <-woke:
+		if a.ModelActual != "p/m" {
+			t.Fatalf("woke with %+v", a)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner-side update did not wake waiters")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 || seen[len(seen)-1].ModelActual != "p/m" {
+		t.Fatalf("events did not receive the update: %+v", seen)
+	}
+	// No-op mutate writes nothing and emits nothing.
+	n := len(seen)
+	mu.Unlock()
+	if err := rt.Update(t.Context(), task.ID, res.Agent.ID, func(*protocol.RuntimeAgent) bool { return false }); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if len(seen) != n {
+		t.Fatal("skipped update emitted an event")
+	}
+}
