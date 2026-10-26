@@ -112,6 +112,15 @@ func WithLeadCapabilities(c protocol.AgentCapabilities) Option {
 	return func(r *Runtime) { r.lead = c }
 }
 
+// WithAdmitted registers a callback that sees each newly created agent once,
+// with the spawn caller's context, after it is stored and before it is
+// submitted to the scheduler (so before its runner can start). A replay does
+// not call it. It runs under the runtime's spawn lock, so it must be quick
+// and must not call back into the runtime.
+func WithAdmitted(fn func(ctx context.Context, a protocol.RuntimeAgent)) Option {
+	return func(r *Runtime) { r.admitted = fn }
+}
+
 // WithEvents registers a callback for persisted agent changes, including
 // creation. See NewScheduler for ordering guarantees.
 func WithEvents(fn func(protocol.RuntimeAgent)) Option {
@@ -128,6 +137,7 @@ type Runtime struct {
 	// resolveFn, when set, supplies the options per task instead of resolve.
 	resolveFn func(ctx context.Context, taskID string) ResolveOptions
 	events    func(protocol.RuntimeAgent)
+	admitted  func(context.Context, protocol.RuntimeAgent)
 	lead      protocol.AgentCapabilities
 
 	// lifecycle serialises Spawn so admission, reservation and creation are
@@ -295,6 +305,9 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 		return SpawnResult{}, false, fmt.Errorf("spawn: create agent: %w", err)
 	}
 
+	if r.admitted != nil {
+		r.admitted(ctx, created)
+	}
 	maxConc := plan.Limits.Normalized().MaxConcurrent
 	// The agent is stored; a dying caller ctx must not abandon its scheduling.
 	persist := context.WithoutCancel(ctx)

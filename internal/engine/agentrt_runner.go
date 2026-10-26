@@ -390,7 +390,14 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 			}
 		}
 	}()
-	slice := shared.Slice(a.BudgetShare)
+	// A lead's agent slices the task budget, a nested agent its parent's
+	// slice; the entry is dropped when the runner returns (agent terminal).
+	defer e.releaseRuntimeAgentBudget(task.ID, a.ID)
+	slice, err := e.runtimeAgentBudget(ctx, a)
+	if err != nil {
+		result.Blocker = err.Error()
+		return result, err
+	}
 	if ctx.Err() == nil && sliceExhausted(slice, shared, "") {
 		result.Blocker = errBudgetSliceExhausted.Error()
 		return result, errBudgetSliceExhausted

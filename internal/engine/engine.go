@@ -127,6 +127,9 @@ type Engine struct {
 	// runtimeBudgetTrackers holds one entry per task whose budget a tracker
 	// goroutine will drop; removed together with the budget.
 	runtimeBudgetTrackers sync.Map
+	// runtimeAgentBudgets holds each live runtime agent's budget slice so a
+	// nested agent slices its parent's slice (see agentrt_budget.go).
+	runtimeAgentBudgets agentBudgetRegistry
 
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
