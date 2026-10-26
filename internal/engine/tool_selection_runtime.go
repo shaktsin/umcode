@@ -336,7 +336,7 @@ func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.P
 	}
 	if c.tool.Name() == "agent.review_report" {
 		x := childExecutionFrom(ctx)
-		if x == nil || x.child.Role != protocol.AgentRoleReviewer {
+		if x == nil || x.runtime != nil || x.child.Role != protocol.AgentRoleReviewer {
 			return false
 		}
 	}

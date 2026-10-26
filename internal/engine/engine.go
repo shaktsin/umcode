@@ -34,6 +34,7 @@ import (
 	"github.com/shaktsin/umcode/internal/projects"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/router"
+	"github.com/shaktsin/umcode/internal/sandbox"
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
@@ -99,6 +100,13 @@ type Engine struct {
 	DelegationWorkspaceService *delegation.WorkspaceService
 	// AgentRuntime is set only when agents.runtime_v2 is on.
 	AgentRuntime *agentrt.Runtime
+	// RuntimeWorkspaces gives runtime agents their checkouts. Nil uses the
+	// owned Git checkouts of DelegationWorkspaceService.
+	RuntimeWorkspaces RuntimeWorkspaceResolver
+	// agentVMCheck and agentSandbox probe the confinement a runtime agent's
+	// shell would get (see runtimeConfinement); nil uses the real host checks.
+	agentVMCheck func() error
+	agentSandbox func() sandbox.Sandbox
 
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
@@ -1012,6 +1020,9 @@ func (e *Engine) systemPrompt(ctx context.Context, userText string, proj *protoc
 // instructions, the skills catalog and the project's UMCODE.md files. userText
 // is used to point at a matching skill. Empty layers are omitted.
 func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *protocol.Project, instructionHint string, hookContext []string) []promptLayer {
+	if x := childExecutionFrom(ctx); x != nil && x.runtime != nil {
+		return []promptLayer{{Name: layerCore, Text: runtimeAgentPrompt(x.runtime.agent, x.workspace.Root)}}
+	}
 	if x := childExecutionFrom(ctx); x != nil {
 		review := ""
 		if x.child.Role == protocol.AgentRoleReviewer {

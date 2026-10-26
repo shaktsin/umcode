@@ -57,7 +57,7 @@ func (e *Engine) checkChildTaskAuthority(ctx context.Context, operation protocol
 	comparison.Root = x.task.ParentRoot
 	comparison.ThreadID = parent.ID
 	comparison.ProjectID = parent.ProjectID
-	comparison.ReadOnly = actual.ReadOnly || x.child.Role == protocol.AgentRoleReviewer
+	comparison.ReadOnly = actual.ReadOnly || (x.runtime == nil && x.child.Role == protocol.AgentRoleReviewer)
 	if operation.Tool == "file.read" || operation.Tool == "file.write" || operation.Tool == "file.edit" {
 		var args map[string]json.RawMessage
 		if json.Unmarshal(operation.Args, &args) == nil {

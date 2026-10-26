@@ -589,3 +589,14 @@ func InheritRunnerContext(ctx, from context.Context) context.Context {
 func hasResult(r protocol.AgentResult) bool {
 	return r.Summary != "" || r.Blocker != "" || len(r.Findings) > 0 || len(r.Checks) > 0 || len(r.ChangedPaths) > 0
 }
+
+// WithChildCancellation gives ctx a cancellation owner for the engine turns an
+// execution starts (see RegisterChildCancellation): each registered turn is
+// cancelled when ctx is done. The agent runtime's runner uses it in place of
+// the coordinator's slot. stop releases the watch on ctx.
+func WithChildCancellation(ctx context.Context) (context.Context, func()) {
+	h := &childCancellation{}
+	ctx = context.WithValue(ctx, cancellationKey{}, h)
+	stop := context.AfterFunc(ctx, h.cancel)
+	return ctx, func() { stop() }
+}

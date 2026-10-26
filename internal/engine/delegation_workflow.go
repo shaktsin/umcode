@@ -261,7 +261,7 @@ func (e *Engine) delegationWorkflowCall(ctx context.Context, action string, args
 }
 func (e *Engine) submitReview(ctx context.Context, args json.RawMessage) (string, error) {
 	x := childExecutionFrom(ctx)
-	if x == nil || x.child.Role != protocol.AgentRoleReviewer {
+	if x == nil || x.runtime != nil || x.child.Role != protocol.AgentRoleReviewer {
 		return "", errors.New("review report requires actual reviewer execution")
 	}
 	if err := ctx.Err(); err != nil {
