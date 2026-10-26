@@ -12,7 +12,7 @@ package compute
 static int32_t umcode_start_guest(const char *rootfs, const char *project,
                                     const char *workdir, const char *command,
                                     const char *resolver,
-                                    bool allow_network, int32_t vcpus, int32_t memory_mib,
+                                    bool allow_network, bool root_read_only, int32_t vcpus, int32_t memory_mib,
                                     int32_t host_port, int32_t guest_port) {
     int32_t ctx = krun_create_ctx();
     if (ctx < 0) return ctx;
@@ -20,7 +20,7 @@ static int32_t umcode_start_guest(const char *rootfs, const char *project,
     CHECK_KRUN(krun_set_vm_config((uint32_t)ctx, vcpus, memory_mib));
     CHECK_KRUN(krun_add_virtio_console_default((uint32_t)ctx, 0, 1, 2));
     CHECK_KRUN(krun_set_root((uint32_t)ctx, rootfs));
-    CHECK_KRUN(krun_add_virtiofs3((uint32_t)ctx, "umcode_workspace", project, 0, false));
+    CHECK_KRUN(krun_add_virtiofs3((uint32_t)ctx, "umcode_workspace", project, 0, root_read_only));
     CHECK_KRUN(krun_disable_implicit_vsock((uint32_t)ctx));
     if (allow_network) {
         CHECK_KRUN(krun_add_vsock((uint32_t)ctx, KRUN_TSI_HIJACK_INET));
@@ -102,7 +102,7 @@ func RunGuest(req GuestRequest) error {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return fmt.Errorf("libkrun guest execution is unsupported on %s", runtime.GOOS)
 	}
-	if rc := C.umcode_start_guest(cRootFS, cRoot, cGuestDir, cCommand, cResolver, C.bool(req.Network),
+	if rc := C.umcode_start_guest(cRootFS, cRoot, cGuestDir, cCommand, cResolver, C.bool(req.Network), C.bool(req.RootReadOnly),
 		C.int32_t(req.VCPUs), C.int32_t(req.MemoryMiB), C.int32_t(req.HostPort), C.int32_t(req.GuestPort)); rc < 0 {
 		return fmt.Errorf("libkrun failed before guest exit (error %d)", int32(rc))
 	}
