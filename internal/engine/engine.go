@@ -120,6 +120,9 @@ type Engine struct {
 	// agentThreadLookup reads the lead thread for leadApprovalMode; nil uses
 	// the store. A test seam for a lookup that never returns.
 	agentThreadLookup func(ctx context.Context, id string) (protocol.Thread, error)
+	// agentTurnDone, when set, is called with a runtime agent's ID right
+	// after its turn loop exits. A test seam.
+	agentTurnDone func(agentID string)
 	// runtimeBudgets maps a task ID to the shared task budget its lead turns
 	// run under, so runtime agents (which the scheduler starts on the engine's
 	// base context) slice the right budget without the legacy coordinator.
