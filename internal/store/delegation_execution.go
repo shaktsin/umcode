@@ -91,7 +91,7 @@ func (s *Store) EnsureAgentExecution(ctx context.Context, task protocol.AgentTas
 		return AgentExecution{}, err
 	}
 	defer tx.Rollback()
-	id, err := insertAgentExecution(ctx, tx, task.ID, child.ID, parent, string(data))
+	id, err := insertAgentExecution(ctx, tx, task.ID, child.ID, parent, string(data), true)
 	if err != nil {
 		return AgentExecution{}, err
 	}
@@ -127,11 +127,13 @@ func (s *Store) IsInternalThread(ctx context.Context, id string) (bool, error) {
 }
 
 // insertAgentExecution creates the internal execution thread for an existing
-// agent_children row and its agent_executions record in tx.
-func insertAgentExecution(ctx context.Context, tx *sql.Tx, taskID, childID string, parent protocol.Thread, contextJSON string) (string, error) {
+// agent_children row and its agent_executions record in tx. A legacy child's
+// thread copies the lead's approval mode (inheritApproval); a runtime agent's
+// thread carries an empty mode, since agents read the lead's mode live.
+func insertAgentExecution(ctx context.Context, tx *sql.Tx, taskID, childID string, parent protocol.Thread, contextJSON string, inheritApproval bool) (string, error) {
 	id := NewID("thr")
 	now := Now()
-	result, err := tx.ExecContext(ctx, `INSERT INTO threads (`+threadCols+`,internal_child_id) SELECT ?,?,th.project_id,'local',th.channel,0,0,?,?,?,?,th.approval_mode,'',?,?,c.id FROM threads th JOIN agent_tasks t ON t.thread_id=th.id JOIN agent_children c ON c.task_id=t.id WHERE t.id=? AND c.id=? AND th.id=? AND th.internal_child_id=''`, id, "Agent execution", parent.Settings.Provider, parent.Settings.Model, string(parent.Settings.Complexity), parent.Settings.CredentialID, now, now, taskID, childID, parent.ID)
+	result, err := tx.ExecContext(ctx, `INSERT INTO threads (`+threadCols+`,internal_child_id) SELECT ?,?,th.project_id,'local',th.channel,0,0,?,?,?,?,CASE WHEN ? THEN th.approval_mode ELSE '' END,'',?,?,c.id FROM threads th JOIN agent_tasks t ON t.thread_id=th.id JOIN agent_children c ON c.task_id=t.id WHERE t.id=? AND c.id=? AND th.id=? AND th.internal_child_id=''`, id, "Agent execution", parent.Settings.Provider, parent.Settings.Model, string(parent.Settings.Complexity), parent.Settings.CredentialID, b2i(inheritApproval), now, now, taskID, childID, parent.ID)
 	if err != nil {
 		return "", err
 	}

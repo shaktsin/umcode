@@ -148,3 +148,50 @@ func TestUpdateRuntimeAgentSyncsMirrorState(t *testing.T) {
 		t.Fatal("stale update moved mirror")
 	}
 }
+
+// S3: a runtime agent's internal execution thread carries an empty approval
+// mode (agents read the lead's mode live); a legacy child's thread still
+// copies the lead's mode as before.
+func TestRuntimeExecutionThreadHasEmptyApprovalMode(t *testing.T) {
+	s, task := runtimeFixture(t)
+	if err := s.UpdateThread(t.Context(), task.ThreadID, map[string]any{"approval_mode": "auto_all"}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.CreateRuntimeAgent(t.Context(), newRuntimeAgent(task, "one"), "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err := s.EnsureRuntimeAgentExecution(t.Context(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := threadApprovalMode(t, s, x.ThreadID); mode != "" {
+		t.Fatalf("runtime execution thread approval mode = %q, want empty", mode)
+	}
+
+	parent, err := s.GetThread(t.Context(), task.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := s.CreateAgentChild(t.Context(), protocol.AgentChild{TaskID: task.ID, Role: protocol.AgentRoleImplementer, Assignment: protocol.AgentAssignment{Prompt: "p"}, State: protocol.AgentStateQueued}, "legacy-call")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lx, err := s.EnsureAgentExecution(t.Context(), task, child, parent, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := threadApprovalMode(t, s, lx.ThreadID); mode != "auto_all" {
+		t.Fatalf("legacy execution thread approval mode = %q, want the lead's (unchanged)", mode)
+	}
+}
+
+// threadApprovalMode reads a thread's stored mode, internal threads included.
+func threadApprovalMode(t *testing.T, s *Store, id string) string {
+	t.Helper()
+	var mode string
+	if err := s.DB.QueryRowContext(t.Context(), `SELECT approval_mode FROM threads WHERE id=?`, id).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	return mode
+}
