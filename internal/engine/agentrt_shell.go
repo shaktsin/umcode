@@ -14,35 +14,74 @@ import (
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
-// shellChecks caches the read-only self-check results, one per confinement
-// mechanism for the life of the process. A check that ended because its
-// context ended is not cached.
+// shellChecks runs the read-only self-checks, one in flight per confinement
+// key, and caches only passes for the life of the process: a failure (a
+// transient VM boot error, a check cut short) is retried on the next call, so
+// it never disables the read-only shell until restart. No lock is held while
+// a check runs, so a slow first microVM probe blocks neither other keys nor
+// anything else that takes the lock.
 type shellChecks struct {
-	mu      sync.Mutex
-	results map[string]error
+	mu     sync.Mutex
+	passed map[string]bool
+	flight map[string]*shellCheck
 }
 
-func (c *shellChecks) do(ctx context.Context, key string, run func(context.Context) error) error {
+// shellCheck is one in-flight check; err is set before done is closed.
+type shellCheck struct {
+	done chan struct{}
+	err  error
+}
+
+// do returns nil for a key that passed before, else joins the key's in-flight
+// check or starts one. The check runs on runCtx (the engine's lifetime, not
+// the caller's, so a caller giving up does not abort it for the others); the
+// caller waits only as long as ctx allows.
+func (c *shellChecks) do(ctx, runCtx context.Context, key string, run func(context.Context) error) error {
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err, ok := c.results[key]; ok {
-		return err
+	if c.passed[key] {
+		c.mu.Unlock()
+		return nil
 	}
-	err := run(ctx)
-	if ctx.Err() != nil {
-		return err
+	f := c.flight[key]
+	if f == nil {
+		f = &shellCheck{done: make(chan struct{})}
+		if c.flight == nil {
+			c.flight = map[string]*shellCheck{}
+		}
+		c.flight[key] = f
+		go func() {
+			err := run(runCtx)
+			c.mu.Lock()
+			f.err = err
+			if err == nil {
+				if c.passed == nil {
+					c.passed = map[string]bool{}
+				}
+				c.passed[key] = true
+			}
+			if c.flight[key] == f {
+				delete(c.flight, key)
+			}
+			c.mu.Unlock()
+			close(f.done)
+		}()
 	}
-	if c.results == nil {
-		c.results = map[string]error{}
+	c.mu.Unlock()
+	select {
+	case <-f.done:
+		return f.err
+	case <-ctx.Done():
+		return fmt.Errorf("read-only self-check still running: %w", ctx.Err())
 	}
-	c.results[key] = err
-	return err
 }
 
-// reset forgets every cached result. A test seam.
+// reset forgets every cached pass. A test seam.
 func (c *shellChecks) reset() {
 	c.mu.Lock()
-	c.results = nil
+	c.passed = nil
 	c.mu.Unlock()
 }
 
@@ -90,17 +129,18 @@ func (e *Engine) runtimeConfinementWhy(scope *tools.Scope) (tools.Confinement, s
 }
 
 // shellOfferFor resolves the confinement a project would use and runs its
-// read-only self-check (once per process, on first need).
+// read-only self-check on first need (a pass is kept for the process, a
+// failure is retried next time).
 func (e *Engine) shellOfferFor(ctx context.Context, scope *tools.Scope) shellOffer {
 	conf, why := e.runtimeConfinementWhy(scope)
 	offer := shellOffer{Confinement: conf, Reason: why}
 	var err error
 	switch conf {
 	case tools.ConfMicroVM:
-		err = e.shellChecks.do(ctx, "microvm", e.vmReadOnlyCheck)
+		err = e.shellChecks.do(ctx, e.baseCtx, "microvm", e.vmReadOnlyCheck)
 	case tools.ConfOSSandbox:
 		sb := e.hostSandboxForCheck()
-		err = e.shellChecks.do(ctx, "os:"+sb.Name(), func(context.Context) error { return e.osReadOnlyCheck(sb) })
+		err = e.shellChecks.do(ctx, e.baseCtx, "os:"+sb.Name(), func(context.Context) error { return e.osReadOnlyCheck(sb) })
 	default:
 		return offer
 	}

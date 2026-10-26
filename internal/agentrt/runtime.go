@@ -100,8 +100,9 @@ func WithResolveOptions(o ResolveOptions) Option {
 
 // WithResolveOptionsFunc computes the resolution options per task at each
 // admission, such as the shell confinement the task's project would use. It
-// takes precedence over WithResolveOptions. The function runs under the
-// runtime's spawn lock, so it must not call back into the runtime.
+// takes precedence over WithResolveOptions. The function runs before the
+// runtime's spawn lock is taken (it may be slow, such as a first microVM
+// self-check) and only for a call ID not spawned yet; it must honour ctx.
 func WithResolveOptionsFunc(fn func(ctx context.Context, taskID string) ResolveOptions) Option {
 	return func(r *Runtime) { r.resolveFn = fn }
 }
@@ -204,7 +205,11 @@ func (r *Runtime) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 	if req.TaskID == "" || req.CallID == "" {
 		return SpawnResult{}, errors.New("spawn: task ID and call ID are required")
 	}
-	res, created, err := r.spawnLocked(ctx, req)
+	options, err := r.optionsFor(ctx, req)
+	if err != nil {
+		return SpawnResult{}, err
+	}
+	res, created, err := r.spawnLocked(ctx, req, options)
 	if err != nil {
 		return SpawnResult{}, err
 	}
@@ -215,9 +220,36 @@ func (r *Runtime) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 	return res, nil
 }
 
-// spawnLocked runs Spawn under the lifecycle lock; created reports whether a
-// new agent was stored and submitted (false for a replay).
-func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResult, bool, error) {
+// optionsFor computes the resolve options for a spawn outside the lifecycle
+// lock, so a slow computation stalls neither other spawns nor Close. A call
+// already spawned is a replay that never re-resolves, so it is looked up
+// first; spawnLocked repeats the lookup under the lock, which keeps replay
+// semantics identical when two calls race.
+func (r *Runtime) optionsFor(ctx context.Context, req SpawnRequest) (ResolveOptions, error) {
+	if r.resolveFn == nil {
+		return r.resolve, nil
+	}
+	r.lifecycle.Lock()
+	closed := r.closed
+	r.lifecycle.Unlock()
+	if closed {
+		return ResolveOptions{}, ErrClosed
+	}
+	if _, err := r.store.RuntimeAgentForCall(ctx, req.TaskID, req.CallID); !errors.Is(err, protocol.ErrNotFound) {
+		// A replay, or a store error spawnLocked reports: no options needed.
+		return r.resolve, nil
+	}
+	options := r.resolveFn(ctx, req.TaskID)
+	if err := ctx.Err(); err != nil {
+		return ResolveOptions{}, fmt.Errorf("spawn: resolve options: %w", err)
+	}
+	return options, nil
+}
+
+// spawnLocked runs Spawn under the lifecycle lock with options computed
+// beforehand; created reports whether a new agent was stored and submitted
+// (false for a replay).
+func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest, options ResolveOptions) (SpawnResult, bool, error) {
 	r.lifecycle.Lock()
 	defer r.lifecycle.Unlock()
 	if r.closed {
@@ -265,10 +297,6 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 		}
 	}
 
-	options := r.resolve
-	if r.resolveFn != nil {
-		options = r.resolveFn(ctx, req.TaskID)
-	}
 	adm, err := Admit(AdmissionInput{
 		Plan:            plan,
 		Caller:          caller,

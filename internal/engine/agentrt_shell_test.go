@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/agentrt"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -233,5 +235,181 @@ func TestAdmissionNetworkCeilingFromProject(t *testing.T) {
 	res = spawn("on-off", protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone})
 	if res.Granted.Network || networkRejection(res) != "" {
 		t.Fatalf("project on, agent off: granted %+v rejected %+v", res.Granted, res.Rejected)
+	}
+}
+
+// I4: one in-flight check per key, run outside the lock on its own context;
+// callers wait with theirs; other keys are not blocked; only a pass is cached.
+func TestShellChecksSingleflightOutsideLock(t *testing.T) {
+	var c shellChecks
+	block := make(chan struct{})
+	var runs atomic.Int32
+	slow := func(ctx context.Context) error {
+		runs.Add(1)
+		select {
+		case <-block:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	results := make(chan error, 2)
+	for range 2 {
+		go func() { results <- c.do(context.Background(), context.Background(), "microvm", slow) }()
+	}
+	// Another key is not blocked behind the in-flight probe.
+	done := make(chan error, 1)
+	go func() { done <- c.do(context.Background(), context.Background(), "os:fake", func(context.Context) error { return nil }) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a check for another key waited behind the in-flight probe")
+	}
+	// A caller whose context ends stops waiting at once.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := c.do(ctx, context.Background(), "microvm", slow); err == nil || time.Since(start) > 2*time.Second {
+		t.Fatalf("waiter with an ended context: err %v after %v", err, time.Since(start))
+	}
+	close(block)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("probe ran %d times, want once for concurrent callers", n)
+	}
+	// A pass is cached.
+	if err := c.do(context.Background(), context.Background(), "microvm", slow); err != nil || runs.Load() != 1 {
+		t.Fatalf("cached pass: err %v runs %d", err, runs.Load())
+	}
+}
+
+func TestShellChecksFailureIsRetried(t *testing.T) {
+	var c shellChecks
+	var runs atomic.Int32
+	fail := errors.New("transient VM failure")
+	run := func(context.Context) error {
+		if runs.Add(1) == 1 {
+			return fail
+		}
+		return nil
+	}
+	if err := c.do(context.Background(), context.Background(), "microvm", run); !errors.Is(err, fail) {
+		t.Fatalf("first: %v", err)
+	}
+	if err := c.do(context.Background(), context.Background(), "microvm", run); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if err := c.do(context.Background(), context.Background(), "microvm", run); err != nil || runs.Load() != 2 {
+		t.Fatalf("after pass: err %v runs %d", err, runs.Load())
+	}
+}
+
+// A failed microVM probe does not disable the read-only shell until restart:
+// the next admission probes again.
+func TestFailedVMProbeRetriedOnNextAdmission(t *testing.T) {
+	env, rt := shellFixture(t)
+	seams := &shellSeams{vmErr: errors.New("microVM read-only self-check: the guest did not boot")}
+	seams.install(env.e, fakeSandbox{}, nil)
+	setProjectCompute(t, env.e, env.th.ProjectID, true)
+	if res := spawnScout(t, env, rt, "vm-fail"); res.Granted.Shell != protocol.ShellNone {
+		t.Fatalf("failed probe: granted %+v", res.Granted)
+	}
+	seams.vmErr = nil
+	if res := spawnScout(t, env, rt, "vm-ok"); res.Granted.Shell != protocol.ShellReadOnly {
+		t.Fatalf("retried probe: granted %+v rejected %+v", res.Granted, res.Rejected)
+	}
+	if n := seams.vmChecks.Load(); n != 2 {
+		t.Fatalf("VM probe ran %d times, want 2 (failure not cached)", n)
+	}
+}
+
+// A first microVM probe that hangs stalls neither a spawn that needs another
+// confinement, nor the plan card's summary for it, nor Runtime.Close.
+func TestBlockingVMProbeStallsNothingElse(t *testing.T) {
+	env, rt := shellFixture(t)
+	seams := &shellSeams{}
+	seams.install(env.e, fakeSandbox{}, nil)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var relOnce sync.Once
+	unblock := func() { relOnce.Do(func() { close(release) }) }
+	defer unblock()
+	var once sync.Once
+	env.e.agentVMROCheck = func(ctx context.Context) error {
+		once.Do(func() { close(entered) })
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	setProjectCompute(t, env.e, env.th.ProjectID, true)
+	vmSpawn := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := rt.Spawn(ctx, agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "vm", PlanEntry: "scout", Assignment: protocol.AgentAssignment{Prompt: "look"}})
+		vmSpawn <- err
+	}()
+	<-entered
+
+	// The project now uses the OS sandbox: its spawn and summary go ahead.
+	setProjectCompute(t, env.e, env.th.ProjectID, false)
+	type spawned struct {
+		res agentrt.SpawnResult
+		err error
+	}
+	quick := make(chan spawned, 1)
+	go func() {
+		res, err := rt.Spawn(t.Context(), agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "os", PlanEntry: "scout", Assignment: protocol.AgentAssignment{Prompt: "look"}})
+		quick <- spawned{res, err}
+	}()
+	select {
+	case q := <-quick:
+		res := q.res
+		if q.err != nil {
+			t.Fatal(q.err)
+		}
+		if res.Granted.Shell != protocol.ShellReadOnly {
+			t.Fatalf("os sandbox spawn: granted %+v rejected %+v", res.Granted, res.Rejected)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a spawn needing the OS sandbox waited behind the microVM probe")
+	}
+	summary := make(chan string, 1)
+	go func() { summary <- env.e.ConfinementSummary(context.Background(), env.th.ProjectID, protocol.ShellReadOnly) }()
+	select {
+	case got := <-summary:
+		if got != "Commands run in a read-only sandbox" {
+			t.Fatalf("summary %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ConfinementSummary waited behind the microVM probe")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	_ = rt.Close(ctx)
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("Close took %v with a probe in flight", d)
+	}
+	// The probe finishes after Close: that spawn is refused, not admitted.
+	unblock()
+	select {
+	case err := <-vmSpawn:
+		if !errors.Is(err, agentrt.ErrClosed) {
+			t.Fatalf("spawn whose probe finished after Close: %v, want ErrClosed", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the microVM spawn never returned")
 	}
 }

@@ -972,3 +972,61 @@ func TestAdmittedHookRunsBeforeRunnerOncePerAgent(t *testing.T) {
 		t.Fatalf("hook saw %v, want once for %s", seen, res.Agent.ID)
 	}
 }
+
+// I4: the per-task resolve options (which may boot a probe VM) are computed
+// outside the spawn lock: a slow computation neither stalls another spawn
+// nor Close, and a spawn whose options arrive after Close is refused.
+func TestResolveOptionsComputedOutsideSpawnLock(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	rt := newTestRuntime(t, s, newFakeRunner(), WithResolveOptionsFunc(func(ctx context.Context, _ string) ResolveOptions {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		return ResolveOptions{}
+	}))
+	slow := make(chan error, 1)
+	go func() {
+		_, err := rt.Spawn(context.Background(), spawnReq(task, "slow", "slow", 0.25))
+		slow <- err
+	}()
+	<-entered
+	fast := make(chan error, 1)
+	go func() {
+		_, err := rt.Spawn(context.Background(), spawnReq(task, "fast", "fast", 0.25))
+		fast <- err
+	}()
+	select {
+	case err := <-fast:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a slow options computation stalled another spawn")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := rt.Close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("close blocked %v behind the options computation", d)
+	}
+	close(release)
+	if err := <-slow; !errors.Is(err, ErrClosed) {
+		t.Fatalf("spawn admitted after close: %v", err)
+	}
+}
