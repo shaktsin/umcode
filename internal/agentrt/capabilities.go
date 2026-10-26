@@ -96,6 +96,13 @@ func Resolve(parent, entry, requested protocol.AgentCapabilities, opt ResolveOpt
 		rej = append(rej, protocol.CapabilityRejection{Field: field, Reason: reason})
 	}
 
+	// A writable shell can change files that the file tools may not, so it is
+	// honoured only together with read-write files: downgrade one rung.
+	clamped := false
+	if granted.Shell == protocol.ShellReadWrite && granted.Files != protocol.FilesReadWrite {
+		granted.Shell = protocol.ShellReadOnly
+		clamped = true
+	}
 	if granted.Shell == protocol.ShellReadOnly && !opt.ShellReadOnlySupported {
 		granted.Shell = protocol.ShellNone
 	}
@@ -111,6 +118,9 @@ func Resolve(parent, entry, requested protocol.AgentCapabilities, opt ResolveOpt
 		add("capabilities.shell", fmt.Sprintf("unknown value %q", string(requested.Shell)))
 	case shellRank(requested.Shell) > shellRank(granted.Shell):
 		reason := fmt.Sprintf("requested %q exceeds allowed %q", requested.Shell, granted.Shell)
+		if clamped {
+			reason = fmt.Sprintf("read-write shell requires files %q; granted shell %q", protocol.FilesReadWrite, granted.Shell)
+		}
 		if requested.Shell == protocol.ShellReadOnly && !opt.ShellReadOnlySupported {
 			reason = "read-only shell is not supported on this platform"
 		}
@@ -146,7 +156,10 @@ func AllowedTools(c protocol.AgentCapabilities) []string {
 	}
 	tools = append(tools, "skill.get_instructions")
 	if shellRank(c.Shell) >= 1 {
-		tools = append(tools, "shell.run", "verification.run")
+		tools = append(tools, "shell.run")
+	}
+	if shellRank(c.Shell) >= 2 {
+		tools = append(tools, "verification.run")
 	}
 	if c.SpawnMax > 0 {
 		tools = append(tools, "agent.spawn", "agent.list", "agent.status", "agent.wait", "agent.message", "agent.cancel")

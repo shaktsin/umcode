@@ -1807,8 +1807,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 		}
 	}
-	approvalMode := normalizedApprovalMode(th.ApprovalMode)
-	decision, reason := e.gate.Check(name, risk, th.Channel == "listener", approvalMode)
+	decision, reason := e.gateDecision(ctx, name, risk, th.Channel == "listener", th.ApprovalMode)
 	if decision == policy.Ask {
 		approved, err := e.requestApproval(ctx, sctx, turn, it, name, call.Args, risk, reason, summary)
 		if err != nil || !approved {
@@ -1874,7 +1873,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 		}
 		if decision == policy.Allow {
-			if currentDecision, _ := e.gate.Check(name, risk, currentThread.Channel == "listener", normalizedApprovalMode(currentThread.ApprovalMode)); currentDecision != policy.Allow {
+			if currentDecision, _ := e.gateDecision(ctx, name, risk, currentThread.Channel == "listener", currentThread.ApprovalMode); currentDecision != policy.Allow {
 				it.Status = protocol.ItemDenied
 				it.Tool.Error = "approval policy narrowed before action; explicitly retry for approval"
 				_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
@@ -1884,7 +1883,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		th = currentThread
 	}
 	if childExecutionFrom(ctx) != nil && decision == policy.Allow {
-		if currentDecision, _ := e.gate.Check(name, risk, th.Channel == "listener", normalizedApprovalMode(th.ApprovalMode)); currentDecision != policy.Allow {
+		if currentDecision, _ := e.gateDecision(ctx, name, risk, th.Channel == "listener", th.ApprovalMode); currentDecision != policy.Allow {
 			it.Status, it.Tool.Error = protocol.ItemDenied, "parent approval policy narrowed before action; explicitly retry for approval"
 			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)

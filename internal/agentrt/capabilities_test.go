@@ -107,7 +107,12 @@ func TestAllowedToolsFollowCapabilities(t *testing.T) {
 	}
 	got = AllowedTools(protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadOnly, SpawnMax: 1})
 	want = []string{"agent.cancel", "agent.list", "agent.message", "agent.spawn", "agent.status", "agent.wait",
-		"file.edit", "file.list", "file.read", "file.search", "file.write", "shell.run", "skill.get_instructions", "verification.run"}
+		"file.edit", "file.list", "file.read", "file.search", "file.write", "shell.run", "skill.get_instructions"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v", got)
+	}
+	got = AllowedTools(protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadWrite})
+	want = []string{"file.edit", "file.list", "file.read", "file.search", "file.write", "shell.run", "skill.get_instructions", "verification.run"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v", got)
 	}
@@ -115,5 +120,25 @@ func TestAllowedToolsFollowCapabilities(t *testing.T) {
 		if strings.HasPrefix(tool, "file.") {
 			t.Fatalf("unexpected %s", tool)
 		}
+	}
+}
+
+func TestResolveClampsReadWriteShellWithoutWriteFiles(t *testing.T) {
+	root := RootCapabilities()
+	req := protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellReadWrite}
+	g, rej := Resolve(root, root, req, ResolveOptions{ShellReadOnlySupported: true})
+	if g.Shell != protocol.ShellReadOnly || g.Files != protocol.FilesRead {
+		t.Fatalf("granted %+v", g)
+	}
+	if len(rej) != 1 || rej[0].Field != "capabilities.shell" || rej[0].Reason == "" {
+		t.Fatalf("rejected %+v", rej)
+	}
+	g, rej = Resolve(root, root, req, ResolveOptions{ShellReadOnlySupported: false})
+	if g.Shell != protocol.ShellNone || len(rej) != 1 || rej[0].Field != "capabilities.shell" {
+		t.Fatalf("unsupported: %+v %+v", g, rej)
+	}
+	g, rej = Resolve(root, root, protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadWrite}, ResolveOptions{})
+	if g.Shell != protocol.ShellReadWrite || len(rej) != 0 {
+		t.Fatalf("read-write files keep shell: %+v %+v", g, rej)
 	}
 }
