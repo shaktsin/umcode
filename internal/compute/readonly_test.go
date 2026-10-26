@@ -67,6 +67,5 @@ func TestComputeCannotProtectDotGitInWritableRoot(t *testing.T) {
 	t.Log("gap: no read-only /workspace/.git mount inside a writable root")
 }
 
-func TestComputeReadOnlyRootIntegration(t *testing.T) {
-	t.Skip("requires a real microVM (libkrun bridge); run on the desktop host")
-}
+// TestComputeReadOnlyRootIntegration lives in readonly_integration_test.go
+// (build tag libkrun): it needs a real guest.
