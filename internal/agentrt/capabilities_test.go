@@ -167,3 +167,42 @@ func TestResolveShellDowngradeReasons(t *testing.T) {
 		t.Fatalf("spurious rejection %+v", rs)
 	}
 }
+
+// C1: a project whose network is off is a ceiling for every agent, even when
+// the caller (the lead's root capabilities) and the plan entry allow it.
+func TestResolveNetworkCeiling(t *testing.T) {
+	root := RootCapabilities()
+	req := protocol.AgentCapabilities{Files: protocol.FilesRead, Network: true}
+	g, rs := Resolve(root, root, req, ResolveOptions{NetworkUnavailable: "the project's network is off"})
+	r := hasRejection(rs, "capabilities.network")
+	if g.Network || r == nil || !strings.Contains(r.Reason, "the project's network is off") {
+		t.Fatalf("granted=%+v rejections=%+v", g, rs)
+	}
+	g, rs = Resolve(root, root, req, ResolveOptions{})
+	if !g.Network || hasRejection(rs, "capabilities.network") != nil {
+		t.Fatalf("project on: granted=%+v rejections=%+v", g, rs)
+	}
+	// Not asking for network under the ceiling is not a rejection.
+	off := protocol.AgentCapabilities{Files: protocol.FilesRead}
+	if g, rs = Resolve(root, root, off, ResolveOptions{NetworkUnavailable: "off"}); g.Network || hasRejection(rs, "capabilities.network") != nil {
+		t.Fatalf("no request: granted=%+v rejections=%+v", g, rs)
+	}
+}
+
+// I5: a shell can read every file of the checkout, so files "none" allows no
+// shell at all; files "read" keeps a read-only shell.
+func TestResolveFilesNoneClampsShell(t *testing.T) {
+	root := RootCapabilities()
+	for _, shell := range []protocol.ShellAccess{protocol.ShellReadOnly, protocol.ShellReadWrite} {
+		req := protocol.AgentCapabilities{Files: protocol.FilesNone, Shell: shell}
+		g, rs := Resolve(root, root, req, ResolveOptions{ShellReadOnlySupported: true})
+		r := hasRejection(rs, "capabilities.shell")
+		if g.Shell != protocol.ShellNone || r == nil || !strings.Contains(r.Reason, "files") {
+			t.Fatalf("shell %s: granted=%+v rejections=%+v", shell, g, rs)
+		}
+	}
+	req := protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellReadOnly}
+	if g, rs := Resolve(root, root, req, ResolveOptions{ShellReadOnlySupported: true}); g.Shell != protocol.ShellReadOnly || len(rs) != 0 {
+		t.Fatalf("files read: granted=%+v rejections=%+v", g, rs)
+	}
+}

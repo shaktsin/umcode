@@ -25,8 +25,10 @@ func runtimeToolAllowed(caps protocol.AgentCapabilities, tool string) bool {
 }
 
 // runtimeScope returns a copy of base shaped by an agent's capabilities. The
-// agent's network comes only from caps.Network, never from the project or
-// tools.default_network. modeFn supplies the lead's approval mode.
+// agent's network is granted only by caps.Network, never by the project or
+// tools.default_network alone, and the project's effective network (the
+// lead's base.AllowNet) is its ceiling: authority only narrows down the tree.
+// modeFn supplies the lead's approval mode.
 func runtimeScope(base *tools.Scope, caps protocol.AgentCapabilities, conf tools.Confinement, modeFn func() string) *tools.Scope {
 	s := *base
 	s.RestrictedChild = true
@@ -38,7 +40,7 @@ func runtimeScope(base *tools.Scope, caps protocol.AgentCapabilities, conf tools
 	// The lead's mode is read live through modeFn; a copied stale mode must
 	// never make TrustedAutonomy true for an agent.
 	s.ApprovalMode = ""
-	s.AllowNet = caps.Network
+	s.AllowNet = caps.Network && base.AllowNet
 	s.Confined = conf != tools.ConfNone && caps.Shell != protocol.ShellNone && caps.Shell != ""
 	s.ApprovalModeFn = modeFn
 	return &s
@@ -67,6 +69,11 @@ func (e *Engine) gateDecision(ctx context.Context, name string, risk tools.Risk,
 	scope := tools.ScopeFrom(ctx)
 	if scope == nil || !scope.RuntimeAgent {
 		return e.gate.Check(name, risk, fromListener, normalizedApprovalMode(threadMode))
+	}
+	// The listener-channel rule outranks the confinement: a red action
+	// triggered by an inbound message always asks, as it does for the lead.
+	if risk == tools.RiskRed && fromListener {
+		return policy.Ask, "red action triggered by an inbound message"
 	}
 	if scope.Confined && confinedShellTool(name) {
 		return policy.Allow, "confined agent shell"

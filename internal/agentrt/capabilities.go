@@ -20,6 +20,11 @@ type ResolveOptions struct {
 	// project at all (confinement none): every shell grant becomes none and the
 	// rejection carries this reason.
 	ShellUnavailable string
+	// NetworkUnavailable, when non-empty, is a network ceiling: the task's
+	// project has no network, so no agent may get it whatever the caller and
+	// plan allow (authority only narrows down the tree). The rejection carries
+	// this reason.
+	NetworkUnavailable string
 }
 
 // filesRank ranks file access; unknown or empty values rank as none.
@@ -116,6 +121,16 @@ func Resolve(parent, entry, requested protocol.AgentCapabilities, opt ResolveOpt
 	if opt.ShellUnavailable != "" {
 		granted.Shell = protocol.ShellNone
 	}
+	// Any shell can read every file of the checkout, so files "none" allows
+	// no shell at all (the mirror of the read-write ruling above).
+	filesNone := false
+	if granted.Files == protocol.FilesNone && granted.Shell != protocol.ShellNone {
+		granted.Shell = protocol.ShellNone
+		filesNone = true
+	}
+	if opt.NetworkUnavailable != "" {
+		granted.Network = false
+	}
 
 	switch {
 	case !filesKnown(requested.Files):
@@ -140,10 +155,17 @@ func Resolve(parent, entry, requested protocol.AgentCapabilities, opt ResolveOpt
 		if opt.ShellUnavailable != "" {
 			reason = "shell is not available: " + opt.ShellUnavailable
 		}
+		if filesNone {
+			reason = fmt.Sprintf("a shell can read the project's files; files %q allows no shell", protocol.FilesNone)
+		}
 		add("capabilities.shell", reason)
 	}
 	if requested.Network && !granted.Network {
-		add("capabilities.network", "network access not allowed")
+		reason := "network access not allowed"
+		if opt.NetworkUnavailable != "" {
+			reason = "network access is not available: " + opt.NetworkUnavailable
+		}
+		add("capabilities.network", reason)
 	}
 	if requested.SpawnMax > granted.SpawnMax {
 		add("capabilities.spawnMax", fmt.Sprintf("requested %d exceeds allowed %d", requested.SpawnMax, granted.SpawnMax))
