@@ -3,11 +3,13 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/agentrt"
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -65,62 +67,6 @@ func TestRuntimeV2FlagOnRegistersRuntimeTools(t *testing.T) {
 	for _, n := range []string{"agent.integrate", "agent.complete", "agent.review_report"} {
 		if _, ok := e.Tools.Get(n); !ok {
 			t.Fatalf("workflow tool %s missing", n)
-		}
-	}
-}
-
-func TestRuntimeV2SpawnFailsClearlyWithoutExecutionAdapter(t *testing.T) {
-	e, th, root, p := delegationFixtureWith(t, runtimeV2On)
-	activation, err := e.PrepareDelegation(t.Context(), th.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: activation.ActivationToken})
-	task, err := e.Store.AgentTask(t.Context(), p.last())
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := protocol.AgentPlan{ID: "plan-rtv2", ThreadID: th.ID, State: protocol.PlanProposed, Limits: protocol.DefaultPlanLimits(),
-		Agents: []protocol.PlanAgent{{Name: "worker", Purpose: "investigate", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone}}}}
-	if err = e.Store.SaveAgentPlan(t.Context(), plan); err != nil {
-		t.Fatal(err)
-	}
-	if err = e.Store.ApproveAgentPlan(t.Context(), plan.ID, task.ID); err != nil {
-		t.Fatal(err)
-	}
-	tool, ok := e.Tools.Get("agent.spawn")
-	if !ok {
-		t.Fatal("missing agent.spawn")
-	}
-	admitted := tools.WithScope(withDelegationTask(t.Context(), task), &tools.Scope{ThreadID: th.ID, ProjectID: th.ProjectID, Root: root})
-	out, err := tool.Call(tools.WithAgentCallID(admitted, "call-rtv2"), json.RawMessage(`{"planEntry":"worker","assignment":{"prompt":"look around"}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var spawned struct {
-		ID string `json:"id"`
-	}
-	if err = json.Unmarshal([]byte(out), &spawned); err != nil || spawned.ID == "" {
-		t.Fatalf("spawn result %q: %v", out, err)
-	}
-	deadline := time.After(10 * time.Second)
-	tick := time.NewTicker(20 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		a, err := e.Store.RuntimeAgent(t.Context(), task.ID, spawned.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if a.State == protocol.AgentStateFailed {
-			if !strings.Contains(a.Result.Blocker, "execution adapter pending") {
-				t.Fatalf("blocker = %q", a.Result.Blocker)
-			}
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("agent did not fail: state %q", a.State)
-		case <-tick.C:
 		}
 	}
 }
@@ -192,18 +138,295 @@ func TestRuntimeV2SpawnKeyIncludesTurnAndOccurrence(t *testing.T) {
 	}
 }
 
-func TestRuntimeCallerFailsClosedForChildContexts(t *testing.T) {
+func TestRuntimeCallerResolvesAgentID(t *testing.T) {
 	ctx := t.Context()
-	if id, ok := runtimeCaller(ctx); !ok || id != "" {
-		t.Fatalf("lead ctx: id=%q ok=%v", id, ok)
+	if id, ok := runtimeCaller(withRuntimeAgent(ctx, "a1")); !ok || id != "a1" {
+		t.Fatalf("agent ctx: id=%q ok=%v, want a1 true", id, ok)
 	}
+	if id, ok := runtimeCaller(ctx); !ok || id != "" {
+		t.Fatalf("lead ctx: id=%q ok=%v, want empty true", id, ok)
+	}
+	// A runtime agent's real turn context carries its execution and the ID.
+	own := withRuntimeAgent(withChildExecution(WithDelegationChild(ctx), &childExecution{runtime: &runtimeExecution{agent: protocol.RuntimeAgent{ID: "a1"}}}), "a1")
+	if id, ok := runtimeCaller(own); !ok || id != "a1" {
+		t.Fatalf("own execution ctx: id=%q ok=%v", id, ok)
+	}
+	// Anything legacy or ambiguous fails closed.
 	for name, child := range map[string]context.Context{
-		"delegation child": WithDelegationChild(ctx),
-		"child execution":  withChildExecution(ctx, &childExecution{}),
+		"delegation child":     WithDelegationChild(ctx),
+		"legacy child":         withChildExecution(ctx, &childExecution{}),
+		"id of another agent":  withRuntimeAgent(withChildExecution(WithDelegationChild(ctx), &childExecution{runtime: &runtimeExecution{agent: protocol.RuntimeAgent{ID: "a2"}}}), "a1"),
+		"id on a legacy child": withRuntimeAgent(withChildExecution(WithDelegationChild(ctx), &childExecution{}), "a1"),
 	} {
 		if id, ok := runtimeCaller(child); ok {
 			t.Fatalf("%s resolved as caller %q", name, id)
 		}
+	}
+}
+
+// agentToolCtx is a lead context admitted for env's task, carrying agentID as
+// the calling agent when it is not empty.
+func (env runtimeRunnerEnv) agentToolCtx(t *testing.T, agentID string) context.Context {
+	t.Helper()
+	proj, err := env.e.Projects.Get(t.Context(), env.th.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := tools.WithScope(withDelegationTask(t.Context(), env.task), &tools.Scope{ThreadID: env.th.ID, ProjectID: env.th.ProjectID, Root: proj.Root})
+	if agentID != "" {
+		// What the agent's own turn carries: its execution, task and ID, and
+		// its own checkout as the working folder.
+		a, err := env.e.Store.RuntimeAgent(t.Context(), env.task.ID, agentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkout := t.TempDir()
+		x := &childExecution{task: env.task, workspace: ChildWorkspace{Root: checkout}, runtime: &runtimeExecution{agent: a}}
+		ctx = withRuntimeAgent(withChildExecution(WithDelegationChild(tools.WithScope(t.Context(), &tools.Scope{ProjectID: env.th.ProjectID, Root: checkout})), x), agentID)
+	}
+	return ctx
+}
+
+func callAgentTool(t *testing.T, e *Engine, ctx context.Context, name, callID, args string) (string, error) {
+	t.Helper()
+	tool, ok := e.Tools.Get(name)
+	if !ok {
+		t.Fatalf("missing %s", name)
+	}
+	return tool.Call(tools.WithAgentCallID(ctx, callID), json.RawMessage(args))
+}
+
+func blockUntilCancelled(started chan<- struct{}) func(int, context.Context, llm.Request) []llm.Event {
+	return func(_ int, ctx context.Context, _ llm.Request) []llm.Event {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return []llm.Event{{Type: llm.EventError, Err: ctx.Err()}}
+	}
+}
+
+func TestChildSpawnIsIntersectedWithOwnCaps(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	started := make(chan struct{}, 4)
+	env.p.script = blockUntilCancelled(started)
+	env.approvePlan(t, protocol.DefaultPlanLimits(),
+		protocol.PlanAgent{Name: "parent", Purpose: "coordinate", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone, SpawnMax: 1}},
+		protocol.PlanAgent{Name: "worker", Purpose: "write", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellNone}})
+	// The lead spawns a1: read-only with SpawnMax 1.
+	out, err := callAgentTool(t, env.e, env.agentToolCtx(t, ""), "agent.spawn", "lead-1", `{"planEntry":"parent","assignment":{"prompt":"coordinate"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a1 struct{ ID string }
+	if err = json.Unmarshal([]byte(out), &a1); err != nil || a1.ID == "" {
+		t.Fatalf("spawn: %q %v", out, err)
+	}
+	// a1 asks for a read-write child: it gets read, plus a rejection, even
+	// though the lead itself could grant read-write.
+	out, err = callAgentTool(t, env.e, env.agentToolCtx(t, a1.ID), "agent.spawn", "a1-1",
+		`{"planEntry":"worker","assignment":{"prompt":"edit"},"capabilities":{"files":"read-write","shell":"none","network":false,"spawnMax":0}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var child struct {
+		ID       string
+		Granted  protocol.AgentCapabilities
+		Rejected []protocol.CapabilityRejection
+	}
+	if err = json.Unmarshal([]byte(out), &child); err != nil {
+		t.Fatal(err)
+	}
+	if child.Granted.Files != protocol.FilesRead {
+		t.Fatalf("granted files = %q, want read (the caller's own cap)", child.Granted.Files)
+	}
+	if !slices.ContainsFunc(child.Rejected, func(r protocol.CapabilityRejection) bool { return strings.Contains(r.Field, "files") }) {
+		t.Fatalf("rejected = %+v, want a files rejection", child.Rejected)
+	}
+	stored, err := env.e.Store.RuntimeAgent(t.Context(), env.task.ID, child.ID)
+	if err != nil || stored.ParentAgentID != a1.ID {
+		t.Fatalf("child parent = %q err %v, want %s", stored.ParentAgentID, err, a1.ID)
+	}
+	_ = env.e.AgentRuntime.Close(t.Context())
+}
+
+func TestAuthorizeDelegationToolForRuntimeAgentContext(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	a := env.newRuntimeAgent(t, "kid", readOnlyCaps, "")
+	checkout := t.TempDir()
+	x := &childExecution{task: env.task, workspace: ChildWorkspace{Root: checkout}, runtime: &runtimeExecution{agent: a}}
+	ctx := withRuntimeAgent(withChildExecution(WithDelegationChild(tools.WithScope(t.Context(), &tools.Scope{ThreadID: "internal", ProjectID: env.th.ProjectID, Root: checkout})), x), a.ID)
+	task, err := env.e.authorizeDelegationTool(ctx)
+	if err != nil || task.ID != env.task.ID {
+		t.Fatalf("runtime agent authorization: task %q err %v", task.ID, err)
+	}
+	// A foreign or altered execution is refused.
+	foreign := *x
+	foreign.task.ThreadID = "someone-else"
+	if _, err = env.e.authorizeDelegationTool(withRuntimeAgent(withChildExecution(WithDelegationChild(tools.WithScope(t.Context(), &tools.Scope{Root: checkout})), &foreign), a.ID)); err == nil {
+		t.Fatal("foreign runtime execution authorized")
+	}
+	// A legacy child never is.
+	legacy := &childExecution{task: env.task, workspace: ChildWorkspace{Root: checkout}}
+	if _, err = env.e.authorizeDelegationTool(withChildExecution(WithDelegationChild(tools.WithScope(t.Context(), &tools.Scope{Root: checkout})), legacy)); err == nil {
+		t.Fatal("legacy child authorized")
+	}
+}
+
+func agentStates(t *testing.T, e *Engine, taskID string) map[string]protocol.AgentState {
+	t.Helper()
+	all, err := e.Store.RuntimeAgents(t.Context(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]protocol.AgentState{}
+	for _, a := range all {
+		out[a.Name] = a.State
+	}
+	return out
+}
+
+func waitForSignal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// stopFixture runs one running and one queued agent (maxConcurrent 1) whose
+// provider calls block until their context ends.
+func stopFixture(t *testing.T) (runtimeRunnerEnv, chan struct{}) {
+	t.Helper()
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	started := make(chan struct{}, 4)
+	env.p.script = blockUntilCancelled(started)
+	limits := protocol.DefaultPlanLimits()
+	limits.MaxConcurrent = 1
+	env.approvePlan(t, limits, protocol.PlanAgent{Name: "worker", Purpose: "investigate", Capabilities: readOnlyCaps})
+	ctx := env.agentToolCtx(t, "")
+	for _, call := range []string{"first", "second"} {
+		if _, err := callAgentTool(t, env.e, ctx, "agent.spawn", call, `{"name":"`+call+`","planEntry":"worker","assignment":{"prompt":"look"}}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitForSignal(t, started, "the first agent's provider call")
+	return env, started
+}
+
+func requireAllCancelled(t *testing.T, env runtimeRunnerEnv) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		states := agentStates(t, env.e, env.task.ID)
+		done := len(states) == 2
+		for _, st := range states {
+			if st != protocol.AgentStateCancelled {
+				done = false
+			}
+		}
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agents = %v, want all cancelled", states)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The provider call and the agent turn ended.
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		env.e.mu.Lock()
+		live := len(env.e.activeTurns)
+		env.e.mu.Unlock()
+		if live == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("an agent turn is still running after cancellation")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestCancelDelegationCancelsRuntimeAgents(t *testing.T) {
+	env, _ := stopFixture(t)
+	if states := agentStates(t, env.e, env.task.ID); states["first"] != protocol.AgentStateRunning || states["second"] != protocol.AgentStateQueued {
+		t.Fatalf("setup states = %v", states)
+	}
+	if _, err := env.e.CancelDelegation(t.Context(), protocol.DelegationCancelParams{ThreadID: env.th.ID, TaskID: env.task.ID}); err != nil {
+		t.Fatal(err)
+	}
+	requireAllCancelled(t, env)
+}
+
+func TestStopTurnCancelsRuntimeAgents(t *testing.T) {
+	env, _ := stopFixture(t)
+	at := &activeTurn{taskID: env.task.ID, cancel: func() {}}
+	env.e.mu.Lock()
+	env.e.activeTurns["stop-turn"] = at
+	env.e.mu.Unlock()
+	if err := env.e.InterruptTurn("stop-turn"); err != nil {
+		t.Fatal(err)
+	}
+	env.e.mu.Lock()
+	delete(env.e.activeTurns, "stop-turn")
+	env.e.mu.Unlock()
+	requireAllCancelled(t, env)
+}
+
+func TestCancelDelegationWithoutRuntimeIsUnchanged(t *testing.T) {
+	e, th, _, _ := delegationFixture(t)
+	task := childExecutionTask(t, e, th)
+	if e.AgentRuntime != nil {
+		t.Fatal("runtime constructed with the flag off")
+	}
+	if _, err := e.CancelDelegation(t.Context(), protocol.DelegationCancelParams{ThreadID: th.ID, TaskID: task.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.Store.AgentTask(t.Context(), task.ID)
+	if err != nil || got.State != protocol.AgentStateCancelled {
+		t.Fatalf("task = %q err %v", got.State, err)
+	}
+}
+
+type exitRecorder struct {
+	started chan struct{}
+	exited  chan struct{}
+}
+
+func (r *exitRecorder) Run(ctx context.Context, _ protocol.RuntimeAgent) (protocol.AgentResult, error) {
+	close(r.started)
+	<-ctx.Done()
+	time.Sleep(100 * time.Millisecond) // a runner needs a moment to wind down
+	close(r.exited)
+	return protocol.AgentResult{}, ctx.Err()
+}
+
+func TestShutdownClosesRuntimeBeforeReturning(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	env.approvePlan(t, protocol.DefaultPlanLimits(), protocol.PlanAgent{Name: "worker", Purpose: "investigate", Capabilities: readOnlyCaps})
+	r := &exitRecorder{started: make(chan struct{}), exited: make(chan struct{})}
+	env.e.AgentRuntime = agentrt.NewRuntime(env.e.Store, r, env.e.baseCtx)
+	res, err := env.e.AgentRuntime.Spawn(t.Context(), agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "sd", PlanEntry: "worker", Assignment: protocol.AgentAssignment{Prompt: "look"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, r.started, "the runner to start")
+	env.e.Shutdown(t.Context())
+	select {
+	case <-r.exited:
+	default:
+		t.Fatal("Shutdown returned before the runtime agent's runner exited")
+	}
+	got, err := env.e.Store.RuntimeAgent(t.Context(), env.task.ID, res.Agent.ID)
+	if err != nil || got.State != protocol.AgentStateCancelled {
+		t.Fatalf("agent after shutdown: %q err %v, want cancelled", got.State, err)
+	}
+	if _, err = env.e.AgentRuntime.Spawn(t.Context(), agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "after", PlanEntry: "worker", Assignment: protocol.AgentAssignment{Prompt: "late"}}); !errors.Is(err, agentrt.ErrClosed) {
+		t.Fatalf("spawn after shutdown: %v", err)
 	}
 }
 

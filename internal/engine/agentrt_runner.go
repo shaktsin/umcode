@@ -127,7 +127,19 @@ func (m managedChildWorkspaces) FinalizeRuntime(ctx context.Context, t protocol.
 	return ChildWorkspace{ID: r.ID, Root: r.Root, Revision: r.ResultRevision, ChangedPaths: append([]string{}, r.ChangedPaths...)}, err
 }
 
+// runtimeViewDiscarder is implemented by resolvers that can remove a stopped
+// read-only agent's view checkout. It is optional so resolvers without owned
+// checkouts need nothing.
+type runtimeViewDiscarder interface {
+	DiscardRuntimeView(ctx context.Context, taskID, agentID string) error
+}
+
+func (m managedChildWorkspaces) DiscardRuntimeView(ctx context.Context, taskID, agentID string) error {
+	return m.service.DiscardRuntimeView(ctx, taskID, agentID)
+}
+
 var _ RuntimeWorkspaceResolver = managedChildWorkspaces{}
+var _ runtimeViewDiscarder = managedChildWorkspaces{}
 
 func (e *Engine) runtimeWorkspaces() RuntimeWorkspaceResolver {
 	if e.RuntimeWorkspaces != nil {
@@ -183,13 +195,23 @@ func (e *Engine) runtimeAgentScope(base *tools.Scope, x *childExecution) *tools.
 	return runtimeScope(base, caps, conf, rt.modeFn)
 }
 
+// leadApprovalTimeout bounds one lookup of the lead's approval mode; a slow
+// store fails closed to the strictest mode instead of stalling a tool call.
+const leadApprovalTimeout = 2 * time.Second
+
 // leadApprovalMode reads the lead chat's approval mode from the task's root
 // thread at each call, so a mid-run change applies to the agent's next tool
 // call. The agent's own internal thread has no mode and is never consulted.
 // An unreadable or foreign thread yields "" (the strictest mode).
 func (e *Engine) leadApprovalMode(task protocol.AgentTask) func() string {
 	return func() string {
-		th, err := e.Store.GetThread(context.Background(), task.ThreadID)
+		ctx, cancel := context.WithTimeout(context.Background(), leadApprovalTimeout)
+		defer cancel()
+		lookup := e.Store.GetThread
+		if e.agentThreadLookup != nil {
+			lookup = e.agentThreadLookup
+		}
+		th, err := lookup(ctx, task.ThreadID)
 		if err != nil || th.ProjectID != task.ProjectID {
 			return ""
 		}
@@ -200,6 +222,10 @@ func (e *Engine) leadApprovalMode(task protocol.AgentTask) func() string {
 // updateRuntimeAgent applies mutate under optimistic versioning; mutate
 // returns false to skip the write.
 func (e *Engine) updateRuntimeAgent(ctx context.Context, taskID, id string, mutate func(*protocol.RuntimeAgent) bool) error {
+	if e.AgentRuntime != nil {
+		// Through the runtime, so waiters wake and the events callback fires.
+		return e.AgentRuntime.Update(ctx, taskID, id, mutate)
+	}
 	for i := 0; i < 8; i++ {
 		a, err := e.Store.RuntimeAgent(ctx, taskID, id)
 		if err != nil {
@@ -302,16 +328,12 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 	if err != nil {
 		return result, err
 	}
-	shared := delegation.BudgetFromContext(ctx)
+	shared := e.runtimeTaskBudget(ctx, task.ID)
 	if shared == nil {
-		e.mu.Lock()
-		limits := e.turnLimits
-		e.mu.Unlock()
-		owned, taskBudget, ownerErr := e.DelegationCoordinator.Task(ctx, task, limits)
-		if ownerErr != nil {
-			return result, fmt.Errorf("agent %s: task budget unavailable: %w", a.ID, ownerErr)
-		}
-		shared = taskBudget
+		return result, fmt.Errorf("agent %s: task budget unavailable", a.ID)
+	}
+	if owned := shared.Context(); owned != nil {
+		// The agent lives no longer than the task that owns the budget.
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
 		defer cancel()
@@ -370,6 +392,14 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 			return true
 		}); updateErr != nil {
 			fail(updateErr)
+			return
+		}
+		// A read-only agent's view checkout has nothing to integrate. A
+		// write-capable agent's workspace is kept for integration.
+		if d, ok := resolver.(runtimeViewDiscarder); ok && !writable {
+			if discardErr := d.DiscardRuntimeView(finalCtx, task.ID, a.ID); discardErr != nil {
+				e.Log.Warn("runtime agent view checkout retained", "agent", a.ID, "err", discardErr)
+			}
 		}
 	}()
 	slice := shared.Slice(a.BudgetShare)
