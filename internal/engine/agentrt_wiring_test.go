@@ -467,3 +467,83 @@ func TestEngineStartReconcilesRuntimeAgentsWithFlagOff(t *testing.T) {
 		t.Fatalf("state=%s err=%v; want interrupted after restart with the flag off", got.State, err)
 	}
 }
+
+func budgetEntry(e *Engine, taskID string) bool {
+	_, ok := e.runtimeBudgets.Load(taskID)
+	return ok
+}
+
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out: %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func (env runtimeRunnerEnv) trackBudget(t *testing.T) {
+	t.Helper()
+	env.e.mu.Lock()
+	limits := env.e.turnLimits
+	env.e.mu.Unlock()
+	owned, shared, err := env.e.DelegationCoordinator.Task(context.WithoutCancel(t.Context()), env.task, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.e.trackRuntimeBudget(env.task.ID, owned, shared)
+	if !budgetEntry(env.e, env.task.ID) {
+		t.Fatal("budget not registered")
+	}
+}
+
+func TestRuntimeBudgetForgottenAfterTaskCloses(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	env.trackBudget(t)
+	a := env.newRuntimeAgent(t, "late", readOnlyCaps, "")
+	done := a
+	done.State = protocol.AgentStateCompleted
+	if err := env.e.Store.UpdateRuntimeAgent(t.Context(), done, a.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.e.CancelDelegation(t.Context(), protocol.DelegationCancelParams{ThreadID: env.th.ID, TaskID: env.task.ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "budget entry removed after CancelDelegation", func() bool { return !budgetEntry(env.e, env.task.ID) })
+	// A late runner for the task fails closed rather than running unbounded.
+	if _, err := env.run(t, a); err == nil {
+		// (An active task with a forgotten budget is TestRunnerWithoutTaskBudgetFailsCleanly.)
+		t.Fatal("late runner for a closed task succeeded")
+	}
+	if reqs, _ := env.p.snapshot(); len(reqs) != 0 {
+		t.Fatal("provider called by a late runner")
+	}
+}
+
+func TestRuntimeBudgetKeptWhileAgentRuns(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	env.approvePlan(t, protocol.DefaultPlanLimits(), protocol.PlanAgent{Name: "worker", Purpose: "investigate", Capabilities: readOnlyCaps})
+	r := &exitRecorder{started: make(chan struct{}), exited: make(chan struct{})}
+	rt := agentrt.NewRuntime(env.e.Store, r, env.e.baseCtx)
+	env.e.AgentRuntime = rt
+	res, err := rt.Spawn(t.Context(), agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "keep", PlanEntry: "worker", Assignment: protocol.AgentAssignment{Prompt: "look"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, r.started, "the runner to start")
+	env.trackBudget(t)
+	// Close the task underneath the running agent (its runner ignores that).
+	if err = env.e.DelegationCoordinator.CancelTask(t.Context(), env.task.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * runtimeBudgetPoll)
+	if !budgetEntry(env.e, env.task.ID) {
+		t.Fatal("budget forgotten while a runtime agent is still running")
+	}
+	if err = rt.Cancel(t.Context(), env.task.ID, "", res.Agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "budget entry removed once the agent stopped", func() bool { return !budgetEntry(env.e, env.task.ID) })
+}

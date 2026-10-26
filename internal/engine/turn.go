@@ -455,7 +455,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		}
 		budget.shared = shared
 		if childExecutionFrom(ctx) == nil {
-			e.rememberRuntimeBudget(task.ID, shared)
+			e.trackRuntimeBudget(task.ID, owned, shared)
 		}
 		stop := context.AfterFunc(owned, cancelTurn)
 		defer stop()
