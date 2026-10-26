@@ -80,21 +80,8 @@ func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child pro
 	if err != nil || !info.IsDir() {
 		return result, errors.New("child workspace is unavailable")
 	}
-	parent, err := e.Store.GetThread(ctx, task.ThreadID)
+	parent, proj, err := e.childProjectBase(ctx, task)
 	if err != nil {
-		return result, err
-	}
-	if parent.ProjectID != task.ProjectID {
-		return result, errors.New("child parent project changed")
-	}
-	proj, err := e.Projects.Get(ctx, task.ProjectID)
-	if err != nil {
-		return result, err
-	}
-	if proj.Missing || !pathutil.SameFolder(proj.Root, task.BaseRoot) {
-		return result, errors.New("child project base changed")
-	}
-	if err = e.validateDelegationParent(ctx, task); err != nil {
 		return result, err
 	}
 	modelScope, err := e.Store.AgentModelScope(ctx, task.ID)
@@ -119,19 +106,9 @@ func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child pro
 		pick.candidates = append([]protocol.ConfiguredModel{chosen}, append(append([]protocol.ConfiguredModel{}, pick.candidates[:found]...), pick.candidates[found+1:]...)...)
 		pick.provider, pick.model, pick.explicit = chosen.Provider, chosen.Model, true
 	}
-	proj.Root = ws.Root
-	guidance, sources := e.Projects.InstructionsForProjection(ctx, proj, "", "child-"+child.ID, memory.WithoutGeneratedMemory)
-	for _, src := range sources {
-		if src.Error != "" {
-			return result, fmt.Errorf("project guidance: %s", src.Error)
-		}
-	}
-	if name, explicit := skills.Invocation(child.Assignment.Prompt); explicit {
-		instructions, readErr := e.Skills.InstructionsContext(ctx, name)
-		if readErr != nil {
-			return result, readErr
-		}
-		guidance += "\n" + instructions
+	guidance, err := e.childGuidance(ctx, proj, ws.Root, child.ID, child.Assignment.Prompt)
+	if err != nil {
+		return result, err
 	}
 	builder := delegation.ScopedContextBuilder{Root: ws.Root, Guidance: guidance}
 	supplied, err := builder.Build(ctx, task, child)
@@ -175,39 +152,14 @@ func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child pro
 		}
 	}()
 	x := &childExecution{task: task, child: child, workspace: ws, selection: pick, credentialID: modelScope.CredentialID, credentialIDs: modelScope.CredentialIDs}
-	ctx = withChildExecution(store.WithInternalThreads(WithDelegationChild(ctx)), x)
-	text := "Continue the original assignment using the recorded child history and queued corrections."
-	prior, err := e.Store.ListTurns(ctx, execution.ThreadID)
+	out, err := e.driveChildTurn(ctx, x, execution)
 	if err != nil {
 		return result, err
 	}
-	if len(prior) == 0 {
-		text = messageText(execution.Context)
-	}
-	wait := make(chan protocol.Turn, 1)
-	_, err = e.startTurn(ctx, turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: execution.ThreadID, Text: text}, wait: wait})
-	if err != nil {
-		return result, err
-	}
-	// Always wait for the actual loop to exit; the coordinator owns the slot until
-	// this returns. Cancellation has already reached the registered engine handle.
-	done := <-wait
-	sctx := context.WithoutCancel(ctx)
-	items, readErr := e.Store.ListItems(sctx, execution.ThreadID, 0)
-	if readErr != nil {
-		err = readErr
-	}
-	for _, it := range items {
-		if it.TurnID == done.ID && it.Kind == protocol.ItemAgentMessage {
-			result.Summary = it.Text
-		}
-		if it.Kind == protocol.ItemFileChange {
-			var change protocol.FileChangeData
-			if json.Unmarshal(it.Data, &change) == nil && change.Path != "" && !slices.Contains(result.ChangedPaths, change.Path) {
-				result.ChangedPaths = append(result.ChangedPaths, change.Path)
-			}
-		}
-	}
+	done, sctx := out.done, out.sctx
+	err = out.readErr
+	result.Summary = out.summary
+	result.ChangedPaths = append(result.ChangedPaths, out.changed...)
 	if child.Role == protocol.AgentRoleReviewer {
 		result.Checks = append(result.Checks, protocol.AgentCheckEvidence{Command: "reviewer command verification", Status: "blocked", Summary: "Read-only command sandbox is unavailable; reviewer inspected files/evidence only. Implementer and lead must execute checks."})
 	}
@@ -227,6 +179,99 @@ func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child pro
 		err = errors.Join(err, ctx.Err())
 	}
 	return result, err
+}
+
+// childProjectBase revalidates the delegation parent thread, project and
+// active parent checkout before a child execution is prepared.
+func (e *Engine) childProjectBase(ctx context.Context, task protocol.AgentTask) (protocol.Thread, protocol.Project, error) {
+	parent, err := e.Store.GetThread(ctx, task.ThreadID)
+	if err != nil {
+		return parent, protocol.Project{}, err
+	}
+	if parent.ProjectID != task.ProjectID {
+		return parent, protocol.Project{}, errors.New("child parent project changed")
+	}
+	proj, err := e.Projects.Get(ctx, task.ProjectID)
+	if err != nil {
+		return parent, proj, err
+	}
+	if proj.Missing || !pathutil.SameFolder(proj.Root, task.BaseRoot) {
+		return parent, proj, errors.New("child project base changed")
+	}
+	if err = e.validateDelegationParent(ctx, task); err != nil {
+		return parent, proj, err
+	}
+	return parent, proj, nil
+}
+
+// childGuidance projects the project guidance onto the execution checkout
+// root and appends an explicitly invoked skill's instructions.
+func (e *Engine) childGuidance(ctx context.Context, proj protocol.Project, root, executionID, prompt string) (string, error) {
+	proj.Root = root
+	guidance, sources := e.Projects.InstructionsForProjection(ctx, proj, "", "child-"+executionID, memory.WithoutGeneratedMemory)
+	for _, src := range sources {
+		if src.Error != "" {
+			return "", fmt.Errorf("project guidance: %s", src.Error)
+		}
+	}
+	if name, explicit := skills.Invocation(prompt); explicit {
+		instructions, readErr := e.Skills.InstructionsContext(ctx, name)
+		if readErr != nil {
+			return "", readErr
+		}
+		guidance += "\n" + instructions
+	}
+	return guidance, nil
+}
+
+// childTurnOutcome is what driveChildTurn observed of one execution turn.
+type childTurnOutcome struct {
+	done    protocol.Turn
+	sctx    context.Context // store context carrying the execution markers
+	summary string          // the turn's final assistant text
+	changed []string        // paths of recorded file changes, in order
+	readErr error           // a failure reading the turn's items
+}
+
+// driveChildTurn runs one engine turn of an execution (legacy delegated
+// child or runtime agent) on its internal thread and waits until the actual
+// loop exits. Both runners share it so the turn mechanics stay identical.
+func (e *Engine) driveChildTurn(ctx context.Context, x *childExecution, execution store.AgentExecution) (childTurnOutcome, error) {
+	var out childTurnOutcome
+	ctx = withChildExecution(store.WithInternalThreads(WithDelegationChild(ctx)), x)
+	text := "Continue the original assignment using the recorded child history and queued corrections."
+	prior, err := e.Store.ListTurns(ctx, execution.ThreadID)
+	if err != nil {
+		return out, err
+	}
+	if len(prior) == 0 {
+		text = messageText(execution.Context)
+	}
+	wait := make(chan protocol.Turn, 1)
+	_, err = e.startTurn(ctx, turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: execution.ThreadID, Text: text}, wait: wait})
+	if err != nil {
+		return out, err
+	}
+	// Always wait for the actual loop to exit; the coordinator owns the slot until
+	// this returns. Cancellation has already reached the registered engine handle.
+	out.done = <-wait
+	out.sctx = context.WithoutCancel(ctx)
+	items, readErr := e.Store.ListItems(out.sctx, execution.ThreadID, 0)
+	if readErr != nil {
+		out.readErr = readErr
+	}
+	for _, it := range items {
+		if it.TurnID == out.done.ID && it.Kind == protocol.ItemAgentMessage {
+			out.summary = it.Text
+		}
+		if it.Kind == protocol.ItemFileChange {
+			var change protocol.FileChangeData
+			if json.Unmarshal(it.Data, &change) == nil && change.Path != "" && !slices.Contains(out.changed, change.Path) {
+				out.changed = append(out.changed, change.Path)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (e *Engine) updateChildExecution(ctx context.Context, taskID, childID string, mutate func(*protocol.AgentChild)) error {
