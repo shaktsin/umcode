@@ -260,15 +260,21 @@ func (e *Engine) runtimeModelPool(ctx context.Context, scope store.AgentModelSco
 }
 
 // sliceExhausted reports whether an agent stopped because its own budget
-// slice ran out, as opposed to the task being stopped or failing accounting.
-func sliceExhausted(slice *delegation.Budget, turnErr string) bool {
-	if reason := slice.StopReason(); reason != "" && !strings.HasPrefix(reason, "shared task stopped") && !strings.HasPrefix(reason, "shared task accounting") && reason != "the shared task time budget" {
+// slice's limit ran out, not the shared task budget (parent) or an unrelated
+// failure.
+func sliceExhausted(slice, parent *delegation.Budget, turnErr string) bool {
+	if parent.StopReason() != "" {
+		return false
+	}
+	if slice.StopReason() != "" {
 		return true
 	}
-	if tokens, cost := slice.Remaining(); tokens <= 0 || cost <= 0 {
+	st, sc := slice.Remaining()
+	pt, pc := parent.Remaining()
+	if (st <= 0 && pt > 0) || (sc <= 0 && pc > 0) {
 		return true
 	}
-	return strings.Contains(turnErr, "insufficient shared task")
+	return strings.Contains(turnErr, "insufficient shared task") && (st < pt || sc < pc)
 }
 
 // runtimeRunner is the agentrt.Runner that executes runtime agents as engine
@@ -367,7 +373,7 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 		}
 	}()
 	slice := shared.Slice(a.BudgetShare)
-	if ctx.Err() == nil && sliceExhausted(slice, "") {
+	if ctx.Err() == nil && sliceExhausted(slice, shared, "") {
 		result.Blocker = errBudgetSliceExhausted.Error()
 		return result, errBudgetSliceExhausted
 	}
@@ -442,7 +448,7 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 		err = errors.Join(err, e.updateRuntimeAgent(sctx, task.ID, a.ID, func(c *protocol.RuntimeAgent) bool { c.Usage = usage; return true }))
 	}
 	if done.Status != protocol.TurnCompleted {
-		if ctx.Err() == nil && sliceExhausted(slice, done.Error) {
+		if ctx.Err() == nil && sliceExhausted(slice, shared, done.Error) {
 			result.Blocker = errBudgetSliceExhausted.Error()
 			if err != nil {
 				e.Log.Warn("runtime agent bookkeeping", "agent", a.ID, "err", err)

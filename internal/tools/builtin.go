@@ -21,6 +21,7 @@ import (
 	"github.com/shaktsin/umcode/internal/compute"
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
+	"github.com/shaktsin/umcode/internal/pathutil"
 	"github.com/shaktsin/umcode/internal/preview"
 	"github.com/shaktsin/umcode/internal/procutil"
 	"github.com/shaktsin/umcode/internal/sandbox"
@@ -356,8 +357,10 @@ func resolvePath(ctx context.Context, ws *Workspaces, name, path string, op Oper
 			return "", fmt.Errorf("this chat works in the project %s; %q is not one of its folders", scope.ProjectName, name)
 		}
 		abs, err := scope.Resolve(path)
-		if err == nil && op != OpRead && scope.RuntimeAgent && inGitMetadata(scope, abs) {
-			return "", errors.New("the repository metadata (.git) is read-only for agents")
+		if err == nil && op != OpRead && scope.RuntimeAgent {
+			if guardErr := agentWriteTarget(scope, abs); guardErr != nil {
+				return "", guardErr
+			}
 		}
 		return abs, err
 	}
@@ -371,10 +374,58 @@ func resolvePath(ctx context.Context, ws *Workspaces, name, path string, op Oper
 	return w.Resolve(path, op)
 }
 
-// inGitMetadata reports whether abs is the root's .git entry or inside it.
-func inGitMetadata(scope *Scope, abs string) bool {
+// agentWriteTarget refuses a runtime agent's write that would land in the
+// root's .git, judged both lexically and at the target a write would actually
+// reach after following every symlink, dangling ones included.
+func agentWriteTarget(scope *Scope, abs string) error {
+	gitErr := errors.New("the repository metadata (.git) is read-only for agents")
 	first, _, _ := strings.Cut(scope.Rel(abs), "/")
-	return strings.EqualFold(first, ".git")
+	if strings.EqualFold(first, ".git") {
+		return gitErr
+	}
+	target := writeTarget(abs, 0)
+	rel, err := filepath.Rel(pathutil.Resolved(scope.Root), target)
+	if target == "" || err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s resolves outside the project folder (or through a symlink loop); writes through it to .git or elsewhere are refused", scope.Rel(abs))
+	}
+	if first, _, _ = strings.Cut(filepath.ToSlash(rel), "/"); strings.EqualFold(first, ".git") {
+		return gitErr
+	}
+	return nil
+}
+
+// writeTarget is where a write to abs lands: every existing component is
+// followed if it is a symlink (a dangling link to its would-be target) and
+// the missing remainder is appended. "" means a symlink loop.
+func writeTarget(abs string, depth int) string {
+	if depth > 40 {
+		return ""
+	}
+	abs = filepath.Clean(abs)
+	cur := filepath.VolumeName(abs) + string(filepath.Separator)
+	parts := strings.Split(strings.TrimPrefix(abs[len(filepath.VolumeName(abs)):], string(filepath.Separator)), string(filepath.Separator))
+	for i, part := range parts {
+		next := filepath.Join(cur, part)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return filepath.Join(append([]string{cur}, parts[i:]...)...)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(next)
+			if err != nil {
+				return ""
+			}
+			if !filepath.IsAbs(link) {
+				link = filepath.Join(cur, link)
+			}
+			if cur = writeTarget(link, depth+1); cur == "" {
+				return ""
+			}
+			continue
+		}
+		cur = next
+	}
+	return cur
 }
 
 // ---- file.read ----
