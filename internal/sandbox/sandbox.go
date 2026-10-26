@@ -268,9 +268,11 @@ func protectGit(p *Policy) {
 	}
 	if st.Mode()&os.ModeSymlink != 0 {
 		// A symlinked .git: keep the lexical path and also protect a real git
-		// directory it resolves to. A target that is not a git directory is
-		// never mounted or made readable.
-		if real := realPath(dotgit); isDir(real) && looksLikeGitDir(real) {
+		// directory it resolves to, but only when that directory lies inside
+		// the checkout (the agent controls the link; a target outside would
+		// let it name any repository). A target that is not a git directory
+		// is never mounted or made readable.
+		if real := realPath(dotgit); isDir(real) && looksLikeGitDir(real) && within(realPath(p.Root), real) {
 			p.ReadOnlyInRoot = append(p.ReadOnlyInRoot, real)
 		}
 		return
@@ -301,12 +303,35 @@ func protectGit(p *Policy) {
 	}
 	dirs := []string{gitdir}
 	if cd, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
-		if common := realPath(resolveFrom(gitdir, strings.TrimSpace(string(cd)))); isDir(common) && looksLikeGitDir(common) {
-			dirs = append(dirs, common)
+		// The agent can write the admin dir's files, so commondir is only
+		// accepted when the common dir itself names this checkout back:
+		// <common>/worktrees/<basename(gitdir)>/gitdir -> <root>/.git. A
+		// commondir that is not proven this way rejects the whole pointer.
+		common := realPath(resolveFrom(gitdir, strings.TrimSpace(string(cd))))
+		if !isDir(common) || !looksLikeGitDir(common) || !commonNamesCheckout(common, gitdir, dotgit) {
+			return
 		}
+		dirs = append(dirs, common)
 	}
 	p.ReadOnlyPaths = append(p.ReadOnlyPaths, dirs...)
 	p.Readable = dedupe(append(p.Readable, dirs...))
+}
+
+// commonNamesCheckout reports whether common's worktrees/<basename(gitdir)>/
+// gitdir file resolves to dotgit, the checkout's own .git pointer.
+func commonNamesCheckout(common, gitdir, dotgit string) bool {
+	admin := filepath.Join(common, "worktrees", filepath.Base(gitdir))
+	back, err := os.ReadFile(filepath.Join(admin, "gitdir"))
+	if err != nil {
+		return false
+	}
+	return realPath(resolveFrom(admin, strings.TrimSpace(string(back)))) == realPath(dotgit)
+}
+
+// within reports whether path is dir or lies below it (both already resolved).
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // resolveFrom makes path absolute against base.
