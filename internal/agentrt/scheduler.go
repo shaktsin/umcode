@@ -106,9 +106,14 @@ func (s *Scheduler) existing(taskID string) *taskSched {
 // remembered is recoverable from the store: Submit cancels any agent whose
 // stored ancestor is `cancelled` (descendants of a cancelled agent are
 // cancelled with it, and only a live caller can spawn, so a later descendant
-// always has a stored `cancelled` ancestor or none), a replayed spawn returns
-// the stored agent without touching the scheduler, and a re-submitted
-// terminal agent is skipped by run's state check. The entry's channel is
+// always has a stored `cancelled` ancestor or none). That rests on an
+// invariant enforced outside this package: a runner does not return while a
+// spawn call it made is still in flight (the engine's driveChildTurn waits on
+// <-wait for the agent's turn loop, including its tool calls, to exit; see
+// internal/engine/delegation_execution.go), so a caller's spawn always lands
+// while the caller is still running and the entry is still live. A
+// replayed spawn returns the stored agent without touching the scheduler,
+// and a re-submitted terminal agent is skipped by run's state check. The entry's channel is
 // closed so a holder of Changed is woken rather than left waiting on a
 // channel nobody will close. s.mu must be held.
 func (s *Scheduler) pruneLocked(taskID string) {
@@ -342,8 +347,10 @@ func (s *Scheduler) changed(a protocol.RuntimeAgent, onPersist func(*taskSched))
 // transitively). Queued agents leave the queue and are persisted as
 // `cancelled` without ever running; running agents have their context
 // cancelled and are persisted as `cancelled`. Terminal agents are left as
-// they are, though their non-terminal descendants are still cancelled. All
-// targets are remembered, so descendants submitted later are cancelled too.
+// they are, though their non-terminal descendants are still cancelled. The
+// targets are remembered in memory only until the task's entry is pruned
+// (see pruneLocked); after that, descendants submitted later are still
+// cancelled because Submit finds their stored `cancelled` ancestor.
 func (s *Scheduler) Cancel(ctx context.Context, taskID, agentID string) error {
 	if _, err := s.store.RuntimeAgent(ctx, taskID, agentID); err != nil {
 		return fmt.Errorf("cancel agent %s: %w", agentID, err)
