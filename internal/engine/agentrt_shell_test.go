@@ -259,7 +259,9 @@ func TestShellChecksSingleflightOutsideLock(t *testing.T) {
 	}
 	// Another key is not blocked behind the in-flight probe.
 	done := make(chan error, 1)
-	go func() { done <- c.do(context.Background(), context.Background(), "os:fake", func(context.Context) error { return nil }) }()
+	go func() {
+		done <- c.do(context.Background(), context.Background(), "os:fake", func(context.Context) error { return nil })
+	}()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -385,7 +387,9 @@ func TestBlockingVMProbeStallsNothingElse(t *testing.T) {
 		t.Fatal("a spawn needing the OS sandbox waited behind the microVM probe")
 	}
 	summary := make(chan string, 1)
-	go func() { summary <- env.e.ConfinementSummary(context.Background(), env.th.ProjectID, protocol.ShellReadOnly) }()
+	go func() {
+		summary <- env.e.ConfinementSummary(context.Background(), env.th.ProjectID, protocol.ShellReadOnly)
+	}()
 	select {
 	case got := <-summary:
 		if got != "Commands run in a read-only sandbox" {
