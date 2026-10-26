@@ -114,6 +114,9 @@ type Engine struct {
 	// run under, so runtime agents (which the scheduler starts on the engine's
 	// base context) slice the right budget without the legacy coordinator.
 	runtimeBudgets sync.Map
+	// runtimeBudgetTrackers holds one entry per task whose budget a tracker
+	// goroutine will drop; removed together with the budget.
+	runtimeBudgetTrackers sync.Map
 
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
