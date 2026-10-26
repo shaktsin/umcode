@@ -312,7 +312,7 @@ func (e *Engine) Shutdown(ctx context.Context) {
 		// Before anything is torn down: stop admitting spawns, cancel every
 		// agent and wait (bounded) for runners to finish their cleanup. The
 		// store is closed by the caller after Shutdown returns.
-		closeCtx, cancelClose := context.WithTimeout(ctx, runtimeCloseTimeout)
+		closeCtx, cancelClose := context.WithTimeout(ctx, runtimeCloseBudget(ctx))
 		if err := e.AgentRuntime.Close(closeCtx); err != nil {
 			e.Log.Warn("agent runtime did not stop in time", "err", err)
 		}

@@ -16,6 +16,17 @@ import (
 // runtimeCloseTimeout bounds how long Shutdown waits for runtime agents.
 const runtimeCloseTimeout = 10 * time.Second
 
+// runtimeCloseBudget is how long Shutdown lets the agent runtime stop: at most
+// runtimeCloseTimeout and at most half of the caller's remaining time (never
+// less than 1s), so a hung runner cannot starve closing plugins and MCP.
+func runtimeCloseBudget(ctx context.Context) time.Duration {
+	d := runtimeCloseTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		d = min(d, max(time.Until(deadline)/2, time.Second))
+	}
+	return d
+}
+
 // registerAgentRuntime builds the agent runtime on base and registers its
 // model-facing tools in place of the legacy delegation agent tools. The lead
 // keeps the default RootCapabilities authority (agentrt.WithLeadCapabilities).
@@ -104,10 +115,17 @@ func (e *Engine) rememberRuntimeBudget(taskID string, b *delegation.Budget) {
 }
 
 // forgetRuntimeBudget drops the task's tracker guard first (so a fresh budget
-// can be tracked again), then its budget.
-func (e *Engine) forgetRuntimeBudget(taskID string) {
+// can be tracked again), then compare-and-deletes b: a budget registered for
+// the task in the meantime is never clobbered, and is handed to a tracker
+// (the one that raced in, or a new one) so it cannot leak either.
+func (e *Engine) forgetRuntimeBudget(taskID string, b *delegation.Budget) {
 	e.runtimeBudgetTrackers.Delete(taskID)
-	e.runtimeBudgets.Delete(taskID)
+	if e.runtimeBudgets.CompareAndDelete(taskID, b) {
+		return
+	}
+	if cur, ok := e.runtimeBudgets.Load(taskID); ok {
+		e.trackRuntimeBudget(taskID, cur.(*delegation.Budget))
+	}
 }
 
 // Backoff for the budget tracker's checks of whether its task is still active.
@@ -126,21 +144,21 @@ func (e *Engine) trackRuntimeBudget(taskID string, b *delegation.Budget) {
 	if _, loaded := e.runtimeBudgetTrackers.LoadOrStore(taskID, struct{}{}); loaded {
 		return
 	}
-	go e.trackRuntimeBudgetUntilIdle(taskID)
+	go e.trackRuntimeBudgetUntilIdle(taskID, b)
 }
 
-func (e *Engine) trackRuntimeBudgetUntilIdle(taskID string) {
+func (e *Engine) trackRuntimeBudgetUntilIdle(taskID string, b *delegation.Budget) {
 	wait := runtimeBudgetPoll
 	for !e.runtimeTaskIdle(taskID) {
 		select {
 		case <-e.baseCtx.Done():
-			e.forgetRuntimeBudget(taskID)
+			e.forgetRuntimeBudget(taskID, b)
 			return
 		case <-time.After(wait):
 		}
 		wait = min(wait*2, runtimeBudgetPollMax)
 	}
-	e.forgetRuntimeBudget(taskID)
+	e.forgetRuntimeBudget(taskID, b)
 }
 
 // runtimeTaskIdle reports that the task left the active states and has no live

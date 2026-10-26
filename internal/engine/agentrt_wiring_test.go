@@ -590,11 +590,90 @@ func TestRuntimeBudgetOneTrackerPerTask(t *testing.T) {
 func TestRuntimeLateRunnerFailsClosedOnActiveTask(t *testing.T) {
 	env := runtimeRunnerFixture(t, runtimeV2On)
 	a := env.newRuntimeAgent(t, "late", readOnlyCaps, "")
-	env.e.forgetRuntimeBudget(env.task.ID)
+	env.trackBudget(t)
+	kept, _ := env.e.runtimeBudgets.Load(env.task.ID)
+	env.e.forgetRuntimeBudget(env.task.ID, kept.(*delegation.Budget))
 	if _, err := env.run(t, a); err == nil || !strings.Contains(err.Error(), "task budget unavailable") {
 		t.Fatalf("late runner err = %v, want task budget unavailable", err)
 	}
 	if reqs, _ := env.p.snapshot(); len(reqs) != 0 {
 		t.Fatal("provider called by a late runner")
+	}
+}
+
+// Forgetting compares the budget pointer: a fresh budget registered for the
+// task meanwhile is never clobbered, and keeps a tracker.
+func TestForgetRuntimeBudgetKeepsFreshlyRegisteredBudget(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	stale := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100}, protocol.UsageTotals{}, nil)
+	fresh := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 200}, protocol.UsageTotals{}, nil)
+	env.e.rememberRuntimeBudget(env.task.ID, fresh)
+	env.e.forgetRuntimeBudget(env.task.ID, stale)
+	if got, ok := env.e.runtimeBudgets.Load(env.task.ID); !ok || got.(*delegation.Budget) != fresh {
+		t.Fatalf("fresh budget clobbered by a stale forget: %v %v", got, ok)
+	}
+	if !trackerEntry(env.e, env.task.ID) {
+		t.Fatal("the fresh budget has no tracker")
+	}
+	env.e.forgetRuntimeBudget(env.task.ID, fresh)
+	if budgetEntry(env.e, env.task.ID) {
+		t.Fatal("matching forget did not remove the budget")
+	}
+}
+
+func TestRuntimeCloseBudget(t *testing.T) {
+	with := func(d time.Duration) context.Context {
+		ctx, cancel := context.WithTimeout(t.Context(), d)
+		t.Cleanup(cancel)
+		return ctx
+	}
+	if got := runtimeCloseBudget(t.Context()); got != runtimeCloseTimeout {
+		t.Errorf("no deadline = %v, want %v", got, runtimeCloseTimeout)
+	}
+	if got := runtimeCloseBudget(with(time.Hour)); got != runtimeCloseTimeout {
+		t.Errorf("long deadline = %v, want the %v cap", got, runtimeCloseTimeout)
+	}
+	if got := runtimeCloseBudget(with(10 * time.Second)); got < 4*time.Second || got > 5*time.Second {
+		t.Errorf("10s remaining = %v, want half", got)
+	}
+	if got := runtimeCloseBudget(with(1500 * time.Millisecond)); got != time.Second {
+		t.Errorf("1.5s remaining = %v, want the 1s floor", got)
+	}
+}
+
+// hangingRunner ignores its context, like a runner stuck in a syscall.
+type hangingRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *hangingRunner) Run(context.Context, protocol.RuntimeAgent) (protocol.AgentResult, error) {
+	close(r.started)
+	<-r.release
+	return protocol.AgentResult{}, nil
+}
+
+// A runner that never stops must not starve the rest of Shutdown: Close gets
+// at most half of the caller's deadline, so Plugins and MCP still close.
+func TestShutdownReachesPluginsAndMCPWhenRunnerHangs(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	env.approvePlan(t, protocol.DefaultPlanLimits(), protocol.PlanAgent{Name: "worker", Purpose: "investigate", Capabilities: readOnlyCaps})
+	r := &hangingRunner{started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(r.release) })
+	env.e.AgentRuntime = agentrt.NewRuntime(env.e.Store, r, env.e.baseCtx)
+	if _, err := env.e.AgentRuntime.Spawn(t.Context(), agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "hang", PlanEntry: "worker", Assignment: protocol.AgentAssignment{Prompt: "look"}}); err != nil {
+		t.Fatal(err)
+	}
+	waitForSignal(t, r.started, "the runner to start")
+	const budget = 4 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
+	defer cancel()
+	start := time.Now()
+	env.e.Shutdown(ctx)
+	if elapsed := time.Since(start); elapsed > budget-time.Second {
+		t.Fatalf("Shutdown used %v of %v: a hung runner starved the rest of it", elapsed, budget)
+	}
+	if _, err := env.e.Plugins.Acquire(t.Context(), env.th.ProjectID); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("plugins were not closed by Shutdown: %v", err)
 	}
 }

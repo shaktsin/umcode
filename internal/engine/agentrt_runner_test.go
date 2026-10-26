@@ -449,6 +449,32 @@ func TestRunnerExposesOnlyGrantedTools(t *testing.T) {
 	}
 }
 
+// An agent whose capabilities grant no tool-backed ability needs no tool
+// support from its model, so its request carries no tools at all (not even the
+// always-allowed context tools): a model without tool support stays valid.
+func TestRunnerNoCapabilitiesSendsNoTools(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	none := protocol.AgentCapabilities{Files: protocol.FilesNone, Shell: protocol.ShellNone}
+	if agentNeedsFor(none).Tools {
+		t.Fatal("an agent with no capabilities must not require tool support")
+	}
+	a := env.newRuntimeAgent(t, "thinker", none, "")
+	if _, err := env.run(t, a); err != nil {
+		t.Fatal(err)
+	}
+	reqs, _ := env.p.snapshot()
+	if len(reqs) == 0 {
+		t.Fatal("no request")
+	}
+	if len(reqs[0].Tools) != 0 {
+		var names []string
+		for _, spec := range reqs[0].Tools {
+			names = append(names, spec.Name)
+		}
+		t.Fatalf("request carries tools for an agent that may use none: %v", names)
+	}
+}
+
 func TestRunnerDeliversPendingMessages(t *testing.T) {
 	env := runtimeRunnerFixture(t)
 	a := env.newRuntimeAgent(t, "listener", readOnlyCaps, "")
@@ -650,7 +676,11 @@ func TestRunnerWithoutTaskBudgetFailsCleanly(t *testing.T) {
 	env := runtimeRunnerFixture(t)
 	a := env.newRuntimeAgent(t, "nobudget", readOnlyCaps, "")
 	env.e.DelegationCoordinator = nil
-	env.e.forgetRuntimeBudget(env.task.ID)
+	kept, ok := env.e.runtimeBudgets.Load(env.task.ID)
+	if !ok {
+		t.Fatal("fixture registered no budget")
+	}
+	env.e.forgetRuntimeBudget(env.task.ID, kept.(*delegation.Budget))
 	_, err := env.run(t, a)
 	if err == nil || !strings.Contains(err.Error(), "task budget unavailable") {
 		t.Fatalf("err = %v, want task budget unavailable", err)

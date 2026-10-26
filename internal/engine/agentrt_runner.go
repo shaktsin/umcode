@@ -44,7 +44,9 @@ func runtimeAgentFrom(ctx context.Context) (string, bool) {
 type agentNeeds struct{ Tools bool }
 
 // agentNeedsFor derives model needs from capabilities alone: any granted
-// file, shell or spawn capability is exercised through tools.
+// file, shell or spawn capability is exercised through tools. The always-
+// allowed context tools do not count: an agent granted nothing else is sent
+// no tools at all (see offerTools in the turn loop).
 func agentNeedsFor(c protocol.AgentCapabilities) agentNeeds {
 	files := c.Files == protocol.FilesRead || c.Files == protocol.FilesReadWrite
 	shell := c.Shell == protocol.ShellReadOnly || c.Shell == protocol.ShellReadWrite
