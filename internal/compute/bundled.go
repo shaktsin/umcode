@@ -100,6 +100,17 @@ func (r GuestRequest) Mounts() []GuestMount {
 	}
 }
 
+// workspaceReadOnly is the flag the libkrun call is given for the project
+// share, taken from the workspace entry of Mounts().
+func (r GuestRequest) workspaceReadOnly() bool {
+	for _, m := range r.Mounts() {
+		if m.GuestPath == "/workspace" {
+			return m.ReadOnly
+		}
+	}
+	return false
+}
+
 type bundledPreview struct {
 	hostPort int
 	cancel   context.CancelFunc

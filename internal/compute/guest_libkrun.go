@@ -102,7 +102,7 @@ func RunGuest(req GuestRequest) error {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return fmt.Errorf("libkrun guest execution is unsupported on %s", runtime.GOOS)
 	}
-	if rc := C.umcode_start_guest(cRootFS, cRoot, cGuestDir, cCommand, cResolver, C.bool(req.Network), C.bool(req.RootReadOnly),
+	if rc := C.umcode_start_guest(cRootFS, cRoot, cGuestDir, cCommand, cResolver, C.bool(req.Network), C.bool(req.workspaceReadOnly()),
 		C.int32_t(req.VCPUs), C.int32_t(req.MemoryMiB), C.int32_t(req.HostPort), C.int32_t(req.GuestPort)); rc < 0 {
 		return fmt.Errorf("libkrun failed before guest exit (error %d)", int32(rc))
 	}
