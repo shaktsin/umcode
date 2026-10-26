@@ -107,6 +107,16 @@ type Engine struct {
 	// shell would get (see runtimeConfinement); nil uses the real host checks.
 	agentVMCheck func() error
 	agentSandbox func() sandbox.Sandbox
+	// agentSandboxROCheck and agentVMROCheck replace the real read-only
+	// self-checks (sandbox.SelfCheckReadOnly, a guest probe); agentCompute is
+	// the runner the guest probe uses (nil: the bundled microVM).
+	agentSandboxROCheck func(sandbox.Sandbox) error
+	agentVMROCheck      func(context.Context) error
+	agentCompute        compute.Runner
+	// shellChecks caches the self-check results for the process;
+	// shellDowngrades dedupes the downgrade log lines.
+	shellChecks     shellChecks
+	shellDowngrades sync.Map
 	// agentThreadLookup reads the lead thread for leadApprovalMode; nil uses
 	// the store. A test seam for a lookup that never returns.
 	agentThreadLookup func(ctx context.Context, id string) (protocol.Thread, error)

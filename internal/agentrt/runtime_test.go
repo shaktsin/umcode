@@ -854,3 +854,85 @@ func TestUpdateWakesWaitersAndEmitsEvent(t *testing.T) {
 		t.Fatal("skipped update emitted an event")
 	}
 }
+
+// Pruning the scheduler's per-task state never changes what Spawn, Wait and
+// List answer: replaying a cancelled spawn returns the stored cancelled agent
+// without running it, and Wait on terminal agents leaves no state behind.
+func TestRuntimePruningKeepsReplayAndWaitSemantics(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	r := newFakeRunner()
+	rt := newTestRuntime(t, s, r)
+	first, err := rt.Spawn(t.Context(), spawnReq(task, "call-1", "a", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStarted(t, r, "a")
+	if err = rt.Cancel(t.Context(), task.ID, "", first.Agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	rt.sched.Wait()
+	got, err := rt.Wait(t.Context(), task.ID, "", []string{first.Agent.ID}, WaitAll)
+	if err != nil || got[0].State != protocol.AgentStateCancelled {
+		t.Fatalf("wait: %+v %v", got, err)
+	}
+	if n := rt.sched.taskCount(); n != 0 {
+		t.Fatalf("scheduler keeps %d task entries after Wait on terminal agents", n)
+	}
+	replay, err := rt.Spawn(t.Context(), spawnReq(task, "call-1", "a", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.Agent.ID != first.Agent.ID || replay.Agent.State != protocol.AgentStateCancelled || replay.QueuedReason != "" {
+		t.Fatalf("replay of a cancelled spawn = %+v", replay)
+	}
+	rt.sched.Wait()
+	if calls := r.Calls(); len(calls) != 1 {
+		t.Fatalf("replay ran the agent again: %v", calls)
+	}
+	if n := rt.sched.taskCount(); n != 0 {
+		t.Fatalf("entries after replay = %d", n)
+	}
+}
+
+// The resolve options are computed per task at admission time, so two tasks
+// (projects) can get different shell offers from one runtime.
+func TestRuntimeResolveOptionsAreComputedPerTask(t *testing.T) {
+	s, task := runtimeFixture(t)
+	p := savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	_ = p
+	var seen []string
+	supported := false
+	rt := newTestRuntime(t, s, newFakeRunner(), WithResolveOptionsFunc(func(_ context.Context, taskID string) ResolveOptions {
+		seen = append(seen, taskID)
+		if supported {
+			return ResolveOptions{ShellReadOnlySupported: true}
+		}
+		return ResolveOptions{ShellUnavailable: "no sandbox available"}
+	}))
+	req := spawnReq(task, "c1", "a", 0.25)
+	req.Capabilities = &protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellReadOnly}
+	first, err := rt.Spawn(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Granted.Shell != protocol.ShellNone || len(first.Rejected) == 0 {
+		t.Fatalf("unavailable shell: granted %+v rejected %+v", first.Granted, first.Rejected)
+	}
+	supported = true
+	req.CallID = "c2"
+	second, err := rt.Spawn(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Granted.Shell != protocol.ShellReadOnly {
+		t.Fatalf("supported shell: granted %+v", second.Granted)
+	}
+	if len(seen) != 2 || seen[0] != task.ID || seen[1] != task.ID {
+		t.Fatalf("provider saw %v, want one call per admission for the task", seen)
+	}
+	// A replay never re-resolves.
+	if _, err = rt.Spawn(t.Context(), req); err != nil || len(seen) != 2 {
+		t.Fatalf("replay called the provider: %v %v", seen, err)
+	}
+}

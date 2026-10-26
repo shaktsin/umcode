@@ -98,6 +98,14 @@ func WithResolveOptions(o ResolveOptions) Option {
 	return func(r *Runtime) { r.resolve = o }
 }
 
+// WithResolveOptionsFunc computes the resolution options per task at each
+// admission, such as the shell confinement the task's project would use. It
+// takes precedence over WithResolveOptions. The function runs under the
+// runtime's spawn lock, so it must not call back into the runtime.
+func WithResolveOptionsFunc(fn func(ctx context.Context, taskID string) ResolveOptions) Option {
+	return func(r *Runtime) { r.resolveFn = fn }
+}
+
 // WithLeadCapabilities sets the lead's authority used when the lead (caller
 // "") spawns. The default is RootCapabilities().
 func WithLeadCapabilities(c protocol.AgentCapabilities) Option {
@@ -117,8 +125,10 @@ type Runtime struct {
 	store   AgentStore
 	sched   *Scheduler
 	resolve ResolveOptions
-	events  func(protocol.RuntimeAgent)
-	lead    protocol.AgentCapabilities
+	// resolveFn, when set, supplies the options per task instead of resolve.
+	resolveFn func(ctx context.Context, taskID string) ResolveOptions
+	events    func(protocol.RuntimeAgent)
+	lead      protocol.AgentCapabilities
 
 	// lifecycle serialises Spawn so admission, reservation and creation are
 	// atomic with respect to each other.
@@ -245,12 +255,16 @@ func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResul
 		}
 	}
 
+	options := r.resolve
+	if r.resolveFn != nil {
+		options = r.resolveFn(ctx, req.TaskID)
+	}
 	adm, err := Admit(AdmissionInput{
 		Plan:            plan,
 		Caller:          caller,
 		All:             all,
 		ParentShareFree: ledger.Free(caller.ID, caller.BudgetShare),
-		Options:         r.resolve,
+		Options:         options,
 		Request:         req,
 	})
 	if err != nil {
@@ -388,12 +402,13 @@ func (r *Runtime) Wait(ctx context.Context, taskID, callerID string, ids []strin
 	}
 	for {
 		// Take the channel before reading state so no change is missed.
-		changed := r.sched.Changed(taskID)
+		changed, release := r.sched.watch(taskID)
 		agents := make([]protocol.RuntimeAgent, len(ids))
 		done := 0
 		for i, id := range ids {
 			a, err := r.store.RuntimeAgent(ctx, taskID, id)
 			if err != nil {
+				release()
 				return nil, fmt.Errorf("wait: agent %s: %w", id, err)
 			}
 			agents[i] = a
@@ -402,11 +417,14 @@ func (r *Runtime) Wait(ctx context.Context, taskID, callerID string, ids []strin
 			}
 		}
 		if (mode == WaitAny && done > 0) || (mode == WaitAll && done == len(ids)) {
+			release()
 			return agents, nil
 		}
 		select {
 		case <-changed:
+			release()
 		case <-ctx.Done():
+			release()
 			return agents, ctx.Err()
 		}
 	}

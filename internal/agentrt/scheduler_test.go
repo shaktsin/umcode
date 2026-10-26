@@ -538,3 +538,86 @@ func TestSchedulerQueuedReportsQueueMembership(t *testing.T) {
 	}
 	r.finish("a2", protocol.AgentResult{}, nil)
 }
+
+func (s *Scheduler) taskCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.tasks)
+}
+
+// Once every agent of a task is terminal and the runners have returned, the
+// scheduler holds nothing for it: its queue, running set, waiters and
+// remembered cancellations are gone. Later calls still answer correctly.
+func TestSchedulerPrunesIdleTasks(t *testing.T) {
+	s, task := runtimeFixture(t)
+	r := newFakeRunner()
+	sch := newTestScheduler(t, s, r, nil)
+	parent := createAgent(t, s, task, "parent", "")
+	child := createAgent(t, s, task, "child", parent.ID)
+	other := createAgent(t, s, task, "other", "")
+	sch.Submit(t.Context(), parent, 2)
+	sch.Submit(t.Context(), child, 2)
+	sch.Submit(t.Context(), other, 2)
+	waitStarted(t, r, "parent", "child")
+	if sch.taskCount() != 1 {
+		t.Fatalf("task entries while running = %d", sch.taskCount())
+	}
+	if err := sch.Cancel(t.Context(), task.ID, parent.ID); err != nil { // cancels parent, child
+		t.Fatal(err)
+	}
+	waitStarted(t, r, "other")
+	r.finish("other", protocol.AgentResult{}, nil)
+	sch.Wait()
+	if n := sch.taskCount(); n != 0 {
+		t.Fatalf("scheduler keeps %d task entries after every agent is terminal", n)
+	}
+	if sch.Queued(task.ID, other.ID) || sch.Active(task.ID) != 0 {
+		t.Fatal("pruned task answers as busy")
+	}
+	if sch.taskCount() != 0 {
+		t.Fatal("reading a pruned task recreated its entry")
+	}
+	// A descendant of a cancelled agent that shows up after the pruning is
+	// still cancelled, never run (the store remembers the cancellation).
+	late := createAgent(t, s, task, "late", child.ID)
+	sch.Submit(t.Context(), late, 2)
+	sch.Wait()
+	if st := stateOf(t, s, late).State; st != protocol.AgentStateCancelled {
+		t.Fatalf("late descendant of a cancelled agent is %s", st)
+	}
+	for _, c := range r.Calls() {
+		if c == "late" {
+			t.Fatal("late descendant ran")
+		}
+	}
+	if n := sch.taskCount(); n != 0 {
+		t.Fatalf("entries after the late submit = %d", n)
+	}
+}
+
+// A task with a waiter keeps its entry until the waiter lets go, and the
+// waiter's channel is never orphaned by pruning.
+func TestSchedulerWatchHoldsEntryUntilReleased(t *testing.T) {
+	s, task := runtimeFixture(t)
+	r := newFakeRunner()
+	sch := newTestScheduler(t, s, r, nil)
+	a := createAgent(t, s, task, "a", "")
+	ch, release := sch.watch(task.ID)
+	sch.Submit(t.Context(), a, 1)
+	waitStarted(t, r, "a")
+	r.finish("a", protocol.AgentResult{}, nil)
+	sch.Wait()
+	select {
+	case <-ch:
+	default:
+		t.Fatal("watcher not woken by the last transition")
+	}
+	if sch.taskCount() != 1 {
+		t.Fatalf("entry dropped while watched: %d", sch.taskCount())
+	}
+	release()
+	if sch.taskCount() != 0 {
+		t.Fatalf("entry kept after the last watcher left: %d", sch.taskCount())
+	}
+	release() // idempotent
+}

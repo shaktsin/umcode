@@ -142,3 +142,28 @@ func TestResolveClampsReadWriteShellWithoutWriteFiles(t *testing.T) {
 		t.Fatalf("read-write files keep shell: %+v %+v", g, rej)
 	}
 }
+
+// A visible, specific reason replaces the generic platform message when the
+// read-only shell is downgraded, and an unavailable shell (confinement none)
+// takes every shell grant down to none with its reason.
+func TestResolveShellDowngradeReasons(t *testing.T) {
+	c := protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadOnly}
+	g, rs := Resolve(c, c, c, ResolveOptions{ShellReadOnlyReason: "microVM read-only self-check failed"})
+	r := hasRejection(rs, "capabilities.shell")
+	if g.Shell != protocol.ShellNone || r == nil || !strings.Contains(r.Reason, "microVM read-only self-check failed") {
+		t.Fatalf("granted=%+v rejections=%+v", g, rs)
+	}
+	rw := protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadWrite}
+	for _, req := range []protocol.AgentCapabilities{c, rw} {
+		g, rs = Resolve(rw, rw, req, ResolveOptions{ShellReadOnlySupported: true, ShellUnavailable: "no sandbox available"})
+		r = hasRejection(rs, "capabilities.shell")
+		if g.Shell != protocol.ShellNone || r == nil || !strings.Contains(r.Reason, "no sandbox available") {
+			t.Fatalf("req %+v: granted=%+v rejections=%+v", req.Shell, g, rs)
+		}
+	}
+	// Not asking for a shell is not a rejection.
+	none := protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone}
+	if _, rs = Resolve(rw, none, none, ResolveOptions{ShellUnavailable: "no sandbox available"}); hasRejection(rs, "capabilities.shell") != nil {
+		t.Fatalf("spurious rejection %+v", rs)
+	}
+}
