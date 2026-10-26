@@ -204,7 +204,7 @@ func isDir(p string) bool {
 
 func dedupe(in []string) []string {
 	seen := map[string]bool{}
-	out := in[:0]
+	out := make([]string, 0, len(in))
 	for _, s := range in {
 		if !seen[s] {
 			seen[s] = true
@@ -263,12 +263,24 @@ func protectGit(p *Policy) {
 	dotgit := filepath.Join(p.Root, ".git")
 	p.ReadOnlyInRoot = []string{dotgit}
 	st, err := os.Lstat(dotgit)
-	if err != nil || st.IsDir() {
-		if err == nil {
-			p.ReadOnlyInRoot = []string{realPathOrSelf(dotgit)}
+	if err != nil {
+		return
+	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		// A symlinked .git: keep the lexical path and also protect a real git
+		// directory it resolves to. A target that is not a git directory is
+		// never mounted or made readable.
+		if real := realPath(dotgit); isDir(real) && looksLikeGitDir(real) {
+			p.ReadOnlyInRoot = append(p.ReadOnlyInRoot, real)
 		}
 		return
 	}
+	if st.IsDir() {
+		p.ReadOnlyInRoot = []string{realPathOrSelf(dotgit)}
+		return
+	}
+	// The pointer is written by the agent's own checkout, so it is untrusted:
+	// nothing it names is trusted unless the named directory points back.
 	data, err := os.ReadFile(dotgit)
 	if err != nil {
 		return
@@ -277,25 +289,40 @@ func protectGit(p *Policy) {
 	if !ok {
 		return
 	}
-	ptr = strings.TrimSpace(ptr)
-	if !filepath.IsAbs(ptr) {
-		ptr = filepath.Join(p.Root, ptr)
+	gitdir := realPath(resolveFrom(p.Root, strings.TrimSpace(ptr)))
+	// A linked worktree's admin dir has HEAD but no objects/; its proof is the
+	// back-reference below.
+	if !isDir(gitdir) || !exists(filepath.Join(gitdir, "HEAD")) {
+		return
 	}
-	dirs := []string{realPath(ptr)}
-	if cd, err := os.ReadFile(filepath.Join(dirs[0], "commondir")); err == nil {
-		c := strings.TrimSpace(string(cd))
-		if !filepath.IsAbs(c) {
-			c = filepath.Join(dirs[0], c)
-		}
-		dirs = append(dirs, realPath(c))
+	back, err := os.ReadFile(filepath.Join(gitdir, "gitdir"))
+	if err != nil || realPath(resolveFrom(gitdir, strings.TrimSpace(string(back)))) != realPath(dotgit) {
+		return
 	}
-	for _, d := range dirs {
-		if isDir(d) {
-			p.ReadOnlyPaths = append(p.ReadOnlyPaths, d)
-			p.Readable = append(p.Readable, d)
+	dirs := []string{gitdir}
+	if cd, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {
+		if common := realPath(resolveFrom(gitdir, strings.TrimSpace(string(cd)))); isDir(common) && looksLikeGitDir(common) {
+			dirs = append(dirs, common)
 		}
 	}
-	p.Readable = dedupe(p.Readable)
+	p.ReadOnlyPaths = append(p.ReadOnlyPaths, dirs...)
+	p.Readable = dedupe(append(p.Readable, dirs...))
+}
+
+// resolveFrom makes path absolute against base.
+func resolveFrom(base, path string) string {
+	if path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	return path
+}
+
+// looksLikeGitDir reports whether dir has the files every git directory has.
+func looksLikeGitDir(dir string) bool {
+	return exists(filepath.Join(dir, "HEAD")) && isDir(filepath.Join(dir, "objects"))
 }
 
 // ReadOnlyChildPolicy is IsolatedChildPolicy with the whole project root

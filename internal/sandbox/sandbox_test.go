@@ -386,3 +386,89 @@ func TestAgentWritePolicyMissingGitDeniedInSeatbelt(t *testing.T) {
 		t.Error("bwrap cannot mount a missing path; it must be skipped")
 	}
 }
+
+func hasPath(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func fakeGitDir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCraftedGitPointerDoesNotWidenAccess(t *testing.T) {
+	assertOnlyPointer := func(t *testing.T, root, secret string) {
+		t.Helper()
+		for name, p := range map[string]Policy{"write": AgentWritePolicy(root, false, t.TempDir()), "readonly": ReadOnlyChildPolicy(root, false, t.TempDir())} {
+			if hasPath(p.Readable, secret) || hasPath(p.ReadOnlyPaths, secret) || len(p.ReadOnlyPaths) != 0 {
+				t.Errorf("%s: crafted pointer widened access: ro=%v", name, p.ReadOnlyPaths)
+			}
+			if !hasPath(p.ReadOnlyInRoot, filepath.Join(realPath(root), ".git")) {
+				t.Errorf("%s: pointer file must stay protected: %v", name, p.ReadOnlyInRoot)
+			}
+		}
+	}
+	t.Run("no back-reference", func(t *testing.T) {
+		root, secret := realPath(t.TempDir()), realPath(t.TempDir())
+		os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+secret+"\n"), 0o644)
+		assertOnlyPointer(t, root, secret)
+	})
+	t.Run("git-shaped dir without back-reference", func(t *testing.T) {
+		root, secret := realPath(t.TempDir()), realPath(t.TempDir())
+		fakeGitDir(t, secret)
+		os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+secret+"\n"), 0o644)
+		assertOnlyPointer(t, root, secret)
+	})
+	t.Run("back-reference points elsewhere", func(t *testing.T) {
+		root, secret := realPath(t.TempDir()), realPath(t.TempDir())
+		fakeGitDir(t, secret)
+		os.WriteFile(filepath.Join(secret, "gitdir"), []byte(filepath.Join(t.TempDir(), ".git")), 0o644)
+		os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+secret+"\n"), 0o644)
+		assertOnlyPointer(t, root, secret)
+	})
+	t.Run("commondir is not a git dir", func(t *testing.T) {
+		root, gd, other := realPath(t.TempDir()), realPath(t.TempDir()), realPath(t.TempDir())
+		os.WriteFile(filepath.Join(gd, "HEAD"), []byte("ref: refs/heads/x\n"), 0o644)
+		os.WriteFile(filepath.Join(gd, "gitdir"), []byte(filepath.Join(root, ".git")), 0o644)
+		os.WriteFile(filepath.Join(gd, "commondir"), []byte(other), 0o644)
+		os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+gd+"\n"), 0o644)
+		p := AgentWritePolicy(root, false, t.TempDir())
+		if hasPath(p.Readable, other) || hasPath(p.ReadOnlyPaths, other) {
+			t.Errorf("non-git commondir accepted: %v", p.ReadOnlyPaths)
+		}
+		if !hasPath(p.ReadOnlyPaths, gd) {
+			t.Errorf("validated gitdir should still be protected: %v", p.ReadOnlyPaths)
+		}
+	})
+}
+
+func TestSymlinkedDotGitTargetIsProtected(t *testing.T) {
+	root, real := realPath(t.TempDir()), realPath(t.TempDir())
+	fakeGitDir(t, real)
+	if err := os.Symlink(real, filepath.Join(root, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]Policy{"write": AgentWritePolicy(root, false, t.TempDir()), "readonly": ReadOnlyChildPolicy(root, false, t.TempDir())} {
+		if !hasPath(p.ReadOnlyInRoot, real) || !hasPath(p.ReadOnlyInRoot, filepath.Join(root, ".git")) {
+			t.Errorf("%s: target and lexical path must be read-only: %v", name, p.ReadOnlyInRoot)
+		}
+	}
+}
+
+func TestDedupeDoesNotMutateInput(t *testing.T) {
+	in := []string{"a", "b", "a", "c"}
+	out := dedupe(in)
+	if strings.Join(in, ",") != "a,b,a,c" || strings.Join(out, ",") != "a,b,c" {
+		t.Errorf("in=%v out=%v", in, out)
+	}
+}
