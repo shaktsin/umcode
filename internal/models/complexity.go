@@ -26,7 +26,7 @@ func DefaultPresets() map[protocol.Complexity]protocol.ComplexityPreset {
 func Presets(cfg config.ModelsConfig) map[protocol.Complexity]protocol.ComplexityPreset {
 	out := DefaultPresets()
 	for name, o := range cfg.Complexity {
-		lvl := protocol.Complexity(strings.ToLower(name))
+		lvl := protocol.NormalizeComplexity(name)
 		p, ok := out[lvl]
 		if !ok {
 			continue

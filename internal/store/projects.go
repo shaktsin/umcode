@@ -24,7 +24,7 @@ func scanProject(sc interface{ Scan(...any) error }) (protocol.Project, error) {
 	if err != nil {
 		return p, err
 	}
-	p.Settings.Complexity = protocol.Complexity(complexity)
+	p.Settings.Complexity = protocol.NormalizeComplexity(complexity)
 	p.Archived = archived != 0
 	if toolsJSON != "" {
 		_ = json.Unmarshal([]byte(toolsJSON), &p.Tools)

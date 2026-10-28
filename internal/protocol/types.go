@@ -40,6 +40,9 @@ func NormalizeComplexity(s string) Complexity {
 
 // UnmarshalJSON normalizes legacy level names on read.
 func (c *Complexity) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err

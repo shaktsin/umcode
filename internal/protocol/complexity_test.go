@@ -43,3 +43,10 @@ func TestComplexityValid(t *testing.T) {
 		}
 	}
 }
+
+func TestComplexityUnmarshalNull(t *testing.T) {
+	c := ComplexityHigh
+	if err := json.Unmarshal([]byte("null"), &c); err != nil || c != ComplexityHigh {
+		t.Fatalf("null changed value: %q err=%v", c, err)
+	}
+}

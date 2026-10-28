@@ -99,7 +99,7 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 	presets := e.presets
 	limits := e.turnLimits
 	e.mu.Unlock()
-	level := protocol.Complexity(cplx)
+	level := protocol.NormalizeComplexity(cplx)
 	if level == protocol.ComplexityAuto {
 		var previous protocol.Complexity
 		if models.IsContinuation(text) {

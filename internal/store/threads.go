@@ -26,7 +26,7 @@ func scanThread(sc interface{ Scan(...any) error }) (protocol.Thread, error) {
 		return t, err
 	}
 	t.Pinned, t.Archived = pinned != 0, archived != 0
-	t.Settings.Complexity = protocol.Complexity(complexity)
+	t.Settings.Complexity = protocol.NormalizeComplexity(complexity)
 	t.CreatedAt, t.UpdatedAt = ParseTime(created), ParseTime(updated)
 	return t, nil
 }
@@ -269,7 +269,7 @@ func (s *Store) ListTurns(ctx context.Context, threadID string) ([]protocol.Turn
 		if trail != "" {
 			_ = json.Unmarshal([]byte(trail), &t.RouteTrail)
 		}
-		t.Selection.Complexity, t.Resolved.Complexity = protocol.Complexity(selC), protocol.Complexity(resC)
+		t.Selection.Complexity, t.Resolved.Complexity = protocol.NormalizeComplexity(selC), protocol.NormalizeComplexity(resC)
 		t.AutoPicked = auto != 0
 		t.StartedAt, t.FinishedAt = ParseTime(started), nullTime(fin)
 		out = append(out, t)

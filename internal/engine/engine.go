@@ -804,7 +804,7 @@ const complexitySettingKey = "complexity_defaults"
 
 func (e *Engine) loadComplexity(ctx context.Context) error {
 	e.presets = models.Presets(e.Cfg.Models)
-	e.defaultCplx = protocol.Complexity(e.Cfg.Models.DefaultComplexity)
+	e.defaultCplx = protocol.NormalizeComplexity(e.Cfg.Models.DefaultComplexity)
 	e.turnLimits = protocol.ExecutionLimits{
 		MaxDurationMinutes: e.Cfg.Models.ExecutionLimits.MaxDurationMinutes,
 		MaxTokens:          e.Cfg.Models.ExecutionLimits.MaxTokens,
