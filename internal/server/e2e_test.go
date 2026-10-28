@@ -515,8 +515,12 @@ func TestThreadManagementAndModels(t *testing.T) {
 	h.call(protocol.MethodComplexityGetDefaults, nil, &d)
 	d.Default = protocol.ComplexityStandard
 	d.Limits.MaxToolRounds = 50
+	if d.DefaultMaxOutputTokens != 32768 {
+		t.Fatalf("default max output = %d, want 32768", d.DefaultMaxOutputTokens)
+	}
+	d.DefaultMaxOutputTokens = 65536
 	h.call(protocol.MethodComplexitySetDefaults, d, &d)
-	if d.Default != "medium" || d.Limits.MaxToolRounds != 50 {
+	if d.Default != "medium" || d.Limits.MaxToolRounds != 50 || d.DefaultMaxOutputTokens != 65536 {
 		t.Fatalf("complexity = %+v", d)
 	}
 	var creds protocol.CredentialListResult

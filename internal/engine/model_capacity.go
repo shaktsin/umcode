@@ -331,7 +331,9 @@ func (e *Engine) resolveCapacity(ctx context.Context, res resolved) (models.Capa
 	}
 	if cap.MaxOutput == 0 {
 		cap.MaxOutput = 32768
-		if e.Cfg != nil && e.Cfg.Models.DefaultMaxOutputTokens > 0 {
+		if n := e.defaultMaxOut.Load(); n > 0 {
+			cap.MaxOutput = int(n)
+		} else if e.Cfg != nil && e.Cfg.Models.DefaultMaxOutputTokens > 0 {
 			cap.MaxOutput = e.Cfg.Models.DefaultMaxOutputTokens
 		}
 	}

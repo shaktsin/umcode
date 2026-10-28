@@ -76,3 +76,25 @@ func TestDefaultPresets(t *testing.T) {
 		}
 	}
 }
+
+func TestListReportsReasoningLevels(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	c, err := NewCatalog(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := c.List(ctx, "claude", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range list {
+		if m.ID == "claude-sonnet-4-6" && len(m.ReasoningLevels) != 3 {
+			t.Fatalf("sonnet levels = %v", m.ReasoningLevels)
+		}
+	}
+}

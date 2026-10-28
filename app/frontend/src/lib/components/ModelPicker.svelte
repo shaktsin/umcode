@@ -2,7 +2,7 @@
   import { Check, ChevronDown, Layers3, Zap } from '@lucide/svelte';
   import PopupSurface from './PopupSurface.svelte';
   import PillMenu from './PillMenu.svelte';
-  import { COMPLEXITY_LEVELS, complexityPillLabel, nextComplexity } from '$lib/complexityPill';
+  import { complexityPillLabel, levelMenuItems, nextComplexity } from '$lib/complexityPill';
   import { app } from '$lib/stores/app.svelte';
   import { modelPickerOptions, poolModelIds } from '$lib/modelPickerOptions';
   import type { Complexity, ConfiguredModel, ModelPool, ModelSelection, RoutingConfig } from '$lib/types';
@@ -27,6 +27,12 @@
     return Object.entries(groups);
   });
 
+  // A pool can land on any of its models, so only a single chosen model limits the levels.
+  const supportedLevels = $derived(
+    value.provider && value.provider !== 'pool' && value.model
+      ? app.models.find((m) => m.provider === value.provider && m.id === value.model)?.reasoningLevels
+      : undefined,
+  );
   const poolName = $derived(value.provider === 'pool' ? pools.find((pool) => pool.id === value.model)?.name : undefined);
   const modelLabel = $derived.by(() => {
     if (poolName) return poolName;
@@ -155,10 +161,10 @@
   </div>
 
   <PillMenu
-    ariaLabel="Complexity"
-    title="Complexity"
+    ariaLabel="Thinking"
+    title="Thinking"
     label={complexityPillLabel(value.complexity, app.complexity?.default, compact)}
-    items={COMPLEXITY_LEVELS.map((level) => ({ id: level.id, label: level.label, hint: level.hint, checked: (value.complexity || '') === level.id }))}
+    items={levelMenuItems(value.complexity, app.complexity?.default, supportedLevels)}
     onselect={(id) => onchange({ ...value, complexity: nextComplexity(value.complexity, id as Complexity) })}
   >
     {#snippet icon()}<Zap class="w-3.5 h-3.5 shrink-0" />{/snippet}

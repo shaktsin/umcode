@@ -1,6 +1,6 @@
 // Mirrors internal/protocol (Go). Keep field names in sync with the JSON tags there.
 
-export type Complexity = '' | 'auto' | 'quick' | 'standard' | 'deep';
+export type Complexity = '' | 'low' | 'medium' | 'high';
 
 // Per-chat auto-approve tier. 'normal' asks for red-risk actions;
 // 'auto_workspace' auto-approves workspace actions; 'auto_all' also includes
@@ -135,7 +135,6 @@ export interface Turn {
   status: TurnStatus;
   selection: ModelSelection;
   resolved: ModelSelection;
-  autoPicked?: boolean;
   error?: string;
   usage: UsageTotals;
   /** Every route the turn tried, in order; more than one means it switched. */
@@ -169,7 +168,6 @@ export interface ModelRouteResult {
   chosen?: RouteInfo;
   alternatives: RouteInfo[];
   complexity: Complexity;
-  autoPicked?: boolean;
   reason?: string;
 }
 
@@ -320,6 +318,8 @@ export interface Model {
   supportsTools: boolean;
   supportsImages: boolean;
   supportsReasoning: boolean;
+  /** Levels the model supports; empty or missing means unknown. */
+  reasoningLevels?: string[];
   inputPerMTok: number;
   cachedInputPerMTok: number;
   outputPerMTok: number;
@@ -338,15 +338,14 @@ export interface Provider {
 export interface ComplexityPreset {
   level: Complexity;
   reasoning: string;
-  maxToolSteps: number;
-  multiAgent: string;
-  maxOutputTokens: number;
 }
 
 export interface ComplexityDefaults {
   default: Complexity;
   presets: ComplexityPreset[];
   limits: ExecutionLimits;
+  /** Output limit for models whose own maximum is unknown (1024-1000000). */
+  defaultMaxOutputTokens: number;
 }
 
 export interface ExecutionLimits {

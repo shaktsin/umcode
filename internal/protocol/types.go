@@ -241,18 +241,20 @@ type Credential struct {
 
 // Model describes a model in the catalog.
 type Model struct {
-	Provider           string  `json:"provider"`
-	ID                 string  `json:"id"`
-	DisplayName        string  `json:"displayName"`
-	ContextWindow      int     `json:"contextWindow,omitempty"`
-	SupportsTools      bool    `json:"supportsTools"`
-	SupportsImages     bool    `json:"supportsImages"`
-	SupportsReasoning  bool    `json:"supportsReasoning"`
-	InputPerMTok       float64 `json:"inputPerMTok"`
-	CachedInputPerMTok float64 `json:"cachedInputPerMTok"`
-	OutputPerMTok      float64 `json:"outputPerMTok"`
-	Hidden             bool    `json:"hidden"`
-	Source             string  `json:"source"` // bundled | api | user
+	Provider          string `json:"provider"`
+	ID                string `json:"id"`
+	DisplayName       string `json:"displayName"`
+	ContextWindow     int    `json:"contextWindow,omitempty"`
+	SupportsTools     bool   `json:"supportsTools"`
+	SupportsImages    bool   `json:"supportsImages"`
+	SupportsReasoning bool   `json:"supportsReasoning"`
+	// ReasoningLevels are the low|medium|high levels the model supports; empty means none are known.
+	ReasoningLevels    []string `json:"reasoningLevels,omitempty"`
+	InputPerMTok       float64  `json:"inputPerMTok"`
+	CachedInputPerMTok float64  `json:"cachedInputPerMTok"`
+	OutputPerMTok      float64  `json:"outputPerMTok"`
+	Hidden             bool     `json:"hidden"`
+	Source             string   `json:"source"` // bundled | api | user
 }
 
 // Provider describes a configured provider.

@@ -173,6 +173,9 @@ func (c *Catalog) List(ctx context.Context, provider string, includeHidden bool)
 			SupportsTools: m.Tools, SupportsImages: m.Images, SupportsReasoning: m.CatalogReasoning(),
 			InputPerMTok: m.In, CachedInputPerMTok: m.CachedIn, OutputPerMTok: m.Out, Source: source,
 		}
+		if m.CatalogReasoning() {
+			pm.ReasoningLevels = append([]string(nil), m.ReasoningLevels...)
+		}
 		if p, ok := prefs[k]; ok {
 			pm.Hidden = p.Hidden
 			if p.PriceOverride {

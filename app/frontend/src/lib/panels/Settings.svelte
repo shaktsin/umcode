@@ -10,7 +10,7 @@
   const tabs = [
     { id: 'keys', label: 'Providers' },
     { id: 'models', label: 'Models' },
-    { id: 'complexity', label: 'Complexity' },
+    { id: 'complexity', label: 'Thinking' },
     { id: 'computer-use', label: 'Computer Use' },
  { id: 'optimization', label: 'Token optimization' },
     { id: 'engine', label: 'Engine & app' },
