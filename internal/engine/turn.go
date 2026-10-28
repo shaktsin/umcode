@@ -667,7 +667,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	req := llm.Request{
 		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, "", hookContext), Tools: specs,
 	}
-	if res.meta.Reasoning {
+	if res.meta.CatalogReasoning() {
 		req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
 	}
 
@@ -1027,7 +1027,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return modelOutput{}, fmt.Errorf("unknown provider %q", res.sel.Provider)
 		}
 		req.Model = res.sel.Model
-		if res.meta.Reasoning {
+		if res.meta.CatalogReasoning() {
 			req.Reasoning, req.ReasoningStyle = reasoning, res.meta.ReasoningStyle
 		} else {
 			req.Reasoning, req.ReasoningStyle = "", ""

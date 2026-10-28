@@ -276,8 +276,8 @@ func (r *Router) order(ctx context.Context, in []protocol.ConfiguredModel, strat
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := meta[out[i].Provider+"/"+out[i].Model], meta[out[j].Provider+"/"+out[j].Model]
 		if level == protocol.ComplexityDeep {
-			if a.Reasoning != b.Reasoning {
-				return a.Reasoning
+			if a.CatalogReasoning() != b.CatalogReasoning() {
+				return a.CatalogReasoning()
 			}
 			return price(out[i]) > price(out[j])
 		}

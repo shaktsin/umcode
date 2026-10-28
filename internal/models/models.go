@@ -170,7 +170,7 @@ func (c *Catalog) List(ctx context.Context, provider string, includeHidden bool)
 		seen[k] = true
 		pm := protocol.Model{
 			Provider: m.Provider, ID: m.ID, DisplayName: m.DisplayName, ContextWindow: m.ContextWindow,
-			SupportsTools: m.Tools, SupportsImages: m.Images, SupportsReasoning: m.Reasoning,
+			SupportsTools: m.Tools, SupportsImages: m.Images, SupportsReasoning: m.CatalogReasoning(),
 			InputPerMTok: m.In, CachedInputPerMTok: m.CachedIn, OutputPerMTok: m.Out, Source: source,
 		}
 		if p, ok := prefs[k]; ok {

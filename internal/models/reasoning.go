@@ -44,3 +44,10 @@ func withReasoningProfile(m Meta) Meta {
 	}
 	return m
 }
+
+// CatalogReasoning reports whether the model has thinking controls known without
+// probing the server. Template-style (local) models count only after the engine
+// detects the chat template variables, so they are excluded here.
+func (m Meta) CatalogReasoning() bool {
+	return m.Reasoning && m.ReasoningStyle != "template"
+}

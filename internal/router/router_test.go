@@ -363,3 +363,23 @@ func TestCandidateWithoutAKeyIsExplained(t *testing.T) {
 		t.Fatalf("missing key not explained: %+v", plan.Blocked)
 	}
 }
+
+// Local template-style models only think once the engine detects the chat
+// template controls, so an undetected local server must not outrank a
+// non-reasoning cloud model when the pool asks for quality.
+func TestQualityOrderDoesNotRankLocalModelsAsReasoning(t *testing.T) {
+	ctx := context.Background()
+	r, _, _ := newRouter(t)
+	local := protocol.ConfiguredModel{ID: "l", Provider: "openai_compatible", Model: "qwen3.8", Enabled: true}
+	cloud := protocol.ConfiguredModel{ID: "c", Provider: "openai", Model: "gpt-4o-mini", Enabled: true}
+	got := r.order(ctx, []protocol.ConfiguredModel{cloud, local}, protocol.PoolQuality, "")
+	if got[0].ID != cloud.ID {
+		t.Fatalf("quality order = %s first, want the cloud model kept ahead of an undetected local model", got[0].ID)
+	}
+	// A catalog reasoning model still outranks a non-reasoning one.
+	think := protocol.ConfiguredModel{ID: "t", Provider: "claude", Model: "claude-sonnet-4-6", Enabled: true}
+	got = r.order(ctx, []protocol.ConfiguredModel{cloud, think}, protocol.PoolQuality, "")
+	if got[0].ID != think.ID {
+		t.Fatalf("catalog reasoning model should rank first, got %s", got[0].ID)
+	}
+}

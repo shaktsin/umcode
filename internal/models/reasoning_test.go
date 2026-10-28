@@ -46,3 +46,13 @@ func TestInferSelfAdapting(t *testing.T) {
 		t.Errorf("openai_compatible: %+v", m)
 	}
 }
+
+func TestCatalogReasoningExcludesTemplateModels(t *testing.T) {
+	local := infer("openai_compatible", "qwen3.8")
+	if !local.Reasoning || local.CatalogReasoning() {
+		t.Fatalf("local: Reasoning=%v CatalogReasoning=%v, want true/false", local.Reasoning, local.CatalogReasoning())
+	}
+	if !infer("claude", "claude-sonnet-4-6").CatalogReasoning() {
+		t.Fatal("claude must be catalog reasoning")
+	}
+}
