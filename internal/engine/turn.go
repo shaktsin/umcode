@@ -47,7 +47,6 @@ type resolved struct {
 	approvedCredentialID  string
 	approvedCredentialIDs []string
 	sel                   protocol.ModelSelection // what is used
-	auto                  bool                    // complexity picked by Auto
 	preset                protocol.ComplexityPreset
 	limits                protocol.ExecutionLimits
 	meta                  models.Meta
@@ -103,22 +102,12 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 	limits := e.turnLimits
 	e.mu.Unlock()
 	level := protocol.NormalizeComplexity(cplx)
-	if level == protocol.ComplexityAuto {
-		var previous protocol.Complexity
-		if models.IsContinuation(text) {
-			if turns, err := e.Store.ListTurns(ctx, th.ID); err == nil && len(turns) > 0 {
-				previous = turns[len(turns)-1].Resolved.Complexity
-				if previous == "" {
-					previous = turns[len(turns)-1].Selection.Complexity
-				}
-			}
-		}
-		level = models.ClassifyAuto(text, attachments, previous, th.ProjectID != "")
-		r.auto = true
+	if level == "" {
+		level = protocol.ComplexityMedium
 	}
 	preset, ok := presets[level]
 	if !ok {
-		preset = presets[protocol.ComplexityStandard]
+		preset = presets[protocol.ComplexityMedium]
 	}
 	r.preset = preset
 	r.limits = limits
@@ -132,7 +121,7 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 	}
 	plan, err := e.Router.Plan(ctx, router.Request{
 		Pinned:     pinned,
-		Level:      level,
+		Tier:       router.TierForStrategy(strategy),
 		Candidates: candidates,
 		Strategy:   strategy,
 		Need: router.Capabilities{
@@ -270,7 +259,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	}
 	turn := protocol.Turn{
 		ID: store.NewID("trn"), ThreadID: th.ID, Status: protocol.TurnRunning,
-		Selection: p.Override, Resolved: res.sel, AutoPicked: res.auto, StartedAt: time.Now().UTC(),
+		Selection: p.Override, Resolved: res.sel, StartedAt: time.Now().UTC(),
 	}
 	executionBase := e.baseCtx
 	if delegationChild(ctx) {

@@ -51,7 +51,7 @@ func addKey(t *testing.T, creds *credentials.Service, provider, label, secret st
 
 func TestPlanWithoutKeysExplainsItself(t *testing.T) {
 	r, _, _ := newRouter(t)
-	plan, err := r.Plan(context.Background(), Request{Level: protocol.ComplexityStandard})
+	plan, err := r.Plan(context.Background(), Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestPlanLinesUpFallbacks(t *testing.T) {
 	k1 := addKey(t, creds, "claude", "primary", "sk-one")
 	k2 := addKey(t, creds, "claude", "backup", "sk-two")
 
-	plan, err := r.Plan(ctx, Request{Level: protocol.ComplexityStandard, Need: Capabilities{Tools: true}})
+	plan, err := r.Plan(ctx, Request{Need: Capabilities{Tools: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestPinnedKeyIsExclusive(t *testing.T) {
 	addKey(t, creds, "claude", "primary", "sk-one")
 	k2 := addKey(t, creds, "claude", "backup", "sk-two")
 
-	plan, err := r.Plan(ctx, Request{Level: protocol.ComplexityStandard,
+	plan, err := r.Plan(ctx, Request{
 		Pinned: protocol.ModelSelection{CredentialID: k2.ID}, Need: Capabilities{Tools: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestCooldownRemovesARoute(t *testing.T) {
 	r, creds, st := newRouter(t)
 	k := addKey(t, creds, "claude", "only", "sk-one")
 
-	plan, _ := r.Plan(ctx, Request{Level: protocol.ComplexityStandard, Need: Capabilities{Tools: true}})
+	plan, _ := r.Plan(ctx, Request{Need: Capabilities{Tools: true}})
 	if len(plan.Routes) == 0 {
 		t.Fatal("no routes")
 	}
@@ -133,7 +133,7 @@ func TestCooldownRemovesARoute(t *testing.T) {
 	if err := st.RecordFailure(ctx, hot.Provider, hot.Model, k.ID, "rate_limited", "429", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	again, _ := r.Plan(ctx, Request{Level: protocol.ComplexityStandard, Need: Capabilities{Tools: true}})
+	again, _ := r.Plan(ctx, Request{Need: Capabilities{Tools: true}})
 	for _, rt := range again.Routes {
 		if rt.Same(hot) {
 			t.Fatalf("cooling-down route still offered: %+v", rt)
@@ -153,7 +153,7 @@ func TestCooldownRemovesARoute(t *testing.T) {
 	if err := st.ClearCooldown(ctx, hot.Provider, hot.Model, k.ID); err != nil {
 		t.Fatal(err)
 	}
-	back, _ := r.Plan(ctx, Request{Level: protocol.ComplexityStandard, Need: Capabilities{Tools: true}})
+	back, _ := r.Plan(ctx, Request{Need: Capabilities{Tools: true}})
 	var found bool
 	for _, rt := range back.Routes {
 		found = found || rt.Same(hot)
@@ -241,7 +241,7 @@ func TestExhaustedCreditRecordsHealthAndPreservesApprovedFallback(t *testing.T) 
 	r, creds, _ := newRouter(t)
 	addKey(t, creds, "claude", "primary", "sk-one")
 	addKey(t, creds, "openai", "fallback", "sk-two")
-	req := Request{Level: protocol.ComplexityStandard, Strategy: protocol.PoolPriority,
+	req := Request{Strategy: protocol.PoolPriority,
 		Candidates: []protocol.ConfiguredModel{
 			{ID: "claude", Provider: "claude", Model: "claude-sonnet-4-6", Enabled: true},
 			{ID: "openai", Provider: "openai", Model: "gpt-5.6-sol", Enabled: true},
@@ -295,7 +295,7 @@ func TestCandidatesAreTheOnlyModelsOffered(t *testing.T) {
 	cands := []protocol.ConfiguredModel{
 		{ID: "a", Name: "Haiku", Provider: "claude", Model: "claude-haiku-4-5-20251001", Enabled: true},
 	}
-	plan, err := r.Plan(ctx, Request{Level: protocol.ComplexityDeep, Candidates: cands,
+	plan, err := r.Plan(ctx, Request{Candidates: cands,
 		Strategy: protocol.PoolPriority, Need: Capabilities{Tools: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +320,7 @@ func TestPoolStrategiesOrderCandidates(t *testing.T) {
 	cands := []protocol.ConfiguredModel{cheap, strong}
 
 	first := func(strategy string) string {
-		plan, err := r.Plan(ctx, Request{Level: protocol.ComplexityStandard, Candidates: cands,
+		plan, err := r.Plan(ctx, Request{Candidates: cands,
 			Strategy: strategy, Need: Capabilities{Tools: true}})
 		if err != nil || len(plan.Routes) == 0 {
 			t.Fatalf("%s: %+v %v", strategy, plan, err)
@@ -348,7 +348,7 @@ func TestCandidateWithoutAKeyIsExplained(t *testing.T) {
 		{ID: "a", Provider: "claude", Model: "claude-sonnet-5", Enabled: true},
 		{ID: "b", Name: "GPT", Provider: "openai", Model: "gpt-5.6-sol", Enabled: true},
 	}
-	plan, err := r.Plan(ctx, Request{Level: protocol.ComplexityStandard, Candidates: cands,
+	plan, err := r.Plan(ctx, Request{Candidates: cands,
 		Strategy: protocol.PoolPriority, Need: Capabilities{Tools: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -372,14 +372,72 @@ func TestQualityOrderDoesNotRankLocalModelsAsReasoning(t *testing.T) {
 	r, _, _ := newRouter(t)
 	local := protocol.ConfiguredModel{ID: "l", Provider: "openai_compatible", Model: "qwen3.8", Enabled: true}
 	cloud := protocol.ConfiguredModel{ID: "c", Provider: "openai", Model: "gpt-4o-mini", Enabled: true}
-	got := r.order(ctx, []protocol.ConfiguredModel{cloud, local}, protocol.PoolQuality, "")
+	got := r.order(ctx, []protocol.ConfiguredModel{cloud, local}, protocol.PoolQuality, TierQuality)
 	if got[0].ID != cloud.ID {
 		t.Fatalf("quality order = %s first, want the cloud model kept ahead of an undetected local model", got[0].ID)
 	}
 	// A catalog reasoning model still outranks a non-reasoning one.
 	think := protocol.ConfiguredModel{ID: "t", Provider: "claude", Model: "claude-sonnet-4-6", Enabled: true}
-	got = r.order(ctx, []protocol.ConfiguredModel{cloud, think}, protocol.PoolQuality, "")
+	got = r.order(ctx, []protocol.ConfiguredModel{cloud, think}, protocol.PoolQuality, TierQuality)
 	if got[0].ID != think.ID {
 		t.Fatalf("catalog reasoning model should rank first, got %s", got[0].ID)
+	}
+}
+
+// The effort level is a model-call setting; it never changes which model runs.
+func TestPlanIgnoresEffortLevel(t *testing.T) {
+	ctx := context.Background()
+	r, creds, _ := newRouter(t)
+	addKey(t, creds, "claude", "only", "sk-one")
+	cands := []protocol.ConfiguredModel{
+		{ID: "h", Provider: "claude", Model: "claude-haiku-4-5-20251001", Enabled: true},
+		{ID: "o", Provider: "claude", Model: "claude-opus-5", Enabled: true},
+	}
+	ids := func(p *Plan) []string {
+		var out []string
+		for _, rt := range p.Routes {
+			out = append(out, rt.Model+"/"+rt.Why)
+		}
+		return out
+	}
+	for _, strategy := range []string{protocol.PoolPriority, protocol.PoolQuality, protocol.PoolCheap, protocol.PoolBalanced} {
+		var got [][]string
+		for range []string{"low", "high"} {
+			plan, err := r.Plan(ctx, Request{Candidates: cands, Strategy: strategy, Need: Capabilities{Tools: true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, ids(plan))
+		}
+		if strings.Join(got[0], ",") != strings.Join(got[1], ",") {
+			t.Fatalf("%s: routes differ: %v", strategy, got)
+		}
+	}
+}
+
+func TestStrategyTierOrdering(t *testing.T) {
+	ctx := context.Background()
+	r, creds, _ := newRouter(t)
+	addKey(t, creds, "claude", "only", "sk-one")
+	cheap := protocol.ConfiguredModel{ID: "h", Provider: "claude", Model: "claude-haiku-4-5-20251001", Enabled: true}
+	strong := protocol.ConfiguredModel{ID: "o", Provider: "claude", Model: "claude-opus-5", Enabled: true}
+	cands := []protocol.ConfiguredModel{cheap, strong}
+	first := func(tier string) string {
+		plan, err := r.Plan(ctx, Request{Candidates: cands, Tier: tier, Strategy: protocol.PoolBalanced, Need: Capabilities{Tools: true}})
+		if err != nil || len(plan.Routes) == 0 {
+			t.Fatalf("%s: %+v %v", tier, plan, err)
+		}
+		return plan.Routes[0].Model
+	}
+	if got := first("quality"); got != strong.Model {
+		t.Fatalf("quality tier picked %s", got)
+	}
+	if got := first("cheap"); got != cheap.Model {
+		t.Fatalf("cheap tier picked %s", got)
+	}
+	if TierForStrategy(protocol.PoolQuality) != "quality" || TierForStrategy(protocol.PoolFast) != "cheap" ||
+		TierForStrategy(protocol.PoolCheap) != "cheap" || TierForStrategy(protocol.PoolBalanced) != "" ||
+		TierForStrategy(protocol.PoolPriority) != "" {
+		t.Fatal("TierForStrategy mapping")
 	}
 }

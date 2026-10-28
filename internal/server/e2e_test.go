@@ -361,17 +361,17 @@ func TestDeniedToolAndHistory(t *testing.T) {
 	if turn.Status != protocol.TurnCompleted || len(tools) != 1 || tools[0].Status != protocol.ItemDenied {
 		t.Fatalf("turn=%+v tools=%+v", turn, tools)
 	}
-	// Second turn sends earlier text history and uses quick for a short message (auto).
+	// Second turn sends earlier text history; the level is no longer guessed from the message.
 	h.fake.push(textReply("hi!"))
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "hi"}, &res)
-	if !res.Turn.AutoPicked || res.Turn.Resolved.Complexity != protocol.ComplexityQuick {
-		t.Fatalf("auto: %+v", res.Turn)
+	if res.Turn.AutoPicked || res.Turn.Resolved.Complexity != protocol.ComplexityMedium {
+		t.Fatalf("level: %+v", res.Turn)
 	}
 	h.waitTurn(res.Turn.ID, nil)
 	h.fake.mu.Lock()
 	req := h.fake.calls[len(h.fake.calls)-1]
 	h.fake.mu.Unlock()
-	if !strings.HasPrefix(req.Messages[0].JoinedText(), "delete it") || !strings.Contains(req.Messages[0].JoinedText(), "Historical execution records") || req.Reasoning != llm.ReasoningOff {
+	if !strings.HasPrefix(req.Messages[0].JoinedText(), "delete it") || !strings.Contains(req.Messages[0].JoinedText(), "Historical execution records") || req.Reasoning != llm.ReasoningMedium {
 		t.Fatalf("history/reasoning: %+v", req)
 	}
 }
