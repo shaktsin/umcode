@@ -279,7 +279,7 @@ func TestChatWithApprovedShellTool(t *testing.T) {
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "run echo please",
 		Override: protocol.ModelSelection{Model: "claude-sonnet-4-6", Complexity: protocol.ComplexityDeep}}, &res)
-	if res.Turn.Resolved.Provider != "claude" || res.Turn.Resolved.CredentialID != key.ID || res.Turn.Resolved.Complexity != "deep" {
+	if res.Turn.Resolved.Provider != "claude" || res.Turn.Resolved.CredentialID != key.ID || res.Turn.Resolved.Complexity != "high" {
 		t.Fatalf("resolved = %+v", res.Turn.Resolved)
 	}
 	var approvals []protocol.Approval
@@ -516,7 +516,7 @@ func TestThreadManagementAndModels(t *testing.T) {
 	d.Default = protocol.ComplexityStandard
 	d.Limits.MaxToolRounds = 50
 	h.call(protocol.MethodComplexitySetDefaults, d, &d)
-	if d.Default != "standard" || d.Limits.MaxToolRounds != 50 || d.Presets[0].MaxToolSteps != 50 {
+	if d.Default != "medium" || d.Limits.MaxToolRounds != 50 || d.Presets[0].MaxToolSteps != 50 {
 		t.Fatalf("complexity = %+v", d)
 	}
 	var creds protocol.CredentialListResult
@@ -901,7 +901,7 @@ func TestScheduledTasks(t *testing.T) {
 	}
 	var read protocol.ThreadReadResult
 	h.call(protocol.MethodThreadRead, protocol.ThreadIDParams{ThreadID: got.ThreadID}, &read)
-	if read.Thread.Title != "Task: inbox" || read.Thread.Channel != "task" || read.Turns[0].Resolved.Complexity != "quick" {
+	if read.Thread.Title != "Task: inbox" || read.Thread.Channel != "task" || read.Turns[0].Resolved.Complexity != "low" {
 		t.Fatalf("task thread = %+v turns=%+v", read.Thread, read.Turns)
 	}
 
