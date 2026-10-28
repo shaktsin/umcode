@@ -664,7 +664,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	}
 
 	req := llm.Request{
-		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, "", hookContext), Tools: specs, MaxTokens: res.preset.MaxOutputTokens,
+		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, "", hookContext), Tools: specs,
 	}
 	if res.meta.Reasoning {
 		req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
@@ -1150,7 +1150,7 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 		input := int64(report.EstimatedInput)
 		output := int64(req.MaxTokens)
 		if output <= 0 {
-			output = int64(res.preset.MaxOutputTokens)
+			output = int64(report.ReservedOutput)
 		}
 		if output <= 0 {
 			return out, errors.New("delegation request requires a bounded response allowance")

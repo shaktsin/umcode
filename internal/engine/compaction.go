@@ -167,10 +167,7 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 	if !ok {
 		return fmt.Errorf("unknown provider %q for chat compaction", selection.sel.Provider)
 	}
-	maxOutput := selection.preset.MaxOutputTokens
-	if maxOutput <= 0 || maxOutput > 2400 {
-		maxOutput = 1800
-	}
+	maxOutput := compactionMaxOutput
 	request := llm.Request{
 		Model:     selection.sel.Model,
 		System:    "Summarize this coding conversation for continuation in the same chat. Preserve the user's goal and constraints, decisions, relevant project/file facts, changes already made, checks and their outcomes, unresolved issues, and the next concrete steps. Do not invent facts or claim unverified checks passed. Be concise, but retain details needed to continue the work. Return only the summary.",

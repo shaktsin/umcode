@@ -120,6 +120,13 @@ func (e *Engine) SetModelCapacity(ctx context.Context, p protocol.ModelCapacityP
 // limit the server reports, and observed usage near it raises it.
 const DefaultContextWindow = 256000
 
+// compactionMaxOutput and taskIntentMaxOutput bound the short auxiliary
+// requests; they are independent of the effort level.
+const (
+	compactionMaxOutput = 1800
+	taskIntentMaxOutput = 2048
+)
+
 // minLearnedWindow keeps a guessed window from collapsing below a usable size.
 const minLearnedWindow = 8192
 
@@ -321,6 +328,12 @@ func (e *Engine) resolveCapacity(ctx context.Context, res resolved) (models.Capa
 	}
 	if profile.MaxOutputTokens != nil && (cap.MaxOutput == 0 || *profile.MaxOutputTokens < cap.MaxOutput) {
 		cap.MaxOutput = *profile.MaxOutputTokens
+	}
+	if cap.MaxOutput == 0 {
+		cap.MaxOutput = 32768
+		if e.Cfg != nil && e.Cfg.Models.DefaultMaxOutputTokens > 0 {
+			cap.MaxOutput = e.Cfg.Models.DefaultMaxOutputTokens
+		}
 	}
 	if cap.MaxOutput > cap.Window {
 		cap.MaxOutput = cap.Window
