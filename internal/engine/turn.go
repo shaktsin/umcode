@@ -56,6 +56,8 @@ type resolved struct {
 	route                 router.Route
 	plan                  *router.Plan
 	trail                 []protocol.RouteStep
+	effortRound           int  // model requests already made in this turn
+	effortAfterFailure    bool // the previous round ended in a failed tool call
 }
 
 // use points the resolved selection at a route.
@@ -667,9 +669,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	req := llm.Request{
 		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, "", hookContext), Tools: specs,
 	}
-	if res.meta.CatalogReasoning() {
-		req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
-	}
+	e.applyEffort(ctx, &res, &req, 0, false)
 
 	var turnErr error
 	var reductions ToolReductions
@@ -677,6 +677,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		reductions = make(ToolReductions)
 	}
 	toolOccurrences := make(map[string]int)
+	effortRound, effortAfterFailure := 0, false
 	instructionHint := ""
 	for {
 		if childExecutionFrom(ctx) != nil {
@@ -750,7 +751,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			diagnostic.ToolNames = append(diagnostic.ToolNames, spec.Name)
 		}
 		recorderFrom(ctx).prepare(diagnostic)
+		res.effortRound, res.effortAfterFailure = effortRound, effortAfterFailure
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
+		effortRound++
+		effortAfterFailure = false
 		if res.contextReduced {
 			msgs = cloneModelRequest(llm.Request{Messages: res.workingMessages}).Messages
 			liveFrom = 0
@@ -825,6 +829,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				reductions[key] = toolResult.Reduction
 			}
 			lastToolMsg = len(msgs) - 1
+			effortAfterFailure = isErr
 			toolName := tools.FromWire(call.Name)
 			if !isErr && res.meta.Images && (strings.HasPrefix(toolName, "visual.") || strings.HasPrefix(toolName, "computer.")) {
 				if image := visualEvidenceMessage(ctx, result, toolName); image != nil {
@@ -1006,7 +1011,8 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 	req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
 	contextRetried := false
 	continuations := 0
-	reasoning := res.preset.Reasoning
+	lowered := 0
+	templateRetried := false
 	tail := 0 // trailing continuation messages in req.Messages, never stored as working context
 	var partial strings.Builder
 	defer func() { res.continuationTail = 0 }()
@@ -1027,11 +1033,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return modelOutput{}, fmt.Errorf("unknown provider %q", res.sel.Provider)
 		}
 		req.Model = res.sel.Model
-		if res.meta.CatalogReasoning() {
-			req.Reasoning, req.ReasoningStyle = reasoning, res.meta.ReasoningStyle
-		} else {
-			req.Reasoning, req.ReasoningStyle = "", ""
-		}
+		e.applyEffortLowered(ctx, res, &req, res.effortRound, res.effortAfterFailure, lowered)
 		start := time.Now()
 		res.continuationTail = tail
 		prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, res, req, role, budget)
@@ -1084,9 +1086,17 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			}
 			req.Messages = append(msgs, llm.Message{Role: llm.RoleUser, Parts: textParts(continueNudge)})
 			tail++
-			if res.meta.CatalogReasoning() && mostlyReasoning(interrupted.Usage) {
-				reasoning = lowerLevel(reasoning)
+			if mostlyReasoning(interrupted.Usage) {
+				lowered++
 			}
+			continue
+		}
+		if !templateRetried && templateKwargsRejected(err, req.TemplateKwargs) {
+			// The server does not accept the thinking controls: remember that
+			// and retry the call once without them.
+			templateRetried = true
+			e.disableTemplateKwargs(res)
+			req.Messages = prepared.Messages
 			continue
 		}
 		if confirmedContextOverflow(err) {

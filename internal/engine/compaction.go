@@ -174,9 +174,7 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 		Messages:  []llm.Message{llm.Text(llm.RoleUser, transcript)},
 		MaxTokens: maxOutput,
 	}
-	if selection.meta.CatalogReasoning() {
-		request.Reasoning, request.ReasoningStyle = selection.preset.Reasoning, selection.meta.ReasoningStyle
-	}
+	e.applyEffort(ctx, &selection, &request, 0, false)
 	compactCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	started := time.Now()
