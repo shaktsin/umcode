@@ -145,6 +145,10 @@ type RuntimeConfig struct {
 	SocketPath string `yaml:"socket_path"`
 }
 
+// DefaultMaxOutputTokens is the output limit used for a model whose own
+// maximum is unknown, unless models.default_max_output_tokens overrides it.
+const DefaultMaxOutputTokens = 32768
+
 // ModelsConfig holds new model-selection settings.
 type ModelsConfig struct {
 	// DefaultComplexity is the default effort level: low | medium | high.
@@ -340,7 +344,7 @@ func Default(home string) *Config {
 		},
 		Policy: PolicyConfig{ApprovalTimeoutMinutes: 30},
 		Memory: MemoryConfig{TargetFileBytes: 4096},
-		Models: ModelsConfig{DefaultComplexity: "medium", DefaultMaxOutputTokens: 32768, ExecutionLimits: ExecutionLimits{
+		Models: ModelsConfig{DefaultComplexity: "medium", DefaultMaxOutputTokens: DefaultMaxOutputTokens, ExecutionLimits: ExecutionLimits{
 			MaxDurationMinutes: 120, MaxTokens: 1_000_000, MaxCostUSD: 10, MaxToolRounds: 200,
 		}},
 	}
@@ -371,7 +375,7 @@ func (c *Config) finalize() {
 	}
 	c.Models.DefaultComplexity = string(protocol.NormalizeComplexity(c.Models.DefaultComplexity))
 	if c.Models.DefaultMaxOutputTokens == 0 {
-		c.Models.DefaultMaxOutputTokens = 32768
+		c.Models.DefaultMaxOutputTokens = DefaultMaxOutputTokens
 	}
 	if c.Models.ExecutionLimits.MaxDurationMinutes == 0 {
 		c.Models.ExecutionLimits.MaxDurationMinutes = 120

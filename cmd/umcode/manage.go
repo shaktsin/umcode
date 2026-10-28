@@ -600,14 +600,15 @@ func runComplexity(args []string) error {
 }
 
 // renderComplexityDefaults formats the default level and the level table.
-// Levels set only how much the model thinks; output limits are per model.
+// Levels are only names: how much a model thinks at each is decided per model,
+// and output limits are per model too.
 func renderComplexityDefaults(d protocol.ComplexityDefaults) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "default: %s\ndefault max output tokens: %d\n\n", d.Default, d.DefaultMaxOutputTokens)
 	w := tabwriter.NewWriter(&sb, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "LEVEL\tREASONING")
+	fmt.Fprintln(w, "LEVEL")
 	for _, p := range d.Presets {
-		fmt.Fprintf(w, "%s\t%s\n", p.Level, p.Reasoning)
+		fmt.Fprintf(w, "%s\n", p.Level)
 	}
 	w.Flush()
 	return sb.String()

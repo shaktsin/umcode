@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -330,7 +331,7 @@ func (e *Engine) resolveCapacity(ctx context.Context, res resolved) (models.Capa
 		cap.MaxOutput = *profile.MaxOutputTokens
 	}
 	if cap.MaxOutput == 0 {
-		cap.MaxOutput = 32768
+		cap.MaxOutput = config.DefaultMaxOutputTokens
 		if n := e.defaultMaxOut.Load(); n > 0 {
 			cap.MaxOutput = int(n)
 		} else if e.Cfg != nil && e.Cfg.Models.DefaultMaxOutputTokens > 0 {

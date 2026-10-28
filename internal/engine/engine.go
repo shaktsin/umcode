@@ -882,6 +882,10 @@ func (e *Engine) SetComplexityDefaults(ctx context.Context, d protocol.Complexit
 	e.turnLimits = d.Limits
 	e.mu.Unlock()
 	e.defaultMaxOut.Store(int64(d.DefaultMaxOutputTokens))
+	// Cached capacities embed the old default, so drop them.
+	e.capacityMu.Lock()
+	clear(e.capacityCache)
+	e.capacityMu.Unlock()
 	return e.ComplexityDefaults(), nil
 }
 

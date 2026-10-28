@@ -174,22 +174,27 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 		Messages:  []llm.Message{llm.Text(llm.RoleUser, transcript)},
 		MaxTokens: maxOutput,
 	}
-	e.applyEffort(ctx, &selection, &request, 0, false)
+	e.applyAuxEffort(ctx, &selection, &request)
 	compactCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	started := time.Now()
 	var summary strings.Builder
 	var usage llm.Usage
 	shared := delegation.BudgetFromContext(ctx)
-	if shared != nil {
-		budget := newTurnBudget(selection.limits)
-		budget.shared = shared
-		out, err := e.streamOnce(compactCtx, sctx, turns[len(turns)-1], selection, selection.cred, provider, request, "compaction", budget)
-		if err != nil {
-			return fmt.Errorf("compact chat context: %w", err)
+	base := request
+	attempt := func() error {
+		summary.Reset()
+		request = base
+		if shared != nil {
+			budget := newTurnBudget(selection.limits)
+			budget.shared = shared
+			out, err := e.streamOnce(compactCtx, sctx, turns[len(turns)-1], selection, selection.cred, provider, request, "compaction", budget)
+			if err != nil {
+				return err
+			}
+			summary.WriteString(out.text)
+			return nil
 		}
-		summary.WriteString(out.text)
-	} else {
 		prepared, report, err := e.prepareModelRequest(compactCtx, sctx, turns[len(turns)-1], &selection, request, "compaction", newTurnBudget(selection.limits))
 		if err != nil {
 			return err
@@ -197,7 +202,7 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 		request = prepared
 		events, err := provider.Stream(compactCtx, selection.cred.Material, request)
 		if err != nil {
-			return fmt.Errorf("compact chat context: %w", err)
+			return err
 		}
 		for event := range events {
 			switch event.Type {
@@ -207,11 +212,23 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 				usage = event.Usage
 			case llm.EventError:
 				if event.Err != nil {
-					return fmt.Errorf("compact chat context: %w", event.Err)
+					return event.Err
 				}
 			}
 		}
 		e.observeRequestUsage(selection, report, usage.InputTokens, usage.Reported)
+		return nil
+	}
+	err = attempt()
+	if err != nil && templateKwargsRejected(err, base.TemplateKwargs) {
+		// The server does not accept the thinking controls: remember that and
+		// retry once without them.
+		e.disableTemplateKwargs(&selection)
+		e.applyAuxEffort(ctx, &selection, &base)
+		err = attempt()
+	}
+	if err != nil {
+		return fmt.Errorf("compact chat context: %w", err)
 	}
 	if err := compactCtx.Err(); err != nil {
 		return fmt.Errorf("compact chat context: %w", err)

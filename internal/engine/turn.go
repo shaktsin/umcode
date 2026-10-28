@@ -47,7 +47,6 @@ type resolved struct {
 	approvedCredentialID  string
 	approvedCredentialIDs []string
 	sel                   protocol.ModelSelection // what is used
-	preset                protocol.ComplexityPreset
 	limits                protocol.ExecutionLimits
 	meta                  models.Meta
 	cred                  credentials.Resolved
@@ -98,18 +97,12 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 
 	e.mu.Lock()
 	cplx := firstNonEmpty(string(o.Complexity), string(ts.Complexity), string(e.defaultCplx))
-	presets := e.presets
 	limits := e.turnLimits
 	e.mu.Unlock()
 	level := protocol.NormalizeComplexity(cplx)
 	if level == "" {
 		level = protocol.ComplexityMedium
 	}
-	preset, ok := presets[level]
-	if !ok {
-		preset = presets[protocol.ComplexityMedium]
-	}
-	r.preset = preset
 	r.limits = limits
 	r.sel = protocol.ModelSelection{Complexity: level}
 
@@ -675,6 +668,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			msgs, added, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
 			if added {
 				res.currentInput = cloneModelRequest(llm.Request{Messages: msgs[len(msgs)-1:]}).Messages[0]
+				effortAfterFailure = true
 			}
 			if followErr != nil {
 				turnErr = followErr
@@ -793,6 +787,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 					break
 				}
 				if added {
+					effortAfterFailure = true // follow-ups start at the full level
 					continue
 				}
 			}
@@ -818,7 +813,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				reductions[key] = toolResult.Reduction
 			}
 			lastToolMsg = len(msgs) - 1
-			effortAfterFailure = isErr
+			effortAfterFailure = effortAfterFailure || isErr
 			toolName := tools.FromWire(call.Name)
 			if !isErr && res.meta.Images && (strings.HasPrefix(toolName, "visual.") || strings.HasPrefix(toolName, "computer.")) {
 				if image := visualEvidenceMessage(ctx, result, toolName); image != nil {
@@ -1022,7 +1017,11 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return modelOutput{}, fmt.Errorf("unknown provider %q", res.sel.Provider)
 		}
 		req.Model = res.sel.Model
-		e.applyEffortLowered(ctx, res, &req, res.effortRound, res.effortAfterFailure, lowered)
+		if role == "task_intent" {
+			e.applyAuxEffort(ctx, res, &req)
+		} else {
+			e.applyEffortLowered(ctx, res, &req, res.effortRound, res.effortAfterFailure, lowered)
+		}
 		start := time.Now()
 		res.continuationTail = tail
 		prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, res, req, role, budget)
@@ -1055,7 +1054,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return out, err
 		}
 		var interrupted *outputInterruptionError
-		if role == "chat" && errors.As(err, &interrupted) && interrupted.Kind == interruptionOutput && continuations < maxOutputContinuations && budget.stopReason() == "" && (budget.shared == nil || budget.shared.Err() == nil) {
+		if role == "chat" && childExecutionFrom(ctx) == nil && errors.As(err, &interrupted) && interrupted.Kind == interruptionOutput && continuations < maxOutputContinuations && budget.stopReason() == "" && (budget.shared == nil || budget.shared.Err() == nil) {
 			// The cut-off response is kept as an assistant message and the model
 			// is asked to carry on. Its incomplete tool call is never replayed.
 			continuations++
@@ -1299,6 +1298,7 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 	}
 	var msgItem *protocol.Item
 	var text strings.Builder
+	var reasoningChars int
 	var done *llm.Event
 	var failureUsage llm.Usage
 	var streamErr error
@@ -1321,6 +1321,7 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 			text.WriteString(ev.Text)
 			e.publishTurnEvent(ctx, turn.ThreadID, protocol.NotifyItemDelta, protocol.ItemDelta{ThreadID: turn.ThreadID, TurnID: turn.ID, ItemID: msgItem.ID, Text: ev.Text})
 		case llm.EventReasoningDelta:
+			reasoningChars += len(ev.Text)
 			if ev.Thinking != nil {
 				out.thinking = append(out.thinking, *ev.Thinking)
 			}
@@ -1357,7 +1358,13 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 		_ = e.saveAndPublish(sctx, *it, protocol.NotifyItemCompleted)
 	}
 	if streamErr == nil && done != nil && outputLimitStop(done.StopReason) {
-		streamErr = &outputInterruptionError{Kind: classifyOutputInterruption(done.StopReason, done.Usage, report, false), Usage: done.Usage}
+		interruptedUsage := done.Usage
+		if interruptedUsage.ReasoningTokens == 0 && reasoningChars > 0 {
+			// Many providers do not report reasoning tokens separately: fall
+			// back to the size of the reasoning text that was streamed.
+			interruptedUsage.ReasoningTokens = int64(reasoningChars+3) / 4
+		}
+		streamErr = &outputInterruptionError{Kind: classifyOutputInterruption(done.StopReason, done.Usage, report, false), Usage: interruptedUsage}
 	}
 	failed := streamErr != nil || ctx.Err() != nil
 	finish(msgItem, out.text, failed)

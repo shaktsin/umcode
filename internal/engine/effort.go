@@ -114,6 +114,30 @@ func (e *Engine) applyEffort(ctx context.Context, res *resolved, req *llm.Reques
 // applyEffortLowered is applyEffort with extra downshifts, used when a
 // continuation follows a response that was mostly reasoning.
 func (e *Engine) applyEffortLowered(ctx context.Context, res *resolved, req *llm.Request, round int, afterFailure bool, lowered int) {
+	e.applyLevel(ctx, res, req, func(chosen string) string {
+		level := roundEffort(chosen, res.meta.SelfAdapting, round, afterFailure)
+		for range lowered {
+			level = lowerLevel(level)
+		}
+		return level
+	})
+}
+
+// applyAuxEffort sets the thinking controls for an auxiliary call with a small
+// fixed output cap (compaction, task intent). Self-adapting models keep the
+// chosen level; others do not think, so the cap is not spent on reasoning.
+func (e *Engine) applyAuxEffort(ctx context.Context, res *resolved, req *llm.Request) {
+	e.applyLevel(ctx, res, req, func(chosen string) string {
+		if res.meta.SelfAdapting {
+			return chosen
+		}
+		return "off"
+	})
+}
+
+// applyLevel clears and then sets req's thinking controls from the level pick
+// returns for the model's chosen level.
+func (e *Engine) applyLevel(ctx context.Context, res *resolved, req *llm.Request, pick func(chosen string) string) {
 	req.Reasoning, req.ReasoningStyle, req.TemplateKwargs = "", "", nil
 	if !res.meta.Reasoning {
 		return
@@ -122,10 +146,7 @@ func (e *Engine) applyEffortLowered(ctx context.Context, res *resolved, req *llm
 	if !ok {
 		return
 	}
-	level := roundEffort(chosen, res.meta.SelfAdapting, round, afterFailure)
-	for range lowered {
-		level = lowerLevel(level)
-	}
+	level := pick(chosen)
 	if res.meta.CatalogReasoning() {
 		req.Reasoning, req.ReasoningStyle = level, res.meta.ReasoningStyle
 		return

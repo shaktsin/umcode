@@ -18,7 +18,7 @@ func TestPresetsTableHasNoCapColumn(t *testing.T) {
 		},
 	}
 	out := renderComplexityDefaults(d)
-	for _, bad := range []string{"MAX", "OUTPUT TOKENS", "auto"} {
+	for _, bad := range []string{"MAX", "OUTPUT TOKENS", "REASONING", "auto"} {
 		if strings.Contains(out, bad) {
 			t.Fatalf("table mentions %q:\n%s", bad, out)
 		}
