@@ -24,6 +24,10 @@ func classifyOutputInterruption(reason string, usage llm.Usage, r requestBudgetR
 	switch strings.ToLower(reason) {
 	case "max_tokens", "max_output_tokens":
 		return interruptionOutput
+	case "length":
+		// Admission keeps input plus reserved output inside the window, so a
+		// length stop is the output cap unless usage showed the window used up.
+		return interruptionOutput
 	}
 	if usage.Reported && r.ReservedOutput > 0 && usage.OutputTokens >= int64(r.ReservedOutput) {
 		return interruptionOutput

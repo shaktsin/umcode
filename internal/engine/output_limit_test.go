@@ -97,7 +97,7 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 			}
 			// A confirmed output cut-off is continued twice, then fails.
 			wantCalls := 1
-			if tc.failed && strings.ToLower(tc.reason) != "length" {
+			if tc.failed {
 				wantCalls = 1 + maxOutputContinuations
 			}
 			if provider.calls != wantCalls {

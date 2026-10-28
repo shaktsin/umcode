@@ -10,8 +10,14 @@ import (
 
 func TestLengthStopDoesNotInventContextCause(t *testing.T) {
 	r := requestBudgetReport{Window: 32768, ReservedOutput: 4096}
-	if got := classifyOutputInterruption("length", llm.Usage{Reported: true, InputTokens: 1000, OutputTokens: 20}, r, false); got != interruptionUnknown {
-		t.Fatal(got)
+	if got := classifyOutputInterruption("length", llm.Usage{Reported: true, InputTokens: 1000, OutputTokens: 20}, r, false); got != interruptionOutput {
+		t.Fatal("length with headroom must be the output cap:", got)
+	}
+	if got := classifyOutputInterruption("LENGTH", llm.Usage{}, r, false); got != interruptionOutput {
+		t.Fatal("length with unreported usage must be the output cap:", got)
+	}
+	if got := classifyOutputInterruption("length", llm.Usage{Reported: true, InputTokens: 30000, OutputTokens: 2768}, r, false); got != interruptionContext {
+		t.Fatal("length with the window consumed must be context:", got)
 	}
 	if got := classifyOutputInterruption("length", llm.Usage{Reported: true, InputTokens: 30952, OutputTokens: 1816}, r, false); got != interruptionContext {
 		t.Fatal(got)

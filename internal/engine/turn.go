@@ -39,6 +39,7 @@ const historyLimit = 60
 type resolved struct {
 	currentInput          llm.Message
 	workingMessages       []llm.Message
+	continuationTail      int // trailing continuation messages in the request being prepared
 	contextReduced        bool
 	forceCompaction       bool
 	retryCause            string
@@ -964,6 +965,14 @@ func instructionPathHint(args json.RawMessage) string {
 	return ""
 }
 
+// dropTail removes the last n messages (continuation scaffolding).
+func dropTail(msgs []llm.Message, n int) []llm.Message {
+	if n <= 0 || n > len(msgs) {
+		return msgs
+	}
+	return msgs[:len(msgs)-n]
+}
+
 func textParts(s string) []llm.Part {
 	if s == "" {
 		return nil
@@ -998,7 +1007,9 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 	contextRetried := false
 	continuations := 0
 	reasoning := res.preset.Reasoning
+	tail := 0 // trailing continuation messages in req.Messages, never stored as working context
 	var partial strings.Builder
+	defer func() { res.continuationTail = 0 }()
 	for {
 		if x := childExecutionFrom(ctx); x != nil {
 			if err := e.recordChildModel(sctx, x, res.sel); err != nil {
@@ -1022,6 +1033,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			req.Reasoning, req.ReasoningStyle = "", ""
 		}
 		start := time.Now()
+		res.continuationTail = tail
 		prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, res, req, role, budget)
 		if err != nil {
 			d := budgetDiagnostics(recorderFrom(ctx).template(), report)
@@ -1037,7 +1049,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return modelOutput{}, err
 		}
 		if res.contextReduced {
-			res.workingMessages = prepared.Messages
+			res.workingMessages = dropTail(prepared.Messages, tail)
 		}
 		out, err := e.streamPrepared(ctx, sctx, turn, *res, res.cred, provider, prepared, report, role, budget)
 		if err == nil {
@@ -1052,17 +1064,26 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return out, err
 		}
 		var interrupted *outputInterruptionError
-		if errors.As(err, &interrupted) && interrupted.Kind == interruptionOutput && continuations < maxOutputContinuations && budget.stopReason() == "" && (budget.shared == nil || budget.shared.Err() == nil) {
+		if role == "chat" && errors.As(err, &interrupted) && interrupted.Kind == interruptionOutput && continuations < maxOutputContinuations && budget.stopReason() == "" && (budget.shared == nil || budget.shared.Err() == nil) {
 			// The cut-off response is kept as an assistant message and the model
 			// is asked to carry on. Its incomplete tool call is never replayed.
 			continuations++
 			e.Router.Succeeded(sctx, res.route, time.Since(start))
 			partial.WriteString(out.text)
+			// The cut-off attempt recovered, so its item is not shown as failed.
+			if out.messageID != "" {
+				if it, getErr := e.Store.GetItem(sctx, out.messageID); getErr == nil {
+					it.Status, it.Data = protocol.ItemCompleted, nil
+					_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+				}
+			}
 			msgs := append([]llm.Message(nil), prepared.Messages...)
 			if out.text != "" {
 				msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Parts: textParts(out.text)})
+				tail++
 			}
 			req.Messages = append(msgs, llm.Message{Role: llm.RoleUser, Parts: textParts(continueNudge)})
+			tail++
 			if res.meta.Reasoning && mostlyReasoning(interrupted.Usage) {
 				reasoning = lowerLevel(reasoning)
 			}
