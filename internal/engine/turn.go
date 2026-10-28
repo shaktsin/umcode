@@ -971,7 +971,7 @@ func textParts(s string) []llm.Part {
 	return []llm.Part{{Type: "text", Text: s}}
 }
 
-var errModelOutputLimit = errors.New("model response reached its output limit; work is incomplete. Partial text was saved and incomplete tool calls were not executed. Use a larger response limit or a higher complexity setting, then continue")
+var errModelOutputLimit = errors.New("model response reached its output limit; work is incomplete. Partial text was saved and incomplete tool calls were not executed. Raise the model's output limit in Model settings (or models.default_max_output_tokens for models with unknown limits), then continue")
 
 func outputLimitStop(reason string) bool {
 	switch strings.ToLower(reason) {
@@ -996,6 +996,9 @@ type modelOutput struct {
 func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *resolved,
 	req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
 	contextRetried := false
+	continuations := 0
+	reasoning := res.preset.Reasoning
+	var partial strings.Builder
 	for {
 		if x := childExecutionFrom(ctx); x != nil {
 			if err := e.recordChildModel(sctx, x, res.sel); err != nil {
@@ -1014,7 +1017,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 		}
 		req.Model = res.sel.Model
 		if res.meta.Reasoning {
-			req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
+			req.Reasoning, req.ReasoningStyle = reasoning, res.meta.ReasoningStyle
 		} else {
 			req.Reasoning, req.ReasoningStyle = "", ""
 		}
@@ -1040,10 +1043,30 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 		if err == nil {
 			e.Router.Succeeded(sctx, res.route, time.Since(start))
 			res.trail = append(res.trail, step(res.route, "used", "", time.Since(start)))
+			if partial.Len() > 0 {
+				out.text = partial.String() + out.text
+			}
 			return out, nil
 		}
 		if ctx.Err() != nil {
 			return out, err
+		}
+		var interrupted *outputInterruptionError
+		if errors.As(err, &interrupted) && interrupted.Kind == interruptionOutput && continuations < maxOutputContinuations && budget.stopReason() == "" && (budget.shared == nil || budget.shared.Err() == nil) {
+			// The cut-off response is kept as an assistant message and the model
+			// is asked to carry on. Its incomplete tool call is never replayed.
+			continuations++
+			e.Router.Succeeded(sctx, res.route, time.Since(start))
+			partial.WriteString(out.text)
+			msgs := append([]llm.Message(nil), prepared.Messages...)
+			if out.text != "" {
+				msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Parts: textParts(out.text)})
+			}
+			req.Messages = append(msgs, llm.Message{Role: llm.RoleUser, Parts: textParts(continueNudge)})
+			if res.meta.Reasoning && mostlyReasoning(interrupted.Usage) {
+				reasoning = lowerLevel(reasoning)
+			}
+			continue
 		}
 		if confirmedContextOverflow(err) {
 			if budget.stopReason() != "" {
@@ -1314,7 +1337,7 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 		_ = e.saveAndPublish(sctx, *it, protocol.NotifyItemCompleted)
 	}
 	if streamErr == nil && done != nil && outputLimitStop(done.StopReason) {
-		streamErr = &outputInterruptionError{Kind: classifyOutputInterruption(done.StopReason, done.Usage, report, false)}
+		streamErr = &outputInterruptionError{Kind: classifyOutputInterruption(done.StopReason, done.Usage, report, false), Usage: done.Usage}
 	}
 	failed := streamErr != nil || ctx.Err() != nil
 	finish(msgItem, out.text, failed)

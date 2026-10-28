@@ -95,8 +95,13 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 			case <-time.After(15 * time.Second):
 				t.Fatal("turn did not finish")
 			}
-			if provider.calls != 1 {
-				t.Fatalf("unbounded or unexpected retries: %d", provider.calls)
+			// A confirmed output cut-off is continued twice, then fails.
+			wantCalls := 1
+			if tc.failed && strings.ToLower(tc.reason) != "length" {
+				wantCalls = 1 + maxOutputContinuations
+			}
+			if provider.calls != wantCalls {
+				t.Fatalf("unbounded or unexpected retries: %d, want %d", provider.calls, wantCalls)
 			}
 			items, err := st.ListItems(t.Context(), th.ID, 0)
 			if err != nil {
@@ -121,10 +126,11 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 			if err = json.Unmarshal(b, &decoded); err != nil {
 				t.Fatal(err)
 			}
-			if len(decoded.Requests) != 1 || decoded.Requests[0].StopReason != tc.reason {
+			last := len(decoded.Requests) - 1
+			if len(decoded.Requests) != wantCalls || decoded.Requests[last].StopReason != tc.reason {
 				t.Fatalf("stop reason lost: %s", b)
 			}
-			if tc.failed && decoded.Requests[0].Fallback != "output_limit" {
+			if tc.failed && decoded.Requests[last].Fallback != "output_limit" {
 				t.Fatalf("truncation diagnostic missing: %s", b)
 			}
 		})

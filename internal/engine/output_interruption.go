@@ -31,14 +31,27 @@ func classifyOutputInterruption(reason string, usage llm.Usage, r requestBudgetR
 	return interruptionUnknown
 }
 
-type outputInterruptionError struct{ Kind outputInterruptionKind }
+// maxOutputContinuations bounds the automatic continuations of one model call.
+const maxOutputContinuations = 2
+
+const continueNudge = "Continue from where you stopped."
+
+// mostlyReasoning reports whether thinking used more than half of the output.
+func mostlyReasoning(usage llm.Usage) bool {
+	return usage.Reported && usage.ReasoningTokens*2 > usage.OutputTokens
+}
+
+type outputInterruptionError struct {
+	Kind  outputInterruptionKind
+	Usage llm.Usage
+}
 
 func (e *outputInterruptionError) Error() string {
 	switch e.Kind {
 	case interruptionContext:
 		return "model response interrupted: context window exhausted; work is incomplete. Partial text was saved and incomplete tool calls were not executed. Original sources remain saved."
 	case interruptionOutput:
-		return "model response reached its output limit; work is incomplete. Partial text was saved and incomplete tool calls were not executed. Continue with a larger response allowance if endpoint capacity permits."
+		return "model response reached its output limit after automatic continuation attempts; work is incomplete. Partial text was saved and incomplete tool calls were not executed. Raise the model's output limit in Model settings (or models.default_max_output_tokens for models with unknown limits), then continue."
 	default:
 		return "model response interrupted at a provider length limit; work is incomplete. The provider did not identify whether context or output capacity was exhausted. Partial text was saved and incomplete tool calls were not executed."
 	}
