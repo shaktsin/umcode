@@ -87,11 +87,11 @@ func TestDiscoverTemplateCaps(t *testing.T) {
 	bad := httptest.NewServer(http.NotFoundHandler())
 	defer bad.Close()
 	got, err = DiscoverTemplateCaps(context.Background(), bad.Client(), Credential{BaseURL: bad.URL + "/v1"})
-	if err == nil || got != (TemplateCaps{}) {
+	if err != ErrRuntimeCapacityUnavailable || got != (TemplateCaps{}) {
 		t.Fatalf("undetected: got %+v err %v", got, err)
 	}
-	if _, err = DiscoverTemplateCaps(context.Background(), nil, Credential{BaseURL: "ftp://x/v1"}); err == nil {
-		t.Fatal("expected error for non-http base")
+	if _, err = DiscoverTemplateCaps(context.Background(), nil, Credential{BaseURL: "ftp://x/v1"}); err != ErrRuntimeCapacityUnavailable {
+		t.Fatalf("non-http base: %v", err)
 	}
 }
 
@@ -146,5 +146,34 @@ func TestTemplateStyleWithoutKwargsSendsNothing(t *testing.T) {
 		if _, ok := body["chat_template_kwargs"]; ok {
 			t.Fatalf("level %s: undetected template server got chat_template_kwargs", lvl)
 		}
+	}
+}
+
+func TestDiscoverTemplateCapsFailurePaths(t *testing.T) {
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"chat_template":"enable_thinking"}`))
+	}))
+	defer other.Close()
+	cases := map[string]http.HandlerFunc{
+		"non-200": func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) },
+		"timeout": func(w http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		},
+		"off-host redirect": func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, other.URL+"/props", http.StatusFound)
+		},
+		"oversize": func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"chat_template":"enable_thinking ` + strings.Repeat("x", 1<<20+10) + `"}`))
+		},
+	}
+	for name, h := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(h)
+			defer srv.Close()
+			got, err := DiscoverTemplateCaps(context.Background(), srv.Client(), Credential{BaseURL: srv.URL + "/v1"})
+			if got != (TemplateCaps{}) || err != ErrRuntimeCapacityUnavailable {
+				t.Fatalf("got %+v err %v, want zero caps and ErrRuntimeCapacityUnavailable", got, err)
+			}
+		})
 	}
 }

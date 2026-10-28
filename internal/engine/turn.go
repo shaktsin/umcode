@@ -1084,7 +1084,7 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			}
 			req.Messages = append(msgs, llm.Message{Role: llm.RoleUser, Parts: textParts(continueNudge)})
 			tail++
-			if res.meta.Reasoning && mostlyReasoning(interrupted.Usage) {
+			if res.meta.CatalogReasoning() && mostlyReasoning(interrupted.Usage) {
 				reasoning = lowerLevel(reasoning)
 			}
 			continue

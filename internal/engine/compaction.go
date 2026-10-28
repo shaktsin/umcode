@@ -173,7 +173,9 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 		System:    "Summarize this coding conversation for continuation in the same chat. Preserve the user's goal and constraints, decisions, relevant project/file facts, changes already made, checks and their outcomes, unresolved issues, and the next concrete steps. Do not invent facts or claim unverified checks passed. Be concise, but retain details needed to continue the work. Return only the summary.",
 		Messages:  []llm.Message{llm.Text(llm.RoleUser, transcript)},
 		MaxTokens: maxOutput,
-		Reasoning: selection.preset.Reasoning,
+	}
+	if selection.meta.CatalogReasoning() {
+		request.Reasoning, request.ReasoningStyle = selection.preset.Reasoning, selection.meta.ReasoningStyle
 	}
 	compactCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
