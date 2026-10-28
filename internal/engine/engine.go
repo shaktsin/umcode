@@ -953,7 +953,7 @@ func (e *Engine) UsageSummary(ctx context.Context, p protocol.UsageSummaryParams
 
 func validateSelection(s protocol.ModelSelection) error {
 	if !s.Complexity.Valid() {
-		return fmt.Errorf("unknown complexity %q (use auto, quick, standard or deep)", s.Complexity)
+		return fmt.Errorf("unknown complexity %q (use low, medium or high)", s.Complexity)
 	}
 	return nil
 }

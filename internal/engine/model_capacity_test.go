@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/shaktsin/umcode/internal/credentials"
+	"github.com/shaktsin/umcode/internal/evaluation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -254,5 +255,30 @@ func TestSmallWindowStaysBounded(t *testing.T) {
 		if report.EstimatedInput+prepared.MaxTokens > got.Window {
 			t.Fatalf("input %d + output %d exceeds window %d", report.EstimatedInput, prepared.MaxTokens, got.Window)
 		}
+	}
+}
+
+func TestEvaluationModelOutputLimitReachesCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		window, output int64
+		want           int
+	}{
+		{"declared limit below the default", 200000, 9000, 9000},
+		{"window caps the declared limit", 5000, 9000, 5000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _, _, _ := taskRuntimeFixture(t, "summary_only", false)
+			e.LLMs.Register(&evaluationProvider{inner: &evalStreamFixture{}, synthetic: true, model: evaluation.Model{ID: "deterministic", Window: tc.window, MaxOutput: tc.output}})
+			cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic", CredentialID: cred.Record.ID}, cred: cred, meta: models.Meta{Provider: "claude", ID: "deterministic"}}
+			got, err := e.resolveCapacity(t.Context(), res)
+			if err != nil || got.MaxOutput != tc.want {
+				t.Fatalf("capacity = %+v, %v; want max output %d", got, err, tc.want)
+			}
+		})
 	}
 }
