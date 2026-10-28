@@ -73,7 +73,8 @@ func (*evaluationRunner) Run(ctx context.Context, in evaluation.RunInput) (resul
 			return err
 		}
 		cfg := config.Default(home)
-		cfg.Models.Complexity = map[string]config.ComplexityPreset{model.Reasoning: {MaxOutputTokens: int(model.MaxOutput)}}
+		// The model's output limit reaches the engine through the evaluation
+		// provider's RuntimeCapacity, not through a level preset.
 		cfg.Models.Configured = []config.ConfiguredModel{{ID: "evaluation", Provider: model.Provider, Model: model.ID}}
 		cfg.Models.ExecutionLimits = config.ExecutionLimits{MaxDurationMinutes: max(1, (task.Limits.Seconds+59)/60), MaxTokens: task.Limits.Tokens, MaxCostUSD: cfg.Models.ExecutionLimits.MaxCostUSD, MaxToolRounds: task.Limits.ToolRounds}
 		cfg.Tools.Workspaces = []config.WorkspaceConfig{{Name: "evaluation", Path: result.ArtifactDir, Default: true}}
@@ -148,7 +149,7 @@ func (*evaluationRunner) Run(ctx context.Context, in evaluation.RunInput) (resul
 	if mode == "" {
 		mode = "normal"
 	}
-	th, e2 := e.StartThread(ctx, protocol.ThreadStartParams{Title: "Evaluation " + task.ID, ProjectID: projectID, Settings: protocol.ModelSelection{Provider: model.Provider, Model: model.ID, Complexity: protocol.Complexity(model.Reasoning)}, ApprovalMode: mode})
+	th, e2 := e.StartThread(ctx, protocol.ThreadStartParams{Title: "Evaluation " + task.ID, ProjectID: projectID, Settings: protocol.ModelSelection{Provider: model.Provider, Model: model.ID, Complexity: protocol.NormalizeComplexity(model.Reasoning)}, ApprovalMode: mode})
 	if e2 != nil {
 		return result, e2
 	}

@@ -182,7 +182,7 @@ func TestPoolFallbackAfterMutationUsesSmallerCapacityExactlyOnce(t *testing.T) {
 		return textReply("Completed once on the selected pool.")(req, "")
 	})
 	var th protocol.Thread
-	selection := protocol.ModelSelection{Provider: protocol.PoolProvider, Model: "selected", Complexity: protocol.ComplexityStandard}
+	selection := protocol.ModelSelection{Provider: protocol.PoolProvider, Model: "selected", Complexity: protocol.ComplexityMedium}
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID, Settings: selection}, &th)
 	var start protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Write done to once.txt exactly once, then read large.txt."}, &start)

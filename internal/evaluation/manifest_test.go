@@ -92,3 +92,13 @@ func TestPairedSchedule(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestAcceptsEffortLevels(t *testing.T) {
+	for _, level := range []string{"low", "medium", "high", "quick", "standard", "deep"} {
+		m := fixtureManifest()
+		m.Models[0].Reasoning = level
+		if err := Validate(m); err != nil {
+			t.Fatalf("%s rejected: %v", level, err)
+		}
+	}
+}

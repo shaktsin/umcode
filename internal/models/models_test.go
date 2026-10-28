@@ -92,9 +92,16 @@ func TestListReportsReasoningLevels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	found := false
 	for _, m := range list {
-		if m.ID == "claude-sonnet-4-6" && len(m.ReasoningLevels) != 3 {
-			t.Fatalf("sonnet levels = %v", m.ReasoningLevels)
+		if m.ID == "claude-sonnet-4-6" {
+			found = true
+			if len(m.ReasoningLevels) != 3 {
+				t.Fatalf("sonnet levels = %v", m.ReasoningLevels)
+			}
 		}
+	}
+	if !found {
+		t.Fatal("claude-sonnet-4-6 not in the catalog list")
 	}
 }

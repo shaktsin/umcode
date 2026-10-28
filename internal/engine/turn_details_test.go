@@ -50,7 +50,7 @@ func TestTurnDetailsFromAdmittedTurnAndReadDoesNotCallProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	wait := make(chan protocol.Turn, 1)
-	started, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Tell me a short greeting.", Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityStandard}}, wait: wait})
+	started, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Tell me a short greeting.", Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityMedium}}, wait: wait})
 	if err != nil {
 		t.Fatal(err)
 	}

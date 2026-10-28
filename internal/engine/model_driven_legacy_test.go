@@ -117,7 +117,7 @@ func TestLegacyIntentInputIsAdvisory(t *testing.T) {
 	p := &modelDrivenScript{answer: "Here is the explanation."}
 	e.LLMs.Register(p)
 	wait := make(chan protocol.Turn, 1)
-	_, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Explain this", TaskIntent: &protocol.TaskIntentProposal{Relation: "not-a-valid-old-contract"}, Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityStandard}}, wait: wait})
+	_, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Explain this", TaskIntent: &protocol.TaskIntentProposal{Relation: "not-a-valid-old-contract"}, Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityMedium}}, wait: wait})
 	if err != nil {
 		t.Fatal(err)
 	}

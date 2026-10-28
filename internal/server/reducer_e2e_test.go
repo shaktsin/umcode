@@ -66,7 +66,7 @@ func reducerTurn(t *testing.T, toolName, output string, reducerOn, compilerOn bo
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID, Title: "reducer fixture", ApprovalMode: "auto_all"}, &thread)
 	if compilerOn {
 		h.call(protocol.MethodThreadSetSettings, protocol.ThreadSetSettingsParams{ThreadID: thread.ID,
-			Settings: protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-5", Complexity: protocol.ComplexityStandard}}, &thread)
+			Settings: protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-5", Complexity: protocol.ComplexityMedium}}, &thread)
 		long := strings.Repeat("an explanation of the parser behavior ", 40)
 		for i := 0; i < 14; i++ {
 			h.fake.push(textReply("Explaining: " + long))
@@ -102,7 +102,7 @@ func reducerTurn(t *testing.T, toolName, output string, reducerOn, compilerOn bo
 	})
 	var started protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: thread.ID, Text: "run verification",
-		Override: protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-5", Complexity: protocol.ComplexityStandard}}, &started)
+		Override: protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-5", Complexity: protocol.ComplexityMedium}}, &started)
 	turn, _, _ := h.waitTurn(started.Turn.ID, nil)
 	if turn.Status != protocol.TurnCompleted {
 		t.Fatalf("turn = %+v", turn)

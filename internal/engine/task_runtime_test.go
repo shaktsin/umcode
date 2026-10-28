@@ -200,7 +200,7 @@ func taskRuntimeFixture(t *testing.T, mode string, restrict bool) (*Engine, prot
 func runTaskRuntimeTurn(t *testing.T, e *Engine, th protocol.Thread, text string) protocol.Turn {
 	t.Helper()
 	wait := make(chan protocol.Turn, 1)
-	if _, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: text, Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityStandard}}, wait: wait}); err != nil {
+	if _, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: text, Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityMedium}}, wait: wait}); err != nil {
 		t.Fatal(err)
 	}
 	select {

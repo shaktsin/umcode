@@ -13,8 +13,18 @@
     if (app.complexity && !draft) draft = copy(app.complexity);
   });
 
+  const MAX_OUT_MIN = 1024;
+  const MAX_OUT_MAX = 1_000_000;
+  // A cleared number input binds to null, so a missing value is invalid too.
+  const maxOutValid = $derived(
+    draft != null &&
+      Number.isInteger(draft.defaultMaxOutputTokens) &&
+      (draft.defaultMaxOutputTokens as number) >= MAX_OUT_MIN &&
+      (draft.defaultMaxOutputTokens as number) <= MAX_OUT_MAX,
+  );
+
   async function save() {
-    if (!draft) return;
+    if (!draft || !maxOutValid) return;
     const r = await app.try<ComplexityDefaults>('complexity/setDefaults', draft, 'Thinking settings saved.');
     if (r) {
       app.complexity = r;
@@ -33,6 +43,9 @@
     <label class="label mt-4" for="cx-maxout">Default max output tokens</label>
     <input id="cx-maxout" class="input w-40" type="number" min="1024" max="1000000" step="1024" bind:value={draft.defaultMaxOutputTokens} />
     <p class="text-xs text-muted mt-2">Used for models whose own output limit is unknown (1,024 to 1,000,000).</p>
+    {#if !maxOutValid}
+      <p class="text-xs text-red-700 mt-1" role="alert">Enter a number from 1,024 to 1,000,000.</p>
+    {/if}
   </div>
 
   <div class="card p-4 mb-4">
@@ -48,6 +61,6 @@
 
   <div class="flex justify-end gap-2 mt-3">
     <button class="btn-ghost" onclick={() => (draft = app.complexity ? copy(app.complexity) : null)}>Reset</button>
-    <button class="btn-primary" onclick={save}>Save</button>
+    <button class="btn-primary" disabled={!maxOutValid} onclick={save}>Save</button>
   </div>
 {/if}

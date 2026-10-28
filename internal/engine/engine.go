@@ -853,7 +853,7 @@ func (e *Engine) SetComplexityDefaults(ctx context.Context, d protocol.Complexit
 		return protocol.ComplexityDefaults{}, fmt.Errorf("invalid default complexity %q", d.Default)
 	}
 	for _, p := range d.Presets {
-		if p.Level == protocol.ComplexityAuto || !p.Level.Valid() || p.Level == "" {
+		if !p.Level.Valid() || p.Level == "" {
 			return protocol.ComplexityDefaults{}, fmt.Errorf("invalid preset level %q", p.Level)
 		}
 		switch p.Reasoning {

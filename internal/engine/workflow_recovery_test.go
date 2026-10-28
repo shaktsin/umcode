@@ -116,7 +116,7 @@ func TestWorkflowRecoveryActualTurn(t *testing.T) {
 				text = "Revise docs/specs/goodreads.md: replace Users with profiles referencing auth.users."
 			}
 			wait := make(chan protocol.Turn, 1)
-			_, err = e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: text, Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityStandard}}, wait: wait})
+			_, err = e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: text, Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityMedium}}, wait: wait})
 			if err != nil {
 				t.Fatal(err)
 			}

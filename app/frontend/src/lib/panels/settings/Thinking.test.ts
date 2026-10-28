@@ -21,3 +21,21 @@ it('offers only the default level and default max output, labelled Thinking', ()
   expect(body).toContain('Default max output tokens');
   expect(body).toContain('32768');
 });
+
+it('flags an empty or out-of-range max output and disables Save', () => {
+  const base = {
+    default: 'medium' as const,
+    presets: [],
+    limits: { maxDurationMinutes: 60, maxTokens: 1000000, maxCostUsd: 10, maxToolRounds: 100 },
+  };
+  for (const bad of [null, 10, 2_000_000]) {
+    app.complexity = { ...base, defaultMaxOutputTokens: bad as never };
+    const { body } = render(Complexity, { props: {} });
+    expect(body).toContain('Enter a number from 1,024 to 1,000,000');
+    expect(body).toMatch(/<button[^>]*disabled[^>]*>Save<\/button>/);
+  }
+  app.complexity = { ...base, defaultMaxOutputTokens: 32768 };
+  const ok = render(Complexity, { props: {} }).body;
+  expect(ok).not.toContain('Enter a number from');
+  expect(ok).not.toMatch(/<button[^>]*disabled[^>]*>Save<\/button>/);
+});

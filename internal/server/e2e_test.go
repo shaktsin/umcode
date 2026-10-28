@@ -278,7 +278,7 @@ func TestChatWithApprovedShellTool(t *testing.T) {
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &th)
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "run echo please",
-		Override: protocol.ModelSelection{Model: "claude-sonnet-4-6", Complexity: protocol.ComplexityDeep}}, &res)
+		Override: protocol.ModelSelection{Model: "claude-sonnet-4-6", Complexity: protocol.ComplexityHigh}}, &res)
 	if res.Turn.Resolved.Provider != "claude" || res.Turn.Resolved.CredentialID != key.ID || res.Turn.Resolved.Complexity != "high" {
 		t.Fatalf("resolved = %+v", res.Turn.Resolved)
 	}
@@ -513,7 +513,7 @@ func TestThreadManagementAndModels(t *testing.T) {
 	}
 	var d protocol.ComplexityDefaults
 	h.call(protocol.MethodComplexityGetDefaults, nil, &d)
-	d.Default = protocol.ComplexityStandard
+	d.Default = protocol.ComplexityMedium
 	d.Limits.MaxToolRounds = 50
 	if d.DefaultMaxOutputTokens != 32768 {
 		t.Fatalf("default max output = %d, want 32768", d.DefaultMaxOutputTokens)
@@ -883,7 +883,7 @@ func TestScheduledTasks(t *testing.T) {
 	min := 7
 	h.call(protocol.MethodTaskCreate, protocol.TaskCreateParams{Name: "inbox", Prompt: "summarise my inbox",
 		TaskType: protocol.TaskPeriodic, Schedule: protocol.Schedule{Frequency: "hourly", Minute: &min}, Timezone: "UTC",
-		Settings: protocol.ModelSelection{Complexity: protocol.ComplexityQuick}}, &task)
+		Settings: protocol.ModelSelection{Complexity: protocol.ComplexityLow}}, &task)
 	if task.NextRunAt == nil || task.NextRunAt.Minute() != 7 || task.Status != "active" {
 		t.Fatalf("task = %+v", task)
 	}
@@ -999,14 +999,14 @@ func TestRoutePreviewAndHealth(t *testing.T) {
 	h.call(protocol.MethodCredentialUpdate, protocol.CredentialUpdateParams{CredentialID: k2.ID, Fallback: &fb}, nil)
 
 	var preview protocol.ModelRouteResult
-	h.call(protocol.MethodModelRoute, protocol.ModelRouteParams{Text: "write me a haiku"}, &preview)
+	h.call(protocol.MethodModelRoute, protocol.ModelRouteParams{}, &preview)
 	if preview.Chosen == nil || preview.Chosen.Provider != "claude" || preview.Chosen.CredentialID == "" {
 		t.Fatalf("preview = %+v", preview)
 	}
 	if len(preview.Alternatives) == 0 {
 		t.Fatalf("no fallbacks offered: %+v", preview)
 	}
-	if preview.Complexity == "" || preview.Complexity == protocol.ComplexityAuto {
+	if preview.Complexity == "" {
 		t.Fatalf("complexity not resolved: %+v", preview)
 	}
 

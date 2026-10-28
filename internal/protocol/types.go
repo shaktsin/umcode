@@ -13,13 +13,6 @@ const (
 	ComplexityLow    Complexity = "low"
 	ComplexityMedium Complexity = "medium"
 	ComplexityHigh   Complexity = "high"
-
-	// Legacy aliases kept so existing callers compile; later tasks remove them.
-	// ComplexityAuto is a legacy-only value that NormalizeComplexity maps to medium.
-	ComplexityAuto     Complexity = "auto"
-	ComplexityQuick               = ComplexityLow
-	ComplexityStandard            = ComplexityMedium
-	ComplexityDeep                = ComplexityHigh
 )
 
 // NormalizeComplexity lower-cases and trims s and maps legacy values

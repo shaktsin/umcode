@@ -17,7 +17,7 @@ When no runtime, catalog, override or learned window exists, UMCode assumes 256,
 
 Capacity discovery is cached briefly and refreshed at turn admission, explicit Settings refresh, and confirmed context overflow. Changing an override invalidates the matching cache. Different credential/endpoint/model identities do not share observed allocation or estimate calibration.
 
-The optional maximum response and response-reserve fields must be positive and fit within the serving window. By default, response reservation is the complexity response allowance capped at one quarter of the actual window and the known response maximum. Headroom is at least 256 tokens or 5% of the window, rounded up. System instructions, conversation, tool schemas/results, protocol overhead and media all count. Counts are conservative estimates unless a provider tokenizer supplies them; observed provider usage can increase headroom for later requests.
+The optional maximum response and response-reserve fields must be positive and fit within the serving window. By default, response reservation is the model's output limit (its known maximum, or `models.default_max_output_tokens` when unknown) capped at one quarter of the actual window. Headroom is at least 256 tokens or 5% of the window, rounded up. System instructions, conversation, tool schemas/results, protocol overhead and media all count. Counts are conservative estimates unless a provider tokenizer supplies them; observed provider usage can increase headroom for later requests.
 
 ## Working history and progress
 

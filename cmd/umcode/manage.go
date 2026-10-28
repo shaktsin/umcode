@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -495,7 +496,7 @@ func runModel(args []string) error {
 		return w.Flush()
 	case "route":
 		fs := flag.NewFlagSet("model route", flag.ExitOnError)
-		complexity := fs.String("c", "", "quick | standard | deep")
+		complexity := fs.String("c", "", "low | medium | high")
 		provider := fs.String("p", "", "pin a provider")
 		model := fs.String("m", "", "pin a model")
 		key := fs.String("k", "", "pin an API key")
@@ -503,7 +504,7 @@ func runModel(args []string) error {
 		fs.Parse(rest)
 		var r protocol.ModelRouteResult
 		if err := call(protocol.MethodModelRoute, protocol.ModelRouteParams{
-			Complexity: protocol.Complexity(*complexity), Text: strings.Join(fs.Args(), " "), Pool: *pool,
+			Complexity: protocol.NormalizeComplexity(*complexity), Pool: *pool,
 			Override: protocol.ModelSelection{Provider: *provider, Model: *model, CredentialID: *key},
 		}, &r); err != nil {
 			return err
@@ -527,11 +528,7 @@ func runModel(args []string) error {
 			}
 			return errNothingToRoute
 		}
-		auto := ""
-		if r.AutoPicked {
-			auto = " (picked by Auto)"
-		}
-		fmt.Printf("complexity: %s%s\n\n", r.Complexity, auto)
+		fmt.Printf("complexity: %s\n\n", r.Complexity)
 		w := table()
 		fmt.Fprintln(w, "ORDER	PROVIDER	MODEL	KEY	WHY	$/M	STATUS")
 		rows := append([]protocol.RouteInfo{*r.Chosen}, r.Alternatives...)
@@ -591,20 +588,29 @@ func runComplexity(args []string) error {
 		if err := call(protocol.MethodComplexityGetDefaults, nil, &d); err != nil {
 			return err
 		}
-		d.Default = protocol.Complexity(args[1])
+		d.Default = protocol.NormalizeComplexity(args[1])
 		return call(protocol.MethodComplexitySetDefaults, d, nil)
 	}
 	var d protocol.ComplexityDefaults
 	if err := call(protocol.MethodComplexityGetDefaults, nil, &d); err != nil {
 		return err
 	}
-	fmt.Printf("default: %s\n\n", d.Default)
-	w := table()
+	fmt.Print(renderComplexityDefaults(d))
+	return nil
+}
+
+// renderComplexityDefaults formats the default level and the level table.
+// Levels set only how much the model thinks; output limits are per model.
+func renderComplexityDefaults(d protocol.ComplexityDefaults) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "default: %s\ndefault max output tokens: %d\n\n", d.Default, d.DefaultMaxOutputTokens)
+	w := tabwriter.NewWriter(&sb, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "LEVEL\tREASONING")
 	for _, p := range d.Presets {
 		fmt.Fprintf(w, "%s\t%s\n", p.Level, p.Reasoning)
 	}
-	return w.Flush()
+	w.Flush()
+	return sb.String()
 }
 
 // ---- usage ----
