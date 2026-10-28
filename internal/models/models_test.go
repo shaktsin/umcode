@@ -78,9 +78,9 @@ func TestIsContinuation(t *testing.T) {
 }
 
 func TestPresetsOverride(t *testing.T) {
-	p := Presets(config.ModelsConfig{Complexity: map[string]config.ComplexityPreset{"deep": {MaxToolSteps: 5}}})
-	if p[protocol.ComplexityDeep].MaxToolSteps != 200 || p[protocol.ComplexityDeep].Reasoning != llm.ReasoningHigh {
-		t.Fatalf("override not applied: %+v", p[protocol.ComplexityDeep])
+	p := Presets(config.ModelsConfig{Complexity: map[string]config.ComplexityPreset{"deep": {MaxToolSteps: 5, Reasoning: llm.ReasoningLow}}})
+	if p[protocol.ComplexityHigh].Reasoning != llm.ReasoningLow {
+		t.Fatalf("override not applied: %+v", p[protocol.ComplexityHigh])
 	}
 }
 
@@ -128,5 +128,17 @@ func TestCostAndCatalog(t *testing.T) {
 	}
 	if unk := c.Lookup(ctx, "openai", "gpt-4o-mini"); Cost(unk, llm.Usage{InputTokens: 1000}) != 0 {
 		t.Fatal("unknown price must cost 0")
+	}
+}
+
+func TestDefaultPresets(t *testing.T) {
+	p := DefaultPresets()
+	if len(p) != 3 {
+		t.Fatalf("want 3 presets, got %d", len(p))
+	}
+	for _, lvl := range []protocol.Complexity{protocol.ComplexityLow, protocol.ComplexityMedium, protocol.ComplexityHigh} {
+		if p[lvl].Level != lvl || p[lvl].Reasoning != string(lvl) {
+			t.Fatalf("%s preset = %+v", lvl, p[lvl])
+		}
 	}
 }

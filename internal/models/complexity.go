@@ -10,15 +10,12 @@ import (
 	"github.com/shaktsin/umcode/internal/skills"
 )
 
-// DefaultPresets are the built-in complexity presets.
+// DefaultPresets are the built-in effort presets.
 func DefaultPresets() map[protocol.Complexity]protocol.ComplexityPreset {
 	return map[protocol.Complexity]protocol.ComplexityPreset{
-		protocol.ComplexityQuick: {Level: protocol.ComplexityQuick, Reasoning: llm.ReasoningOff,
-			MaxToolSteps: 200, MultiAgent: "never", MaxOutputTokens: 4096},
-		protocol.ComplexityStandard: {Level: protocol.ComplexityStandard, Reasoning: llm.ReasoningMedium,
-			MaxToolSteps: 200, MultiAgent: "teamRouteOnly", MaxOutputTokens: 16384},
-		protocol.ComplexityDeep: {Level: protocol.ComplexityDeep, Reasoning: llm.ReasoningHigh,
-			MaxToolSteps: 200, MultiAgent: "allowed", MaxOutputTokens: 32768},
+		protocol.ComplexityLow:    {Level: protocol.ComplexityLow, Reasoning: llm.ReasoningLow, MaxOutputTokens: 4096},
+		protocol.ComplexityMedium: {Level: protocol.ComplexityMedium, Reasoning: llm.ReasoningMedium, MaxOutputTokens: 16384},
+		protocol.ComplexityHigh:   {Level: protocol.ComplexityHigh, Reasoning: llm.ReasoningHigh, MaxOutputTokens: 32768},
 	}
 }
 
@@ -33,9 +30,6 @@ func Presets(cfg config.ModelsConfig) map[protocol.Complexity]protocol.Complexit
 		}
 		if o.Reasoning != "" {
 			p.Reasoning = o.Reasoning
-		}
-		if o.MultiAgent != "" {
-			p.MultiAgent = o.MultiAgent
 		}
 		if o.MaxOutputTokens > 0 {
 			p.MaxOutputTokens = o.MaxOutputTokens

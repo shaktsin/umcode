@@ -267,9 +267,7 @@ type Provider struct {
 // ComplexityPreset is the engine translation of one complexity level.
 type ComplexityPreset struct {
 	Level           Complexity `json:"level"`
-	Reasoning       string     `json:"reasoning"`    // off | low | medium | high
-	MaxToolSteps    int        `json:"maxToolSteps"` // compatibility mirror of the global round ceiling
-	MultiAgent      string     `json:"multiAgent"`   // never | teamRouteOnly | allowed
+	Reasoning       string     `json:"reasoning"` // off | low | medium | high
 	MaxOutputTokens int        `json:"maxOutputTokens"`
 }
 

@@ -5,12 +5,15 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/goccy/go-yaml"
+
+	"github.com/shaktsin/umcode/internal/protocol"
 )
 
 // Config is the subset of config.yaml the Go engine understands today.
@@ -144,9 +147,14 @@ type RuntimeConfig struct {
 
 // ModelsConfig holds new model-selection settings.
 type ModelsConfig struct {
-	DefaultComplexity string                      `yaml:"default_complexity"`
-	Complexity        map[string]ComplexityPreset `yaml:"complexity"`
-	ExecutionLimits   ExecutionLimits             `yaml:"execution_limits"`
+	// DefaultComplexity is the default effort level: low | medium | high.
+	// Legacy auto/quick/standard/deep are accepted on load and normalized.
+	DefaultComplexity string `yaml:"default_complexity"`
+	// DefaultMaxOutputTokens is the output limit used when a model's own
+	// maximum is unknown (1024-1000000, default 32768).
+	DefaultMaxOutputTokens int                         `yaml:"default_max_output_tokens"`
+	Complexity             map[string]ComplexityPreset `yaml:"complexity"`
+	ExecutionLimits        ExecutionLimits             `yaml:"execution_limits"`
 	// Roles overrides the model per role: title, intent, orchestrator, worker.
 	Roles map[string]AgentModelConfig `yaml:"roles"`
 	// Configured is the user-approved model list shown in the app.
@@ -291,8 +299,26 @@ func Load(path string) (*Config, error) {
 		break
 	}
 	applyEnv(cfg)
+	warnLegacyComplexity(cfg)
 	cfg.finalize()
 	return cfg, cfg.Validate()
+}
+
+// warnLegacyComplexity logs one deprecation warning when the config still uses
+// the old Auto/Quick/Standard/Deep keys. It never fails the load.
+func warnLegacyComplexity(c *Config) {
+	var keys []string
+	switch strings.ToLower(strings.TrimSpace(c.Models.DefaultComplexity)) {
+	case "auto", "quick", "standard", "deep":
+		keys = append(keys, "models.default_complexity="+c.Models.DefaultComplexity)
+	}
+	if len(c.Models.Complexity) > 0 {
+		keys = append(keys, "models.complexity")
+	}
+	if len(keys) > 0 {
+		slog.Warn("deprecated config keys: effort levels are now low/medium/high; max_output_tokens, max_tool_steps and multi_agent under models.complexity are ignored",
+			"keys", strings.Join(keys, ","))
+	}
 }
 
 // Default returns a config with defaults rooted at home.
@@ -314,7 +340,7 @@ func Default(home string) *Config {
 		},
 		Policy: PolicyConfig{ApprovalTimeoutMinutes: 30},
 		Memory: MemoryConfig{TargetFileBytes: 4096},
-		Models: ModelsConfig{DefaultComplexity: "auto", ExecutionLimits: ExecutionLimits{
+		Models: ModelsConfig{DefaultComplexity: "medium", DefaultMaxOutputTokens: 32768, ExecutionLimits: ExecutionLimits{
 			MaxDurationMinutes: 120, MaxTokens: 1_000_000, MaxCostUSD: 10, MaxToolRounds: 200,
 		}},
 	}
@@ -341,7 +367,11 @@ func (c *Config) finalize() {
 		c.Policy.ApprovalTimeoutMinutes = 30
 	}
 	if c.Models.DefaultComplexity == "" {
-		c.Models.DefaultComplexity = "auto"
+		c.Models.DefaultComplexity = "medium"
+	}
+	c.Models.DefaultComplexity = string(protocol.NormalizeComplexity(c.Models.DefaultComplexity))
+	if c.Models.DefaultMaxOutputTokens == 0 {
+		c.Models.DefaultMaxOutputTokens = 32768
 	}
 	if c.Models.ExecutionLimits.MaxDurationMinutes == 0 {
 		c.Models.ExecutionLimits.MaxDurationMinutes = 120
@@ -377,9 +407,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("memory.target_file_bytes must be 1024–32768")
 	}
 	switch c.Models.DefaultComplexity {
-	case "auto", "quick", "standard", "deep":
+	case "low", "medium", "high":
 	default:
 		return fmt.Errorf("models.default_complexity: unknown value %q", c.Models.DefaultComplexity)
+	}
+	if c.Models.DefaultMaxOutputTokens < 1024 || c.Models.DefaultMaxOutputTokens > 1_000_000 {
+		return fmt.Errorf("models.default_max_output_tokens must be 1024–1000000")
 	}
 	limits := c.Models.ExecutionLimits
 	if limits.MaxDurationMinutes < 1 || limits.MaxDurationMinutes > 480 {

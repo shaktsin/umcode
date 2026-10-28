@@ -516,7 +516,7 @@ func TestThreadManagementAndModels(t *testing.T) {
 	d.Default = protocol.ComplexityStandard
 	d.Limits.MaxToolRounds = 50
 	h.call(protocol.MethodComplexitySetDefaults, d, &d)
-	if d.Default != "medium" || d.Limits.MaxToolRounds != 50 || d.Presets[0].MaxToolSteps != 50 {
+	if d.Default != "medium" || d.Limits.MaxToolRounds != 50 {
 		t.Fatalf("complexity = %+v", d)
 	}
 	var creds protocol.CredentialListResult

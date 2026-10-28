@@ -16,7 +16,13 @@ llm:
 # Models shown in chat are configuration-led. Pools try enabled entries in
 # order and continue on quota or rate-limit failures.
 models:
-  default_complexity: auto
+  # Effort level: low | medium | high (default medium). The old keys
+  # default_complexity auto/quick/standard/deep and models.complexity.* are
+  # deprecated: they still load (auto/standard -> medium, quick -> low,
+  # deep -> high) with a warning, and max_output_tokens under them is ignored.
+  default_complexity: medium
+  # Output token limit when a model's own maximum is unknown (1024-1000000).
+  default_max_output_tokens: 32768
   default_pool: coding
   configured:
     - id: claude-coding

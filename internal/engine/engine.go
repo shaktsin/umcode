@@ -818,7 +818,6 @@ func (e *Engine) loadComplexity(ctx context.Context) error {
 		}
 		for _, p := range saved.Presets {
 			if _, ok := e.presets[p.Level]; ok {
-				p.MaxToolSteps = e.turnLimits.MaxToolRounds
 				e.presets[p.Level] = p
 			}
 		}
@@ -836,10 +835,8 @@ func (e *Engine) ComplexityDefaults() protocol.ComplexityDefaults {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := protocol.ComplexityDefaults{Default: e.defaultCplx, Limits: e.turnLimits}
-	for _, lvl := range []protocol.Complexity{protocol.ComplexityQuick, protocol.ComplexityStandard, protocol.ComplexityDeep} {
-		preset := e.presets[lvl]
-		preset.MaxToolSteps = e.turnLimits.MaxToolRounds
-		out.Presets = append(out.Presets, preset)
+	for _, lvl := range []protocol.Complexity{protocol.ComplexityLow, protocol.ComplexityMedium, protocol.ComplexityHigh} {
+		out.Presets = append(out.Presets, e.presets[lvl])
 	}
 	return out
 }
@@ -861,9 +858,6 @@ func (e *Engine) SetComplexityDefaults(ctx context.Context, d protocol.Complexit
 	}
 	if !validExecutionLimits(d.Limits) {
 		return protocol.ComplexityDefaults{}, fmt.Errorf("invalid execution limits")
-	}
-	for i := range d.Presets {
-		d.Presets[i].MaxToolSteps = d.Limits.MaxToolRounds
 	}
 	if err := e.Store.SetSetting(ctx, complexitySettingKey, d); err != nil {
 		return protocol.ComplexityDefaults{}, err

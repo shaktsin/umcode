@@ -600,9 +600,9 @@ func runComplexity(args []string) error {
 	}
 	fmt.Printf("default: %s\n\n", d.Default)
 	w := table()
-	fmt.Fprintln(w, "LEVEL\tREASONING\tMAX TOOL STEPS\tMULTI-AGENT\tMAX OUTPUT")
+	fmt.Fprintln(w, "LEVEL\tREASONING\tMAX OUTPUT")
 	for _, p := range d.Presets {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\n", p.Level, p.Reasoning, p.MaxToolSteps, p.MultiAgent, p.MaxOutputTokens)
+		fmt.Fprintf(w, "%s\t%s\t%d\n", p.Level, p.Reasoning, p.MaxOutputTokens)
 	}
 	return w.Flush()
 }
