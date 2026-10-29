@@ -23,6 +23,13 @@ models:
   default_complexity: medium
   # Output token limit when a model's own maximum is unknown (1024-1000000).
   default_max_output_tokens: 32768
+  # Per-turn safety limits. Omitted or 0 uses the default. Set max_duration_minutes
+  # or max_tokens to -1 for no limit (cost and tool-round limits always apply).
+  # execution_limits:
+  #   max_duration_minutes: 120     # 1-480, or -1 for no time limit
+  #   max_tokens: 1000000           # 10000-10000000, or -1 for no token budget
+  #   max_cost_usd: 10
+  #   max_tool_rounds: 200
   default_pool: coding
   configured:
     - id: claude-coding

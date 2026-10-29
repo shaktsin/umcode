@@ -296,3 +296,33 @@ func TestDefaultMaxOutputTokensRange(t *testing.T) {
 		t.Fatalf("4096 -> %v, %v", c, err)
 	}
 }
+
+func TestExecutionLimitsNoLimitSentinel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	path := filepath.Join(home, "config.yaml")
+	load := func(dur, tok int64) (*Config, error) {
+		yml := fmt.Sprintf("models:\n  execution_limits:\n    max_duration_minutes: %d\n    max_tokens: %d\n", dur, tok)
+		if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(path)
+	}
+	c, err := load(0, 0)
+	if err != nil || c.Models.ExecutionLimits.MaxDurationMinutes != 120 || c.Models.ExecutionLimits.MaxTokens != 1_000_000 {
+		t.Fatalf("0 should default: %+v, %v", c, err)
+	}
+	c, err = load(-1, -1)
+	if err != nil || c.Models.ExecutionLimits.MaxDurationMinutes != -1 || c.Models.ExecutionLimits.MaxTokens != -1 {
+		t.Fatalf("-1 should be kept: %+v, %v", c, err)
+	}
+	if _, err := load(-2, 0); err == nil || !strings.Contains(err.Error(), "or -1 for no limit") {
+		t.Fatalf("-2 duration: %v", err)
+	}
+	if _, err := load(0, -2); err == nil || !strings.Contains(err.Error(), "or -1 for no limit") {
+		t.Fatalf("-2 tokens: %v", err)
+	}
+	if _, err := load(481, 0); err == nil {
+		t.Fatal("481 minutes should fail")
+	}
+}

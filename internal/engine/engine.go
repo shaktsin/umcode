@@ -892,8 +892,8 @@ func (e *Engine) SetComplexityDefaults(ctx context.Context, d protocol.Complexit
 func validDefaultMaxOutput(n int) bool { return n >= 1024 && n <= 1_000_000 }
 
 func validExecutionLimits(l protocol.ExecutionLimits) bool {
-	return l.MaxDurationMinutes >= 1 && l.MaxDurationMinutes <= 480 &&
-		l.MaxTokens >= 10_000 && l.MaxTokens <= 10_000_000 &&
+	return (l.MaxDurationMinutes == protocol.NoLimit || l.MaxDurationMinutes >= 1 && l.MaxDurationMinutes <= 480) &&
+		(l.MaxTokens == protocol.NoLimit || l.MaxTokens >= 10_000 && l.MaxTokens <= 10_000_000) &&
 		l.MaxCostUSD >= 0.01 && l.MaxCostUSD <= 10_000 &&
 		l.MaxToolRounds >= 1 && l.MaxToolRounds <= 1000
 }

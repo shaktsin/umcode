@@ -32,13 +32,15 @@ func (b *turnBudget) addUsage(usage protocol.UsageTotals) {
 }
 
 func (b *turnBudget) stopReason() string {
-	if b.shared != nil && time.Since(b.started) < time.Duration(b.limits.MaxDurationMinutes)*time.Minute {
+	// A non-positive duration or token limit (protocol.NoLimit) is unlimited.
+	timeExpired := b.limits.MaxDurationMinutes > 0 && time.Since(b.started) >= time.Duration(b.limits.MaxDurationMinutes)*time.Minute
+	if b.shared != nil && !timeExpired {
 		return b.shared.StopReason()
 	}
 	switch {
-	case time.Since(b.started) >= time.Duration(b.limits.MaxDurationMinutes)*time.Minute:
+	case timeExpired:
 		return fmt.Sprintf("the %d-minute time budget", b.limits.MaxDurationMinutes)
-	case b.tokens >= b.limits.MaxTokens:
+	case b.limits.MaxTokens > 0 && b.tokens >= b.limits.MaxTokens:
 		return fmt.Sprintf("the %s-token budget", formatBudgetTokens(b.limits.MaxTokens))
 	case b.costUSD >= b.limits.MaxCostUSD:
 		return fmt.Sprintf("the $%.2f per-turn cost budget", b.limits.MaxCostUSD)

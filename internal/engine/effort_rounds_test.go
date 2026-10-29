@@ -269,3 +269,34 @@ func TestSetComplexityDefaultsAppliesNewMaxOutputImmediately(t *testing.T) {
 		t.Fatalf("capacity after change = %+v, %v; want 4096", got, err)
 	}
 }
+
+func TestSetComplexityDefaultsAcceptsAndPersistsNoLimit(t *testing.T) {
+	e, _, _, _ := scriptedLocalFixture(t, "", false)
+	d := e.ComplexityDefaults()
+	d.Limits.MaxDurationMinutes = protocol.NoLimit
+	d.Limits.MaxTokens = protocol.NoLimit
+	got, err := e.SetComplexityDefaults(t.Context(), d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Limits.MaxDurationMinutes != protocol.NoLimit || got.Limits.MaxTokens != protocol.NoLimit {
+		t.Fatalf("limits = %+v", got.Limits)
+	}
+	var saved protocol.ComplexityDefaults
+	if err := e.Store.GetSetting(t.Context(), complexitySettingKey, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Limits.MaxDurationMinutes != protocol.NoLimit || saved.Limits.MaxTokens != protocol.NoLimit {
+		t.Fatalf("persisted = %+v", saved.Limits)
+	}
+	if err := e.loadComplexity(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if l := e.ComplexityDefaults().Limits; l.MaxDurationMinutes != protocol.NoLimit || l.MaxTokens != protocol.NoLimit {
+		t.Fatalf("reloaded = %+v", l)
+	}
+	d.Limits.MaxDurationMinutes = -2
+	if _, err := e.SetComplexityDefaults(t.Context(), d); err == nil {
+		t.Fatal("-2 should be rejected")
+	}
+}

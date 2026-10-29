@@ -39,3 +39,20 @@ it('flags an empty or out-of-range max output and disables Save', () => {
   expect(ok).not.toContain('Enter a number from');
   expect(ok).not.toMatch(/<button[^>]*disabled[^>]*>Save<\/button>/);
 });
+
+it('offers a No limit checkbox for time and tokens and keeps Save enabled at -1', () => {
+  const limits = { maxDurationMinutes: -1, maxTokens: -1, maxCostUsd: 10, maxToolRounds: 100 };
+  app.complexity = { default: 'medium' as const, presets: [], limits, defaultMaxOutputTokens: 32768 };
+  const { body } = render(Complexity, { props: {} });
+  expect(body.match(/type="checkbox"/g)?.length).toBe(2);
+  expect(body.match(/No limit/g)?.length).toBe(2);
+  expect(body.match(/type="checkbox"[^>]*checked/g)?.length).toBe(2);
+  expect(body).toMatch(/type="number"[^>]*min="1" max="480"[^>]*disabled/);
+  expect(body).toMatch(/type="number"[^>]*min="10000"[^>]*disabled/);
+  expect(body).not.toMatch(/<button[^>]*disabled[^>]*>Save<\/button>/);
+
+  app.complexity = { default: 'medium' as const, presets: [], limits: { ...limits, maxDurationMinutes: 60, maxTokens: 500000 }, defaultMaxOutputTokens: 32768 };
+  const finite = render(Complexity, { props: {} }).body;
+  expect(finite.match(/type="checkbox"[^>]*checked/g)).toBeNull();
+  expect(finite).not.toMatch(/type="number"[^>]*min="1" max="480"[^>]*disabled/);
+});
