@@ -129,15 +129,22 @@ func (e *Engine) withRuntimeStatus(ctx context.Context, taskID string, out runti
 //
 // Accept rule (chosen): strict submission order. A revision may be accepted
 // only when every revision submitted before it (lower Seq) is applied or
-// dropped, or is not integrable because its agent did not complete (for
-// example cancelled after recording). A conflicted earlier revision must be
-// dropped or resolved first. Replays of an applied revision are not ordered.
+// dropped, or belongs to a cancelled agent (never integrable, spec 4.7). An
+// earlier revision whose agent is still finishing (recorded, not yet marked
+// completed), completed (accept, drop or resolve it), or failed/interrupted
+// (drop it) blocks. Replays of an applied revision are not ordered.
 //
-// The first accept also requires every live agent to own its workspace: after
-// it the project checkout holds staged changes and no agent workspace can be
-// created any more, so a queued agent could never start (gap G1).
+// The target's own agent must have completed: a cancelled, failed or
+// interrupted agent's revision is never integrable, and one still finishing
+// must be waited for.
+//
+// The first accept also requires every live agent's checkout to be ready
+// (RuntimeWorkspacesPending, which waits for any checkout being prepared):
+// after it the project checkout holds staged changes and no agent checkout can
+// be prepared any more, so such an agent could never start (gap G1).
 func (e *Engine) runtimeAcceptAllowed(ctx context.Context, taskID, agentID string) error {
-	st, err := e.DelegationWorkspaceService.RuntimeIntegrationStatus(ctx, taskID)
+	svc := e.DelegationWorkspaceService
+	st, err := svc.RuntimeIntegrationStatus(ctx, taskID)
 	if err != nil {
 		return err
 	}
@@ -158,30 +165,55 @@ func (e *Engine) runtimeAcceptAllowed(ctx context.Context, taskID, agentID strin
 	if target == nil || (target.State != store.RevisionSubmitted && target.State != store.RevisionConflict) {
 		return nil // the service reports a missing revision; a replay is not ordered
 	}
+	switch as := state[agentID]; {
+	case as == protocol.AgentStateCompleted:
+	case !agentrt.IsTerminal(as):
+		return fmt.Errorf("accept refused: agent %s is still finishing (%s); wait for it to complete (agent.wait), then accept", agentID, as)
+	case as == protocol.AgentStateCancelled:
+		return fmt.Errorf("accept refused: agent %s was cancelled after submitting; its revision cannot be integrated. Drop it (agent.integrate {action:\"drop\", agent, reason}) or start a new agent", agentID)
+	default:
+		return fmt.Errorf("accept refused: agent %s ended %s after submitting; its revision cannot be integrated. Drop it (agent.integrate {action:\"drop\", agent, reason}) or start a new agent", agentID, as)
+	}
 	for _, r := range st.Revisions {
 		if r.Seq >= target.Seq || r.ID == target.ID {
 			continue
 		}
-		pending := r.State == store.RevisionApplying ||
-			((r.State == store.RevisionSubmitted || r.State == store.RevisionConflict) && state[r.AgentID] == protocol.AgentStateCompleted)
-		if pending {
-			return fmt.Errorf("accept refused: revisions are accepted in submission order, and agent %s's revision (submitted earlier) is %s; accept, drop or resolve it before agent %s", r.AgentID, r.State, agentID)
+		if r.State == store.RevisionApplied || r.State == store.RevisionDropped {
+			continue
+		}
+		as := state[r.AgentID]
+		if r.State == store.RevisionSubmitted && as == protocol.AgentStateCancelled {
+			continue
+		}
+		const order = "accept refused: revisions are accepted in submission order, and agent %s's revision (submitted earlier) is %s"
+		switch {
+		case r.State == store.RevisionApplying || as == protocol.AgentStateCompleted:
+			return fmt.Errorf(order+"; accept, drop or resolve it before agent %s", r.AgentID, r.State, agentID)
+		case !agentrt.IsTerminal(as):
+			return fmt.Errorf(order+" and its agent is still finishing (%s); wait for it and accept or drop it before agent %s", r.AgentID, r.State, as, agentID)
+		default:
+			return fmt.Errorf(order+" but its agent ended %s, so it cannot be integrated; drop it with a reason before agent %s", r.AgentID, r.State, as, agentID)
 		}
 	}
 	if st.AppliedCount == 0 {
-		for _, a := range agents {
-			if !agentrt.IsTerminal(a.State) && a.WorkspaceID == "" {
-				return fmt.Errorf("accept refused: agent %s (%s) is %s and has no workspace yet; after the first accept the project checkout holds staged changes and no new agent workspace can be created. Wait until it is running with a workspace, or cancel it, then accept", a.ID, a.Name, a.State)
-			}
+		pending, err := svc.RuntimeWorkspacesPending(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if len(pending) > 0 {
+			a := pending[0]
+			return fmt.Errorf("accept refused: agent %s (%s) is %s and its workspace is not ready yet; after the first accept the project checkout holds staged changes and no new agent workspace can be created. Wait until its workspace is ready, or cancel it, then accept", a.ID, a.Name, a.State)
 		}
 	}
 	return nil
 }
 
 // planRuntimeHead plans the checks for the head after an accept or a manual
-// resolution. A plan already stored for the head is kept (a replay must not
-// reset recorded results); a failed plan is reported as pending, never as a
-// failed accept: the revision is applied and the lead retries with accept.
+// resolution. A non-empty plan already stored for the head is kept (a replay
+// must not reset recorded results); a stored empty plan has no results to
+// lose and is planned again, so a replay retries it. A failed plan is
+// reported as pending, never as a failed accept: the revision is applied and
+// the lead retries with accept.
 func (e *Engine) planRuntimeHead(ctx context.Context, task protocol.AgentTask, agentID string, out *runtimeIntegrateResult) {
 	if h, err := e.Store.AgentIntegrationHead(ctx, task.ID); err == nil {
 		if w, err := store.DecodeRuntimeWorkflow(h.Workflow); err == nil && w.HeadTree == h.HeadTree && len(w.Checks) > 0 {
@@ -205,8 +237,9 @@ func runtimePlanText(w runtimeWorkflow) string {
 }
 
 // completeRuntimeTask implements the runtime completion rule: no unfinished
-// agents; every revision applied or dropped, or its agent not completed (no
-// integrable revision); and, if anything was integrated, the lead's own
+// agents; every revision settled (delegation.RevisionSettled: applied,
+// dropped, or submitted by a cancelled agent; a failed or interrupted
+// agent's revision needs an explicit drop); and, if anything was integrated, the lead's own
 // passing receipts for every planned check of the final head, with the
 // project checkout still exactly that head. It then marks the task completed,
 // cleans up the applied and verified workspaces (a failure is a warning) and
@@ -248,13 +281,14 @@ func (e *Engine) completeRuntimeTask(ctx context.Context, task protocol.AgentTas
 	}
 	var open []string
 	for _, r := range st.Revisions {
-		switch {
-		case r.State == store.RevisionApplied || r.State == store.RevisionDropped:
-		case r.State == store.RevisionSubmitted && state[r.AgentID] != protocol.AgentStateCompleted:
-			// Not integrable: its agent did not complete.
-		default:
-			open = append(open, fmt.Sprintf("agent %s's revision is %s", r.AgentID, r.State))
+		if delegation.RevisionSettled(r, state[r.AgentID] == protocol.AgentStateCancelled) {
+			continue
 		}
+		if r.State == store.RevisionSubmitted && state[r.AgentID] != protocol.AgentStateCompleted {
+			open = append(open, fmt.Sprintf("agent %s's revision is submitted but the agent ended %s, so it cannot be integrated: drop it with a reason", r.AgentID, state[r.AgentID]))
+			continue
+		}
+		open = append(open, fmt.Sprintf("agent %s's revision is %s", r.AgentID, r.State))
 	}
 	if len(open) > 0 {
 		return out, fmt.Errorf("completion refused: accept or drop every revision first: %s", strings.Join(open, "; "))
