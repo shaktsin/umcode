@@ -584,7 +584,7 @@ func TestIntegrationUsesAuthorityRecheck(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { runtimeIntegrateHook = nil })
-	if _, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID); err == nil || !strings.Contains(err.Error(), "workspace mode") {
+	if _, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID); err == nil || !strings.Contains(err.Error(), "parent checkout changed") {
 		t.Fatalf("authority change not caught by the guard: %v", err)
 	}
 	if rtParent(t, task.ParentRoot) != before {
@@ -608,5 +608,38 @@ func TestIntegrationUsesAuthorityRecheck(t *testing.T) {
 	}
 	if rtParent(t, task.ParentRoot) != before {
 		t.Fatal("refused accept changed the parent")
+	}
+}
+
+// A crash after the revision was recorded applied but before the head moved
+// is repaired from the revision's evidence.
+func TestReconcileRuntimeRepairsHead(t *testing.T) {
+	svc, s, task := rtFixture(t)
+	ctx := t.Context()
+	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+	got, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := s.AgentIntegrationHead(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.HeadTree, h.AppliedCount = got.Revision.TreeBefore, 0
+	if err = s.SetAgentIntegrationHead(ctx, h, h.Version); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.ReconcileRuntimeIntegration(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := svc.RuntimeIntegrationStatus(ctx, task.ID)
+	if st.HeadTree != got.HeadTree || st.AppliedCount != 1 || st.Verified {
+		t.Fatalf("head not repaired: %+v", st)
+	}
+	if err = svc.ReconcileRuntimeIntegration(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st2, _ := svc.RuntimeIntegrationStatus(ctx, task.ID); st2.AppliedCount != 1 {
+		t.Fatalf("repair not idempotent: %+v", st2)
 	}
 }
