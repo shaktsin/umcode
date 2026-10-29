@@ -184,28 +184,11 @@ func (e *Engine) delegationWorkflowCall(ctx context.Context, action string, args
 		}
 		w, err = e.Store.AgentWorkflow(ctx, task.ID)
 		if errors.Is(err, store.ErrNotFound) {
-			planner, ok := e.Tools.Get("verification.plan")
-			if !ok {
-				return "", errors.New("verification planner unavailable")
-			}
-			raw, planErr := planner.Call(ctx, json.RawMessage(`{}`))
+			checks, planErr := e.planVerificationChecks(ctx)
 			if planErr != nil {
 				return "", planErr
 			}
-			var plan struct {
-				Checks   []store.AgentWorkflowCheck `json:"checks"`
-				VisualQA string                     `json:"visual_qa"`
-			}
-			if err = json.Unmarshal([]byte(raw), &plan); err != nil {
-				return "", err
-			}
-			w = store.AgentWorkflow{TaskID: task.ID, ChildID: impl.ID, Revision: impl.Revision, Checks: plan.Checks}
-			for i := range w.Checks {
-				w.Checks[i].Status = "not_run"
-			}
-			if strings.HasPrefix(plan.VisualQA, "required:") {
-				w.Checks = append(w.Checks, store.AgentWorkflowCheck{Label: "Visual QA", Command: "visual QA", Kind: "visual", Reason: plan.VisualQA, Status: "blocked", Summary: "Trusted interactive visual QA receipts are unavailable in delegated completion v1."})
-			}
+			w = store.AgentWorkflow{TaskID: task.ID, ChildID: impl.ID, Revision: impl.Revision, Checks: checks}
 			if err = e.Store.SaveAgentWorkflow(ctx, w); err != nil {
 				return "", err
 			}
@@ -298,16 +281,66 @@ func (e *Engine) submitReview(ctx context.Context, args json.RawMessage) (string
 	return string(b), err
 }
 
+// planVerificationChecks calls the verification.plan tool and returns its
+// checks, every one not_run, plus a blocked Visual QA check when the planner
+// requires visual QA. Shared by the legacy integrate action and the runtime
+// head (planRuntimeVerification).
+func (e *Engine) planVerificationChecks(ctx context.Context) ([]store.AgentWorkflowCheck, error) {
+	planner, ok := e.Tools.Get("verification.plan")
+	if !ok {
+		return nil, errors.New("verification planner unavailable")
+	}
+	raw, err := planner.Call(ctx, json.RawMessage(`{}`))
+	if err != nil {
+		return nil, err
+	}
+	var plan struct {
+		Checks   []store.AgentWorkflowCheck `json:"checks"`
+		VisualQA string                     `json:"visual_qa"`
+	}
+	if err = json.Unmarshal([]byte(raw), &plan); err != nil {
+		return nil, err
+	}
+	checks := plan.Checks
+	for i := range checks {
+		checks[i].Status = "not_run"
+	}
+	if strings.HasPrefix(plan.VisualQA, "required:") {
+		checks = append(checks, store.AgentWorkflowCheck{Label: "Visual QA", Command: "visual QA", Kind: "visual", Reason: plan.VisualQA, Status: "blocked", Summary: "Trusted interactive visual QA receipts are unavailable in delegated completion v1."})
+	}
+	return checks, nil
+}
+
+// verificationTarget is what a bracketed verification.run/browser.verify call
+// records into: the legacy implementer workflow, or a runtime task's
+// integration head (headTree is the tree its plan was made for).
+type verificationTarget struct {
+	legacy   *store.AgentWorkflow
+	taskID   string
+	headTree string
+}
+
 // begin/end bracket the real built-in call, after normal tool approval. Neither
 // model text nor tool arguments provide status evidence. Pre-integration and
 // child checks intentionally never create lead receipts.
-func (e *Engine) beginDelegationVerification(ctx context.Context, name string) (*store.AgentWorkflow, error) {
+//
+// A task whose integration head row exists is a runtime task: that row is
+// written only by runtime integration (Plan 3), and it is exactly what gets
+// verified. Every other task keeps the legacy workflow target.
+func (e *Engine) beginDelegationVerification(ctx context.Context, name string) (*verificationTarget, error) {
 	if name != "verification.run" && name != "browser.verify" {
 		return nil, nil
 	}
 	task, ok := DelegationTaskFromContext(ctx)
 	if !ok {
 		return nil, nil
+	}
+	head, err := e.Store.AgentIntegrationHead(ctx, task.ID)
+	if err == nil {
+		return e.beginRuntimeVerification(ctx, head)
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
 	}
 	w, err := e.Store.AgentWorkflow(ctx, task.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -319,12 +352,16 @@ func (e *Engine) beginDelegationVerification(ctx context.Context, name string) (
 	if err = e.DelegationWorkspaceService.ValidateIntegrated(ctx, task.ID, w.ChildID, w.Revision); err != nil {
 		return nil, err
 	}
-	return &w, nil
+	return &verificationTarget{legacy: &w}, nil
 }
-func (e *Engine) finishDelegationVerification(ctx context.Context, name string, w *store.AgentWorkflow, raw string) error {
-	if w == nil {
+func (e *Engine) finishDelegationVerification(ctx context.Context, name string, target *verificationTarget, raw string) error {
+	if target == nil {
 		return nil
 	}
+	if target.legacy == nil {
+		return e.recordRuntimeVerification(ctx, target.taskID, target.headTree, name, raw)
+	}
+	w := target.legacy
 	e.delegationWorkflowMu.Lock()
 	defer e.delegationWorkflowMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -340,6 +377,24 @@ func (e *Engine) finishDelegationVerification(ctx context.Context, name string, 
 	if current.Revision != w.Revision {
 		return errors.New("verification revision changed")
 	}
+	if err = recordVerificationResults(current.Checks, name, raw); err != nil {
+		return err
+	}
+	if err = e.Store.SaveAgentWorkflow(ctx, current); err != nil {
+		return err
+	}
+	if task, readErr := e.Store.AgentTask(ctx, w.TaskID); readErr == nil {
+		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &task, Workflow: &current})
+	}
+	return nil
+}
+
+// recordVerificationResults applies the raw output of a real verification.run
+// or browser.verify call to the matching checks (same command and directory;
+// browser checks only from browser.verify). The summary is the error, else
+// the reason, else the output, truncated to 4096 bytes. Checks may be
+// partially updated when it returns an error; callers discard them then.
+func recordVerificationResults(checks []store.AgentWorkflowCheck, name, raw string) error {
 	type checkResult struct {
 		Command   string `json:"command"`
 		Directory string `json:"directory"`
@@ -351,7 +406,7 @@ func (e *Engine) finishDelegationVerification(ctx context.Context, name string, 
 	var results []checkResult
 	if name == "browser.verify" {
 		var r checkResult
-		if err = json.Unmarshal([]byte(raw), &r); err != nil {
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
 			return err
 		}
 		results = append(results, r)
@@ -359,14 +414,14 @@ func (e *Engine) finishDelegationVerification(ctx context.Context, name string, 
 		var r struct {
 			Results []checkResult `json:"results"`
 		}
-		if err = json.Unmarshal([]byte(raw), &r); err != nil {
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
 			return err
 		}
 		results = r.Results
 	}
 	for _, r := range results {
-		for i := range current.Checks {
-			c := &current.Checks[i]
+		for i := range checks {
+			c := &checks[i]
 			if c.Command == r.Command && c.Directory == r.Directory && (c.Kind == "browser") == (name == "browser.verify") {
 				switch r.Status {
 				case "passed", "failed", "blocked", "not_run":
@@ -386,12 +441,6 @@ func (e *Engine) finishDelegationVerification(ctx context.Context, name string, 
 				}
 			}
 		}
-	}
-	if err = e.Store.SaveAgentWorkflow(ctx, current); err != nil {
-		return err
-	}
-	if task, readErr := e.Store.AgentTask(ctx, w.TaskID); readErr == nil {
-		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &task, Workflow: &current})
 	}
 	return nil
 }
