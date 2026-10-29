@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -119,6 +120,13 @@ func (e *Engine) SetModelCapacity(ctx context.Context, p protocol.ModelCapacityP
 // window exists. It never blocks a turn: a confirmed overflow lowers it to the
 // limit the server reports, and observed usage near it raises it.
 const DefaultContextWindow = 256000
+
+// compactionMaxOutput and taskIntentMaxOutput bound the short auxiliary
+// requests; they are independent of the effort level.
+const (
+	compactionMaxOutput = 1800
+	taskIntentMaxOutput = 2048
+)
 
 // minLearnedWindow keeps a guessed window from collapsing below a usable size.
 const minLearnedWindow = 8192
@@ -321,6 +329,14 @@ func (e *Engine) resolveCapacity(ctx context.Context, res resolved) (models.Capa
 	}
 	if profile.MaxOutputTokens != nil && (cap.MaxOutput == 0 || *profile.MaxOutputTokens < cap.MaxOutput) {
 		cap.MaxOutput = *profile.MaxOutputTokens
+	}
+	if cap.MaxOutput == 0 {
+		cap.MaxOutput = config.DefaultMaxOutputTokens
+		if n := e.defaultMaxOut.Load(); n > 0 {
+			cap.MaxOutput = int(n)
+		} else if e.Cfg != nil && e.Cfg.Models.DefaultMaxOutputTokens > 0 {
+			cap.MaxOutput = e.Cfg.Models.DefaultMaxOutputTokens
+		}
 	}
 	if cap.MaxOutput > cap.Window {
 		cap.MaxOutput = cap.Window

@@ -108,6 +108,10 @@ type Request struct {
 	//   gemini: "level" (thinkingConfig.thinkingLevel, default) or "budget" (thinkingBudget)
 	//   openai: ignored (reasoning_effort)
 	ReasoningStyle string
+	// TemplateKwargs is sent as chat_template_kwargs to llama.cpp-style servers
+	// whose template thinking controls were detected. When non-empty it replaces
+	// the legacy reasoning_effort field for this request.
+	TemplateKwargs map[string]any
 }
 
 // RequestTokenCounter is an optional exact serving-tokenizer capability.

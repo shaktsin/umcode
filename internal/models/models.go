@@ -21,19 +21,23 @@ var catalogJSON []byte
 
 // Meta is what the engine knows about one model.
 type Meta struct {
-	Provider       string  `json:"provider"`
-	ID             string  `json:"id"`
-	DisplayName    string  `json:"displayName"`
-	ContextWindow  int     `json:"contextWindow"`
-	Tools          bool    `json:"tools"`
-	Images         bool    `json:"images"`
-	Reasoning      bool    `json:"reasoning"`
-	ReasoningStyle string  `json:"reasoningStyle"`
-	In             float64 `json:"in"`
-	CachedIn       float64 `json:"cachedIn"`
-	Out            float64 `json:"out"`
-	PriceUnknown   bool    `json:"priceUnknown"`
-	Bundled        bool    `json:"-"`
+	Provider       string `json:"provider"`
+	ID             string `json:"id"`
+	DisplayName    string `json:"displayName"`
+	ContextWindow  int    `json:"contextWindow"`
+	Tools          bool   `json:"tools"`
+	Images         bool   `json:"images"`
+	Reasoning      bool   `json:"reasoning"`
+	ReasoningStyle string `json:"reasoningStyle"`
+	// ReasoningLevels is the subset of low|medium|high the model supports; empty means no thinking.
+	ReasoningLevels []string `json:"reasoningLevels,omitempty"`
+	// SelfAdapting models scale their own effort, so the chosen level is sent unchanged every round.
+	SelfAdapting bool    `json:"selfAdapting,omitempty"`
+	In           float64 `json:"in"`
+	CachedIn     float64 `json:"cachedIn"`
+	Out          float64 `json:"out"`
+	PriceUnknown bool    `json:"priceUnknown"`
+	Bundled      bool    `json:"-"`
 }
 
 type bundle struct {
@@ -60,6 +64,7 @@ func NewCatalog(st *store.Store) (*Catalog, error) {
 	}
 	c := &Catalog{store: st, bundled: map[string]Meta{}, defaults: b.Defaults, cheap: b.Cheap}
 	for _, m := range b.Models {
+		m = withReasoningProfile(m)
 		m.Bundled = true
 		k := m.Provider + "/" + m.ID
 		c.bundled[k] = m
@@ -117,8 +122,13 @@ func infer(provider, model string) Meta {
 			m.ReasoningStyle = "budget"
 		}
 	case "openai_compatible":
-		// Local models: price 0, reasoning unknown.
+		// Local models: price 0. Thinking is template-driven; Task 6 applies this only when detection succeeds.
 		m.PriceUnknown = false
+		m.Reasoning, m.ReasoningStyle = true, "template"
+	}
+	if m.Reasoning {
+		m.ReasoningLevels = append([]string(nil), allLevels...)
+		m.SelfAdapting = provider != "openai_compatible"
 	}
 	return m
 }
@@ -160,8 +170,11 @@ func (c *Catalog) List(ctx context.Context, provider string, includeHidden bool)
 		seen[k] = true
 		pm := protocol.Model{
 			Provider: m.Provider, ID: m.ID, DisplayName: m.DisplayName, ContextWindow: m.ContextWindow,
-			SupportsTools: m.Tools, SupportsImages: m.Images, SupportsReasoning: m.Reasoning,
+			SupportsTools: m.Tools, SupportsImages: m.Images, SupportsReasoning: m.CatalogReasoning(),
 			InputPerMTok: m.In, CachedInputPerMTok: m.CachedIn, OutputPerMTok: m.Out, Source: source,
+		}
+		if m.CatalogReasoning() {
+			pm.ReasoningLevels = append([]string(nil), m.ReasoningLevels...)
 		}
 		if p, ok := prefs[k]; ok {
 			pm.Hidden = p.Hidden

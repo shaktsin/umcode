@@ -101,8 +101,6 @@ type ModelRouteParams struct {
 	// Pool names a configured pool to route within, as "pool/<id>" does in a
 	// selection.
 	Pool string `json:"pool,omitempty"`
-	// Text lets Auto classify the same way a real turn would.
-	Text string `json:"text,omitempty"`
 	Role string `json:"role,omitempty"`
 }
 
@@ -112,7 +110,8 @@ type ModelRouteResult struct {
 	Chosen       *RouteInfo  `json:"chosen,omitempty"`
 	Alternatives []RouteInfo `json:"alternatives"`
 	Complexity   Complexity  `json:"complexity"`
-	AutoPicked   bool        `json:"autoPicked,omitempty"`
+	// AutoPicked is always false since Auto was removed; kept for wire compatibility.
+	AutoPicked bool `json:"autoPicked,omitempty"`
 	// Reason explains an empty list: no keys, everything cooling down, …
 	Reason string `json:"reason,omitempty"`
 }

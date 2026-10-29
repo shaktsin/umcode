@@ -75,10 +75,10 @@ await step('undo turn puts the file back', async () => {
 });
 
 await step('complexity pill picks a level from its menu', async () => {
-  const pill = p.getByRole('button', { name: /^Complexity: (Auto|Quick|Standard|Deep)$/ }).first();
+  const pill = p.getByRole('button', { name: /^Thinking: (Low|Medium|High)$/ }).first();
   await pill.click();
-  await p.getByRole('menuitem', { name: /^Deep/ }).click();
-  await p.getByRole('button', { name: 'Complexity: Deep', exact: true }).first().waitFor({ timeout: 5000 });
+  await p.getByRole('menuitem', { name: /^High/ }).click();
+  await p.getByRole('button', { name: 'Thinking: High', exact: true }).first().waitFor({ timeout: 5000 });
 });
 
 console.log('console errors:', errors.length ? errors.slice(0, 5) : 'none');

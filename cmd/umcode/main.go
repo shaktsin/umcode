@@ -61,7 +61,7 @@ Chat
       -t THREAD   continue a thread (default: new thread)
       -p PROVIDER claude | openai | gemini | openai_compatible
       -m MODEL    model id
-      -c LEVEL    auto | quick | standard | deep
+      -c LEVEL    low | medium | high
       -k KEY      API key id to use
   thread list [--archived] | show ID | search QUERY | rename ID TITLE | pin ID | unpin ID
          archive ID | unarchive ID | delete ID | fork ID [ITEM] | export ID [-o FILE]

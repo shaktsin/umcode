@@ -138,6 +138,15 @@ func (o *OpenAI) buildRequest(req Request) map[string]any {
 			body["max_completion_tokens"] = req.MaxTokens
 		}
 	}
+	if len(req.TemplateKwargs) > 0 {
+		body["chat_template_kwargs"] = req.TemplateKwargs
+		return body
+	}
+	if req.ReasoningStyle == "template" {
+		// Local template servers without detected controls get no reasoning
+		// fields, and "none" is never sent to them.
+		return body
+	}
 	if len(req.Tools) > 0 && req.Reasoning == ReasoningOff {
 		// Quick/Auto turns explicitly disable reasoning. Omitting this field lets
 		// some reasoning models apply their default effort, which Chat Completions

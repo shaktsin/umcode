@@ -81,7 +81,7 @@
     const r = t.resolved || {};
     const m = app.models.find((x) => x.provider === r.provider && x.id === r.model);
     const name = m?.displayName || r.model || '';
-    const cx = r.complexity ? `${r.complexity}${t.autoPicked ? ' (auto)' : ''}` : '';
+    const cx = r.complexity ? r.complexity : '';
     return [name, cx].filter(Boolean).join(' · ');
   }
 

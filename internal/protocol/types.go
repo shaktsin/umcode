@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -9,16 +10,45 @@ import (
 type Complexity string
 
 const (
-	ComplexityAuto     Complexity = "auto"
-	ComplexityQuick    Complexity = "quick"
-	ComplexityStandard Complexity = "standard"
-	ComplexityDeep     Complexity = "deep"
+	ComplexityLow    Complexity = "low"
+	ComplexityMedium Complexity = "medium"
+	ComplexityHigh   Complexity = "high"
 )
 
-// Valid reports whether c is a known complexity (empty counts as valid: inherit).
+// NormalizeComplexity lower-cases and trims s and maps legacy values
+// (quick, standard, auto, deep) to low/medium/high. Empty stays empty
+// (inherit); unknown values pass through so Valid rejects them.
+func NormalizeComplexity(s string) Complexity {
+	switch v := strings.ToLower(strings.TrimSpace(s)); v {
+	case "quick":
+		return ComplexityLow
+	case "standard", "auto":
+		return ComplexityMedium
+	case "deep":
+		return ComplexityHigh
+	default:
+		return Complexity(v)
+	}
+}
+
+// UnmarshalJSON normalizes legacy level names on read.
+func (c *Complexity) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	*c = NormalizeComplexity(s)
+	return nil
+}
+
+// Valid reports whether c is a known level (empty counts as valid: inherit).
+// Legacy names are accepted only after NormalizeComplexity.
 func (c Complexity) Valid() bool {
 	switch c {
-	case "", ComplexityAuto, ComplexityQuick, ComplexityStandard, ComplexityDeep:
+	case "", ComplexityLow, ComplexityMedium, ComplexityHigh:
 		return true
 	}
 	return false
@@ -204,18 +234,20 @@ type Credential struct {
 
 // Model describes a model in the catalog.
 type Model struct {
-	Provider           string  `json:"provider"`
-	ID                 string  `json:"id"`
-	DisplayName        string  `json:"displayName"`
-	ContextWindow      int     `json:"contextWindow,omitempty"`
-	SupportsTools      bool    `json:"supportsTools"`
-	SupportsImages     bool    `json:"supportsImages"`
-	SupportsReasoning  bool    `json:"supportsReasoning"`
-	InputPerMTok       float64 `json:"inputPerMTok"`
-	CachedInputPerMTok float64 `json:"cachedInputPerMTok"`
-	OutputPerMTok      float64 `json:"outputPerMTok"`
-	Hidden             bool    `json:"hidden"`
-	Source             string  `json:"source"` // bundled | api | user
+	Provider          string `json:"provider"`
+	ID                string `json:"id"`
+	DisplayName       string `json:"displayName"`
+	ContextWindow     int    `json:"contextWindow,omitempty"`
+	SupportsTools     bool   `json:"supportsTools"`
+	SupportsImages    bool   `json:"supportsImages"`
+	SupportsReasoning bool   `json:"supportsReasoning"`
+	// ReasoningLevels are the low|medium|high levels the model supports; empty means none are known.
+	ReasoningLevels    []string `json:"reasoningLevels,omitempty"`
+	InputPerMTok       float64  `json:"inputPerMTok"`
+	CachedInputPerMTok float64  `json:"cachedInputPerMTok"`
+	OutputPerMTok      float64  `json:"outputPerMTok"`
+	Hidden             bool     `json:"hidden"`
+	Source             string   `json:"source"` // bundled | api | user
 }
 
 // Provider describes a configured provider.
@@ -229,11 +261,8 @@ type Provider struct {
 
 // ComplexityPreset is the engine translation of one complexity level.
 type ComplexityPreset struct {
-	Level           Complexity `json:"level"`
-	Reasoning       string     `json:"reasoning"`    // off | low | medium | high
-	MaxToolSteps    int        `json:"maxToolSteps"` // compatibility mirror of the global round ceiling
-	MultiAgent      string     `json:"multiAgent"`   // never | teamRouteOnly | allowed
-	MaxOutputTokens int        `json:"maxOutputTokens"`
+	Level     Complexity `json:"level"`
+	Reasoning string     `json:"reasoning"` // off | low | medium | high
 }
 
 // ExecutionLimits bound a complete model/tool turn independently of reasoning level.

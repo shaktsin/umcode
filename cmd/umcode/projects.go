@@ -55,7 +55,7 @@ func runProject(args []string) error {
 		name := fs.String("name", "", "display name (default: the folder's name)")
 		model := fs.String("m", "", "default model for chats in this project")
 		provider := fs.String("p", "", "default provider")
-		cplx := fs.String("c", "", "default complexity: auto|quick|standard|deep")
+		cplx := fs.String("c", "", "default complexity: low|medium|high")
 		compute := fs.Bool("compute", false, "run commands in the isolated microVM")
 		network := fs.Bool("network", false, "allow commands that use the network")
 		fs.Parse(rest)

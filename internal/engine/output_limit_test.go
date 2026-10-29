@@ -79,7 +79,7 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			wait := make(chan protocol.Turn, 1)
-			started, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Implement the reader", Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityStandard}}, wait: wait})
+			started, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Implement the reader", Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityMedium}}, wait: wait})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,8 +95,13 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 			case <-time.After(15 * time.Second):
 				t.Fatal("turn did not finish")
 			}
-			if provider.calls != 1 {
-				t.Fatalf("unbounded or unexpected retries: %d", provider.calls)
+			// A confirmed output cut-off is continued twice, then fails.
+			wantCalls := 1
+			if tc.failed {
+				wantCalls = 1 + maxOutputContinuations
+			}
+			if provider.calls != wantCalls {
+				t.Fatalf("unbounded or unexpected retries: %d, want %d", provider.calls, wantCalls)
 			}
 			items, err := st.ListItems(t.Context(), th.ID, 0)
 			if err != nil {
@@ -121,10 +126,11 @@ func TestOutputLimitDoesNotCompleteOrExecutePartialTools(t *testing.T) {
 			if err = json.Unmarshal(b, &decoded); err != nil {
 				t.Fatal(err)
 			}
-			if len(decoded.Requests) != 1 || decoded.Requests[0].StopReason != tc.reason {
+			last := len(decoded.Requests) - 1
+			if len(decoded.Requests) != wantCalls || decoded.Requests[last].StopReason != tc.reason {
 				t.Fatalf("stop reason lost: %s", b)
 			}
-			if tc.failed && decoded.Requests[0].Fallback != "output_limit" {
+			if tc.failed && decoded.Requests[last].Fallback != "output_limit" {
 				t.Fatalf("truncation diagnostic missing: %s", b)
 			}
 		})
@@ -195,4 +201,58 @@ func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T)
 
 func (*outputLimitProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
 	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}
+
+type maxTokensRecorder struct {
+	outputLimitProvider
+	maxTokens []int
+}
+
+func (p *maxTokensRecorder) Stream(ctx context.Context, cred llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if _, ok := testIntentReply(req, "explanation", "answer", ""); !ok {
+		p.maxTokens = append(p.maxTokens, req.MaxTokens)
+	}
+	return p.outputLimitProvider.Stream(ctx, cred, req)
+}
+
+func TestPresetNoLongerSetsMaxTokens(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	cfg.LLM.Provider, cfg.LLM.Model = "claude", "deterministic"
+	st, err := teststore.Open(t.Context(), filepath.Join(cfg.Home, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	provider := &maxTokensRecorder{outputLimitProvider: outputLimitProvider{reason: "end_turn"}}
+	reg := llm.NewRegistry()
+	reg.Register(provider)
+	e, err := New(t.Context(), Options{Config: cfg, Store: st, Secrets: secrets.NewMemoryStore(), LLMs: reg, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), DisableScheduler: true, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Shutdown(context.Background()) })
+	if _, err = e.Creds.Add(t.Context(), protocol.CredentialAddParams{Provider: "claude", Label: "test", Secret: "test", IsDefault: true}); err != nil {
+		t.Fatal(err)
+	}
+	th, err := st.CreateThread(t.Context(), protocol.Thread{Title: "preset max tokens"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := make(chan protocol.Turn, 1)
+	if _, err = e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: th.ID, Text: "Implement the reader", Override: protocol.ModelSelection{Provider: "claude", Model: "deterministic", Complexity: protocol.ComplexityLow}}, wait: wait}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-wait:
+	case <-time.After(15 * time.Second):
+		t.Fatal("turn did not finish")
+	}
+	if len(provider.maxTokens) == 0 {
+		t.Fatal("no request recorded")
+	}
+	// The Low preset used to cap output at 4096; the budgeter result for the
+	// 256000-token default window with the 32768 default output is 32768.
+	if got := provider.maxTokens[0]; got != 32768 {
+		t.Fatalf("first request MaxTokens = %d, want the budgeter result 32768", got)
+	}
 }

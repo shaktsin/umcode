@@ -30,7 +30,7 @@
     <div class="popup-list p-1" role="menu" aria-label={ariaLabel}>
       {#each items as item (item.id)}
         {#if item.separatorBefore}<div class="my-1 border-t border-line" role="separator"></div>{/if}
-        <button type="button" role="menuitem" class="w-full flex items-start gap-2 px-2 py-1.5 rounded-md text-left text-xs hover:bg-raised disabled:opacity-50" disabled={item.disabled} onclick={() => choose(item.id)}>
+        <button type="button" role="menuitem" class="w-full flex items-start gap-2 px-2 py-1.5 rounded-md text-left text-xs hover:bg-raised disabled:opacity-50" disabled={item.disabled} title={item.title} onclick={() => choose(item.id)}>
           <span class="w-4 h-4 flex items-center justify-center shrink-0">{#if item.checked}<Check class="w-3.5 h-3.5 text-accent" />{/if}</span>
           <span class="min-w-0 flex-1">
             <span class="block font-semibold text-ink">{item.label}</span>

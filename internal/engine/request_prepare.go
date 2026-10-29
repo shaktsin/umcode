@@ -66,12 +66,12 @@ func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Tu
 					}
 					item.Status = protocol.ItemCompleted
 					item.Text = "Automatic working-context checkpoint. Original messages and tool outputs remain saved and retrievable."
-					item.Data, _ = json.Marshal(map[string]any{"workingMessages": prepared.Messages})
+					item.Data, _ = json.Marshal(map[string]any{"workingMessages": dropTail(prepared.Messages, res.continuationTail)})
 					if err = e.Store.SaveItem(sctx, item); err != nil {
 						return llm.Request{}, report, err
 					}
 				}
-				res.workingMessages = prepared.Messages
+				res.workingMessages = dropTail(prepared.Messages, res.continuationTail)
 				res.contextReduced = true
 			}
 			return prepared, report, nil

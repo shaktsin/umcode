@@ -167,32 +167,34 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 	if !ok {
 		return fmt.Errorf("unknown provider %q for chat compaction", selection.sel.Provider)
 	}
-	maxOutput := selection.preset.MaxOutputTokens
-	if maxOutput <= 0 || maxOutput > 2400 {
-		maxOutput = 1800
-	}
+	maxOutput := compactionMaxOutput
 	request := llm.Request{
 		Model:     selection.sel.Model,
 		System:    "Summarize this coding conversation for continuation in the same chat. Preserve the user's goal and constraints, decisions, relevant project/file facts, changes already made, checks and their outcomes, unresolved issues, and the next concrete steps. Do not invent facts or claim unverified checks passed. Be concise, but retain details needed to continue the work. Return only the summary.",
 		Messages:  []llm.Message{llm.Text(llm.RoleUser, transcript)},
 		MaxTokens: maxOutput,
-		Reasoning: selection.preset.Reasoning,
 	}
+	e.applyAuxEffort(ctx, &selection, &request)
 	compactCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	started := time.Now()
 	var summary strings.Builder
 	var usage llm.Usage
 	shared := delegation.BudgetFromContext(ctx)
-	if shared != nil {
-		budget := newTurnBudget(selection.limits)
-		budget.shared = shared
-		out, err := e.streamOnce(compactCtx, sctx, turns[len(turns)-1], selection, selection.cred, provider, request, "compaction", budget)
-		if err != nil {
-			return fmt.Errorf("compact chat context: %w", err)
+	base := request
+	attempt := func() error {
+		summary.Reset()
+		request = base
+		if shared != nil {
+			budget := newTurnBudget(selection.limits)
+			budget.shared = shared
+			out, err := e.streamOnce(compactCtx, sctx, turns[len(turns)-1], selection, selection.cred, provider, request, "compaction", budget)
+			if err != nil {
+				return err
+			}
+			summary.WriteString(out.text)
+			return nil
 		}
-		summary.WriteString(out.text)
-	} else {
 		prepared, report, err := e.prepareModelRequest(compactCtx, sctx, turns[len(turns)-1], &selection, request, "compaction", newTurnBudget(selection.limits))
 		if err != nil {
 			return err
@@ -200,7 +202,7 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 		request = prepared
 		events, err := provider.Stream(compactCtx, selection.cred.Material, request)
 		if err != nil {
-			return fmt.Errorf("compact chat context: %w", err)
+			return err
 		}
 		for event := range events {
 			switch event.Type {
@@ -210,11 +212,23 @@ func (e *Engine) compactConversation(ctx, sctx context.Context, thread protocol.
 				usage = event.Usage
 			case llm.EventError:
 				if event.Err != nil {
-					return fmt.Errorf("compact chat context: %w", event.Err)
+					return event.Err
 				}
 			}
 		}
 		e.observeRequestUsage(selection, report, usage.InputTokens, usage.Reported)
+		return nil
+	}
+	err = attempt()
+	if err != nil && templateKwargsRejected(err, base.TemplateKwargs) {
+		// The server does not accept the thinking controls: remember that and
+		// retry once without them.
+		e.disableTemplateKwargs(&selection)
+		e.applyAuxEffort(ctx, &selection, &base)
+		err = attempt()
+	}
+	if err != nil {
+		return fmt.Errorf("compact chat context: %w", err)
 	}
 	if err := compactCtx.Err(); err != nil {
 		return fmt.Errorf("compact chat context: %w", err)

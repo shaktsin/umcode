@@ -51,6 +51,7 @@ type Engine struct {
 	capacityMu         sync.Mutex
 	capacityCache      map[capacityKey]capacityCacheEntry
 	observedCapacity   map[capacityKey]observedWindow
+	templateCache      map[capacityKey]templateCapsEntry
 	evaluationPolicy   *optimization.Policy
 	selectionHook      func() // instance-local failure seam, set before use
 	discoveryHook      func()
@@ -109,6 +110,7 @@ type Engine struct {
 	presets          map[protocol.Complexity]protocol.ComplexityPreset
 	defaultCplx      protocol.Complexity
 	turnLimits       protocol.ExecutionLimits
+	defaultMaxOut    atomic.Int64                  // output limit for models with unknown max output
 	turnWaiters      map[string]chan protocol.Turn // turn id -> completion (task runs)
 	wg               sync.WaitGroup
 }
@@ -804,21 +806,24 @@ const complexitySettingKey = "complexity_defaults"
 
 func (e *Engine) loadComplexity(ctx context.Context) error {
 	e.presets = models.Presets(e.Cfg.Models)
-	e.defaultCplx = protocol.Complexity(e.Cfg.Models.DefaultComplexity)
+	e.defaultCplx = protocol.NormalizeComplexity(e.Cfg.Models.DefaultComplexity)
 	e.turnLimits = protocol.ExecutionLimits{
 		MaxDurationMinutes: e.Cfg.Models.ExecutionLimits.MaxDurationMinutes,
 		MaxTokens:          e.Cfg.Models.ExecutionLimits.MaxTokens,
 		MaxCostUSD:         e.Cfg.Models.ExecutionLimits.MaxCostUSD,
 		MaxToolRounds:      e.Cfg.Models.ExecutionLimits.MaxToolRounds,
 	}
+	e.defaultMaxOut.Store(int64(e.Cfg.Models.DefaultMaxOutputTokens))
 	var saved protocol.ComplexityDefaults
 	if err := e.Store.GetSetting(ctx, complexitySettingKey, &saved); err == nil {
+		if validDefaultMaxOutput(saved.DefaultMaxOutputTokens) {
+			e.defaultMaxOut.Store(int64(saved.DefaultMaxOutputTokens))
+		}
 		if saved.Default.Valid() && saved.Default != "" {
 			e.defaultCplx = saved.Default
 		}
 		for _, p := range saved.Presets {
 			if _, ok := e.presets[p.Level]; ok {
-				p.MaxToolSteps = e.turnLimits.MaxToolRounds
 				e.presets[p.Level] = p
 			}
 		}
@@ -835,11 +840,9 @@ func (e *Engine) loadComplexity(ctx context.Context) error {
 func (e *Engine) ComplexityDefaults() protocol.ComplexityDefaults {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := protocol.ComplexityDefaults{Default: e.defaultCplx, Limits: e.turnLimits}
-	for _, lvl := range []protocol.Complexity{protocol.ComplexityQuick, protocol.ComplexityStandard, protocol.ComplexityDeep} {
-		preset := e.presets[lvl]
-		preset.MaxToolSteps = e.turnLimits.MaxToolRounds
-		out.Presets = append(out.Presets, preset)
+	out := protocol.ComplexityDefaults{Default: e.defaultCplx, Limits: e.turnLimits, DefaultMaxOutputTokens: int(e.defaultMaxOut.Load())}
+	for _, lvl := range []protocol.Complexity{protocol.ComplexityLow, protocol.ComplexityMedium, protocol.ComplexityHigh} {
+		out.Presets = append(out.Presets, e.presets[lvl])
 	}
 	return out
 }
@@ -850,7 +853,7 @@ func (e *Engine) SetComplexityDefaults(ctx context.Context, d protocol.Complexit
 		return protocol.ComplexityDefaults{}, fmt.Errorf("invalid default complexity %q", d.Default)
 	}
 	for _, p := range d.Presets {
-		if p.Level == protocol.ComplexityAuto || !p.Level.Valid() || p.Level == "" {
+		if !p.Level.Valid() || p.Level == "" {
 			return protocol.ComplexityDefaults{}, fmt.Errorf("invalid preset level %q", p.Level)
 		}
 		switch p.Reasoning {
@@ -862,8 +865,11 @@ func (e *Engine) SetComplexityDefaults(ctx context.Context, d protocol.Complexit
 	if !validExecutionLimits(d.Limits) {
 		return protocol.ComplexityDefaults{}, fmt.Errorf("invalid execution limits")
 	}
-	for i := range d.Presets {
-		d.Presets[i].MaxToolSteps = d.Limits.MaxToolRounds
+	if d.DefaultMaxOutputTokens == 0 {
+		d.DefaultMaxOutputTokens = int(e.defaultMaxOut.Load())
+	}
+	if !validDefaultMaxOutput(d.DefaultMaxOutputTokens) {
+		return protocol.ComplexityDefaults{}, fmt.Errorf("default max output tokens must be between 1024 and 1000000")
 	}
 	if err := e.Store.SetSetting(ctx, complexitySettingKey, d); err != nil {
 		return protocol.ComplexityDefaults{}, err
@@ -875,8 +881,15 @@ func (e *Engine) SetComplexityDefaults(ctx context.Context, d protocol.Complexit
 	}
 	e.turnLimits = d.Limits
 	e.mu.Unlock()
+	e.defaultMaxOut.Store(int64(d.DefaultMaxOutputTokens))
+	// Cached capacities embed the old default, so drop them.
+	e.capacityMu.Lock()
+	clear(e.capacityCache)
+	e.capacityMu.Unlock()
 	return e.ComplexityDefaults(), nil
 }
+
+func validDefaultMaxOutput(n int) bool { return n >= 1024 && n <= 1_000_000 }
 
 func validExecutionLimits(l protocol.ExecutionLimits) bool {
 	return l.MaxDurationMinutes >= 1 && l.MaxDurationMinutes <= 480 &&
@@ -944,7 +957,7 @@ func (e *Engine) UsageSummary(ctx context.Context, p protocol.UsageSummaryParams
 
 func validateSelection(s protocol.ModelSelection) error {
 	if !s.Complexity.Valid() {
-		return fmt.Errorf("unknown complexity %q (use auto, quick, standard or deep)", s.Complexity)
+		return fmt.Errorf("unknown complexity %q (use low, medium or high)", s.Complexity)
 	}
 	return nil
 }

@@ -103,8 +103,8 @@ try {
       const input=page.getByRole('textbox',{name:'Message',exact:true}).first();const draft='Long draft line\n'.repeat(80);await input.fill(draft);
       const send=composer.getByRole('button',{name:'Send',exact:true});const r=await send.boundingBox();assert.ok(r.x>=0&&r.x+r.width<=width&&r.y+r.height<=height,'send bounds');
       assert.equal(await input.inputValue(),draft);
-      for(const name of ['Complexity','More options']){
-        const pill=composer.getByRole('button',{name:name==='Complexity'?/^Complexity: (Auto|Quick|Standard|Deep|A|Q|S|D)$/:name,exact:name!=='Complexity'}).first();
+      for(const name of ['Thinking','More options']){
+        const pill=composer.getByRole('button',{name:name==='Thinking'?/^Thinking: (Low|Medium|High|L|M|H)$/:name,exact:name!=='Thinking'}).first();
         near((await pill.boundingBox()).height,28,name+' pill height');
       }
       await input.evaluate(el=>{el.scrollTop=el.scrollHeight;});assert.ok(await input.evaluate(el=>el.scrollHeight>el.clientHeight));

@@ -66,7 +66,6 @@ func (r Route) Same(o Route) bool {
 type Plan struct {
 	Routes    []Route
 	Blocked   []protocol.RouteInfo
-	Level     protocol.Complexity
 	Reason    string
 	nextIndex int
 }
@@ -86,8 +85,11 @@ type Request struct {
 	// Pinned is the selection after merging turn → thread → project; empty
 	// fields mean "no preference".
 	Pinned protocol.ModelSelection
-	Level  protocol.Complexity
-	Need   Capabilities
+	// Tier is "quality", "cheap" or "" (standard), derived only from the pool
+	// strategy. The effort level never reaches the router: it tunes the model
+	// call, not which model is called.
+	Tier string
+	Need Capabilities
 	// MaxRoutes caps how many fallbacks to line up (default 6).
 	MaxRoutes int
 	// Candidates, when set, is the only set of models the plan may use: the
@@ -125,11 +127,12 @@ func (r *Router) Plan(ctx context.Context, req Request) (*Plan, error) {
 	if max <= 0 {
 		max = defaultMaxRoutes
 	}
-	level := req.Level
-	if level == "" || level == protocol.ComplexityAuto {
-		level = protocol.ComplexityStandard
+	tier := req.Tier
+	if tier == "" {
+		tier = TierForStrategy(req.Strategy)
 	}
-	plan := &Plan{Level: level}
+	level := tierLevel(tier)
+	plan := &Plan{}
 	now := time.Now()
 
 	// Which providers can pay for anything at all.
@@ -172,7 +175,7 @@ func (r *Router) Plan(ctx context.Context, req Request) (*Plan, error) {
 	// A configured set short-circuits everything below: these are the models the
 	// user approved, in the order the pool asks for, and nothing else.
 	if len(req.Candidates) > 0 {
-		for i, cm := range r.order(ctx, req.Candidates, req.Strategy, level) {
+		for i, cm := range r.order(ctx, req.Candidates, req.Strategy, tier) {
 			why := protocol.RouteFallback
 			switch {
 			case cm.Provider == pinnedProvider && cm.Model == req.Pinned.Model:
@@ -231,40 +234,53 @@ func (r *Router) Plan(ctx context.Context, req Request) (*Plan, error) {
 		}
 	}
 
-	// 3. Nothing in this tier: drop a level rather than failing the turn.
-	if len(plan.Routes) == 0 && level == protocol.ComplexityDeep {
-		lower := *plan
-		req.Level = protocol.ComplexityStandard
-		if p, err := r.Plan(ctx, req); err == nil && len(p.Routes) > 0 {
-			for i := range p.Routes {
-				p.Routes[i].Why = protocol.RouteLastGasp
-			}
-			p.Blocked = append(lower.Blocked, p.Blocked...)
-			return p, nil
-		}
-	}
 	if len(plan.Routes) == 0 && plan.Reason == "" {
 		plan.Reason = r.explainEmpty(plan)
 	}
 	return plan, nil
 }
 
+// Tier names the model class a pool strategy asks for.
+const (
+	TierQuality = "quality"
+	TierCheap   = "cheap"
+)
+
+// TierForStrategy maps a pool strategy to a tier: quality wants the strongest
+// models, fast and cheap the cheapest, anything else the standard tier.
+func TierForStrategy(strategy string) string {
+	switch strategy {
+	case protocol.PoolQuality:
+		return TierQuality
+	case protocol.PoolFast, protocol.PoolCheap:
+		return TierCheap
+	}
+	return ""
+}
+
+// tierLevel is the catalog ranking a tier uses.
+func tierLevel(tier string) protocol.Complexity {
+	switch tier {
+	case TierQuality:
+		return protocol.ComplexityHigh
+	case TierCheap:
+		return protocol.ComplexityLow
+	}
+	return protocol.ComplexityMedium
+}
+
 // order sorts configured models for a pool strategy. "priority" is the order
-// the user wrote down; the rest borrow the complexity tiers' ranking, so a
-// pool and a tier agree about what "fast" or "strongest" means.
-func (r *Router) order(ctx context.Context, in []protocol.ConfiguredModel, strategy string, level protocol.Complexity) []protocol.ConfiguredModel {
+// the user wrote down; the rest rank by tier, so a pool and the catalog agree
+// about what "cheap" or "strongest" means.
+func (r *Router) order(ctx context.Context, in []protocol.ConfiguredModel, strategy, tier string) []protocol.ConfiguredModel {
 	out := make([]protocol.ConfiguredModel, len(in))
 	copy(out, in)
 	switch strategy {
-	case protocol.PoolQuality:
-		level = protocol.ComplexityDeep
-	case protocol.PoolFast, protocol.PoolCheap:
-		level = protocol.ComplexityQuick
-	case protocol.PoolBalanced:
-		level = protocol.ComplexityStandard
+	case protocol.PoolQuality, protocol.PoolFast, protocol.PoolCheap, protocol.PoolBalanced:
 	default: // priority, or nothing set
 		return out
 	}
+	level := tierLevel(tier)
 	meta := make(map[string]models.Meta, len(out))
 	for _, m := range out {
 		meta[m.Provider+"/"+m.Model] = r.cat.Lookup(ctx, m.Provider, m.Model)
@@ -275,9 +291,9 @@ func (r *Router) order(ctx context.Context, in []protocol.ConfiguredModel, strat
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := meta[out[i].Provider+"/"+out[i].Model], meta[out[j].Provider+"/"+out[j].Model]
-		if level == protocol.ComplexityDeep {
-			if a.Reasoning != b.Reasoning {
-				return a.Reasoning
+		if level == protocol.ComplexityHigh {
+			if a.CatalogReasoning() != b.CatalogReasoning() {
+				return a.CatalogReasoning()
 			}
 			return price(out[i]) > price(out[j])
 		}

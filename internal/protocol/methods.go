@@ -397,6 +397,8 @@ type ComplexityDefaults struct {
 	Default Complexity         `json:"default"`
 	Presets []ComplexityPreset `json:"presets"`
 	Limits  ExecutionLimits    `json:"limits"`
+	// DefaultMaxOutputTokens is the output limit for models whose own maximum is unknown.
+	DefaultMaxOutputTokens int `json:"defaultMaxOutputTokens"`
 }
 
 // ItemDelta is streamed while an item is in progress.

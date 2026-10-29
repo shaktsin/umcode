@@ -39,6 +39,7 @@ const historyLimit = 60
 type resolved struct {
 	currentInput          llm.Message
 	workingMessages       []llm.Message
+	continuationTail      int // trailing continuation messages in the request being prepared
 	contextReduced        bool
 	forceCompaction       bool
 	retryCause            string
@@ -46,8 +47,6 @@ type resolved struct {
 	approvedCredentialID  string
 	approvedCredentialIDs []string
 	sel                   protocol.ModelSelection // what is used
-	auto                  bool                    // complexity picked by Auto
-	preset                protocol.ComplexityPreset
 	limits                protocol.ExecutionLimits
 	meta                  models.Meta
 	cred                  credentials.Resolved
@@ -55,6 +54,8 @@ type resolved struct {
 	route                 router.Route
 	plan                  *router.Plan
 	trail                 []protocol.RouteStep
+	effortRound           int  // model requests already made in this turn
+	effortAfterFailure    bool // the previous round ended in a failed tool call
 }
 
 // use points the resolved selection at a route.
@@ -96,28 +97,12 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 
 	e.mu.Lock()
 	cplx := firstNonEmpty(string(o.Complexity), string(ts.Complexity), string(e.defaultCplx))
-	presets := e.presets
 	limits := e.turnLimits
 	e.mu.Unlock()
-	level := protocol.Complexity(cplx)
-	if level == protocol.ComplexityAuto {
-		var previous protocol.Complexity
-		if models.IsContinuation(text) {
-			if turns, err := e.Store.ListTurns(ctx, th.ID); err == nil && len(turns) > 0 {
-				previous = turns[len(turns)-1].Resolved.Complexity
-				if previous == "" {
-					previous = turns[len(turns)-1].Selection.Complexity
-				}
-			}
-		}
-		level = models.ClassifyAuto(text, attachments, previous, th.ProjectID != "")
-		r.auto = true
+	level := protocol.NormalizeComplexity(cplx)
+	if level == "" {
+		level = protocol.ComplexityMedium
 	}
-	preset, ok := presets[level]
-	if !ok {
-		preset = presets[protocol.ComplexityStandard]
-	}
-	r.preset = preset
 	r.limits = limits
 	r.sel = protocol.ModelSelection{Complexity: level}
 
@@ -129,7 +114,7 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 	}
 	plan, err := e.Router.Plan(ctx, router.Request{
 		Pinned:     pinned,
-		Level:      level,
+		Tier:       router.TierForStrategy(strategy),
 		Candidates: candidates,
 		Strategy:   strategy,
 		Need: router.Capabilities{
@@ -267,7 +252,7 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	}
 	turn := protocol.Turn{
 		ID: store.NewID("trn"), ThreadID: th.ID, Status: protocol.TurnRunning,
-		Selection: p.Override, Resolved: res.sel, AutoPicked: res.auto, StartedAt: time.Now().UTC(),
+		Selection: p.Override, Resolved: res.sel, StartedAt: time.Now().UTC(),
 	}
 	executionBase := e.baseCtx
 	if delegationChild(ctx) {
@@ -664,11 +649,9 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	}
 
 	req := llm.Request{
-		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, "", hookContext), Tools: specs, MaxTokens: res.preset.MaxOutputTokens,
+		Model: res.sel.Model, System: e.systemPrompt(sctx, p.Text, proj, "", hookContext), Tools: specs,
 	}
-	if res.meta.Reasoning {
-		req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
-	}
+	e.applyEffort(ctx, &res, &req, 0, false)
 
 	var turnErr error
 	var reductions ToolReductions
@@ -676,6 +659,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		reductions = make(ToolReductions)
 	}
 	toolOccurrences := make(map[string]int)
+	effortRound, effortAfterFailure := 0, false
 	instructionHint := ""
 	for {
 		if childExecutionFrom(ctx) != nil {
@@ -684,6 +668,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			msgs, added, followErr = e.consumeChildFollowups(ctx, sctx, turn, msgs)
 			if added {
 				res.currentInput = cloneModelRequest(llm.Request{Messages: msgs[len(msgs)-1:]}).Messages[0]
+				effortAfterFailure = true
 			}
 			if followErr != nil {
 				turnErr = followErr
@@ -749,7 +734,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			diagnostic.ToolNames = append(diagnostic.ToolNames, spec.Name)
 		}
 		recorderFrom(ctx).prepare(diagnostic)
+		res.effortRound, res.effortAfterFailure = effortRound, effortAfterFailure
 		out, err := e.callModel(ctx, sctx, turn, &res, req, "chat", budget)
+		effortRound++
+		effortAfterFailure = false
 		if res.contextReduced {
 			msgs = cloneModelRequest(llm.Request{Messages: res.workingMessages}).Messages
 			liveFrom = 0
@@ -799,6 +787,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 					break
 				}
 				if added {
+					effortAfterFailure = true // follow-ups start at the full level
 					continue
 				}
 			}
@@ -824,6 +813,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				reductions[key] = toolResult.Reduction
 			}
 			lastToolMsg = len(msgs) - 1
+			effortAfterFailure = effortAfterFailure || isErr
 			toolName := tools.FromWire(call.Name)
 			if !isErr && res.meta.Images && (strings.HasPrefix(toolName, "visual.") || strings.HasPrefix(toolName, "computer.")) {
 				if image := visualEvidenceMessage(ctx, result, toolName); image != nil {
@@ -964,6 +954,14 @@ func instructionPathHint(args json.RawMessage) string {
 	return ""
 }
 
+// dropTail removes the last n messages (continuation scaffolding).
+func dropTail(msgs []llm.Message, n int) []llm.Message {
+	if n <= 0 || n > len(msgs) {
+		return msgs
+	}
+	return msgs[:len(msgs)-n]
+}
+
 func textParts(s string) []llm.Part {
 	if s == "" {
 		return nil
@@ -971,7 +969,7 @@ func textParts(s string) []llm.Part {
 	return []llm.Part{{Type: "text", Text: s}}
 }
 
-var errModelOutputLimit = errors.New("model response reached its output limit; work is incomplete. Partial text was saved and incomplete tool calls were not executed. Use a larger response limit or a higher complexity setting, then continue")
+var errModelOutputLimit = errors.New("model response reached its output limit; work is incomplete. Partial text was saved and incomplete tool calls were not executed. Raise the model's output limit in Model settings (or models.default_max_output_tokens for models with unknown limits), then continue")
 
 func outputLimitStop(reason string) bool {
 	switch strings.ToLower(reason) {
@@ -996,6 +994,12 @@ type modelOutput struct {
 func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *resolved,
 	req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
 	contextRetried := false
+	continuations := 0
+	lowered := 0
+	templateRetried := false
+	tail := 0 // trailing continuation messages in req.Messages, never stored as working context
+	var partial strings.Builder
+	defer func() { res.continuationTail = 0 }()
 	for {
 		if x := childExecutionFrom(ctx); x != nil {
 			if err := e.recordChildModel(sctx, x, res.sel); err != nil {
@@ -1013,12 +1017,13 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return modelOutput{}, fmt.Errorf("unknown provider %q", res.sel.Provider)
 		}
 		req.Model = res.sel.Model
-		if res.meta.Reasoning {
-			req.Reasoning, req.ReasoningStyle = res.preset.Reasoning, res.meta.ReasoningStyle
+		if role == "task_intent" {
+			e.applyAuxEffort(ctx, res, &req)
 		} else {
-			req.Reasoning, req.ReasoningStyle = "", ""
+			e.applyEffortLowered(ctx, res, &req, res.effortRound, res.effortAfterFailure, lowered)
 		}
 		start := time.Now()
+		res.continuationTail = tail
 		prepared, report, err := e.prepareModelRequest(ctx, sctx, turn, res, req, role, budget)
 		if err != nil {
 			d := budgetDiagnostics(recorderFrom(ctx).template(), report)
@@ -1034,16 +1039,53 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			return modelOutput{}, err
 		}
 		if res.contextReduced {
-			res.workingMessages = prepared.Messages
+			res.workingMessages = dropTail(prepared.Messages, tail)
 		}
 		out, err := e.streamPrepared(ctx, sctx, turn, *res, res.cred, provider, prepared, report, role, budget)
 		if err == nil {
 			e.Router.Succeeded(sctx, res.route, time.Since(start))
 			res.trail = append(res.trail, step(res.route, "used", "", time.Since(start)))
+			if partial.Len() > 0 {
+				out.text = partial.String() + out.text
+			}
 			return out, nil
 		}
 		if ctx.Err() != nil {
 			return out, err
+		}
+		var interrupted *outputInterruptionError
+		if role == "chat" && childExecutionFrom(ctx) == nil && errors.As(err, &interrupted) && interrupted.Kind == interruptionOutput && continuations < maxOutputContinuations && budget.stopReason() == "" && (budget.shared == nil || budget.shared.Err() == nil) {
+			// The cut-off response is kept as an assistant message and the model
+			// is asked to carry on. Its incomplete tool call is never replayed.
+			continuations++
+			e.Router.Succeeded(sctx, res.route, time.Since(start))
+			partial.WriteString(out.text)
+			// The cut-off attempt recovered, so its item is not shown as failed.
+			if out.messageID != "" {
+				if it, getErr := e.Store.GetItem(sctx, out.messageID); getErr == nil {
+					it.Status, it.Data = protocol.ItemCompleted, nil
+					_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+				}
+			}
+			msgs := append([]llm.Message(nil), prepared.Messages...)
+			if out.text != "" {
+				msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Parts: textParts(out.text)})
+				tail++
+			}
+			req.Messages = append(msgs, llm.Message{Role: llm.RoleUser, Parts: textParts(continueNudge)})
+			tail++
+			if mostlyReasoning(interrupted.Usage) {
+				lowered++
+			}
+			continue
+		}
+		if !templateRetried && templateKwargsRejected(err, req.TemplateKwargs) {
+			// The server does not accept the thinking controls: remember that
+			// and retry the call once without them.
+			templateRetried = true
+			e.disableTemplateKwargs(res)
+			req.Messages = prepared.Messages
+			continue
 		}
 		if confirmedContextOverflow(err) {
 			if budget.stopReason() != "" {
@@ -1150,7 +1192,7 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 		input := int64(report.EstimatedInput)
 		output := int64(req.MaxTokens)
 		if output <= 0 {
-			output = int64(res.preset.MaxOutputTokens)
+			output = int64(report.ReservedOutput)
 		}
 		if output <= 0 {
 			return out, errors.New("delegation request requires a bounded response allowance")
@@ -1256,6 +1298,7 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 	}
 	var msgItem *protocol.Item
 	var text strings.Builder
+	var reasoningChars int
 	var done *llm.Event
 	var failureUsage llm.Usage
 	var streamErr error
@@ -1278,6 +1321,7 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 			text.WriteString(ev.Text)
 			e.publishTurnEvent(ctx, turn.ThreadID, protocol.NotifyItemDelta, protocol.ItemDelta{ThreadID: turn.ThreadID, TurnID: turn.ID, ItemID: msgItem.ID, Text: ev.Text})
 		case llm.EventReasoningDelta:
+			reasoningChars += len(ev.Text)
 			if ev.Thinking != nil {
 				out.thinking = append(out.thinking, *ev.Thinking)
 			}
@@ -1314,7 +1358,13 @@ func (e *Engine) streamPrepared(ctx, sctx context.Context, turn protocol.Turn, r
 		_ = e.saveAndPublish(sctx, *it, protocol.NotifyItemCompleted)
 	}
 	if streamErr == nil && done != nil && outputLimitStop(done.StopReason) {
-		streamErr = &outputInterruptionError{Kind: classifyOutputInterruption(done.StopReason, done.Usage, report, false)}
+		interruptedUsage := done.Usage
+		if interruptedUsage.ReasoningTokens == 0 && reasoningChars > 0 {
+			// Many providers do not report reasoning tokens separately: fall
+			// back to the size of the reasoning text that was streamed.
+			interruptedUsage.ReasoningTokens = int64(reasoningChars+3) / 4
+		}
+		streamErr = &outputInterruptionError{Kind: classifyOutputInterruption(done.StopReason, done.Usage, report, false), Usage: interruptedUsage}
 	}
 	failed := streamErr != nil || ctx.Err() != nil
 	finish(msgItem, out.text, failed)

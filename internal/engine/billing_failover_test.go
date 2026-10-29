@@ -102,7 +102,7 @@ func TestBillingFailoverAtProviderBoundary(t *testing.T) {
 				}
 			}
 			e.routing.Models = []protocol.ConfiguredModel{{ID: "primary", Provider: "claude", Model: "claude-sonnet-4-6", Enabled: true}}
-			selection := protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-4-6", Complexity: protocol.ComplexityStandard}
+			selection := protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-4-6", Complexity: protocol.ComplexityMedium}
 			if tt.pool {
 				e.routing.Models = append(e.routing.Models, protocol.ConfiguredModel{ID: "fallback", Provider: "openai", Model: "gpt-5.6-sol", Enabled: true})
 				members := []string{"primary"}

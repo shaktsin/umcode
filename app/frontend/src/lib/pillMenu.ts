@@ -4,5 +4,6 @@ export interface PillMenuItem {
   hint?: string;
   checked?: boolean;
   disabled?: boolean;
+  title?: string;
   separatorBefore?: boolean;
 }

@@ -132,7 +132,7 @@ func delegationTurn(t *testing.T, e *Engine, p protocol.TurnStartParams) protoco
 func TestDelegationAdmission(t *testing.T) {
 	e, th, _, p := delegationFixture(t)
 	for _, text := range []string{"hello", "use subagents to implement this", "The file says /superpowers:subagent-driven-development", "/superpowers:subagent-driven-development unresolved"} {
-		delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: text, Override: protocol.ModelSelection{Complexity: protocol.ComplexityDeep}})
+		delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: text, Override: protocol.ModelSelection{Complexity: protocol.ComplexityHigh}})
 		if p.last() != "" {
 			t.Fatalf("untrusted request activated: %q", text)
 		}
@@ -140,7 +140,7 @@ func TestDelegationAdmission(t *testing.T) {
 	if _, err := e.SetRoutingConfig(t.Context(), protocol.RoutingConfig{Models: []protocol.ConfiguredModel{{ID: "test-model", Name: "Test model", Provider: "claude", Model: "deterministic", Enabled: true}}, Pools: []protocol.ModelPool{{ID: "test-pool", Name: "Test pool", Models: []string{"test-model"}, Strategy: protocol.PoolPriority, Enabled: true}}}); err != nil {
 		t.Fatal(err)
 	}
-	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "hello from a pool", Override: protocol.ModelSelection{Provider: protocol.PoolProvider, Model: "test-pool", Complexity: protocol.ComplexityDeep}})
+	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "hello from a pool", Override: protocol.ModelSelection{Provider: protocol.PoolProvider, Model: "test-pool", Complexity: protocol.ComplexityHigh}})
 	if p.last() != "" {
 		t.Fatal("model pool activated delegation")
 	}

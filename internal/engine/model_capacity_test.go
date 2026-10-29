@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/shaktsin/umcode/internal/credentials"
+	"github.com/shaktsin/umcode/internal/evaluation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -193,4 +195,90 @@ func TestCapacityRefreshInvalidatesPriorAllocation(t *testing.T) {
 
 func (*capacityFixtureProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
 	return llm.RuntimeCapacity{}, llm.ErrRuntimeCapacityUnavailable
+}
+
+func capacityWithWindow(t *testing.T, window int) (*Engine, resolved) {
+	t.Helper()
+	e, res, _ := runtimeCapacityFixture(t, "generic", &window, func(w http.ResponseWriter, r *http.Request) { t.Error("generic metadata must not make a network call") })
+	return e, res
+}
+func TestUnknownMaxOutputUsesDefault(t *testing.T) {
+	e, res := capacityWithWindow(t, 262144)
+	got, err := e.resolveCapacity(t.Context(), res)
+	if err != nil || got.MaxOutput != 32768 {
+		t.Fatalf("unknown max output must use the configured default: %+v %v", got, err)
+	}
+	prepared, _, err := budgetRequest(llm.Request{Messages: []llm.Message{llm.Text(llm.RoleUser, "hi")}}, got, got.ResponseReserve)
+	if err != nil || prepared.MaxTokens != 32768 {
+		t.Fatalf("prepared MaxTokens = %d, %v", prepared.MaxTokens, err)
+	}
+	e.Cfg.Models.DefaultMaxOutputTokens = 0
+	e.invalidateCapacity(res)
+	if got, err = e.resolveCapacity(t.Context(), res); err != nil || got.MaxOutput != 32768 {
+		t.Fatalf("unset default must fall back to 32768: %+v %v", got, err)
+	}
+}
+func TestKnownMaxOutputWins(t *testing.T) {
+	e, res := capacityWithWindow(t, 262144)
+	id, _ := models.EndpointIdentity("openai_compatible", res.cred.Record.BaseURL)
+	window, output := 262144, 8192
+	profile := protocol.ModelCapacityProfile{Provider: "openai_compatible", EndpointID: id, Model: res.sel.Model, Backend: "generic", ContextWindow: &window, MaxOutputTokens: &output}
+	if err := e.Store.SetModelCapacityProfile(t.Context(), profile); err != nil {
+		t.Fatal(err)
+	}
+	e.invalidateCapacity(res)
+	got, err := e.resolveCapacity(t.Context(), res)
+	if err != nil || got.MaxOutput != 8192 {
+		t.Fatalf("known max output lost: %+v %v", got, err)
+	}
+	prepared, _, err := budgetRequest(llm.Request{Messages: []llm.Message{llm.Text(llm.RoleUser, "hi")}}, got, got.ResponseReserve)
+	if err != nil || prepared.MaxTokens != 8192 {
+		t.Fatalf("prepared MaxTokens = %d, %v", prepared.MaxTokens, err)
+	}
+}
+func TestSmallWindowStaysBounded(t *testing.T) {
+	e, res := capacityWithWindow(t, 4096)
+	got, err := e.resolveCapacity(t.Context(), res)
+	if err != nil || got.MaxOutput > got.Window {
+		t.Fatalf("default output exceeded the window: %+v %v", got, err)
+	}
+	for _, text := range []string{"hi", strings.Repeat("word ", 1500)} {
+		req := llm.Request{Messages: []llm.Message{llm.Text(llm.RoleUser, text)}}
+		prepared, report, err := budgetRequest(req, got, got.ResponseReserve)
+		if err != nil {
+			var capacityErr *requestCapacityError
+			if !errors.As(err, &capacityErr) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			continue
+		}
+		if report.EstimatedInput+prepared.MaxTokens > got.Window {
+			t.Fatalf("input %d + output %d exceeds window %d", report.EstimatedInput, prepared.MaxTokens, got.Window)
+		}
+	}
+}
+
+func TestEvaluationModelOutputLimitReachesCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		window, output int64
+		want           int
+	}{
+		{"declared limit below the default", 200000, 9000, 9000},
+		{"window caps the declared limit", 5000, 9000, 5000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _, _, _ := taskRuntimeFixture(t, "summary_only", false)
+			e.LLMs.Register(&evaluationProvider{inner: &evalStreamFixture{}, synthetic: true, model: evaluation.Model{ID: "deterministic", Window: tc.window, MaxOutput: tc.output}})
+			cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic", CredentialID: cred.Record.ID}, cred: cred, meta: models.Meta{Provider: "claude", ID: "deterministic"}}
+			got, err := e.resolveCapacity(t.Context(), res)
+			if err != nil || got.MaxOutput != tc.want {
+				t.Fatalf("capacity = %+v, %v; want max output %d", got, err, tc.want)
+			}
+		})
+	}
 }
