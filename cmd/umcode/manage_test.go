@@ -29,3 +29,17 @@ func TestPresetsTableHasNoCapColumn(t *testing.T) {
 		}
 	}
 }
+
+func TestComplexityRenderShowsNoLimit(t *testing.T) {
+	d := protocol.ComplexityDefaults{Default: protocol.ComplexityMedium, DefaultMaxOutputTokens: 32768}
+	d.Limits.MaxDurationMinutes, d.Limits.MaxTokens = protocol.NoLimit, protocol.NoLimit
+	out := renderComplexityDefaults(d)
+	if !strings.Contains(out, "time limit: no limit") || !strings.Contains(out, "token budget: no limit") {
+		t.Fatalf("output = %q", out)
+	}
+	d.Limits.MaxDurationMinutes, d.Limits.MaxTokens = 120, 1_000_000
+	out = renderComplexityDefaults(d)
+	if !strings.Contains(out, "time limit: 120 minutes") || !strings.Contains(out, "token budget: 1000000") {
+		t.Fatalf("output = %q", out)
+	}
+}

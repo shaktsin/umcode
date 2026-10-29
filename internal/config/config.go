@@ -419,11 +419,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("models.default_max_output_tokens must be 1024–1000000")
 	}
 	limits := c.Models.ExecutionLimits
-	if limits.MaxDurationMinutes < 1 || limits.MaxDurationMinutes > 480 {
-		return fmt.Errorf("models.execution_limits.max_duration_minutes must be 1–480")
+	if d := limits.MaxDurationMinutes; d != protocol.NoLimit && (d < 1 || d > 480) {
+		return fmt.Errorf("models.execution_limits.max_duration_minutes must be 1–480, or -1 for no limit")
 	}
-	if limits.MaxTokens < 10_000 || limits.MaxTokens > 10_000_000 {
-		return fmt.Errorf("models.execution_limits.max_tokens must be 10000–10000000")
+	if n := limits.MaxTokens; n != protocol.NoLimit && (n < 10_000 || n > 10_000_000) {
+		return fmt.Errorf("models.execution_limits.max_tokens must be 10000–10000000, or -1 for no limit")
 	}
 	if limits.MaxCostUSD < 0.01 || limits.MaxCostUSD > 10_000 {
 		return fmt.Errorf("models.execution_limits.max_cost_usd must be 0.01–10000")

@@ -88,3 +88,21 @@ func TestSharedBudgetTaskDurationDoesNotReset(t *testing.T) {
 		t.Fatal("admitted expired task")
 	}
 }
+
+func TestSharedBudgetNoLimitSentinel(t *testing.T) {
+	b := NewBudget(protocol.ExecutionLimits{MaxDurationMinutes: protocol.NoLimit, MaxTokens: protocol.NoLimit, MaxCostUSD: 1}, protocol.UsageTotals{InputTokens: 1 << 40}, nil, WithStartedAt(time.Now().Add(-1000*time.Hour)))
+	if !b.deadline.IsZero() {
+		t.Fatalf("unlimited time set deadline %v", b.deadline)
+	}
+	if got := b.StopReason(); got != "" {
+		t.Fatalf("stopped: %q", got)
+	}
+	if tokens, _ := b.Remaining(); tokens < 1<<40 {
+		t.Fatalf("remaining tokens = %d", tokens)
+	}
+	release, err := b.Reserve(t.Context(), "r1", protocol.UsageTotals{InputTokens: 1 << 41, OutputTokens: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release(protocol.UsageTotals{})
+}

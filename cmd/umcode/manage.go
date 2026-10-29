@@ -604,7 +604,8 @@ func runComplexity(args []string) error {
 // and output limits are per model too.
 func renderComplexityDefaults(d protocol.ComplexityDefaults) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "default: %s\ndefault max output tokens: %d\n\n", d.Default, d.DefaultMaxOutputTokens)
+	fmt.Fprintf(&sb, "default: %s\ndefault max output tokens: %d\n", d.Default, d.DefaultMaxOutputTokens)
+	fmt.Fprintf(&sb, "time limit: %s\ntoken budget: %s\n\n", limitText(int64(d.Limits.MaxDurationMinutes), " minutes"), limitText(d.Limits.MaxTokens, ""))
 	w := tabwriter.NewWriter(&sb, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "LEVEL")
 	for _, p := range d.Presets {
@@ -612,6 +613,14 @@ func renderComplexityDefaults(d protocol.ComplexityDefaults) string {
 	}
 	w.Flush()
 	return sb.String()
+}
+
+// limitText renders an execution limit, with the NoLimit sentinel as "no limit".
+func limitText(n int64, unit string) string {
+	if n <= 0 {
+		return "no limit"
+	}
+	return fmt.Sprintf("%d%s", n, unit)
 }
 
 // ---- usage ----

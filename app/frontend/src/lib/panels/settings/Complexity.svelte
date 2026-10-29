@@ -23,6 +23,17 @@
       (draft.defaultMaxOutputTokens as number) <= MAX_OUT_MAX,
   );
 
+  // -1 is the engine's "no limit" sentinel for the time limit and token budget.
+  const NO_LIMIT = -1;
+  const DEFAULT_MINUTES = 120;
+  const DEFAULT_TOKENS = 1_000_000;
+  function setDurationUnlimited(on: boolean) {
+    if (draft) draft.limits.maxDurationMinutes = on ? NO_LIMIT : DEFAULT_MINUTES;
+  }
+  function setTokensUnlimited(on: boolean) {
+    if (draft) draft.limits.maxTokens = on ? NO_LIMIT : DEFAULT_TOKENS;
+  }
+
   async function save() {
     if (!draft || !maxOutValid) return;
     const r = await app.try<ComplexityDefaults>('complexity/setDefaults', draft, 'Thinking settings saved.');
@@ -52,8 +63,14 @@
     <h3 class="text-sm font-medium text-ink">Turn safety limits</h3>
     <p class="text-xs text-muted mt-1 mb-3">The agent keeps working until it finishes or reaches a real safety budget. These limits apply to every reasoning level.</p>
     <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      <label class="label">Time limit (minutes)<input class="input mt-1" type="number" min="1" max="480" step="5" bind:value={draft.limits.maxDurationMinutes} /></label>
-      <label class="label">Token budget<input class="input mt-1" type="number" min="10000" max="10000000" step="10000" bind:value={draft.limits.maxTokens} /></label>
+      <div>
+        <label class="label">Time limit (minutes)<input class="input mt-1" type="number" min="1" max="480" step="5" disabled={draft.limits.maxDurationMinutes === NO_LIMIT} bind:value={draft.limits.maxDurationMinutes} /></label>
+        <label class="flex items-center gap-2 text-xs text-muted mt-1"><input type="checkbox" checked={draft.limits.maxDurationMinutes === NO_LIMIT} onchange={(e) => setDurationUnlimited(e.currentTarget.checked)} />No limit</label>
+      </div>
+      <div>
+        <label class="label">Token budget<input class="input mt-1" type="number" min="10000" max="10000000" step="10000" disabled={draft.limits.maxTokens === NO_LIMIT} bind:value={draft.limits.maxTokens} /></label>
+        <label class="flex items-center gap-2 text-xs text-muted mt-1"><input type="checkbox" checked={draft.limits.maxTokens === NO_LIMIT} onchange={(e) => setTokensUnlimited(e.currentTarget.checked)} />No limit</label>
+      </div>
       <label class="label">Cost budget (USD)<input class="input mt-1" type="number" min="0.01" max="10000" step="1" bind:value={draft.limits.maxCostUsd} /></label>
       <label class="label">Tool-round safety ceiling<input class="input mt-1" type="number" min="1" max="1000" step="10" bind:value={draft.limits.maxToolRounds} /></label>
     </div>

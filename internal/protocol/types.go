@@ -265,6 +265,10 @@ type ComplexityPreset struct {
 	Reasoning string     `json:"reasoning"` // off | low | medium | high
 }
 
+// NoLimit is the ExecutionLimits sentinel that turns off the time limit
+// (MaxDurationMinutes) or the token budget (MaxTokens).
+const NoLimit = -1
+
 // ExecutionLimits bound a complete model/tool turn independently of reasoning level.
 type ExecutionLimits struct {
 	MaxDurationMinutes int     `json:"maxDurationMinutes"`

@@ -430,7 +430,12 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	defer recorderFrom(ctx).finish()
 	ctx = context.WithValue(ctx, executionTurnKey{}, turn)
 	budget := newTurnBudget(res.limits)
-	ctx, cancelTurn := context.WithTimeout(ctx, time.Duration(res.limits.MaxDurationMinutes)*time.Minute)
+	var cancelTurn context.CancelFunc
+	if res.limits.MaxDurationMinutes > 0 {
+		ctx, cancelTurn = context.WithTimeout(ctx, time.Duration(res.limits.MaxDurationMinutes)*time.Minute)
+	} else {
+		ctx, cancelTurn = context.WithCancel(ctx)
+	}
 	defer cancelTurn()
 	var err error
 	th, err = e.resolveLegacyWorkspaceMode(context.WithoutCancel(ctx), th)
