@@ -200,6 +200,29 @@ func (s *Store) AgentRevisions(ctx context.Context, taskID string) ([]AgentRevis
 	return out, rows.Err()
 }
 
+// RuntimeIntegrationsToReconcile returns, in task order, the tasks whose
+// runtime integration a crash may have left unfinished: a revision still
+// applying, or a head whose applied count differs from its applied revisions.
+func (s *Store) RuntimeIntegrationsToReconcile(ctx context.Context) ([]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT task_id FROM agent_revisions WHERE state=?
+		UNION SELECT h.task_id FROM agent_integration_head h
+		WHERE h.applied_count != (SELECT COUNT(*) FROM agent_revisions r WHERE r.task_id=h.task_id AND r.state=?)
+		ORDER BY 1`, RevisionApplying, RevisionApplied)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // AgentRevision returns the agent's latest revision (ErrNotFound if none).
 func (s *Store) AgentRevision(ctx context.Context, taskID, agentID string) (AgentRevision, error) {
 	return scanAgentRevision(s.DB.QueryRowContext(ctx, `SELECT `+agentRevisionCols+` FROM agent_revisions WHERE task_id=? AND agent_id=? ORDER BY seq DESC LIMIT 1`, taskID, agentID))

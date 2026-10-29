@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/agentrt"
@@ -108,6 +109,96 @@ func (e *Engine) cancelRuntimeAgents(ctx context.Context, taskID string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// reconcileRuntimeIntegrations runs at startup, whatever agents.runtime_v2
+// says (revisions left by an earlier flag-on run still need it). For every
+// task with a revision left applying, or a head that missed its last applied
+// revision, it settles the revision from the actual parent tree
+// (ReconcileRuntimeIntegration): tree before ⇒ back to submitted (or conflict)
+// for the lead to accept again; tree after ⇒ applied; anything else ⇒ left
+// applying, blocked with its reason. It never applies or resumes anything
+// (the apply is predicted read-only, never run). A task that cannot be
+// settled, for example because its project folder is gone, is logged and
+// does not stop the engine; the next accept or completion reports it.
+func (e *Engine) reconcileRuntimeIntegrations(ctx context.Context) error {
+	ids, err := e.Store.RuntimeIntegrationsToReconcile(ctx)
+	if err != nil {
+		return fmt.Errorf("list runtime integrations to reconcile: %w", err)
+	}
+	for _, id := range ids {
+		if err = e.DelegationWorkspaceService.ReconcileRuntimeIntegration(ctx, id); err != nil {
+			e.Log.Warn("agent integration left unsettled after restart", "task", id, "err", err)
+		}
+	}
+	return nil
+}
+
+// cancelledIntegrationReport describes what a cancelled task leaves in the
+// project checkout, or nil when the task has no runtime agent revision. It
+// waits for an accept in flight (the service's per-task integration lock):
+// the cancel is already recorded, so the accept either stops at its next
+// guard, before git writes anything, or, once git is writing, finishes and is
+// recorded; it is never half applied. Then it settles any revision left
+// applying. Applied work stays staged and nothing is reverted; agent
+// workspaces are retained. Reconcile failures are reported, not returned: the
+// cancel itself has succeeded.
+func (e *Engine) cancelledIntegrationReport(ctx context.Context, taskID string) (*protocol.AgentIntegrationReport, error) {
+	svc := e.DelegationWorkspaceService
+	if svc == nil {
+		return nil, nil
+	}
+	revs, err := e.Store.AgentRevisions(ctx, taskID)
+	if err != nil || len(revs) == 0 {
+		return nil, err
+	}
+	report := &protocol.AgentIntegrationReport{}
+	if err = svc.ReconcileRuntimeIntegration(ctx, taskID); err != nil {
+		report.Blocked = err.Error()
+	}
+	st, err := svc.RuntimeIntegrationStatus(ctx, taskID)
+	if err != nil {
+		// For example the project folder is gone: still a successful cancel.
+		if report.Blocked == "" {
+			report.Blocked = err.Error()
+		}
+		report.Message = "The integration state could not be read (" + err.Error() + "). Applied agent work, if any, stays staged in the project checkout; nothing was reverted. Agent workspaces are retained."
+		return report, nil
+	}
+	report.HeadTree, report.AppliedCount, report.Verified = st.HeadTree, st.AppliedCount, st.Verified
+	for _, r := range st.Revisions {
+		switch r.State {
+		case store.RevisionApplied:
+			report.Applied = append(report.Applied, r.AgentID)
+		case store.RevisionDropped:
+		default:
+			report.Unintegrated = append(report.Unintegrated, r.AgentID)
+		}
+	}
+	report.Message = integrationReportMessage(report)
+	return report, nil
+}
+
+func integrationReportMessage(r *protocol.AgentIntegrationReport) string {
+	var b strings.Builder
+	switch {
+	case r.AppliedCount == 0:
+		b.WriteString("No agent work was integrated; agents did not change the project checkout.")
+	case r.Verified:
+		fmt.Fprintf(&b, "%d agent revision(s) (%s) stay applied (staged) in the project checkout; nothing was reverted. Their integrated result %s passed its checks.",
+			r.AppliedCount, strings.Join(r.Applied, ", "), r.HeadTree)
+	default:
+		fmt.Fprintf(&b, "%d agent revision(s) (%s) stay applied (staged) in the project checkout; nothing was reverted. Their integrated result %s is not verified: its checks have not all passed, so review the staged changes before committing them.",
+			r.AppliedCount, strings.Join(r.Applied, ", "), r.HeadTree)
+	}
+	if len(r.Unintegrated) > 0 {
+		fmt.Fprintf(&b, " Not integrated: %s.", strings.Join(r.Unintegrated, ", "))
+	}
+	if r.Blocked != "" {
+		fmt.Fprintf(&b, " The integration could not be reconciled: %s.", r.Blocked)
+	}
+	b.WriteString(" Agent workspaces are retained.")
+	return b.String()
 }
 
 // rememberRuntimeBudget records the shared budget the task's lead turns run
