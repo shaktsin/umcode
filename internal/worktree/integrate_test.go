@@ -1021,3 +1021,60 @@ func TestApplyOnIntegratedNonASCIIConflict(t *testing.T) {
 		t.Fatalf("quoted paths: want conflict, got %v", err)
 	}
 }
+
+// PredictIntegration returns exactly the tree ApplyOnIntegrated produces,
+// including a merge into a file an earlier revision changed, from any parent
+// state (before or after the apply) and never touches the parent.
+func TestPredictIntegrationMatchesApplyAndLeavesParentUntouched(t *testing.T) {
+	lines := "1\n2\n3\n4\n5\n6\n7\n8\n9\n"
+	f := newIntegrationFixture(t, map[string]string{"f.txt": lines, "other": "x\n"})
+	resultA := f.agent(t, "agent-a", func(dir string) { write(t, dir, "f.txt", strings.Replace(lines, "1\n", "one\n", 1)) })
+	resultB := f.agent(t, "agent-b", func(dir string) { write(t, dir, "f.txt", strings.Replace(lines, "9\n", "nine\n", 1)) })
+	resultC := f.agent(t, "agent-c", func(dir string) { write(t, dir, "f.txt", strings.Replace(lines, "1\n", "uno\n", 1)) })
+	ctx := context.Background()
+
+	before := parentSnapshot(t, f.parent)
+	predA, err := f.m.PredictIntegration(ctx, "agent-a", f.parent, f.base, f.baseTree(t), resultA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUnchanged(t, f.parent, before)
+	applyA, err := f.m.ApplyOnIntegrated(ctx, "agent-a", f.parent, f.base, f.baseTree(t), resultA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if predA != applyA.TreeAfter {
+		t.Fatalf("predicted %s, applied %s", predA, applyA.TreeAfter)
+	}
+	// From the after state the prediction for the same step is unchanged.
+	if again, err := f.m.PredictIntegration(ctx, "agent-a", f.parent, f.base, f.baseTree(t), resultA); err != nil || again != predA {
+		t.Fatalf("prediction from the after state = %s, %v", again, err)
+	}
+
+	before = parentSnapshot(t, f.parent)
+	predB, err := f.m.PredictIntegration(ctx, "agent-b", f.parent, f.base, applyA.TreeAfter, resultB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUnchanged(t, f.parent, before)
+	applyB, err := f.m.ApplyOnIntegrated(ctx, "agent-b", f.parent, f.base, applyA.TreeAfter, resultB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if predB != applyB.TreeAfter {
+		t.Fatalf("merged prediction %s, applied %s", predB, applyB.TreeAfter)
+	}
+	if got := git(t, f.parent, "show", ":f.txt"); got != strings.TrimSpace(strings.Replace(strings.Replace(lines, "1\n", "one\n", 1), "9\n", "nine\n", 1)) {
+		t.Fatalf("merged content %q", got)
+	}
+
+	before = parentSnapshot(t, f.parent)
+	var conflict *ConflictError
+	if _, err = f.m.PredictIntegration(ctx, "agent-c", f.parent, f.base, applyB.TreeAfter, resultC); !errors.As(err, &conflict) {
+		t.Fatalf("conflicting prediction: %v", err)
+	}
+	assertUnchanged(t, f.parent, before)
+	if _, err = f.m.PredictIntegration(ctx, "agent-c", f.parent, "0000000000000000000000000000000000000000", f.baseTree(t), resultC); err == nil {
+		t.Fatal("prediction accepted a checkout with another base")
+	}
+}
