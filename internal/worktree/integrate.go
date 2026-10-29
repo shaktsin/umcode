@@ -29,6 +29,18 @@ func (e *ConflictError) Error() string {
 	return fmt.Sprintf("integration conflict on %s: %s", strings.Join(e.Paths, ", "), e.Detail)
 }
 
+// UntrackedError reports untracked, non-ignored files in the parent checkout.
+// It is a parent-changed refusal (errors.Is(err, ErrParentChanged)).
+type UntrackedError struct {
+	Paths []string
+}
+
+func (e *UntrackedError) Error() string {
+	return fmt.Sprintf("%v: untracked files at %s", ErrParentChanged, strings.Join(e.Paths, ", "))
+}
+
+func (e *UntrackedError) Unwrap() error { return ErrParentChanged }
+
 // ApplyResult is the evidence of one applied revision: the paths its diff
 // touched and the parent index tree after applying it.
 type ApplyResult struct {
@@ -106,7 +118,7 @@ func checkParentState(ctx context.Context, parent, base, expectedTree string) er
 		return err
 	}
 	if len(untracked) > 0 {
-		return fmt.Errorf("%w: untracked files at %s", ErrParentChanged, strings.Join(untracked, ", "))
+		return &UntrackedError{Paths: untracked}
 	}
 	return ValidatePaths(ctx, canonical)
 }

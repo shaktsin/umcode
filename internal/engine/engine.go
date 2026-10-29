@@ -249,15 +249,15 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		e.DelegationWorkspaces = managedChildWorkspaces{service: e.DelegationWorkspaceService}
 	}
 	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus), delegation.WithRunner(workflowRunner{engine: e}), delegation.WithWorkflowPolicy(e.delegationWorkflowPolicy))
+	for _, tool := range tools.NewAgentWorkflowTools(e.delegationWorkflowCall) {
+		reg.Add(tool)
+	}
 	if o.Config.Agents.RuntimeV2 {
 		e.registerAgentRuntime(reg, base)
 	} else {
 		for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
 			reg.Add(tool)
 		}
-	}
-	for _, tool := range tools.NewAgentWorkflowTools(e.delegationWorkflowCall) {
-		reg.Add(tool)
 	}
 	e.Work.StartGC(base, e.storageRetention) // best-effort, background, never prompts
 	e.Creds.OnSignIn = func(r protocol.ChatGPTSignInResult) { e.Bus.PublishAdmin(protocol.NotifyChatGPTSignIn, r) }

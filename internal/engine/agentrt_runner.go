@@ -128,6 +128,32 @@ func (m managedChildWorkspaces) FinalizeRuntime(ctx context.Context, t protocol.
 	return ChildWorkspace{ID: r.ID, Root: r.Root, Revision: r.ResultRevision, ChangedPaths: append([]string{}, r.ChangedPaths...)}, err
 }
 
+// runtimeRevisionRecorder is implemented by resolvers whose writer
+// workspaces can be integrated: after a writer finished successfully its
+// committed result is recorded as a submitted revision for agent.integrate.
+// It is optional so resolvers without owned checkouts need nothing.
+type runtimeRevisionRecorder interface {
+	RecordRuntimeRevision(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, ws ChildWorkspace) error
+}
+
+func (m managedChildWorkspaces) RecordRuntimeRevision(ctx context.Context, t protocol.AgentTask, a protocol.RuntimeAgent, w ChildWorkspace) error {
+	ws, err := m.service.Store.AgentWorkspace(ctx, w.ID)
+	if err != nil {
+		return err
+	}
+	_, err = m.service.RecordFinishedRuntimeRevision(ctx, t, a, ws)
+	return err
+}
+
+// runtimeRevisionError explains a failure to record a finished writer's
+// revision; the agent fails with it as its blocker.
+func runtimeRevisionError(err error) error {
+	if errors.Is(err, store.ErrAgentTransition) {
+		return fmt.Errorf("revision not recorded: this agent already has a revision (one revision per agent): %w", err)
+	}
+	return fmt.Errorf("revision not recorded, so its work cannot be integrated (it stays in the agent's workspace): %w", err)
+}
+
 // runtimeViewDiscarder is implemented by resolvers that can remove a stopped
 // read-only agent's view checkout. It is optional so resolvers without owned
 // checkouts need nothing.
@@ -141,6 +167,7 @@ func (m managedChildWorkspaces) DiscardRuntimeView(ctx context.Context, taskID, 
 
 var _ RuntimeWorkspaceResolver = managedChildWorkspaces{}
 var _ runtimeViewDiscarder = managedChildWorkspaces{}
+var _ runtimeRevisionRecorder = managedChildWorkspaces{}
 
 func (e *Engine) runtimeWorkspaces() RuntimeWorkspaceResolver {
 	if e.RuntimeWorkspaces != nil {
@@ -380,6 +407,22 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 		}); updateErr != nil {
 			fail(updateErr)
 			return
+		}
+		// A writer that finished successfully submits its committed result
+		// for integration before the scheduler marks it completed, so a
+		// failure fails the agent with a blocker instead of losing the work
+		// silently. A writer without changes records nothing.
+		if rec, ok := resolver.(runtimeRevisionRecorder); ok && writable && err == nil && ctx.Err() == nil {
+			finished, readErr := e.Store.RuntimeAgent(finalCtx, task.ID, a.ID)
+			if readErr == nil {
+				readErr = rec.RecordRuntimeRevision(finalCtx, task, finished, final)
+			}
+			if readErr != nil {
+				cause := runtimeRevisionError(readErr)
+				result.Blocker = cause.Error()
+				err = cause
+				return
+			}
 		}
 		// A read-only agent's view checkout has nothing to integrate. A
 		// write-capable agent's workspace is kept for integration.
