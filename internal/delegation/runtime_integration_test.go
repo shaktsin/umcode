@@ -1,6 +1,7 @@
 package delegation
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
@@ -21,9 +23,46 @@ type rtAgent struct {
 }
 
 func rtFixture(t *testing.T) (*WorkspaceService, *store.Store, protocol.AgentTask) {
+	return rtFixtureFiles(t, nil)
+}
+
+// rtFixtureFiles is workspaceFixture (without a legacy child) with extra
+// files in the base commit.
+func rtFixtureFiles(t *testing.T, files map[string]string) (*WorkspaceService, *store.Store, protocol.AgentTask) {
 	t.Helper()
-	svc, s, task, _ := workspaceFixture(t)
-	return svc, s, task
+	if len(files) == 0 {
+		svc, s, task, _ := workspaceFixture(t)
+		return svc, s, task
+	}
+	root := t.TempDir()
+	workspaceGit(t, root, "init", "-q")
+	workspaceGit(t, root, "config", "user.name", "Test")
+	workspaceGit(t, root, "config", "user.email", "test@invalid")
+	workspaceWrite(t, root, "tracked", "base\n")
+	workspaceWrite(t, root, "removed", "remove\n")
+	for name, data := range files {
+		workspaceWrite(t, root, name, data)
+	}
+	workspaceGit(t, root, "add", ".")
+	workspaceGit(t, root, "commit", "-qm", "base")
+	s, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	th, err := s.CreateThread(t.Context(), protocol.Thread{Title: "workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := protocol.Turn{ID: "root", ThreadID: th.ID, Status: protocol.TurnCompleted, StartedAt: time.Now()}
+	if err = s.CreateTurn(t.Context(), tr); err != nil {
+		t.Fatal(err)
+	}
+	task := protocol.AgentTask{ID: "task", ThreadID: th.ID, RootTurnID: tr.ID, Activation: protocol.AgentActivationExplicitUser, State: protocol.AgentStateRunning, BaseRoot: root, ParentRoot: root, BaseRevision: workspaceGit(t, root, "rev-parse", "HEAD")}
+	if err = s.CreateAgentTask(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	return NewWorkspaceService(s, worktree.New(t.TempDir()), nil, nil), s, task
 }
 
 // rtRun creates a runtime agent, gives it its checkout, lets edit change it,
@@ -458,8 +497,25 @@ func TestReconcileRuntimeIntegration(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "unrelated") {
 					t.Fatalf("reconcile did not block naming the mismatch: %v", err)
 				}
+				if tree := workspaceGit(t, task.ParentRoot, "write-tree"); !strings.Contains(err.Error(), tree) || !strings.Contains(err.Error(), st.HeadTree) {
+					t.Fatalf("blocking error does not name both trees: %v", err)
+				}
 				if _, err = svc.IntegrateRuntime(ctx, task.ID, w.agent.ID); err == nil || !strings.Contains(err.Error(), "unrelated") {
 					t.Fatalf("integrate did not block naming the mismatch: %v", err)
+				}
+				// The restore the error suggests works for a staged-only parent.
+				workspaceGit(t, task.ParentRoot, "read-tree", "-m", "-u", st.HeadTree)
+				if err = svc.ReconcileRuntimeIntegration(ctx, task.ID); err != nil {
+					t.Fatal(err)
+				}
+				if got := rtRevision(t, s, task.ID, w.agent.ID); got.State != store.RevisionSubmitted {
+					t.Fatalf("after restore: %+v", got)
+				}
+				if _, statErr := os.Stat(filepath.Join(task.ParentRoot, "unrelated")); !os.IsNotExist(statErr) {
+					t.Fatal("restore left the unrelated file")
+				}
+				if _, err = svc.IntegrateRuntime(ctx, task.ID, w.agent.ID); err != nil {
+					t.Fatalf("retry after restore: %v", err)
 				}
 			}
 		})
@@ -497,7 +553,7 @@ func TestDropRuntimeIsExplicitAndReasoned(t *testing.T) {
 	}
 }
 
-func TestResolveManuallyRecordsCurrentTreeAsHead(t *testing.T) {
+func testResolveManuallyRecordsCurrentTreeAsHead(t *testing.T) {
 	svc, s, task := rtFixture(t)
 	ctx := t.Context()
 	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
@@ -552,7 +608,7 @@ func TestResolveManuallyRecordsCurrentTreeAsHead(t *testing.T) {
 	}
 }
 
-func TestIntegrationRefusesWhenTaskCancelled(t *testing.T) {
+func testIntegrationRefusesWhenTaskCancelled(t *testing.T) {
 	svc, s, task := rtFixture(t)
 	ctx := t.Context()
 	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
@@ -571,7 +627,7 @@ func TestIntegrationRefusesWhenTaskCancelled(t *testing.T) {
 	}
 }
 
-func TestIntegrationUsesAuthorityRecheck(t *testing.T) {
+func testIntegrationUsesAuthorityRecheck(t *testing.T) {
 	svc, s, task := rtFixture(t)
 	ctx := t.Context()
 	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
@@ -642,4 +698,284 @@ func TestReconcileRuntimeRepairsHead(t *testing.T) {
 	if st2, _ := svc.RuntimeIntegrationStatus(ctx, task.ID); st2.AppliedCount != 1 {
 		t.Fatalf("repair not idempotent: %+v", st2)
 	}
+}
+
+// The brief's test names, grouped so `-run 'Runtime'` selects them.
+func TestRuntimeManualResolution(t *testing.T) {
+	t.Run("TestResolveManuallyRecordsCurrentTreeAsHead", testResolveManuallyRecordsCurrentTreeAsHead)
+	t.Run("interrupted before the parent changed returns to conflict", func(t *testing.T) {
+		svc, s, task, _, b, _ := rtConflict(t)
+		ctx := t.Context()
+		st, _ := svc.RuntimeIntegrationStatus(ctx, task.ID)
+		rtSetApplying(t, s, task.ID, b.agent.ID, st.HeadTree, manualResolution)
+		if err := svc.ReconcileRuntimeIntegration(ctx, task.ID); err != nil {
+			t.Fatal(err)
+		}
+		r := rtRevision(t, s, task.ID, b.agent.ID)
+		if r.State != store.RevisionConflict || !reflect.DeepEqual(r.Conflict, []string{"tracked"}) || r.Reason == manualResolution {
+			t.Fatalf("interrupted resolution reconciled to %+v", r)
+		}
+		// A retry records its own intent without any manual marker.
+		var intentReason string
+		runtimeIntegrateHook = func(stage string) {
+			if stage == "intent" {
+				intentReason = rtRevision(t, s, task.ID, b.agent.ID).Reason
+			}
+		}
+		t.Cleanup(func() { runtimeIntegrateHook = nil })
+		got, err := svc.IntegrateRuntime(ctx, task.ID, b.agent.ID)
+		if err != nil || got.Revision.State != store.RevisionConflict {
+			t.Fatalf("retry = %+v %v", got, err)
+		}
+		if intentReason != "" {
+			t.Fatalf("intent kept reason %q", intentReason)
+		}
+	})
+	t.Run("interrupted after staging resumes", func(t *testing.T) {
+		svc, s, task, _, b, c := rtConflict(t)
+		ctx := t.Context()
+		st, _ := svc.RuntimeIntegrationStatus(ctx, task.ID)
+		workspaceWrite(t, task.ParentRoot, "tracked", "from a and b\n")
+		workspaceGit(t, task.ParentRoot, "add", "tracked")
+		rtSetApplying(t, s, task.ID, b.agent.ID, st.HeadTree, manualResolution)
+		if err := svc.ReconcileRuntimeIntegration(ctx, task.ID); err == nil || !strings.Contains(err.Error(), "interrupted") {
+			t.Fatalf("interrupted resolution not reported: %v", err)
+		}
+		if _, err := svc.IntegrateRuntime(ctx, task.ID, c.agent.ID); err == nil || !strings.Contains(err.Error(), "interrupted") {
+			t.Fatalf("accept during interrupted resolution: %v", err)
+		}
+		got, err := svc.ResolveRuntimeManually(ctx, task.ID, b.agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree := workspaceGit(t, task.ParentRoot, "write-tree")
+		if got.Revision.State != store.RevisionApplied || got.HeadTree != tree || !got.NeedsVerification {
+			t.Fatalf("resumed = %+v", got)
+		}
+		if st, _ := svc.RuntimeIntegrationStatus(ctx, task.ID); st.HeadTree != tree || st.AppliedCount != 2 {
+			t.Fatalf("status %+v", st)
+		}
+	})
+}
+
+func TestRuntimeIntegrationRefusesWhenTaskCancelled(t *testing.T) {
+	t.Run("TestIntegrationRefusesWhenTaskCancelled", testIntegrationRefusesWhenTaskCancelled)
+}
+
+func TestRuntimeIntegrationUsesAuthorityRecheck(t *testing.T) {
+	t.Run("TestIntegrationUsesAuthorityRecheck", testIntegrationUsesAuthorityRecheck)
+}
+
+// rtConflict integrates and verifies a, then leaves b in conflict on tracked;
+// c (adding a new file) is submitted and untouched.
+func rtConflict(t *testing.T) (*WorkspaceService, *store.Store, protocol.AgentTask, rtAgent, rtAgent, rtAgent) {
+	t.Helper()
+	svc, s, task := rtFixture(t)
+	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+	b := rtWriter(t, svc, s, task, "b", rtWrite(t, "tracked", "from b\n"))
+	c := rtWriter(t, svc, s, task, "c", rtWrite(t, "added", "c\n"))
+	if _, err := svc.IntegrateRuntime(t.Context(), task.ID, a.agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	rtVerify(t, s, task.ID)
+	if got, err := svc.IntegrateRuntime(t.Context(), task.ID, b.agent.ID); err != nil || got.Revision.State != store.RevisionConflict {
+		t.Fatalf("expected conflict: %+v %v", got, err)
+	}
+	return svc, s, task, a, b, c
+}
+
+// rtSetApplying simulates a crash right after an intent was recorded.
+func rtSetApplying(t *testing.T, s *store.Store, taskID, agentID, before, reason string) {
+	t.Helper()
+	r := rtRevision(t, s, taskID, agentID)
+	r.State, r.TreeBefore, r.Reason = store.RevisionApplying, before, reason
+	if err := s.UpdateAgentRevision(t.Context(), r, r.Version); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeConflictRetry(t *testing.T) {
+	t.Run("conflicts again", func(t *testing.T) {
+		svc, s, task, _, b, _ := rtConflict(t)
+		before := rtParent(t, task.ParentRoot)
+		got, err := svc.IntegrateRuntime(t.Context(), task.ID, b.agent.ID)
+		if err != nil || got.Revision.State != store.RevisionConflict || !reflect.DeepEqual(got.Revision.Conflict, []string{"tracked"}) || len(got.Options) != 3 {
+			t.Fatalf("retry = %+v %v", got, err)
+		}
+		if rtParent(t, task.ParentRoot) != before {
+			t.Fatal("retry changed the parent")
+		}
+		_ = s
+	})
+	t.Run("failure before mutation restores the conflict", func(t *testing.T) {
+		svc, s, task, _, b, _ := rtConflict(t)
+		ctx := t.Context()
+		runtimeIntegrateHook = func(stage string) {
+			if stage == "intent" {
+				if err := s.UpdateThread(ctx, task.ThreadID, map[string]any{"workspace_mode": "worktree"}); err != nil {
+					t.Error(err)
+				}
+			}
+		}
+		t.Cleanup(func() { runtimeIntegrateHook = nil })
+		if _, err := svc.IntegrateRuntime(ctx, task.ID, b.agent.ID); err == nil {
+			t.Fatal("guard abort not reported")
+		}
+		r := rtRevision(t, s, task.ID, b.agent.ID)
+		if r.State != store.RevisionConflict || !reflect.DeepEqual(r.Conflict, []string{"tracked"}) {
+			t.Fatalf("conflict not restored: %+v", r)
+		}
+	})
+}
+
+// A guard that refuses on its second pass (right before git writes) aborts
+// with the parent untouched and the revision as it was.
+func TestRuntimeGuardAbortOnSecondPass(t *testing.T) {
+	svc, s, task := rtFixture(t)
+	ctx := t.Context()
+	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+	before := rtParent(t, task.ParentRoot)
+	runtimeIntegrateHook = func(stage string) {
+		if stage == "guard2" {
+			if err := s.UpdateThread(ctx, task.ThreadID, map[string]any{"workspace_mode": "worktree"}); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Cleanup(func() { runtimeIntegrateHook = nil })
+	if _, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID); err == nil || !strings.Contains(err.Error(), "parent checkout changed") {
+		t.Fatalf("second-pass guard abort: %v", err)
+	}
+	if rtParent(t, task.ParentRoot) != before || rtRevision(t, s, task.ID, a.agent.ID).State != store.RevisionSubmitted {
+		t.Fatal("second-pass abort changed state")
+	}
+}
+
+// A failure after both guard passes (here: cancellation right before the
+// write) is decided from the actual parent tree: unchanged => retry allowed.
+// (A conflicted revision never reaches the second pass: it conflicts in the
+// private-index prediction first.)
+func TestRuntimeFailureAfterSecondGuardReconciles(t *testing.T) {
+	svc, s, task := rtFixture(t)
+	w := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	before := rtParent(t, task.ParentRoot)
+	runtimeIntegrateHook = func(stage string) {
+		if stage == "passed2" {
+			cancel()
+		}
+	}
+	t.Cleanup(func() { runtimeIntegrateHook = nil })
+	if _, err := svc.IntegrateRuntime(ctx, task.ID, w.agent.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel after the second guard: %v", err)
+	}
+	if rtParent(t, task.ParentRoot) != before {
+		t.Fatal("parent changed")
+	}
+	if r := rtRevision(t, s, task.ID, w.agent.ID); r.State != store.RevisionSubmitted {
+		t.Fatalf("revision %+v", r)
+	}
+	runtimeIntegrateHook = nil
+	if _, err := svc.IntegrateRuntime(t.Context(), task.ID, w.agent.ID); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+}
+
+// Crash after `git apply` of a revision that merged into a file an earlier
+// revision changed: recovery recognises the predicted tree and never re-applies.
+func TestReconcileRuntimeMergedHunks(t *testing.T) {
+	lines := "1\n2\n3\n4\n5\n6\n7\n8\n9\n"
+	svc, s, task := rtFixtureFiles(t, map[string]string{"lines": lines})
+	ctx := t.Context()
+	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "lines", strings.Replace(lines, "1\n", "one\n", 1)))
+	b := rtWriter(t, svc, s, task, "b", rtWrite(t, "lines", strings.Replace(lines, "9\n", "nine\n", 1)))
+	first, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rtVerify(t, s, task.ID)
+	rtSetApplying(t, s, task.ID, b.agent.ID, first.HeadTree, "")
+	if _, err = svc.Manager.ApplyOnIntegrated(ctx, b.ws.ID, task.ParentRoot, task.BaseRevision, first.HeadTree, b.agent.Revision); err != nil {
+		t.Fatal(err)
+	}
+	tree := workspaceGit(t, task.ParentRoot, "write-tree")
+	if err = svc.ReconcileRuntimeIntegration(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	r := rtRevision(t, s, task.ID, b.agent.ID)
+	st, _ := svc.RuntimeIntegrationStatus(ctx, task.ID)
+	if r.State != store.RevisionApplied || r.TreeAfter != tree || st.HeadTree != tree || st.AppliedCount != 2 || st.Verified {
+		t.Fatalf("merged recovery: %+v / %+v", r, st)
+	}
+	if _, err = svc.IntegrateRuntime(ctx, task.ID, b.agent.ID); err != nil || workspaceGit(t, task.ParentRoot, "write-tree") != tree {
+		t.Fatalf("replay re-applied: %v", err)
+	}
+	if got := workspaceGit(t, task.ParentRoot, "show", ":lines"); !strings.HasPrefix(got, "one\n") || !strings.HasSuffix(got, "nine") {
+		t.Fatalf("merged content %q", got)
+	}
+}
+
+// The head repair uses the revision applied last, even when trees repeat or
+// the apply order differs from the submission order.
+func TestReconcileRuntimeRepairsHeadLatest(t *testing.T) {
+	rewind := func(t *testing.T, s *store.Store, taskID, tree string, count int) {
+		t.Helper()
+		h, err := s.AgentIntegrationHead(t.Context(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.HeadTree, h.AppliedCount = tree, count
+		if err = s.SetAgentIntegrationHead(t.Context(), h, h.Version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("repeated head tree", func(t *testing.T) {
+		svc, s, task, _, b, c := rtConflict(t)
+		ctx := t.Context()
+		// The lead resolves b by restoring the base content: T1 -> T0.
+		workspaceWrite(t, task.ParentRoot, "tracked", "base\n")
+		workspaceGit(t, task.ParentRoot, "add", "tracked")
+		resolved, err := svc.ResolveRuntimeManually(ctx, task.ID, b.agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if base := workspaceGit(t, task.ParentRoot, "rev-parse", "HEAD^{tree}"); resolved.HeadTree != base {
+			t.Fatalf("resolution tree %s, want the base tree %s", resolved.HeadTree, base)
+		}
+		rtVerify(t, s, task.ID)
+		got, err := svc.IntegrateRuntime(ctx, task.ID, c.agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rewind(t, s, task.ID, resolved.HeadTree, 2)
+		if err = svc.ReconcileRuntimeIntegration(ctx, task.ID); err != nil {
+			t.Fatal(err)
+		}
+		if st, _ := svc.RuntimeIntegrationStatus(ctx, task.ID); st.HeadTree != got.HeadTree || st.AppliedCount != 3 {
+			t.Fatalf("repaired to %+v, want %s", st, got.HeadTree)
+		}
+	})
+	t.Run("apply order differs from submission order", func(t *testing.T) {
+		svc, s, task := rtFixture(t)
+		ctx := t.Context()
+		a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+		b := rtWriter(t, svc, s, task, "b", rtWrite(t, "added", "b\n"))
+		gotB, err := svc.IntegrateRuntime(ctx, task.ID, b.agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rtVerify(t, s, task.ID)
+		gotA, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rewind(t, s, task.ID, gotB.HeadTree, 1)
+		if err = svc.ReconcileRuntimeIntegration(ctx, task.ID); err != nil {
+			t.Fatal(err)
+		}
+		if st, _ := svc.RuntimeIntegrationStatus(ctx, task.ID); st.HeadTree != gotA.HeadTree || st.AppliedCount != 2 {
+			t.Fatalf("repaired to %+v, want %s", st, gotA.HeadTree)
+		}
+	})
 }
