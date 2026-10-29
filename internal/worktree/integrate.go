@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // ErrParentChanged is wrapped by refusals caused by the parent checkout no
@@ -189,7 +190,7 @@ func (m *Manager) ApplyOnIntegrated(ctx context.Context, workspaceID, parent, ba
 	if err = ctx.Err(); err != nil {
 		return ApplyResult{}, err
 	}
-	predicted, err := predictTree(ctx, parent, expectedTree, patch, paths)
+	predicted, changedPaths, err := predictTree(ctx, parent, expectedTree, patch, paths)
 	if err != nil {
 		return fail(err)
 	}
@@ -218,12 +219,12 @@ func (m *Manager) ApplyOnIntegrated(ctx context.Context, workspaceID, parent, ba
 	}
 	tree, err := parentTree(done, parent)
 	if err != nil {
-		return ApplyResult{Paths: paths}, fmt.Errorf("revision applied but the parent tree could not be read: %w", err)
+		return ApplyResult{Paths: changedPaths}, fmt.Errorf("revision applied but the parent tree could not be read: %w", err)
 	}
 	if tree != predicted {
-		return ApplyResult{Paths: paths, TreeAfter: tree}, fmt.Errorf("revision applied but the parent tree %s differs from the verified prediction %s; inspect the parent", tree, predicted)
+		return ApplyResult{Paths: changedPaths, TreeAfter: tree}, fmt.Errorf("revision applied but the parent tree %s differs from the verified prediction %s; inspect the parent", tree, predicted)
 	}
-	return ApplyResult{Paths: paths, TreeAfter: tree}, nil
+	return ApplyResult{Paths: changedPaths, TreeAfter: tree}, nil
 }
 
 // predictTree applies the exact patch bytes to a private temporary index
@@ -231,48 +232,49 @@ func (m *Manager) ApplyOnIntegrated(ctx context.Context, workspaceID, parent, ba
 // resulting tree: path rules, the same path set the agent revision reported,
 // and containment of every symlink. The parent index, worktree and HEAD are
 // never touched; only unreachable objects may be added to its object store.
-func predictTree(ctx context.Context, parent, expectedTree string, patch []byte, paths []string) (string, error) {
+func predictTree(ctx context.Context, parent, expectedTree string, patch []byte, paths []string) (string, []string, error) {
 	dir, err := os.MkdirTemp("", "umcode-integrate-")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer os.RemoveAll(dir)
 	env := []string{"GIT_INDEX_FILE=" + filepath.Join(dir, "index")}
 	if _, stderr, err := hardenedRunEnv(ctx, parent, env, nil, "read-tree", expectedTree); err != nil {
-		return "", fmt.Errorf("integration could not prepare a private index: %s", commandError(err, stderr))
+		return "", nil, fmt.Errorf("integration could not prepare a private index: %s", commandError(err, stderr))
 	}
 	if _, stderr, err := hardenedRunEnv(ctx, parent, env, patch, "apply", "--cached", "--binary", "--whitespace=nowarn", "-"); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
+			return "", nil, ctxErr
 		}
-		return "", classifyApplyCheck(stderr, paths, err)
+		return "", nil, classifyApplyCheck(stderr, paths, err)
 	}
 	out, stderr, err := hardenedRunEnv(ctx, parent, env, nil, "write-tree")
 	if err != nil {
-		return "", fmt.Errorf("integration could not write the predicted tree: %s", commandError(err, stderr))
+		return "", nil, fmt.Errorf("integration could not write the predicted tree: %s", commandError(err, stderr))
 	}
 	predicted := strings.TrimSpace(string(out))
 	entries, err := scanRevision(ctx, parent, expectedTree, predicted)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	scanned := map[string]bool{}
 	for _, p := range paths {
 		scanned[p] = true
 	}
-	deleted := map[string]bool{}
+	deleted, changed := map[string]bool{}, map[string]bool{}
 	for _, e := range entries {
+		changed[e.path] = true
 		if !scanned[e.path] {
-			return "", fmt.Errorf("agent revision changed during integration: the patch touches unscanned path %q", e.path)
+			return "", nil, fmt.Errorf("agent revision changed during integration: the patch touches unscanned path %q", e.path)
 		}
 		if e.status == "D" {
 			deleted[e.path] = true
 		}
 	}
-	if err = checkSymlinks(ctx, parent, parent, predicted, deleted); err != nil {
-		return "", err
+	if err = checkSymlinks(ctx, parent, parent, predicted, deleted, changed); err != nil {
+		return "", nil, err
 	}
-	return predicted, nil
+	return predicted, entryPaths(entries), nil
 }
 
 // rawEntry is one `git diff --raw` record of the agent revision.
@@ -333,10 +335,30 @@ func entryPaths(entries []rawEntry) []string {
 // other symlinks, including ignored on-disk symlinks that are not tracked, so
 // no symlink can escape the checkout or reach repository metadata. Paths in
 // deleted are removed by the pending apply and are not followed.
-func checkSymlinks(ctx context.Context, root, objects, tree string, deleted map[string]bool) error {
+func checkSymlinks(ctx context.Context, root, objects, tree string, deleted, changed map[string]bool) error {
 	type node struct{ mode, id string }
 	files := map[string]node{}
 	dirs := map[string]bool{}
+	// Paths changed by the revision and their ancestors: a pre-existing alias
+	// pair in the parent is the user's state, an introduced one is refused.
+	involved := map[string]bool{}
+	for p := range changed {
+		for ; p != "."; p = path.Dir(p) {
+			involved[p] = true
+		}
+	}
+	aliases := map[string]string{}
+	addAlias := func(p string) error {
+		key := pathAliasKey(p)
+		if q, ok := aliases[key]; ok && q != p {
+			if changed == nil || involved[p] || involved[q] {
+				return fmt.Errorf("path %q aliases %q on case-insensitive or normalizing filesystems", p, q)
+			}
+			return nil
+		}
+		aliases[key] = p
+		return nil
+	}
 	listing, err := hardenedNULList(ctx, objects, "ls-tree", "-r", "-z", "--full-tree", tree)
 	if err != nil {
 		return err
@@ -350,6 +372,19 @@ func checkSymlinks(ctx context.Context, root, objects, tree string, deleted map[
 		files[name] = node{mode: f[0], id: f[2]}
 		for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
 			dirs[dir] = true
+		}
+	}
+	all := make([]string, 0, len(files)+len(dirs))
+	for name := range files {
+		all = append(all, name)
+	}
+	for dir := range dirs {
+		all = append(all, dir)
+	}
+	sort.Strings(all)
+	for _, p := range all {
+		if err = addAlias(p); err != nil {
+			return err
 		}
 	}
 	readTarget := func(id string) (string, error) {
@@ -379,6 +414,11 @@ func checkSymlinks(ctx context.Context, root, objects, tree string, deleted map[
 		}
 		if dirs[p] || deleted[p] {
 			return false, "", nil
+		}
+		// On case-insensitive or normalizing filesystems this component is
+		// another tracked entry (possibly a symlink): never treat it as missing.
+		if q, ok := aliases[pathAliasKey(p)]; ok {
+			return false, "", fmt.Errorf("path %q aliases %q on case-insensitive or normalizing filesystems", p, q)
 		}
 		// Untracked but ignored content is not in the tree; consult the
 		// filesystem so an ignored symlink cannot be used as a stepping stone.
@@ -497,9 +537,7 @@ func isDotGit(name string) bool {
 		return false
 	}
 	name = strings.Map(func(r rune) rune {
-		switch {
-		case r == 0x200c || r == 0x200d || r == 0x200e || r == 0x200f,
-			r >= 0x202a && r <= 0x202e, r >= 0x206a && r <= 0x206f, r == 0xfeff:
+		if hfsIgnorable(r) {
 			return -1
 		}
 		return r
@@ -510,6 +548,113 @@ func isDotGit(name string) bool {
 	name = strings.TrimRight(name, ". ")
 	return strings.EqualFold(name, ".git") || strings.EqualFold(name, "git~1")
 }
+
+func hfsIgnorable(r rune) bool {
+	return r == 0x200c || r == 0x200d || r == 0x200e || r == 0x200f ||
+		(r >= 0x202a && r <= 0x202e) || (r >= 0x206a && r <= 0x206f) || r == 0xfeff
+}
+
+// pathAliasKey is aliasKey applied to every component of a slash path.
+func pathAliasKey(p string) string {
+	parts := strings.Split(p, "/")
+	for i, c := range parts {
+		parts[i] = aliasKey(c)
+	}
+	return strings.Join(parts, "/")
+}
+
+// aliasKey maps a path component to a key shared by every name a
+// case-insensitive or normalizing filesystem (APFS/HFS+ NFC/NFD, NTFS) could
+// treat as the same entry. It is conservative: no Unicode normalization
+// tables are available offline, so each maximal run of non-ASCII runes
+// becomes one placeholder, and a run that starts with a combining mark also
+// absorbs the preceding ASCII rune (its decomposed base letter). Distinct
+// names can therefore share a key (for example "aé" and "é"); that
+// only causes a refusal, never an acceptance. HFS-ignorable code points are
+// dropped and runes whose case-fold orbit contains an ASCII letter (Kelvin
+// sign, long s) fold to that letter.
+func aliasKey(name string) string {
+	var out []byte
+	runes := make([]rune, 0, len(name))
+	for _, r := range name {
+		if hfsIgnorable(r) {
+			continue
+		}
+		runes = append(runes, asciiFold(r))
+	}
+	for i := 0; i < len(runes); {
+		r := runes[i]
+		if r < 0x80 {
+			out = append(out, byte(r))
+			i++
+			continue
+		}
+		if unicode.In(r, unicode.Mn, unicode.Mc, unicode.Me) && len(out) > 0 && out[len(out)-1] != 0 {
+			out = out[:len(out)-1]
+		}
+		for i < len(runes) && runes[i] >= 0x80 {
+			i++
+		}
+		out = append(out, 0)
+	}
+	return string(out)
+}
+
+func asciiFold(r rune) rune {
+	if r < 0x80 {
+		return unicode.ToLower(r)
+	}
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		if f < 0x80 {
+			return unicode.ToLower(f)
+		}
+	}
+	return r
+}
+
+// unquoteGitPath undoes Git's C-style quoting of a path ("\303\251", "\t",
+// "\"", ...). Unquoted text is returned unchanged.
+func unquoteGitPath(s string) string {
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return s
+	}
+	in := s[1 : len(s)-1]
+	var out []byte
+	for i := 0; i < len(in); i++ {
+		c := in[i]
+		if c != '\\' || i+1 >= len(in) {
+			out = append(out, c)
+			continue
+		}
+		i++
+		switch e := in[i]; e {
+		case 'a':
+			out = append(out, '\a')
+		case 'b':
+			out = append(out, '\b')
+		case 't':
+			out = append(out, '\t')
+		case 'n':
+			out = append(out, '\n')
+		case 'v':
+			out = append(out, '\v')
+		case 'f':
+			out = append(out, '\f')
+		case 'r':
+			out = append(out, '\r')
+		default:
+			if e >= '0' && e <= '3' && i+2 < len(in) && isOctal(in[i+1]) && isOctal(in[i+2]) {
+				out = append(out, (e-'0')<<6|(in[i+1]-'0')<<3|(in[i+2]-'0'))
+				i += 2
+			} else {
+				out = append(out, e)
+			}
+		}
+	}
+	return string(out)
+}
+
+func isOctal(c byte) bool { return c >= '0' && c <= '7' }
 
 // classifyApplyCheck turns a failed `git apply` check into a ConflictError
 // only when every reported error is a genuine content conflict with the
@@ -540,8 +685,8 @@ func classifyApplyCheck(stderr string, paths []string, cause error) error {
 		if !ok {
 			return plain()
 		}
-		if p, ok := strings.CutSuffix(rest, ": does not match index"); ok && known[p] {
-			changed = p
+		if p, ok := strings.CutSuffix(rest, ": does not match index"); ok && known[unquoteGitPath(p)] {
+			changed = unquoteGitPath(p)
 			continue
 		}
 		detail := false
@@ -557,7 +702,7 @@ func classifyApplyCheck(stderr string, paths []string, cause error) error {
 		p := ""
 		for _, suffix := range conflictSuffixes {
 			if trimmed, ok := strings.CutSuffix(rest, suffix); ok {
-				p = trimmed
+				p = unquoteGitPath(trimmed)
 				break
 			}
 		}
