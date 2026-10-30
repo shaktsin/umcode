@@ -66,3 +66,9 @@ export function formatTurnTime(startedAt: string, nowMs: number): string {
   if (minutes) return `${minutes}m ${String(remainder).padStart(2, '0')}s`;
   return `${seconds}s`;
 }
+
+/** A completed turn uses the server's finish time, never the live clock. */
+export function completedTurnTime(startedAt: string, finishedAt?: string): string | null {
+  if (!finishedAt || !Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(finishedAt))) return null;
+  return formatTurnTime(startedAt, Date.parse(finishedAt));
+}

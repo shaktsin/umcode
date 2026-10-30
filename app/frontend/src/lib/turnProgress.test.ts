@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTurnTime, progressPhrase } from './turnProgress';
+import { completedTurnTime, formatTurnTime, progressPhrase } from './turnProgress';
 import type { Item } from './types';
 
 function item(kind: Item['kind'], status: Item['status'], name = '', seq = 1): Item {
@@ -31,5 +31,12 @@ describe('live turn progress', () => {
     expect(formatTurnTime(start, Date.parse(start) + 3_661_000)).toBe('1h 01m 01s');
     expect(formatTurnTime(start, Date.parse(start) - 1_000)).toBe('0s');
     expect(formatTurnTime('not-a-date', Date.parse(start))).toBe('0s');
+  });
+
+  it('freezes a completed turn at its server finish time', () => {
+    const start = '2026-10-30T20:00:00Z';
+    expect(completedTurnTime(start, '2026-10-30T20:01:24Z')).toBe('1m 24s');
+    expect(completedTurnTime(start, undefined)).toBeNull();
+    expect(completedTurnTime(start, 'not-a-date')).toBeNull();
   });
 });
