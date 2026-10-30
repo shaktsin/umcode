@@ -353,7 +353,7 @@ func TestIntegrateRuntimeConflictLeavesBothIntact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Revision.State != store.RevisionConflict || !reflect.DeepEqual(got.Revision.Conflict, []string{"tracked"}) || !reflect.DeepEqual(got.Options, []string{"drop", "resolved", "new_agent"}) {
+	if got.Revision.State != store.RevisionConflict || !reflect.DeepEqual(got.Revision.Conflict, []string{"tracked"}) || !reflect.DeepEqual(got.Options, []string{"drop", "resolved"}) {
 		t.Fatalf("conflict = %+v", got)
 	}
 	if rtParent(t, task.ParentRoot) != before {
@@ -978,4 +978,54 @@ func TestReconcileRuntimeRepairsHeadLatest(t *testing.T) {
 			t.Fatalf("repaired to %+v, want %s", st, gotA.HeadTree)
 		}
 	})
+}
+
+// M4 (final review): completion checks the verified head and changes the
+// task state under the task lock, so no check result is recorded in between.
+func TestFinishRuntimeHoldsTaskLock(t *testing.T) {
+	svc, s, task := rtFixture(t)
+	ctx := t.Context()
+	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+	res, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := res.HeadTree
+	fail := func(w store.RuntimeWorkflow) (store.RuntimeWorkflow, error) {
+		w.Checks = []store.AgentWorkflowCheck{{Label: "tests", Command: "go test ./...", Status: "failed"}}
+		return w, nil
+	}
+	// An unverified head is refused and nothing completes.
+	called := false
+	if err = svc.FinishRuntime(ctx, task.ID, head, 1, func() error { called = true; return nil }); err == nil || called || !strings.Contains(err.Error(), "not verified") {
+		t.Fatalf("unverified head: err=%v called=%v", err, called)
+	}
+	rtVerify(t, s, task.ID)
+	// A stale applied count (another accept happened) is refused.
+	if err = svc.FinishRuntime(ctx, task.ID, head, 2, func() error { called = true; return nil }); err == nil || called {
+		t.Fatalf("stale count: err=%v called=%v", err, called)
+	}
+	done := make(chan error, 1)
+	err = svc.FinishRuntime(ctx, task.ID, head, 1, func() error {
+		go func() { done <- svc.UpdateRuntimeWorkflow(context.Background(), task.ID, head, fail) }()
+		select {
+		case err := <-done:
+			t.Errorf("a check result was recorded inside completion: %v", err)
+		case <-time.After(300 * time.Millisecond):
+		}
+		return s.UpdateAgentTaskState(ctx, task.ID, task.ThreadID, task.ProjectID, task.State, protocol.AgentStateCompleted)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; err == nil {
+		t.Fatal("a failed result was recorded after completion")
+	}
+	h, err := s.AgentIntegrationHead(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := store.DecodeRuntimeWorkflow(h.Workflow); len(w.Checks) != 1 || w.Checks[0].Status != "passed" {
+		t.Fatalf("workflow after completion = %+v", w)
+	}
 }
