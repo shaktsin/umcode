@@ -326,15 +326,13 @@
                 <span aria-hidden="true">{record.decision === 'denied' ? '✕' : '✓'}</span><span>{recordLine(record)}</span>
               </div>
             {/each}
-            {#if g.turn?.status === 'running' || g.turn?.status === 'completed'}
+            {#if g.turn?.status === 'running'}
               <details class="turn-progress text-sm text-muted">
                 <summary class="block border-b border-line/70 pb-1.5 cursor-pointer select-none hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
                   <span class="inline-flex max-w-full items-center gap-2">
-                    <span class="truncate" aria-live="polite">{g.turn.status === 'completed' ? 'Completed' : progressPhrase(g.items, app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId))}</span>
+                    <span class="truncate" aria-live="polite">{progressPhrase(g.items, app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId))}</span>
                     <ChevronRight class="turn-progress-chevron w-3.5 h-3.5 shrink-0 transition-transform" aria-hidden="true" />
-                    {#if g.turn.status === 'running'}
-                      <span class="shrink-0 tabular-nums" title="Time working">{formatTurnTime(g.turn.startedAt, progressNow)}</span>
-                    {/if}
+                    <span class="shrink-0 tabular-nums" title="Time working">{formatTurnTime(g.turn.startedAt, progressNow)}</span>
                   </span>
                 </summary>
                 <div class="pt-2 text-[11px] text-muted">
