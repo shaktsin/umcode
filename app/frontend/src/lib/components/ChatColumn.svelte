@@ -2,7 +2,7 @@
  import CompactionProgress from './CompactionProgress.svelte';
  import CapacityNotice from './CapacityNotice.svelte';
   import { tick } from 'svelte';
-  import { Sparkles, KeyRound, FolderPlus, Undo2, Check, Circle, LoaderCircle, FileText, ShieldCheck } from '@lucide/svelte';
+  import { Sparkles, KeyRound, FolderPlus, Undo2, Check, Circle, LoaderCircle, FileText, ChevronRight } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
   import { chat, type ThreadView } from '$lib/stores/chat.svelte';
   import { projects } from '$lib/stores/projects.svelte';
@@ -19,6 +19,7 @@
   import Agents from './Agents.svelte';
   import type { Item, Turn, TaskWorkspaceResult } from '$lib/types';
   import { createProject } from '$lib/createProject';
+  import { formatTurnTime, progressPhrase } from '$lib/turnProgress';
 
   let { view, variant = 'main' }: { view: ThreadView; variant?: 'main' | 'side' } = $props();
 
@@ -45,6 +46,15 @@
     }
     for (const t of view.turns) if (!byId.has(t.id)) out.push({ turnId: t.id, turn: t, items: [] });
     return out;
+  });
+
+  let progressNow = $state(Date.now());
+  const hasRunningTurn = $derived(groups.some((g) => g.turn?.status === 'running'));
+  $effect(() => {
+    if (!hasRunningTurn) return;
+    progressNow = Date.now();
+    const timer = window.setInterval(() => (progressNow = Date.now()), 1000);
+    return () => window.clearInterval(timer);
   });
 
   const hasKeys = $derived(app.credentials.some((c) => c.enabled));
@@ -162,12 +172,6 @@
     const provisional = item.data && typeof item.data === "object" ? (item.data as { provisionalText?: unknown }).provisionalText : undefined;
     const text = (isProvisionalExecution(item) && typeof provisional === 'string' ? provisional : item.text ?? '').trim();
     return text.length > 480 ? `${text.slice(0, 480).trimEnd()}…` : text;
-  }
-
-  function currentActivity(g: Group): string {
-    if (app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId)) return 'Waiting for your approval';
-    const active = [...g.items].reverse().find((i) => i.kind === 'toolCall' && i.status === 'inProgress');
-    return active ? actionLabel(active) : 'Working through the request';
   }
 
   function isVisibleChatMessage(item: Item): boolean {
@@ -321,10 +325,40 @@
               </div>
             {/each}
             {#if g.turn?.status === 'running'}
-              <div class="flex items-center gap-2 text-xs text-muted" aria-live="polite">
-                {#if currentActivity(g) === 'Waiting for your approval'}<ShieldCheck class="w-3.5 h-3.5 text-amber-warm" />{:else}<LoaderCircle class="w-3.5 h-3.5 text-clay animate-spin motion-reduce:animate-none" />{/if}
-                <span>{currentActivity(g)}…</span>
-              </div>
+              <details class="turn-progress text-sm text-muted">
+                <summary class="block border-b border-line/70 pb-1.5 cursor-pointer select-none hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+                  <span class="inline-flex max-w-full items-center gap-2">
+                    <span class="truncate" aria-live="polite">{progressPhrase(g.items, app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId))}</span>
+                    <ChevronRight class="turn-progress-chevron w-3.5 h-3.5 shrink-0 transition-transform" aria-hidden="true" />
+                    <span class="shrink-0 tabular-nums" title="Time working">{formatTurnTime(g.turn.startedAt, progressNow)}</span>
+                  </span>
+                </summary>
+                <div class="pt-2 text-[11px] text-muted">
+                  {#if workLogItems(g).length > 0}
+                    <ol class="ml-1 pl-4 border-l border-line space-y-2.5">
+                      {#each workLogItems(g) as action (action.id)}
+                        <li class="pl-1">
+                          {#if action.kind === 'agentMessage'}
+                            <div class="text-ink-soft">
+                              <span class="block text-[10px] uppercase tracking-wide text-faint">{isProvisionalExecution(action) ? 'Unverified model narration' : 'Progress update'}</span>
+                              <p class="mt-0.5 whitespace-pre-wrap">{progressText(action)}</p>
+                            </div>
+                          {:else if action.kind === 'toolCall' && action.tool}
+                            <ToolCall item={action} projectId={view.thread?.projectId} />
+                          {:else if action.kind === 'fileChange'}
+                            <button class="text-ink-soft hover:text-accent-strong hover:underline" onclick={() => inspector.openFile((action.data as { path?: string }).path ?? '', view.id ?? undefined, view.thread?.projectId)}>
+                              {actionLabel(action)}
+                            </button>
+                          {/if}
+                        </li>
+                      {/each}
+                    </ol>
+                  {:else}
+                    <p>No activity recorded yet.</p>
+                  {/if}
+                  <p class="mt-2 text-[10px] text-faint">Progress updates show observed actions; private model reasoning isn’t shown.</p>
+                </div>
+              </details>
             {:else if g.turn}
               {#if g.turn.status === 'failed' && taskFailure.showTurnError && !g.items.some((item) => item.kind === 'error' && item.text === g.turn?.error)}
                 <ChatError text={g.turn.error || ''} />
@@ -404,3 +438,9 @@
   <CapacityNotice selection={view.selection} />
   <Composer {view} compact={variant === 'side'} />
 </div>
+
+<style>
+  .turn-progress > summary { list-style: none; }
+  .turn-progress > summary::-webkit-details-marker { display: none; }
+  .turn-progress[open] :global(.turn-progress-chevron) { transform: rotate(90deg); }
+</style>
