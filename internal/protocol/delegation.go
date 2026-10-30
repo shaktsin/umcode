@@ -147,10 +147,13 @@ type AgentIntegrationReport struct {
 	Verified bool `json:"verified"`
 	// Applied lists the agents whose revisions are applied (staged).
 	Applied []string `json:"applied,omitempty"`
-	// Unintegrated lists the agents whose revisions were not applied
-	// (submitted, conflict or still applying); their work stays in their
-	// workspaces.
+	// Unintegrated lists the agents whose revisions were never applied
+	// (submitted or conflict); their work stays only in their workspaces.
 	Unintegrated []string `json:"unintegrated,omitempty"`
+	// BlockedAgents lists the agents whose apply was interrupted and could
+	// not be settled (left applying): the checkout may hold part of their
+	// work, mixed with other edits.
+	BlockedAgents []string `json:"blockedAgents,omitempty"`
 	// Blocked explains an interrupted apply that could not be settled.
 	Blocked string `json:"blocked,omitempty"`
 	Message string `json:"message"`

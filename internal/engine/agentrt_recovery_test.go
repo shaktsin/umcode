@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,17 +23,46 @@ import (
 // not depend on the flag.
 func (env rvEnv) restart(t *testing.T) *Engine {
 	t.Helper()
+	e, _ := env.restartLogged(t)
+	return e
+}
+
+// lockedBuffer is a log sink safe for concurrent writes.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// restartLogged is restart that also returns what the restarted engine logs.
+func (env rvEnv) restartLogged(t *testing.T) (*Engine, *lockedBuffer) {
+	t.Helper()
 	cfg := *env.e.Cfg
 	cfg.Agents.RuntimeV2 = false
 	reg := llm.NewRegistry()
 	reg.Register(&delegationProvider{})
-	e, err := New(t.Context(), Options{Config: &cfg, Store: env.e.Store, Secrets: secrets.NewMemoryStore(), LLMs: reg, DisableMCP: true, DisableScheduler: true})
+	logs := &lockedBuffer{}
+	e, err := New(t.Context(), Options{Config: &cfg, Store: env.e.Store, Secrets: secrets.NewMemoryStore(), LLMs: reg, DisableMCP: true, DisableScheduler: true,
+		Logger: slog.New(slog.NewTextHandler(logs, nil))})
 	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	t.Cleanup(func() { e.Shutdown(context.Background()) })
-	return e
+	return e, logs
 }
+
+const unsettledWarning = "agent integration left unsettled after restart"
 
 func (env rvEnv) baseTree(t *testing.T) string {
 	t.Helper()
@@ -127,8 +157,12 @@ func TestStartupReconcilesApplyingRevisions(t *testing.T) {
 		env.markApplying(t, a.ID)
 		env.stageInParent(t, "a.txt", "someone else\n")
 		odd := env.parentTree(t)
-		// The engine still starts; the revision stays blocked with a reason.
-		restarted := env.restart(t)
+		// The engine still starts; the revision stays blocked with a reason,
+		// and the startup logs it.
+		restarted, logs := env.restartLogged(t)
+		if out := logs.String(); !strings.Contains(out, unsettledWarning) || !strings.Contains(out, env.task.ID) {
+			t.Fatalf("startup did not log the unsettled task:\n%s", out)
+		}
 		if got := env.revision(t, a.ID); got.State != store.RevisionApplying {
 			t.Fatalf("revision = %s; want applying (blocked)", got.State)
 		}
@@ -333,5 +367,110 @@ func TestCancelTaskWithMissingProjectReports(t *testing.T) {
 	}
 	if r := res.Integration; r == nil || r.Blocked == "" || !strings.Contains(r.Message, "nothing was reverted") {
 		t.Fatalf("report = %+v", r)
+	}
+}
+
+func TestStartupRepairsHeadThatMissedItsMove(t *testing.T) {
+	env := runtimeVerificationEnv(t)
+	a := env.writer(t, "a", "a.txt", "from a\n")
+	env.mustIntegrate(t, `{"action":"accept","agent":"`+a.ID+`"}`)
+	after := env.parentTree(t)
+	// A crash between "revision applied" and "head moved".
+	h, _ := env.head(t)
+	if err := env.e.Store.SetAgentIntegrationHead(t.Context(), store.AgentIntegrationHead{TaskID: env.task.ID, HeadTree: env.baseTree(t)}, h.Version); err != nil {
+		t.Fatal(err)
+	}
+	env.restart(t)
+	if h, _ := env.head(t); h.HeadTree != after || h.AppliedCount != 1 {
+		t.Fatalf("head = %+v; want %s with one applied", h, after)
+	}
+	if got := env.revision(t, a.ID); got.State != store.RevisionApplied || got.TreeAfter != after {
+		t.Fatalf("revision = %s %s", got.State, got.TreeAfter)
+	}
+	if tree := env.parentTree(t); tree != after {
+		t.Fatalf("parent tree changed: %s", tree)
+	}
+}
+
+func TestStartupWithMissingProjectFolder(t *testing.T) {
+	env := runtimeVerificationEnv(t)
+	a := env.writer(t, "a", "a.txt", "from a\n")
+	env.markApplying(t, a.ID)
+	moved := env.root + ".moved"
+	if err := os.Rename(env.root, moved); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Rename(moved, env.root) })
+	_, logs := env.restartLogged(t)
+	if got := env.revision(t, a.ID); got.State != store.RevisionApplying {
+		t.Fatalf("revision = %s; want left applying", got.State)
+	}
+	if out := logs.String(); !strings.Contains(out, unsettledWarning) || !strings.Contains(out, env.task.ID) {
+		t.Fatalf("startup did not log the unsettled task:\n%s", out)
+	}
+}
+
+// A revision blocked in applying may be partly in the checkout: the cancel
+// report must say so, list it apart from never-applied work and not offer a
+// retry the cancelled task can never run.
+func TestCancelTaskWithBlockedApplyReports(t *testing.T) {
+	env := runtimeVerificationEnv(t)
+	a := env.writer(t, "a", "a.txt", "from a\n")
+	b := env.writer(t, "b", "b.txt", "from b\n")
+	env.markApplying(t, a.ID)
+	// Git wrote a, then the user edited the staged file before the restart.
+	env.stageInParent(t, "a.txt", "someone else\n")
+	tree := env.parentTree(t)
+	res := env.cancel(t)
+	if res.Task.State != protocol.AgentStateCancelled {
+		t.Fatalf("task = %s", res.Task.State)
+	}
+	r := res.Integration
+	if r == nil {
+		t.Fatal("cancel result has no integration report")
+	}
+	if r.AppliedCount != 0 || len(r.Applied) != 0 || !slices.Equal(r.BlockedAgents, []string{a.ID}) || !slices.Equal(r.Unintegrated, []string{b.ID}) {
+		t.Fatalf("report = %+v", r)
+	}
+	if !strings.Contains(r.Blocked, "blocked in applying") {
+		t.Fatalf("blocked reason = %q", r.Blocked)
+	}
+	for _, text := range []string{r.Blocked, r.Message} {
+		if strings.Contains(text, "retry") || strings.Contains(text, "call resolved") {
+			t.Fatalf("offers an action the cancelled task cannot take: %q", text)
+		}
+	}
+	if strings.Contains(r.Message, "did not change") || strings.Contains(r.Message, "No agent work was integrated") {
+		t.Fatalf("message claims the checkout is untouched: %q", r.Message)
+	}
+	for _, want := range []string{"partly integrated", a.ID, "inspect", "nothing was reverted", "retained"} {
+		if !strings.Contains(r.Message, want) {
+			t.Fatalf("report message %q lacks %q", r.Message, want)
+		}
+	}
+	if got := env.revision(t, a.ID); got.State != store.RevisionApplying {
+		t.Fatalf("revision = %s", got.State)
+	}
+	if got := env.parentTree(t); got != tree {
+		t.Fatalf("parent tree changed: %s", got)
+	}
+}
+
+// Only a task the cancel actually left cancelled gets a report: cancelling a
+// completed task (whose applied checkouts were cleaned up) reports nothing.
+func TestCancelCompletedTaskHasNoIntegrationReport(t *testing.T) {
+	env := runtimeVerificationEnv(t)
+	a := env.writer(t, "a", "a.txt", "from a\n")
+	env.mustIntegrate(t, `{"action":"accept","agent":"`+a.ID+`"}`)
+	env.passChecks(t)
+	if out := env.mustIntegrate(t, `{"action":"complete"}`); out.TaskState != protocol.AgentStateCompleted {
+		t.Fatalf("complete = %+v", out)
+	}
+	res, err := env.e.CancelDelegation(context.Background(), protocol.DelegationCancelParams{ThreadID: env.task.ThreadID, TaskID: env.task.ID})
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if res.Task.State != protocol.AgentStateCompleted || res.Integration != nil {
+		t.Fatalf("cancel of a completed task = %s %+v", res.Task.State, res.Integration)
 	}
 }
