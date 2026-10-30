@@ -632,14 +632,14 @@ func testIntegrationUsesAuthorityRecheck(t *testing.T) {
 	ctx := t.Context()
 	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
 	before := rtParent(t, task.ParentRoot)
-	runtimeIntegrateHook = func(stage string) {
+	setRuntimeIntegrateHook(func(stage string) {
 		if stage == "intent" {
 			if err := s.UpdateThread(ctx, task.ThreadID, map[string]any{"workspace_mode": "worktree"}); err != nil {
 				t.Error(err)
 			}
 		}
-	}
-	t.Cleanup(func() { runtimeIntegrateHook = nil })
+	})
+	t.Cleanup(func() { setRuntimeIntegrateHook(nil) })
 	if _, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID); err == nil || !strings.Contains(err.Error(), "parent checkout changed") {
 		t.Fatalf("authority change not caught by the guard: %v", err)
 	}
@@ -650,7 +650,7 @@ func testIntegrationUsesAuthorityRecheck(t *testing.T) {
 		t.Fatalf("revision after guard abort: %+v", r)
 	}
 	// An agent whose submission changed is refused too (follow-up re-queued it).
-	runtimeIntegrateHook = nil
+	setRuntimeIntegrateHook(nil)
 	if err := s.UpdateThread(ctx, task.ThreadID, map[string]any{"workspace_mode": "local"}); err != nil {
 		t.Fatal(err)
 	}
@@ -717,12 +717,12 @@ func TestRuntimeManualResolution(t *testing.T) {
 		}
 		// A retry records its own intent without any manual marker.
 		var intentReason string
-		runtimeIntegrateHook = func(stage string) {
+		setRuntimeIntegrateHook(func(stage string) {
 			if stage == "intent" {
 				intentReason = rtRevision(t, s, task.ID, b.agent.ID).Reason
 			}
-		}
-		t.Cleanup(func() { runtimeIntegrateHook = nil })
+		})
+		t.Cleanup(func() { setRuntimeIntegrateHook(nil) })
 		got, err := svc.IntegrateRuntime(ctx, task.ID, b.agent.ID)
 		if err != nil || got.Revision.State != store.RevisionConflict {
 			t.Fatalf("retry = %+v %v", got, err)
@@ -810,14 +810,14 @@ func TestRuntimeConflictRetry(t *testing.T) {
 	t.Run("failure before mutation restores the conflict", func(t *testing.T) {
 		svc, s, task, _, b, _ := rtConflict(t)
 		ctx := t.Context()
-		runtimeIntegrateHook = func(stage string) {
+		setRuntimeIntegrateHook(func(stage string) {
 			if stage == "intent" {
 				if err := s.UpdateThread(ctx, task.ThreadID, map[string]any{"workspace_mode": "worktree"}); err != nil {
 					t.Error(err)
 				}
 			}
-		}
-		t.Cleanup(func() { runtimeIntegrateHook = nil })
+		})
+		t.Cleanup(func() { setRuntimeIntegrateHook(nil) })
 		if _, err := svc.IntegrateRuntime(ctx, task.ID, b.agent.ID); err == nil {
 			t.Fatal("guard abort not reported")
 		}
@@ -835,14 +835,14 @@ func TestRuntimeGuardAbortOnSecondPass(t *testing.T) {
 	ctx := t.Context()
 	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
 	before := rtParent(t, task.ParentRoot)
-	runtimeIntegrateHook = func(stage string) {
+	setRuntimeIntegrateHook(func(stage string) {
 		if stage == "guard2" {
 			if err := s.UpdateThread(ctx, task.ThreadID, map[string]any{"workspace_mode": "worktree"}); err != nil {
 				t.Error(err)
 			}
 		}
-	}
-	t.Cleanup(func() { runtimeIntegrateHook = nil })
+	})
+	t.Cleanup(func() { setRuntimeIntegrateHook(nil) })
 	if _, err := svc.IntegrateRuntime(ctx, task.ID, a.agent.ID); err == nil || !strings.Contains(err.Error(), "parent checkout changed") {
 		t.Fatalf("second-pass guard abort: %v", err)
 	}
@@ -861,12 +861,12 @@ func TestRuntimeFailureAfterSecondGuardReconciles(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	before := rtParent(t, task.ParentRoot)
-	runtimeIntegrateHook = func(stage string) {
+	setRuntimeIntegrateHook(func(stage string) {
 		if stage == "passed2" {
 			cancel()
 		}
-	}
-	t.Cleanup(func() { runtimeIntegrateHook = nil })
+	})
+	t.Cleanup(func() { setRuntimeIntegrateHook(nil) })
 	if _, err := svc.IntegrateRuntime(ctx, task.ID, w.agent.ID); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel after the second guard: %v", err)
 	}
@@ -876,7 +876,7 @@ func TestRuntimeFailureAfterSecondGuardReconciles(t *testing.T) {
 	if r := rtRevision(t, s, task.ID, w.agent.ID); r.State != store.RevisionSubmitted {
 		t.Fatalf("revision %+v", r)
 	}
-	runtimeIntegrateHook = nil
+	setRuntimeIntegrateHook(nil)
 	if _, err := svc.IntegrateRuntime(t.Context(), task.ID, w.agent.ID); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
