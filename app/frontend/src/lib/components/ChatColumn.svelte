@@ -19,7 +19,7 @@
   import Agents from './Agents.svelte';
   import type { Item, Turn, TaskWorkspaceResult } from '$lib/types';
   import { createProject } from '$lib/createProject';
-  import { formatTurnTime, progressPhrase } from '$lib/turnProgress';
+  import { completedTurnTime, formatTurnTime, progressPhrase } from '$lib/turnProgress';
 
   let { view, variant = 'main' }: { view: ThreadView; variant?: 'main' | 'side' } = $props();
 
@@ -305,6 +305,7 @@
         {#each groups as g (g.turnId)}
           {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '', g.turn?.status || '')}
           {@const executionOutcome = executionOutcomePresentation(g.items, g.turn?.status || '')}
+          {@const completedTime = g.turn?.status === 'completed' ? completedTurnTime(g.turn.startedAt, g.turn.finishedAt) : null}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}
               {#if !isProvisionalExecution(it) && !taskFailure.hiddenItemIds.includes(it.id) && (it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim())))}
@@ -324,13 +325,17 @@
                 <span aria-hidden="true">{record.decision === 'denied' ? '✕' : '✓'}</span><span>{recordLine(record)}</span>
               </div>
             {/each}
-            {#if g.turn?.status === 'running'}
+            {#if g.turn?.status === 'running' || g.turn?.status === 'completed'}
               <details class="turn-progress text-sm text-muted">
                 <summary class="block border-b border-line/70 pb-1.5 cursor-pointer select-none hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
                   <span class="inline-flex max-w-full items-center gap-2">
-                    <span class="truncate" aria-live="polite">{progressPhrase(g.items, app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId))}</span>
+                    <span class="truncate" aria-live="polite">{g.turn.status === 'completed' ? 'Completed' : progressPhrase(g.items, app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId))}</span>
                     <ChevronRight class="turn-progress-chevron w-3.5 h-3.5 shrink-0 transition-transform" aria-hidden="true" />
-                    <span class="shrink-0 tabular-nums" title="Time working">{formatTurnTime(g.turn.startedAt, progressNow)}</span>
+                    {#if g.turn.status === 'running'}
+                      <span class="shrink-0 tabular-nums" title="Time working">{formatTurnTime(g.turn.startedAt, progressNow)}</span>
+                    {:else if completedTime}
+                      <span class="shrink-0 tabular-nums" title="Time taken">{completedTime}</span>
+                    {/if}
                   </span>
                 </summary>
                 <div class="pt-2 text-[11px] text-muted">
@@ -359,7 +364,8 @@
                   <p class="mt-2 text-[10px] text-faint">Progress updates show observed actions; private model reasoning isn’t shown.</p>
                 </div>
               </details>
-            {:else if g.turn}
+            {/if}
+            {#if g.turn && g.turn.status !== 'running'}
               {#if g.turn.status === 'failed' && taskFailure.showTurnError && !g.items.some((item) => item.kind === 'error' && item.text === g.turn?.error)}
                 <ChatError text={g.turn.error || ''} />
               {/if}
@@ -403,7 +409,7 @@
             {:else if g.turn && g.turn.id === latestTurn?.id && threadProject && view.thread?.workspaceMode !== 'worktree' && g.items.some((i) => i.kind === 'fileChange')}
               <div class="text-[11px] text-muted">Changes are already in the project folder.</div>
             {/if}
-            {#if g.turn && g.turn.status !== 'running' && workLogItems(g).length > 0}
+            {#if g.turn && g.turn.status !== 'running' && g.turn.status !== 'completed' && workLogItems(g).length > 0}
               <details class="text-[11px] text-muted">
                 <summary class="w-fit cursor-pointer select-none hover:text-ink">Work log · {workLogItems(g).length} updates and actions</summary>
                 <ol class="mt-2 ml-1 pl-4 border-l border-line space-y-2.5">
