@@ -55,7 +55,7 @@ func TestRuntimeV2FlagOffKeepsLegacyTools(t *testing.T) {
 
 func TestRuntimeV2FlagOnRegistersRuntimeTools(t *testing.T) {
 	e, _, _, _ := delegationFixtureWith(t, runtimeV2On)
-	want := []string{"agent.cancel", "agent.list", "agent.message", "agent.spawn", "agent.status", "agent.wait"}
+	want := []string{"agent.cancel", "agent.list", "agent.message", "agent.spawn", "agent.status", "agent.suggest", "agent.wait"}
 	if got := agentToolNames(e); !slices.Equal(got, want) {
 		t.Fatalf("agent tools = %v, want %v", got, want)
 	}

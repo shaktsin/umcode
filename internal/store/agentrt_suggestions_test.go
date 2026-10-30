@@ -3,7 +3,9 @@ package store
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 )
@@ -157,5 +159,25 @@ func TestExpirePendingOnRestart(t *testing.T) {
 	}
 	if _, err = s.DecideAgentSuggestion(t.Context(), p.ID, SuggestionEnabled); !errors.Is(err, ErrAgentTransition) {
 		t.Fatalf("expired decide: %v", err)
+	}
+}
+
+func TestSuggestionReasonTruncatedOnRuneBoundary(t *testing.T) {
+	s, th := suggestionFixture(t)
+	a, err := s.CreateAgentSuggestion(t.Context(), AgentSuggestion{ThreadID: th, TurnID: "t1", Reason: "a" + strings.Repeat("é", maxSuggestionReason)})
+	if err != nil || !utf8.ValidString(a.Reason) || len(a.Reason) > maxSuggestionReason {
+		t.Fatalf("reason %d bytes valid=%v err=%v", len(a.Reason), utf8.ValidString(a.Reason), err)
+	}
+}
+
+func TestGetAgentSuggestion(t *testing.T) {
+	s, th := suggestionFixture(t)
+	a, _ := s.CreateAgentSuggestion(t.Context(), AgentSuggestion{ThreadID: th, TurnID: "t1", Reason: "why"})
+	got, err := s.GetAgentSuggestion(t.Context(), a.ID)
+	if err != nil || got.ID != a.ID || got.ThreadID != th || got.Reason != "why" || got.State != SuggestionPending {
+		t.Fatalf("get: %+v %v", got, err)
+	}
+	if _, err = s.GetAgentSuggestion(t.Context(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing: %v", err)
 	}
 }
