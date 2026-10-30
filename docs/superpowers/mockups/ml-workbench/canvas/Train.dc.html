@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UMCode Train</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:6px;background:#eef1f5;border:1px solid #d9dee7;font-size:12px;color:#344157}
+.fld{display:flex;align-items:center;justify-content:space-between;height:30px;font-size:12px;color:#344157}
+.fld span.v{box-sizing:border-box;width:140px;height:26px;border:1px solid #d9dee7;background:#fff;border-radius:6px;display:flex;align-items:center;padding:0 8px;font:400 12px/16px 'SF Mono',ui-monospace,Menlo,monospace;color:#172033}
+.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c;margin:14px 0 4px}
+.mono{font-family:'SF Mono',ui-monospace,Menlo,monospace}
+.tile{flex:1;min-width:0;background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:10px 12px}
+.tile small{display:block;font-size:11px;color:#5b687c;white-space:nowrap}
+.tile b{font-size:16px;line-height:26px;font-weight:600;white-space:nowrap}
+.bar{height:6px;border-radius:3px;background:#e3e7ed;overflow:hidden}
+.bar>div{height:100%;border-radius:3px}
+.log{font:400 11.5px/18px 'SF Mono',ui-monospace,Menlo,monospace;color:#344157;white-space:pre}
+</style>
+</helmet>
+<div style="width:1440px;height:900px;display:flex;background:#f7f8fa;color:#172033;font:13px/20px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',system-ui,sans-serif;overflow:hidden;border-radius:12px;border:1px solid #c6ccd6;box-sizing:border-box">
+
+<aside style="width:64px;flex:none;background:#eef1f5;border-right:1px solid #d9dee7;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px">
+<div style="width:32px;height:32px;border-radius:8px;background:#3569d4;color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;margin-bottom:12px">UM</div>
+<button aria-label="Chat" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg></button>
+<button aria-label="Build" aria-current="page" style="width:40px;height:40px;border:0;border-radius:8px;background:#dfe9ff;color:#2454b5;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+<button aria-label="Approvals" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/></svg></button>
+<button aria-label="Plugins" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+<button aria-label="Periodic" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
+</aside>
+
+<!-- CHAT -->
+<section style="width:340px;flex:none;display:flex;flex-direction:column;border-right:1px solid #d9dee7">
+<header style="height:44px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #d9dee7"><strong>umcode-ml</strong><span style="color:#5b687c">· GPT-2 finetune</span></header>
+<div style="flex:1;min-height:0;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="display:flex;flex-direction:column;gap:8px">
+<div>Run #7 started on <strong>lab-a100</strong>, GPUs 0–2. Checkpoints sync back to your Mac every 500 steps.</div>
+<span class="chip" style="align-self:flex-start">Connected over SSH · torch 2.5 · CUDA 12.4</span>
+</div>
+<div style="align-self:flex-end;max-width:260px;background:#dfe9ff;border-radius:12px 12px 4px 12px;padding:8px 12px">Is the loss behaving?</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div>Train loss fell from 4.1 to 2.31 and is flattening near step 1,200. Eval loss is still dropping, so it isn't overfitting yet. A lower learning rate on the next run might squeeze out a little more.</div>
+<div style="display:flex;gap:8px"><button style="height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px">Queue run with lr 1e-4</button></div>
+</div>
+</div>
+<div style="padding:12px 16px 16px"><div style="border:1px solid #c6ccd6;background:#fff;border-radius:16px;padding:10px 12px;display:flex;flex-direction:column;gap:8px"><span class="chip" style="align-self:flex-start;background:#dfe9ff;border-color:#b9cdf8;color:#2454b5">Context · run #7 metrics</span><span style="color:#5b687c">Ask about this run…</span></div></div>
+</section>
+
+<!-- TRAIN PANEL -->
+<section style="flex:1;min-width:0;display:flex;flex-direction:column">
+<header style="height:44px;box-sizing:border-box;padding:0 12px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #d9dee7">
+<div role="tablist" style="display:flex;background:#eef1f5;border-radius:8px;padding:2px;gap:2px">
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Data</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Build</button>
+<button role="tab" aria-selected="true" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:#fff;color:#172033;font-size:13px;font-weight:600;box-shadow:0 1px 2px rgba(23,32,51,.12)">Train</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Inference</button>
+</div>
+<span class="mono" style="font-size:12px;color:#344157">Run #7</span><span style="display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;background:#dfe9ff;color:#2454b5;font-size:11px;font-weight:600">Text generation</span>
+<span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#2f7a5c;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#2f7a5c"></span>Running · step 1,240 / 9,030</span>
+<div style="margin-left:auto;display:flex;gap:8px"><button style="height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px">Pause</button><button style="height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#bd4b51;font-size:12px">Stop</button></div>
+</header>
+
+<div style="flex:1;min-height:0;display:flex">
+<!-- config -->
+<aside style="width:272px;flex:none;border-right:1px solid #d9dee7;padding:6px 14px;overflow:hidden">
+<div class="h">Mode</div>
+<div style="display:flex;background:#eef1f5;border-radius:8px;padding:2px;gap:2px"><span style="flex:1;text-align:center;height:28px;line-height:28px;font-size:12px;color:#344157">From scratch</span><span style="flex:1;text-align:center;height:28px;line-height:28px;font-size:12px;font-weight:600;background:#fff;border-radius:6px;box-shadow:0 1px 2px rgba(23,32,51,.12)">Finetune</span></div>
+<div class="fld" style="margin-top:6px">Base weights<span class="v" style="width:150px">gpt2 · 124M</span></div>
+<div class="fld">Method<span class="v" style="width:150px">Full · LoRA ▾</span></div>
+<div class="h">Data</div>
+<div class="fld">Source<span class="v" style="width:150px">support-tickets</span></div>
+<div class="fld">Split<span class="v" style="width:150px">95 / 5</span></div>
+<div class="fld">Tokens<span class="v" style="width:150px">31.8M</span></div>
+<div class="h">Hyperparameters</div>
+<div class="fld">Learning rate<span class="v">3e-4 · cosine</span></div>
+<div class="fld">Batch size<span class="v">16 × 512</span></div>
+<div class="fld">Epochs<span class="v">3</span></div>
+<div class="fld">Precision<span class="v">bf16</span></div>
+<div class="fld">Grad clip<span class="v">1.0</span></div>
+<div class="h">Checkpoints</div>
+<div class="fld">Save every<span class="v">500 steps</span></div>
+<div style="font-size:12px;color:#5b687c;line-height:18px;margin-top:2px">Synced to ~/umcode-ml/runs/7 on this Mac</div>
+</aside>
+
+<!-- metrics -->
+<div style="flex:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:12px;overflow:hidden">
+<div style="display:flex;gap:10px">
+<div class="tile"><small>Train loss</small><b>2.31</b></div>
+<div class="tile"><small>Eval loss</small><b>2.44</b></div>
+<div class="tile"><small>Tokens / sec</small><b>41.2k</b></div>
+<div class="tile"><small>Time left</small><b>1h 52m</b></div>
+</div>
+<div style="background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:12px 14px">
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px"><strong style="font-size:13px">Loss</strong><span style="font-size:11px;color:#344157;display:flex;align-items:center;gap:6px"><span style="width:14px;height:2px;background:#3569d4"></span>train</span><span style="font-size:11px;color:#344157;display:flex;align-items:center;gap:6px"><span style="width:14px;height:0;border-top:2px dashed #9a681e"></span>eval</span></div>
+<svg role="img" aria-label="Loss curves: train loss falls from 4.1 to 2.3 and flattens; eval loss follows slightly above" viewBox="0 0 400 170" width="100%" height="190" preserveAspectRatio="none" style="display:block">
+<g stroke="#e3e7ed" stroke-width="1"><line x1="30" y1="10" x2="396" y2="10"/><line x1="30" y1="52" x2="396" y2="52"/><line x1="30" y1="94" x2="396" y2="94"/><line x1="30" y1="136" x2="396" y2="136"/></g>
+<g font-size="10" fill="#5b687c" font-family="-apple-system,system-ui,sans-serif"><text x="2" y="13">4.2</text><text x="2" y="55">3.4</text><text x="2" y="97">2.6</text><text x="2" y="139">1.8</text><text x="30" y="160">0</text><text x="200" y="160">600</text><text x="366" y="160">1,200</text></g>
+<polyline fill="none" stroke="#3569d4" stroke-width="2" stroke-linejoin="round" points="30,14 48,44 66,64 84,78 102,86 120,94 138,98 156,102 174,106 192,106 210,111 228,112 246,115 264,116 282,119 300,120 318,122 336,123 354,125 372,126 390,127"/>
+<polyline fill="none" stroke="#9a681e" stroke-width="2" stroke-dasharray="5 4" points="30,18 120,100 210,114 300,124 390,132"/>
+</svg>
+</div>
+<div style="flex:1;min-height:0;background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:10px 14px;overflow:hidden">
+<div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c;margin-bottom:4px">Live log · lab-a100</div>
+<div class="log">step 1,236  loss 2.318  lr 2.71e-4  41.0k tok/s
+step 1,237  loss 2.309  lr 2.71e-4  41.3k tok/s
+step 1,238  loss 2.322  lr 2.71e-4  41.2k tok/s
+step 1,239  loss 2.311  lr 2.70e-4  41.1k tok/s
+step 1,240  loss 2.307  lr 2.70e-4  41.2k tok/s
+eval @ 1,240  loss 2.440  ppl 11.5
+checkpoint saved  runs/7/ckpt-1240.pt  (498 MB)
+checkpoint synced to your Mac</div>
+</div>
+</div>
+
+<!-- remote GPU -->
+<aside style="width:300px;flex:none;border-left:1px solid #d9dee7;padding:14px;display:flex;flex-direction:column;gap:12px;overflow:hidden">
+<div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c">Compute</div>
+<div style="background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#2f7a5c"></span><strong>lab-a100</strong><span style="margin-left:auto;font-size:11px;color:#2f7a5c;font-weight:600">Connected</span></div>
+<div class="mono" style="font-size:11px;color:#5b687c">ssh gpu.lab.internal · 4× A100 80GB</div>
+<div>
+<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>GPU 0</span><span class="mono">97% · 61 / 80 GB</span></div><div class="bar"><div style="width:97%;background:#3569d4"></div></div>
+</div>
+<div>
+<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>GPU 1</span><span class="mono">96% · 61 / 80 GB</span></div><div class="bar"><div style="width:96%;background:#3569d4"></div></div>
+</div>
+<div>
+<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>GPU 2</span><span class="mono">98% · 60 / 80 GB</span></div><div class="bar"><div style="width:98%;background:#3569d4"></div></div>
+</div>
+<div>
+<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="color:#5b687c">GPU 3 · another user</span><span class="mono" style="color:#5b687c">22% · 14 / 80 GB</span></div><div class="bar"><div style="width:22%;background:#929caf"></div></div>
+</div>
+</div>
+<div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c;margin-top:4px">Switch</div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;align-items:center;gap:8px;height:36px;padding:0 10px;border:1px solid #d9dee7;border-radius:8px;background:#fff"><span style="width:8px;height:8px;border-radius:50%;background:#2f7a5c"></span>This Mac · Apple M-series (MPS)<span style="margin-left:auto;color:#5b687c;font-size:11px">idle</span></div>
+<div style="display:flex;align-items:center;gap:8px;height:36px;padding:0 10px;border:1px dashed #c6ccd6;border-radius:8px;color:#2454b5">+ Add a GPU machine</div>
+</div>
+</aside>
+</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
