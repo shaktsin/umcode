@@ -306,6 +306,7 @@
           {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '', g.turn?.status || '')}
           {@const executionOutcome = executionOutcomePresentation(g.items, g.turn?.status || '')}
           {@const completedTime = g.turn?.status === 'completed' ? completedTurnTime(g.turn.startedAt, g.turn.finishedAt) : null}
+          {@const usageText = usageLine(g.turn?.usage)}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}
               {#if !isProvisionalExecution(it) && !taskFailure.hiddenItemIds.includes(it.id) && (it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim())))}
@@ -333,8 +334,6 @@
                     <ChevronRight class="turn-progress-chevron w-3.5 h-3.5 shrink-0 transition-transform" aria-hidden="true" />
                     {#if g.turn.status === 'running'}
                       <span class="shrink-0 tabular-nums" title="Time working">{formatTurnTime(g.turn.startedAt, progressNow)}</span>
-                    {:else if completedTime}
-                      <span class="shrink-0 tabular-nums" title="Time taken">{completedTime}</span>
                     {/if}
                   </span>
                 </summary>
@@ -382,8 +381,8 @@
                     <Undo2 class="w-3 h-3" />undo this turn
                   </button>
                 {/if}
-                {#if usageLine(g.turn.usage)}
-                  <span class="ml-auto" title="Tokens and cost for this turn">{usageLine(g.turn.usage)}</span>
+                {#if completedTime || usageText}
+                  <span class="ml-auto tabular-nums" title={completedTime ? 'Time taken, tokens and cost for this turn' : 'Tokens and cost for this turn'}>{[completedTime, usageText].filter(Boolean).join(' · ')}</span>
                 {/if}
               </div>
             {/if}
