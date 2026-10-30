@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Suggestion states. A suggestion is the model's request, recorded as a card,
@@ -54,7 +55,12 @@ func (s *Store) CreateAgentSuggestion(ctx context.Context, a AgentSuggestion) (A
 	}
 	reason := strings.TrimSpace(a.Reason)
 	if len(reason) > maxSuggestionReason {
-		reason = reason[:maxSuggestionReason]
+		// Cut on a rune boundary so the stored reason stays valid UTF-8.
+		cut := maxSuggestionReason
+		for cut > 0 && !utf8.RuneStart(reason[cut]) {
+			cut--
+		}
+		reason = reason[:cut]
 	}
 	if a.ID == "" {
 		a.ID = NewID("sug")
@@ -120,6 +126,11 @@ func (s *Store) ExpirePendingAgentSuggestions(ctx context.Context) (int, error) 
 	}
 	n, err := res.RowsAffected()
 	return int(n), err
+}
+
+// GetAgentSuggestion returns one suggestion by ID (ErrNotFound if none).
+func (s *Store) GetAgentSuggestion(ctx context.Context, id string) (AgentSuggestion, error) {
+	return scanSuggestion(s.DB.QueryRowContext(ctx, `SELECT `+suggestionCols+` FROM agent_suggestions WHERE id=?`, id))
 }
 
 // LatestAgentSuggestion returns the thread's newest suggestion (ErrNotFound if none).

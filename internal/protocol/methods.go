@@ -261,6 +261,41 @@ type DelegationEnableResult struct {
 	ExpiresAt       time.Time `json:"expiresAt"`
 }
 
+// MethodAgentSuggestionRespond is the app's answer to an agent.suggest card
+// (admin connections only).
+const MethodAgentSuggestionRespond = "agent/suggestion/respond"
+
+// Decisions for agent/suggestion/respond.
+const (
+	SuggestionEnable  = "enable"
+	SuggestionDecline = "decline"
+)
+
+// AgentSuggestion is a stored agent.suggest card: the model's request that
+// the user enable agents. It grants nothing by itself.
+type AgentSuggestion struct {
+	ID        string     `json:"id"`
+	ThreadID  string     `json:"threadId"`
+	TurnID    string     `json:"turnId"`
+	Reason    string     `json:"reason"`
+	State     string     `json:"state"` // pending | enabled | declined | expired
+	CreatedAt time.Time  `json:"createdAt"`
+	DecidedAt *time.Time `json:"decidedAt,omitempty"`
+}
+
+type AgentSuggestionRespondParams struct {
+	SuggestionID string `json:"suggestionId"`
+	Decision     string `json:"decision"` // enable | decline
+}
+
+// AgentSuggestionRespondResult carries the activation token only for the
+// first enable; the client submits it with the follow-up turn/start.
+type AgentSuggestionRespondResult struct {
+	Suggestion      AgentSuggestion `json:"suggestion"`
+	ActivationToken string          `json:"activationToken,omitempty"`
+	ExpiresAt       *time.Time      `json:"expiresAt,omitempty"`
+}
+
 type TurnStartParams struct {
 	TaskIntent                *TaskIntentProposal `json:"taskIntent,omitempty"`
 	DelegationActivationToken string              `json:"delegationActivationToken,omitempty"`

@@ -340,7 +340,15 @@ func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.P
 			return false
 		}
 	}
-	if isDelegationTool(c.tool.Name()) {
+	if e.suggestOnlyTool(c.tool.Name()) {
+		// Offered to the lead only, and only when the turn is not admitted.
+		if _, admitted := DelegationTaskFromContext(ctx); admitted {
+			return false
+		}
+		if id, ok := runtimeCaller(ctx); !ok || id != "" {
+			return false
+		}
+	} else if isDelegationTool(c.tool.Name()) {
 		if _, ok := DelegationTaskFromContext(ctx); !ok {
 			return false
 		}

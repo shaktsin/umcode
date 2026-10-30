@@ -202,6 +202,14 @@ func (s *Server) routes() map[string]handler {
 			}
 			return e.PrepareDelegation(ctx, p.ThreadID)
 		}),
+		// The user's answer to an agent.suggest card; enable returns the
+		// delegation/enable token in the same call. App clients only.
+		protocol.MethodAgentSuggestionRespond: bind(func(ctx context.Context, c *conn, p protocol.AgentSuggestionRespondParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can answer agent suggestions")
+			}
+			return e.RespondAgentSuggestion(ctx, p)
+		}),
 		protocol.MethodDelegationList: bind(func(ctx context.Context, c *conn, p protocol.DelegationListParams) (any, error) {
 			if !c.admin.Load() {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read delegation")
