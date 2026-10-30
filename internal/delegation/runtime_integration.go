@@ -37,8 +37,11 @@ type RuntimeIntegrationStatus struct {
 }
 
 // conflictOptions are the lead's choices for a conflicted revision: drop it,
-// declare it resolved after fixing the parent by hand, or spawn a new agent.
-func conflictOptions() []string { return []string{"drop", "resolved", "new_agent"} }
+// or declare it resolved after fixing the parent by hand. "Spawn a new agent"
+// is not an option: a conflict only happens after a revision was applied, and
+// from then on no agent workspace can be created (gap G1); redoing the work
+// needs a new delegated task.
+func conflictOptions() []string { return []string{"drop", "resolved"} }
 
 // manualResolution marks a revision the lead resolved by hand in the parent.
 const manualResolution = "resolved manually by the lead"
@@ -294,6 +297,14 @@ func (s *WorkspaceService) recordRuntimeRevision(ctx context.Context, task proto
 		ResultRevision: a.Revision, ResultTree: tree, ChangedPaths: changed})
 }
 
+// Known limitation (v1): applied revisions are final. There is no drop or
+// amend of an applied revision and `resolved` only records a conflict's fix,
+// so when the integrated head cannot be verified (a check genuinely fails on
+// the combined result, the plan is empty, or the checkout was changed by
+// hand) no further accept and no completion is possible: the lead reports it
+// and the task is cancelled, leaving the applied work staged for the user.
+// An amend path is deferred to Plan 5.
+//
 // IntegrateRuntime applies one agent's submitted revision onto the integrated
 // parent state (lead-owned, one at a time per task). The previous head must be
 // verified; an open conflict of another agent blocks it. A conflict is a
@@ -333,7 +344,7 @@ func (s *WorkspaceService) IntegrateRuntime(ctx context.Context, taskID, agentID
 	}
 	for _, other := range revs {
 		if other.ID != rev.ID && other.State == store.RevisionConflict {
-			return RuntimeIntegration{}, fmt.Errorf("agent %s revision is in conflict on %s; drop it, resolve it, or replace it with a new agent before accepting another", other.AgentID, strings.Join(other.Conflict, ", "))
+			return RuntimeIntegration{}, fmt.Errorf("agent %s revision is in conflict on %s; drop it or resolve it (agent.integrate drop / resolved) before accepting another", other.AgentID, strings.Join(other.Conflict, ", "))
 		}
 	}
 	if h.AppliedCount > 0 && !headVerified(h) {
@@ -817,6 +828,37 @@ func (s *WorkspaceService) updateWorkflowLocked(ctx context.Context, taskID, hea
 		return err
 	}
 	return s.Store.SetAgentIntegrationHead(ctx, h, h.Version)
+}
+
+// FinishRuntime runs complete (the caller's state change to completed) under
+// the task's integration lock, after checking that the head still has
+// appliedCount applied revisions at headTree and, when anything was applied,
+// that it is verified and the project checkout is exactly that head. Check
+// results are recorded under the same lock (UpdateRuntimeWorkflow), so none
+// can land between this check and complete; afterwards the task is no longer
+// active and they are refused. complete must not call back into the service.
+func (s *WorkspaceService) FinishRuntime(ctx context.Context, taskID, headTree string, appliedCount int, complete func() error) error {
+	defer s.lockTask(taskID)()
+	t, err := s.loadTask(ctx, taskID, true)
+	if err != nil {
+		return err
+	}
+	h, err := s.head(ctx, t, false)
+	if err != nil {
+		return err
+	}
+	if h.AppliedCount != appliedCount || h.HeadTree != headTree {
+		return fmt.Errorf("the integration changed (head %s with %d applied, expected %s with %d); check the status and complete again", h.HeadTree, h.AppliedCount, headTree, appliedCount)
+	}
+	if appliedCount > 0 {
+		if !headVerified(h) {
+			return fmt.Errorf("the integrated state %s is not verified", headTree)
+		}
+		if _, err = s.validateHeadLocked(ctx, t, headTree); err != nil {
+			return fmt.Errorf("the project checkout is no longer the verified integrated state: %w", err)
+		}
+	}
+	return complete()
 }
 
 // CleanupRuntime discards the checkouts of a completed task's applied runtime

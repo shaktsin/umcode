@@ -289,9 +289,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	}
 	// Likewise regardless of the flag: settle accepts a crash left between
 	// "intent recorded" and "apply finished". Never applies anything.
-	if err := e.reconcileRuntimeIntegrations(ctx); err != nil {
-		return nil, err
-	}
+	e.reconcileRuntimeIntegrations(ctx)
 	if n, err := o.Store.MarkStaleTurns(ctx); err != nil {
 		return nil, err
 	} else if n > 0 {

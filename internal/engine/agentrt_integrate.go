@@ -15,7 +15,13 @@ import (
 
 // runtimeConflictText is the fixed text agent.integrate returns for a
 // conflicted accept; %s is the conflicting paths.
-const runtimeConflictText = `Conflict in %s. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}; or start a new agent with the conflict as context.`
+const runtimeConflictText = `Conflict in %s. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; or fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}. No new agent can be spawned once work is integrated: to redo the work with the conflict as context, finish this task (drop or resolve, verify, complete) and start a new delegated task.`
+
+// runtimeAppliedFinal states the v1 dead end (see the known limitation on
+// delegation.IntegrateRuntime): an applied revision cannot be dropped or
+// amended, so a head that cannot be verified blocks every further accept and
+// the completion.
+const runtimeAppliedFinal = "applied revisions are final (they cannot be dropped or amended in this version): if the integrated state cannot pass its checks, report that to the user, who can cancel the task; the applied work stays staged in the project checkout for the user to keep or discard"
 
 // errRuntimeCheckoutTaken explains why no agent workspace can be created once
 // a revision was integrated (gap G1): every workspace is a checkout of the
@@ -165,14 +171,21 @@ func (e *Engine) runtimeAcceptAllowed(ctx context.Context, taskID, agentID strin
 	if target == nil || (target.State != store.RevisionSubmitted && target.State != store.RevisionConflict) {
 		return nil // the service reports a missing revision; a replay is not ordered
 	}
+	// Before anything is applied a new agent can still be spawned; after
+	// it no workspace can be created (gap G1), so redoing the work needs a
+	// new delegated task.
+	redo := "or start a new agent"
+	if st.AppliedCount > 0 {
+		redo = "and, to redo its work, complete this task and start a new delegated task (no agent workspace can be created once work is integrated)"
+	}
 	switch as := state[agentID]; {
 	case as == protocol.AgentStateCompleted:
 	case !agentrt.IsTerminal(as):
 		return fmt.Errorf("accept refused: agent %s is still finishing (%s); wait for it to complete (agent.wait), then accept", agentID, as)
 	case as == protocol.AgentStateCancelled:
-		return fmt.Errorf("accept refused: agent %s was cancelled after submitting; its revision cannot be integrated. Drop it (agent.integrate {action:\"drop\", agent, reason}) or start a new agent", agentID)
+		return fmt.Errorf("accept refused: agent %s was cancelled after submitting; its revision cannot be integrated. Drop it (agent.integrate {action:\"drop\", agent, reason}) %s", agentID, redo)
 	default:
-		return fmt.Errorf("accept refused: agent %s ended %s after submitting; its revision cannot be integrated. Drop it (agent.integrate {action:\"drop\", agent, reason}) or start a new agent", agentID, as)
+		return fmt.Errorf("accept refused: agent %s ended %s after submitting; its revision cannot be integrated. Drop it (agent.integrate {action:\"drop\", agent, reason}) %s", agentID, as, redo)
 	}
 	for _, r := range st.Revisions {
 		if r.Seq >= target.Seq || r.ID == target.ID {
@@ -187,13 +200,27 @@ func (e *Engine) runtimeAcceptAllowed(ctx context.Context, taskID, agentID strin
 		}
 		const order = "accept refused: revisions are accepted in submission order, and agent %s's revision (submitted earlier) is %s"
 		switch {
-		case r.State == store.RevisionApplying || as == protocol.AgentStateCompleted:
+		case r.State == store.RevisionApplying:
+			// Drop and resolved both refuse an applying revision.
+			return fmt.Errorf(order+": its apply was interrupted; accept agent %s again (that settles it from the project checkout) or, if that reports a blocked apply, restore the checkout as it says, before agent %s", r.AgentID, r.State, r.AgentID, agentID)
+		case as == protocol.AgentStateCompleted:
 			return fmt.Errorf(order+"; accept, drop or resolve it before agent %s", r.AgentID, r.State, agentID)
 		case !agentrt.IsTerminal(as):
 			return fmt.Errorf(order+" and its agent is still finishing (%s); wait for it and accept or drop it before agent %s", r.AgentID, r.State, as, agentID)
 		default:
 			return fmt.Errorf(order+" but its agent ended %s, so it cannot be integrated; drop it with a reason before agent %s", r.AgentID, r.State, as, agentID)
 		}
+	}
+	if st.AppliedCount > 0 && !st.Verified {
+		h, err := e.Store.AgentIntegrationHead(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		w, err := store.DecodeRuntimeWorkflow(h.Workflow)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("accept refused: the integrated state %s is not verified: %s", st.HeadTree, runtimeCheckSummary(w, st.HeadTree))
 	}
 	if st.AppliedCount == 0 {
 		pending, err := svc.RuntimeWorkspacesPending(ctx, taskID)
@@ -306,13 +333,14 @@ func (e *Engine) completeRuntimeTask(ctx context.Context, task protocol.AgentTas
 		if !st.Verified {
 			return out, fmt.Errorf("completion refused: the final integrated state %s is not verified: %s", st.HeadTree, runtimeCheckSummary(w, st.HeadTree))
 		}
-		if err = svc.ValidateRuntimeHead(ctx, task.ID, st.HeadTree); err != nil {
-			return out, fmt.Errorf("completion refused: the project checkout is no longer the verified integrated state: %w", err)
-		}
 		checks = w.Checks
 	}
-	if err = e.Store.UpdateAgentTaskState(ctx, cur.ID, cur.ThreadID, cur.ProjectID, cur.State, protocol.AgentStateCompleted); err != nil {
-		return out, err
+	// The final verified check and the state change run under the task's
+	// integration lock, so no check result is recorded in between.
+	if err = svc.FinishRuntime(ctx, task.ID, st.HeadTree, st.AppliedCount, func() error {
+		return e.Store.UpdateAgentTaskState(ctx, cur.ID, cur.ThreadID, cur.ProjectID, cur.State, protocol.AgentStateCompleted)
+	}); err != nil {
+		return out, fmt.Errorf("completion refused: %w", err)
 	}
 	// Completion is durable before cleanup; a cleanup refusal only retains.
 	if cleanupErr := svc.CleanupRuntime(context.WithoutCancel(ctx), task.ID); cleanupErr != nil {
@@ -326,21 +354,28 @@ func (e *Engine) completeRuntimeTask(ctx context.Context, task protocol.AgentTas
 	return e.withRuntimeStatus(ctx, task.ID, out)
 }
 
-// runtimeCheckSummary says why a head's workflow is not verified.
+// runtimeCheckSummary says why a head's workflow is not verified and what
+// the lead can do: plan (pending plan), run the checks, or, when the head
+// cannot be verified, the v1 dead end (runtimeAppliedFinal).
 func runtimeCheckSummary(w runtimeWorkflow, headTree string) string {
 	if w.HeadTree != headTree {
-		return "no checks are planned for it; plan them with agent.integrate accept"
+		return "plan pending: its checks are not planned yet; retry planning by repeating agent.integrate accept for the agent accepted last"
 	}
 	if len(w.Checks) == 0 {
-		return "no checks planned, so it cannot be verified"
+		return "no checks planned, so it can never be verified; " + runtimeAppliedFinal
 	}
 	var parts []string
+	failed := false
 	for _, c := range w.Checks {
 		if c.Status != "passed" {
 			parts = append(parts, fmt.Sprintf("check %s is %s", c.Command, c.Status))
+			failed = failed || c.Status == "failed" || c.Status == "blocked"
 		}
 	}
-	return strings.Join(parts, "; ")
+	if failed {
+		return strings.Join(parts, "; ") + "; run the checks again with verification.run if they can pass, otherwise " + runtimeAppliedFinal
+	}
+	return strings.Join(parts, "; ") + "; run them with verification.run"
 }
 
 // publishRuntimeTask announces a change of the task's integration.
