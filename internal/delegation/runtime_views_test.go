@@ -73,6 +73,9 @@ func rtStartAgent(t *testing.T, s *store.Store, task protocol.AgentTask, name st
 	if a, err = s.RuntimeAgent(ctx, task.ID, a.ID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = s.EnsureRuntimeAgentExecution(ctx, a); err != nil {
+		t.Fatal(err)
+	}
 	return a
 }
 

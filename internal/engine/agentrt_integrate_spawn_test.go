@@ -77,6 +77,9 @@ func TestAcceptWhileAnAgentHasNoWorkspace(t *testing.T) {
 	env := runtimeVerificationEnv(t)
 	a := env.writer(t, "a", "a.txt", "from a\n")
 	waiting := env.liveAgent(t, "waiting", readOnlyCaps) // running, no checkout yet
+	if _, err := env.e.Store.EnsureRuntimeAgentExecution(t.Context(), waiting); err != nil {
+		t.Fatal(err)
+	}
 	out := env.mustIntegrate(t, `{"action":"accept","agent":"`+a.ID+`"}`)
 	if out.Revision == nil || out.Revision.State != store.RevisionApplied {
 		t.Fatalf("accept = %+v", out)

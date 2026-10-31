@@ -38,9 +38,9 @@ type RuntimeIntegrationStatus struct {
 
 // conflictOptions are the lead's choices for a conflicted revision: drop it,
 // or declare it resolved after fixing the parent by hand. "Spawn a new agent"
-// is not an option: a conflict only happens after a revision was applied, and
-// from then on no agent workspace can be created (gap G1); redoing the work
-// needs a new delegated task.
+// is not an option: a new writer's workspace is the task base, not the
+// integrated head, so its revision would conflict on the same lines again;
+// redoing the work on top of the integrated state needs a new delegated task.
 func conflictOptions() []string { return []string{"drop", "resolved"} }
 
 // manualResolution marks a revision the lead resolved by hand in the parent.
@@ -126,7 +126,7 @@ func (s *WorkspaceService) loadTask(ctx context.Context, taskID string, requireA
 	return t, nil
 }
 
-// head returns the task's integration head. Before the first accept it is the
+// head returns the task's integration head. Until a revision is accepted it is the
 // base tree (Version 0); create records it.
 func (s *WorkspaceService) head(ctx context.Context, t protocol.AgentTask, create bool) (store.AgentIntegrationHead, error) {
 	h, err := s.Store.AgentIntegrationHead(ctx, t.ID)
@@ -717,45 +717,6 @@ func RevisionSettled(r store.AgentRevision, agentCancelled bool) bool {
 		return agentCancelled
 	}
 	return false
-}
-
-// RuntimeWorkspacesPending returns the live (queued, running or waiting)
-// agents of the task whose own checkout is not ready yet: no workspace
-// attached, or its clone not finished (Manager.Lookup fails). It holds the
-// service lock that PrepareRuntime holds for its whole run, so a checkout
-// being prepared is waited for rather than reported ready early. After the
-// first accept the project checkout holds staged changes and no checkout can
-// be prepared any more, so the lead's first accept requires none pending.
-func (s *WorkspaceService) RuntimeWorkspacesPending(ctx context.Context, taskID string) ([]protocol.RuntimeAgent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t, err := s.Store.AgentTask(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	agents, err := s.Store.RuntimeAgents(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	var pending []protocol.RuntimeAgent
-	for _, a := range agents {
-		if !active(a.State) {
-			continue
-		}
-		if a.WorkspaceID == "" {
-			pending = append(pending, a)
-			continue
-		}
-		w, err := s.Store.AgentWorkspace(ctx, a.WorkspaceID)
-		if err != nil || w.TaskID != t.ID || w.ChildID != a.ID || w.Cleaned {
-			pending = append(pending, a)
-			continue
-		}
-		if _, err = s.Manager.Lookup(ctx, w.ID, t.ParentRoot); err != nil {
-			pending = append(pending, a)
-		}
-	}
-	return pending, nil
 }
 
 // ValidateRuntimeHead checks that headTree is the recorded integration head

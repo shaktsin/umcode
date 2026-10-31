@@ -69,6 +69,10 @@ func (m *Manager) lookupWith(ctx context.Context, id, source string, run func(co
 	return Workspace{Path: path, ProjectRoot: source, SourceCommit: f[1], BaselineCommit: f[2]}, nil
 }
 
+// cleanCheckoutRefusal is the refusal for a project checkout that is not a
+// clean committed state a delegation workspace can be created from.
+const cleanCheckoutRefusal = "delegation requires a clean committed checkout; commit or remove changed and untracked required inputs (including UMCODE.md)"
+
 // ValidateCommitted rejects dirty/untracked inputs and unsupported repository
 // layouts before they can be silently copied by ordinary Ensure.
 func ValidateCommitted(ctx context.Context, root, expected string) error {
@@ -95,7 +99,7 @@ func ValidateCommitted(ctx context.Context, root, expected string) error {
 		return err
 	}
 	if status != "" {
-		return errors.New("delegation requires a clean committed checkout; commit or remove changed and untracked required inputs (including UMCODE.md)")
+		return errors.New(cleanCheckoutRefusal)
 	}
 	entries, err := gitNULList(ctx, canonical, "ls-tree", "-r", "-z", "HEAD")
 	if err != nil {
@@ -346,4 +350,355 @@ func (m *Manager) WithCommittedBase(ctx context.Context, parent, base string, gu
 		return err
 	}
 	return save()
+}
+
+// ParentStateForRuntime accepts the project checkout as the source of a new
+// runtime agent workspace when HEAD == base, the index has no conflict stages
+// and its tree is either the base tree or exactly headTree (the recorded
+// integration head after accepted revisions; "" when there is none), nothing
+// is unstaged or untracked, and every path is a contained symlink or regular
+// file. Anything else is refused with ValidateCommitted's refusal text and
+// the offending paths. It only reads: plumbing through the hardened runner
+// with optional index locks disabled, so the index file is never rewritten
+// and no object is written.
+func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) error {
+	canonical, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return err
+	}
+	top, err := hardenedOutput(ctx, canonical, "rev-parse", "--show-toplevel")
+	if err != nil || !samePath(top, canonical) {
+		return errors.New("delegation requires the Git repository root, not a non-Git folder or project subdirectory")
+	}
+	head, err := hardenedOutput(ctx, canonical, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return errors.New("delegation requires an initial committed Git revision")
+	}
+	if head != base {
+		return fmt.Errorf("delegation parent revision changed (%w: HEAD moved from %s to %s)", ErrParentChanged, base, head)
+	}
+	if err = ValidateIndexFlags(ctx, canonical); err != nil {
+		return err
+	}
+	unmerged, err := hardenedNULList(ctx, canonical, "ls-files", "--unmerged", "-z")
+	if err != nil {
+		return err
+	}
+	if len(unmerged) > 0 {
+		var paths []string
+		seen := map[string]bool{}
+		for _, entry := range unmerged {
+			if _, p, ok := strings.Cut(entry, "\t"); ok && !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+		return fmt.Errorf("%s (%w: unresolved conflict stages at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(paths, ", "))
+	}
+	entries, err := hardenedNULList(ctx, canonical, "ls-tree", "-r", "-z", "HEAD")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry, "160000 ") {
+			return errors.New("delegation submodules are unsupported")
+		}
+	}
+	baseTree, err := hardenedOutput(ctx, canonical, "rev-parse", "--verify", base+"^{tree}")
+	if err != nil {
+		return err
+	}
+	// diff-index --cached compares index entries (path, mode, object) with a
+	// tree without writing anything (write-tree may rewrite the index file).
+	stagedAgainst := func(tree string) ([]string, error) {
+		return hardenedNULList(ctx, canonical, "diff-index", "--cached", "--name-only", "--no-renames", "-z", tree, "--")
+	}
+	staged, err := stagedAgainst(baseTree)
+	if err != nil {
+		return err
+	}
+	if len(staged) > 0 && headTree != "" && headTree != baseTree {
+		if staged, err = stagedAgainst(headTree); err != nil {
+			return err
+		}
+	}
+	if len(staged) > 0 {
+		return fmt.Errorf("%s (%w: staged content differs from the integrated state at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(staged, ", "))
+	}
+	unstaged, err := hardenedNULList(ctx, canonical, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z", "--")
+	if err != nil {
+		return err
+	}
+	if len(unstaged) > 0 {
+		return fmt.Errorf("%s (%w: unstaged edits at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(unstaged, ", "))
+	}
+	untracked, err := hardenedNULList(ctx, canonical, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return err
+	}
+	if len(untracked) > 0 {
+		return fmt.Errorf("%s (%w: untracked files at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(untracked, ", "))
+	}
+	return ValidatePaths(ctx, canonical)
+}
+
+// EnsureRuntime returns the owned checkout id of revision base, cloning it
+// when it does not exist yet. The project checkout must pass
+// ParentStateForRuntime (base or exactly the integrated head headTree). The
+// clone is always the committed base revision, never the parent's staged or
+// working tree state: only the base commit's objects are fetched, and they
+// are immutable, so an apply running in the parent cannot be observed half
+// way. Under the manager lock, which ApplyOnIntegrated holds for its whole
+// run, so the parent check cannot interleave with an apply either. The
+// parent is never written.
+func (m *Manager) EnsureRuntime(ctx context.Context, id, parent, base, headTree string) (Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ParentStateForRuntime(ctx, parent, base, headTree); err != nil {
+		return Workspace{}, err
+	}
+	// Never recover or delete an occupied (possibly partial) owned path.
+	if _, err := os.Lstat(m.Path(id)); err == nil {
+		ws, err := m.lookupWith(ctx, id, parent, hardenedOutput)
+		if err != nil {
+			return Workspace{}, err
+		}
+		if ws.SourceCommit != base {
+			return ws, errors.New("workspace source revision changed")
+		}
+		return ws, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Workspace{}, err
+	}
+	return m.cloneRevision(ctx, id, parent, base)
+}
+
+// cloneRevision creates the owned self-contained checkout id holding exactly
+// the committed revision of the source repository (shallow, detached, clean)
+// and writes its ownership marker. The caller holds m.mu.
+func (m *Manager) cloneRevision(ctx context.Context, id, source, revision string) (Workspace, error) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return Workspace{}, errors.New("Git is required to create an isolated coding workspace; install Git and retry")
+	}
+	root, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return Workspace{}, err
+	}
+	common, err := hardenedOutput(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return Workspace{}, err
+	}
+	if common, err = filepath.EvalSymlinks(common); err != nil {
+		return Workspace{}, err
+	}
+	objectFormat, err := hardenedOutput(ctx, root, "rev-parse", "--show-object-format")
+	if err != nil || (objectFormat != "sha1" && objectFormat != "sha256") {
+		return Workspace{}, fmt.Errorf("unsupported Git object format %q", objectFormat)
+	}
+	tree, err := hardenedOutput(ctx, root, "rev-parse", "--verify", revision+"^{tree}")
+	if err != nil {
+		return Workspace{}, err
+	}
+	if err = os.MkdirAll(m.root, 0o700); err != nil {
+		return Workspace{}, fmt.Errorf("create UMCode worktree folder: %w", err)
+	}
+	path := m.Path(id)
+	marker := path + ".ready"
+	_ = os.Remove(marker)
+	cleanup := func(cause error) (Workspace, error) {
+		_ = os.RemoveAll(path)
+		_ = os.Remove(marker)
+		return Workspace{}, cause
+	}
+	if out, err := exec.CommandContext(ctx, "git", "init", "--quiet", "--object-format="+objectFormat, path).CombinedOutput(); err != nil {
+		return cleanup(fmt.Errorf("initialize workspace Git metadata: %s", commandError(err, string(out))))
+	}
+	if _, err = gitBytes(ctx, path, "fetch", "--depth=1", "--no-tags", root, revision); err != nil {
+		return cleanup(fmt.Errorf("copy the task base revision into the workspace: %w", err))
+	}
+	if _, err = gitBytes(ctx, path, "checkout", "--quiet", "--detach", "FETCH_HEAD"); err != nil {
+		return cleanup(fmt.Errorf("check out the task base revision in the workspace: %w", err))
+	}
+	if err = os.Remove(filepath.Join(path, ".git", "FETCH_HEAD")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return cleanup(fmt.Errorf("remove temporary Git source reference: %w", err))
+	}
+	if head, err := gitOutput(ctx, path, "rev-parse", "--verify", "HEAD^{commit}"); err != nil || head != revision {
+		return cleanup(errors.New("workspace checkout is not the task base revision"))
+	}
+	if got, err := gitOutput(ctx, path, "rev-parse", "--verify", "HEAD^{tree}"); err != nil || got != tree {
+		return cleanup(errors.New("workspace checkout tree is not the task base tree"))
+	}
+	if err = os.WriteFile(marker, []byte(common+"\n"+revision+"\n"+revision+"\n"), 0o600); err != nil {
+		return cleanup(fmt.Errorf("mark workspace ready: %w", err))
+	}
+	return Workspace{Path: path, ProjectRoot: root, SourceCommit: revision, BaselineCommit: revision, Created: true}, nil
+}
+
+// viewCommitBody is the fixed commit object of a runtime view: the
+// integrated head tree on top of the task base, with a fixed identity and
+// time, so its id depends only on (base, headTree).
+func viewCommitBody(base, headTree string) []byte {
+	return []byte("tree " + headTree + "\nparent " + base + "\nauthor UMCode <umcode@localhost> 0 +0000\ncommitter UMCode <umcode@localhost> 0 +0000\n\nUMCode integrated view\n")
+}
+
+// isObjectID reports whether s is a full hexadecimal Git object id.
+func isObjectID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// RuntimeViewCommit returns the id of the commit a runtime view of headTree
+// on top of base checks out. It is computed in the parent without writing
+// anything (hash-object without -w).
+func RuntimeViewCommit(ctx context.Context, parent, base, headTree string) (string, error) {
+	if !isObjectID(base) || !isObjectID(headTree) {
+		return "", errors.New("runtime view needs full base and head object ids")
+	}
+	out, err := hardenedBytes(ctx, parent, viewCommitBody(base, headTree), "hash-object", "-t", "commit", "--stdin")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// ApplyRuntimeView turns the owned checkout id, freshly cloned at base by
+// EnsureRuntime, into a read-only view of the integrated head headTree:
+//   - the parent is trusted but only read: the revision base→headTree is
+//     scanned there with Plan 3's rules (no .git component, gitlink or
+//     unsupported mode; every symlink of headTree contained), and its patch is
+//     computed there with the hardened runner;
+//   - the patch is applied with --index only inside the private checkout,
+//     whose metadata is validated before and after (ValidateOwnedMetadata);
+//   - the checkout's index tree must then equal headTree, its paths must pass
+//     ValidatePaths, and it is committed as viewCommit (RuntimeViewCommit),
+//     so it is a clean committed checkout of exactly the head.
+//
+// Any failure leaves the view unusable (HEAD is moved only at the end). An
+// already finished view is checked and accepted again.
+func (m *Manager) ApplyRuntimeView(ctx context.Context, id, parent, base, headTree, viewCommit string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	expected, err := RuntimeViewCommit(ctx, parent, base, headTree)
+	if err != nil {
+		return err
+	}
+	if expected != viewCommit {
+		return fmt.Errorf("runtime view commit %s is not the view of head %s (%s)", viewCommit, headTree, expected)
+	}
+	ws, err := m.lookupWith(ctx, id, parent, hardenedOutput)
+	if err != nil {
+		return err
+	}
+	if ws.SourceCommit != base {
+		return errors.New("owned checkout base revision changed")
+	}
+	if err = ValidateOwnedMetadata(ctx, ws.Path); err != nil {
+		return err
+	}
+	head, err := hardenedOutput(ctx, ws.Path, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return err
+	}
+	switch head {
+	case viewCommit:
+		return checkView(ctx, ws.Path, viewCommit, headTree)
+	case base:
+	default:
+		return fmt.Errorf("view checkout HEAD %s is neither the base nor the view; workspace retained", head)
+	}
+	if err = cleanAt(ctx, ws.Path, base); err != nil {
+		return fmt.Errorf("view checkout is not the clean base revision; workspace retained: %w", err)
+	}
+	entries, err := scanRevision(ctx, parent, base, headTree)
+	if err != nil {
+		return err
+	}
+	deleted, changed := map[string]bool{}, map[string]bool{}
+	for _, e := range entries {
+		changed[e.path] = true
+		if e.status == "D" {
+			deleted[e.path] = true
+		}
+	}
+	if err = checkSymlinks(ctx, ws.Path, parent, headTree, deleted, changed); err != nil {
+		return err
+	}
+	patch, err := hardenedBytes(ctx, parent, nil, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv",
+		"--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, headTree, "--")
+	if err != nil {
+		return err
+	}
+	if len(patch) > 0 {
+		if _, stderr, err := HardenedGit(ctx, ws.Path, patch, "apply", "--index", "--binary", "--whitespace=nowarn", "-"); err != nil {
+			return fmt.Errorf("integrated view could not be applied in the workspace; workspace retained: %s", commandError(err, stderr))
+		}
+	}
+	tree, err := hardenedOutput(ctx, ws.Path, "write-tree")
+	if err != nil {
+		return err
+	}
+	if tree != headTree {
+		return fmt.Errorf("integrated view tree %s differs from the head %s; workspace retained", tree, headTree)
+	}
+	if err = ValidatePaths(ctx, ws.Path); err != nil {
+		return err
+	}
+	out, err := hardenedBytes(ctx, ws.Path, viewCommitBody(base, headTree), "hash-object", "-t", "commit", "-w", "--stdin")
+	if err != nil {
+		return err
+	}
+	if got := strings.TrimSpace(string(out)); got != viewCommit {
+		return fmt.Errorf("integrated view commit %s differs from %s", got, viewCommit)
+	}
+	if _, err = hardenedBytes(ctx, ws.Path, nil, "update-ref", "--no-deref", "HEAD", viewCommit, base); err != nil {
+		return err
+	}
+	if err = checkView(ctx, ws.Path, viewCommit, headTree); err != nil {
+		return err
+	}
+	return ValidateOwnedMetadata(ctx, ws.Path)
+}
+
+// checkView verifies a finished view: HEAD is viewCommit whose tree is
+// headTree and the checkout is clean at it.
+func checkView(ctx context.Context, root, viewCommit, headTree string) error {
+	tree, err := hardenedOutput(ctx, root, "rev-parse", "--verify", viewCommit+"^{tree}")
+	if err != nil {
+		return err
+	}
+	if tree != headTree {
+		return fmt.Errorf("view commit tree %s is not the head %s", tree, headTree)
+	}
+	if err = cleanAt(ctx, root, viewCommit); err != nil {
+		return fmt.Errorf("view checkout changed; workspace retained: %w", err)
+	}
+	return nil
+}
+
+// cleanAt requires the checkout's index and working tree to equal revision
+// with no other file at all (untracked or ignored). Read-only plumbing.
+func cleanAt(ctx context.Context, root, revision string) error {
+	staged, err := hardenedNULList(ctx, root, "diff-index", "--cached", "--name-only", "--no-renames", "-z", revision, "--")
+	if err != nil {
+		return err
+	}
+	unstaged, err := hardenedNULList(ctx, root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z", "--")
+	if err != nil {
+		return err
+	}
+	others, err := hardenedNULList(ctx, root, "ls-files", "--others", "-z")
+	if err != nil {
+		return err
+	}
+	if paths := append(append(staged, unstaged...), others...); len(paths) > 0 {
+		return fmt.Errorf("changed at %s", strings.Join(paths, ", "))
+	}
+	return nil
 }
