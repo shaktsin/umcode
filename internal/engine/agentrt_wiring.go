@@ -40,9 +40,10 @@ func (e *Engine) registerAgentRuntime(reg *tools.Registry, base context.Context)
 	}
 	// Lead-only, never granted through capabilities (agentrt.AllowedTools).
 	e.registerRuntimeIntegrate(reg)
-	// Lead-only activation tools (agent.suggest), offered only in turns that
-	// are not admitted for delegation (see suggestOnlyTool).
-	for _, tool := range tools.NewRuntimeActivationTools(tools.RuntimeActivation{Suggest: e.suggestAgents, Caller: runtimeCaller}) {
+	// Lead-only activation tools: agent.suggest, offered only in turns that
+	// are not admitted for delegation (see suggestOnlyTool), and
+	// agent.propose_plan, offered only in admitted turns like agent.spawn.
+	for _, tool := range tools.NewRuntimeActivationTools(tools.RuntimeActivation{Suggest: e.suggestAgents, ProposePlan: e.proposeAgentPlan, Caller: runtimeCaller}) {
 		reg.Add(tool)
 	}
 }

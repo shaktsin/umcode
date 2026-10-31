@@ -315,6 +315,36 @@ func (s *Store) ApprovedAgentPlanForTask(ctx context.Context, taskID string) (pr
 	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE task_id=? AND state=? ORDER BY approved_at DESC,rowid DESC LIMIT 1`, taskID, protocol.PlanApproved))
 }
 
+// AgentPlan returns one plan by ID, whatever its state.
+func (s *Store) AgentPlan(ctx context.Context, id string) (protocol.AgentPlan, error) {
+	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE id=?`, id))
+}
+
+// SupersedeProposedAgentPlans marks every still-proposed plan of a task other
+// than keepID superseded (a newer proposal replaces them) and returns their
+// IDs. Approved plans are never touched; a superseded plan cannot be approved
+// later (ApproveAgentPlan refuses it).
+func (s *Store) SupersedeProposedAgentPlans(ctx context.Context, taskID, keepID string) ([]string, error) {
+	if taskID == "" {
+		return nil, fmt.Errorf("supersede proposed plans: task ID required")
+	}
+	rows, err := s.DB.QueryContext(ctx, `UPDATE agent_plans SET state=? WHERE task_id=? AND id<>? AND state=? RETURNING id`,
+		protocol.PlanSuperseded, taskID, keepID, protocol.PlanProposed)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // LatestApprovedAgentPlan returns the most recently approved plan of a thread.
 func (s *Store) LatestApprovedAgentPlan(ctx context.Context, threadID string) (protocol.AgentPlan, error) {
 	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE thread_id=? AND state=? ORDER BY approved_at DESC,rowid DESC LIMIT 1`, threadID, protocol.PlanApproved))

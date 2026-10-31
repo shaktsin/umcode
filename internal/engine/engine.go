@@ -141,6 +141,14 @@ type Engine struct {
 	// it read the card as open (under suggestionMu); set before use.
 	suggestionRespondHook func()
 
+	// agentPlanMu guards agentPlanWaits and serializes saving a proposed plan
+	// with superseding the task's earlier proposals (agent.propose_plan).
+	agentPlanMu sync.Mutex
+	// agentPlanWaits holds the decision wait of each plan card still blocking
+	// agent.propose_plan, by plan ID; in memory only (a restart expires every
+	// pending approval).
+	agentPlanWaits map[string]*agentPlanWait
+
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
 	shuttingDown     bool                       // protected by mu
