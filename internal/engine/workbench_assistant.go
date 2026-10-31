@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/tools"
 	"github.com/shaktsin/umcode/internal/workbench"
@@ -237,4 +238,34 @@ func (*workbenchProposalTool) Call(ctx context.Context, args json.RawMessage) (s
 		return "", err
 	}
 	return string(out), nil
+}
+
+// Suggestions have their own execution boundary: no coding workflow, command
+// hooks, plugin/tool discovery, approvals or Work observations are involved.
+func (e *Engine) runWorkbenchProposal(ctx, sctx context.Context, turn protocol.Turn, call llm.ToolCall) toolRunResult {
+	tool := &workbenchProposalTool{}
+	it, err := e.newItem(sctx, turn, protocol.ItemToolCall)
+	if err != nil {
+		return toolRunResult{Output: err.Error(), ModelOutput: err.Error(), IsError: true}
+	}
+	it.Tool = &protocol.ToolCallData{CallID: call.ID, Name: tool.Name(), Args: call.Args, Risk: string(tools.RiskGreen)}
+	if err := e.saveAndPublish(sctx, it, protocol.NotifyItemStarted); err != nil {
+		return toolRunResult{Output: err.Error(), ModelOutput: err.Error(), IsError: true}
+	}
+	output, callErr := tool.Call(ctx, call.Args)
+	if callErr == nil {
+		callErr = ctx.Err()
+	}
+	if callErr != nil {
+		it.Status, it.Tool.Error = protocol.ItemFailed, callErr.Error()
+		_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+		return toolRunResult{Output: callErr.Error(), ModelOutput: callErr.Error(), IsError: true}
+	}
+	// Call returns validated, engine-bound proposal metadata. Preserve it exactly
+	// in the completed chat item; only that completed item is actionable in UI.
+	it.Status, it.Tool.Output, it.Data = protocol.ItemCompleted, output, json.RawMessage(output)
+	if err := e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted); err != nil {
+		return toolRunResult{Output: err.Error(), ModelOutput: err.Error(), IsError: true}
+	}
+	return toolRunResult{Output: output, ModelOutput: output}
 }

@@ -233,13 +233,16 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	// Serialize activation/resumption through persistence, including token replay.
 	// Ordinary turns in other chats must not wait for Git/plugin preflight.
 	skillName, _ := skills.Invocation(p.Text)
-	if p.DelegationActivationToken != "" || p.DelegationTaskID != "" || skillName == delegationSkillID {
+	if p.Workbench == nil && (p.DelegationActivationToken != "" || p.DelegationTaskID != "" || skillName == delegationSkillID) {
 		e.delegationMu.Lock()
 		defer e.delegationMu.Unlock()
 	}
-	admission, err := e.prepareDelegationAdmission(ctx, p.TurnStartParams)
-	if err != nil {
-		return protocol.Turn{}, err
+	var admission *delegationAdmission
+	if p.Workbench == nil {
+		admission, err = e.prepareDelegationAdmission(ctx, p.TurnStartParams)
+		if err != nil {
+			return protocol.Turn{}, err
+		}
 	}
 	res, err := e.resolveSelection(ctx, th, p.Override, p.Text, len(p.Attachments))
 	if err != nil {
@@ -579,7 +582,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		sctx = tools.WithScope(sctx, scope)
 	}
 	var snapshot pluginSnapshot
-	if e.Plugins != nil && childExecutionFrom(ctx) == nil {
+	if e.Plugins != nil && childExecutionFrom(ctx) == nil && p.Workbench == nil {
 		acquired, err := e.Plugins.Acquire(sctx, th.ProjectID)
 		if err != nil {
 			e.finishTurn(sctx, th, turn, fmt.Errorf("load project plugins: %w", err), release)
@@ -642,7 +645,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 
 	var selection *turnSelection
 	var specs []llm.ToolSpec
-	if res.meta.Tools && e.optimizationPolicy(ctx).ProgressiveTools && p.Workbench == nil {
+	if p.Workbench != nil && res.meta.Tools {
+		tool := &workbenchProposalTool{}
+		specs = []llm.ToolSpec{{Name: tools.ToWire(tool.Name()), Description: tool.Description(), Schema: tool.Schema()}}
+	} else if res.meta.Tools && e.optimizationPolicy(ctx).ProgressiveTools {
 		selection = e.startToolSelection(ctx, th, snapshot, proj, p.Text)
 		if selection.fatal {
 			finish(errors.New("tool catalog unavailable"))
@@ -1510,7 +1516,7 @@ func (e *Engine) turnTools(snapshot pluginSnapshot) []turnTool {
 }
 
 func (e *Engine) runPluginHooks(ctx context.Context, snapshot pluginSnapshot, invocation hooks.Invocation) hooks.Outcome {
-	if childExecutionFrom(ctx) != nil || e.Hooks == nil || snapshot == nil {
+	if workbenchContextFrom(ctx) != nil || childExecutionFrom(ctx) != nil || e.Hooks == nil || snapshot == nil {
 		return hooks.Outcome{}
 	}
 	invocation.Version = hooks.EnvelopeVersion
@@ -1549,8 +1555,11 @@ func (e *Engine) runTurnCompleteHooks(ctx context.Context, snapshot pluginSnapsh
 
 // runTool executes one tool call, asking for approval when policy requires it.
 func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn protocol.Turn, call llm.ToolCall, snapshot pluginSnapshot) toolRunResult {
-	if workbenchContextFrom(ctx) != nil && tools.FromWire(call.Name) != "workbench.propose_edit" {
-		return e.selectionFailure(sctx, turn, call, call.Name, "Only architecture proposals are available in a workbench turn. No action was executed.")
+	if workbenchContextFrom(ctx) != nil {
+		if tools.FromWire(call.Name) != "workbench.propose_edit" {
+			return e.selectionFailure(sctx, turn, call, call.Name, "Only architecture proposals are available in a workbench turn. No action was executed.")
+		}
+		return e.runWorkbenchProposal(ctx, sctx, turn, call)
 	}
 	if e.Cfg != nil && e.Cfg.Policy.RequireWorkflowApproval {
 		ctx = optimization.WithPolicy(ctx, e.optimizationPolicy(ctx))
@@ -2078,14 +2087,6 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		}
 		if json.Unmarshal([]byte(output), &proposalResult) == nil && proposalResult.Resolution != nil {
 			mergeTaskItemData(&it, "taskResolution", proposalResult.Resolution)
-		}
-	}
-	if _, owned := tool.(*workbenchProposalTool); owned {
-		var proposed struct {
-			Proposal *protocol.WorkbenchProposal `json:"workbenchProposal"`
-		}
-		if json.Unmarshal([]byte(output), &proposed) == nil && proposed.Proposal != nil {
-			mergeTaskItemData(&it, "workbenchProposal", proposed.Proposal)
 		}
 	}
 	it.Status, it.Tool.Output = protocol.ItemCompleted, output

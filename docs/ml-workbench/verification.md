@@ -11,7 +11,7 @@ Chrome for browser interactions and PyTorch 2.15 for generated modules.
 | Real-engine assistant smoke | Passed local HTTP provider transport, context/proposal/apply/failure/navigation workflows and 6 light/dark layouts; no browser errors |
 | `go test -count=1 ./internal/workbench` | Passed |
 | `go test -count=1 -run '^TestWorkbench' ./internal/server` | Passed |
-| Focused assistant engine/server tests | Passed, including preservation of existing coding tasks after proposals, denied calls and cancellation |
+| Focused assistant engine/server tests | Passed, including coding-task/Work/evidence preservation, pending coding approvals, disabled executable hooks and disabled typed delegation activation |
 | Existing normal chat/optimization/context-compiler server regressions | Passed |
 | `go vet ./internal/workbench ./internal/protocol ./internal/engine ./internal/server` | Passed |
 | Broader Go suite | Not fully green: three existing server-test failures reproduced on the base branch; details below |
@@ -50,6 +50,13 @@ tool calls, context/provider failures, cancellation during context preparation
 and provider streaming, disabled submission without a model, and history reload.
 It tests 760/1180/1440px in both themes. The fake provider establishes UI/runtime
 correctness; it does not establish answer quality from an actual LLM.
+
+Independent review found three backend isolation gaps. Each was reproduced by a
+failing real-RPC regression and fixed: advisory suggestions now bypass coding
+workflow observation/approval paths, executable plugin hooks, and textual skill
+delegation admission. Installed-hook and installed-skill positive controls verify
+ordinary Chat still supports those features. The full affected Go regression
+selection, vet, browser acceptance and native build/signature passed afterward.
 
 ## Generated-module checks
 
