@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -277,7 +279,7 @@ func TestPrepareRuntimeRefusedWhileApplying(t *testing.T) {
 	}
 	for _, files := range []protocol.FileAccess{protocol.FilesReadWrite, protocol.FilesRead} {
 		b := rtStartAgent(t, s, task, "late-"+string(files), files)
-		if _, err := svc.PrepareRuntime(t.Context(), task, b, files == protocol.FilesReadWrite); err == nil || !strings.Contains(err.Error(), "an integration is being applied; try again") {
+		if _, err := svc.PrepareRuntime(t.Context(), task, b, files == protocol.FilesReadWrite); err == nil || !strings.Contains(err.Error(), "an integration is being applied") || !strings.Contains(err.Error(), "accept agent "+a.agent.ID+" again") || strings.Contains(err.Error(), "try again") {
 			t.Fatalf("prepare while applying (%s): %v", files, err)
 		}
 	}
@@ -339,5 +341,142 @@ func rtGitStdin(t *testing.T, root, stdin string, args ...string) {
 	cmd.Stdin = strings.NewReader(stdin)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v %s", args, err, b)
+	}
+}
+
+// I1 at the service level: a stat-only change in the project checkout is
+// accepted and the index file is not rewritten.
+func TestPrepareRuntimeAfterFirstAcceptStatDirtyParent(t *testing.T) {
+	svc, s, task, head := rtAccepted(t, nil, rtWrite(t, "tracked", "from a\n"))
+	later := time.Now().Add(2 * time.Hour)
+	for _, rel := range []string{"tracked", "removed"} {
+		if err := os.Chtimes(filepath.Join(task.ParentRoot, rel), later, later); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := rtCheckoutBytes(t, task.ParentRoot)
+	b := rtStartAgent(t, s, task, "b", protocol.FilesReadWrite)
+	if _, err := svc.PrepareRuntime(t.Context(), task, b, true); err != nil {
+		t.Fatal(err)
+	}
+	r := rtStartAgent(t, s, task, "r", protocol.FilesRead)
+	ref, err := svc.PrepareRuntime(t.Context(), task, r, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := workspaceGit(t, ref.Root, "rev-parse", "HEAD^{tree}"); got != head {
+		t.Fatalf("view tree %s, want %s", got, head)
+	}
+	if after := rtCheckoutBytes(t, task.ParentRoot); after != before {
+		t.Fatal("preparing workspaces rewrote the project checkout (index bytes)")
+	}
+	if _, err := os.Lstat(filepath.Join(task.ParentRoot, ".git", "index.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("index.lock left behind: %v", err)
+	}
+}
+
+// M3: a writer re-prepared after its snapshot recorded a result revision
+// gets its checkout back (no "view" refusal).
+func TestPrepareRuntimeWriterAgainAfterSnapshot(t *testing.T) {
+	svc, s, task := rtFixture(t)
+	w := rtStartAgent(t, s, task, "w", protocol.FilesReadWrite)
+	ref, err := svc.PrepareRuntime(t.Context(), task, w, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceWrite(t, ref.Root, "tracked", "edit\n")
+	if w, err = s.RuntimeAgent(t.Context(), task.ID, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.SnapshotRuntime(t.Context(), task, w, ref); err != nil {
+		t.Fatal(err)
+	}
+	again, err := svc.PrepareRuntime(t.Context(), task, w, true)
+	if err != nil || again.ID != ref.ID {
+		t.Fatalf("writer re-prepare = %+v %v", again, err)
+	}
+}
+
+// M3: a reader whose first preparation was refused (dirty parent) leaves no
+// stale identity: after the parent is clean and a revision is accepted it
+// gets the view of the new head.
+func TestPrepareRuntimeViewAfterRefusedFirstPrepare(t *testing.T) {
+	svc, s, task := rtFixture(t)
+	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+	r := rtStartAgent(t, s, task, "reader", protocol.FilesRead)
+	workspaceWrite(t, task.ParentRoot, "notes", "mine\n")
+	if _, err := svc.PrepareRuntime(t.Context(), task, r, false); err == nil || !strings.Contains(err.Error(), "notes") {
+		t.Fatalf("dirty parent prepare: %v", err)
+	}
+	if err := os.Remove(filepath.Join(task.ParentRoot, "notes")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := svc.IntegrateRuntime(t.Context(), task.ID, a.agent.ID)
+	if err != nil || len(res.Options) > 0 {
+		t.Fatalf("accept = %+v %v", res, err)
+	}
+	ref, err := svc.PrepareRuntime(t.Context(), task, r, false)
+	if err != nil {
+		t.Fatalf("prepare after the refusal and an accept: %v", err)
+	}
+	if got := workspaceGit(t, ref.Root, "rev-parse", "HEAD^{tree}"); got != res.HeadTree {
+		t.Fatalf("view tree %s, want %s", got, res.HeadTree)
+	}
+}
+
+// M9: an accept started while a workspace is being prepared waits for the
+// preparation (task lock) and the preparation sees the pre-accept state.
+func TestIntegrateWaitsForWorkspaceBeingPrepared(t *testing.T) {
+	svc, s, task := rtFixture(t)
+	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+	r := rtStartAgent(t, s, task, "reader", protocol.FilesRead)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	svc.ValidateParent = func(context.Context, protocol.AgentTask) error {
+		blocked := false
+		once.Do(func() { blocked = true })
+		if blocked {
+			close(entered)
+			<-release
+		}
+		return nil
+	}
+	type prepared struct {
+		ref WorkspaceRef
+		err error
+	}
+	prep := make(chan prepared, 1)
+	go func() {
+		ref, err := svc.PrepareRuntime(t.Context(), task, r, false)
+		prep <- prepared{ref, err}
+	}()
+	<-entered
+	before := rtCheckoutBytes(t, task.ParentRoot)
+	integ := make(chan error, 1)
+	go func() {
+		_, err := svc.IntegrateRuntime(t.Context(), task.ID, a.agent.ID)
+		integ <- err
+	}()
+	select {
+	case err := <-integ:
+		t.Fatalf("accept finished while a workspace was being prepared: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if after := rtCheckoutBytes(t, task.ParentRoot); after != before {
+		t.Fatal("accept changed the project checkout while a workspace was being prepared")
+	}
+	close(release)
+	got := <-prep
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if err := <-integ; err != nil {
+		t.Fatal(err)
+	}
+	if head := workspaceGit(t, got.ref.Root, "rev-parse", "HEAD"); head != task.BaseRevision {
+		t.Fatalf("view prepared before the accept is at %s, want the base", head)
+	}
+	if rev := rtRevision(t, s, task.ID, a.agent.ID); rev.State != store.RevisionApplied {
+		t.Fatalf("revision %s after the preparation finished", rev.State)
 	}
 }

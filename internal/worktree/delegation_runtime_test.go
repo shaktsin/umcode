@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // checkoutBytes fingerprints a project checkout byte for byte: HEAD, the raw
@@ -311,5 +312,164 @@ func TestRuntimeViewFailsClosed(t *testing.T) {
 	write(t, ws3.Path, "keep.txt", "tampered\n")
 	if err = f.m.ApplyRuntimeView(ctx, "dirty", f.parent, f.base, head, commit); err == nil {
 		t.Fatal("dirty view checkout accepted")
+	}
+}
+
+// I1: a stat-only change (an editor saving an unchanged file) must not make
+// the read-only parent check refresh and rewrite the project's index.
+func TestParentStateForRuntimeNeverRewritesIndex(t *testing.T) {
+	ctx := context.Background()
+	f, head := integratedFixture(t)
+	later := time.Now().Add(2 * time.Hour)
+	for _, rel := range []string{"keep.txt", "new.txt", "bin.dat"} {
+		if err := os.Chtimes(filepath.Join(f.parent, rel), later, later); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := checkoutBytes(t, f.parent)
+	if err := ParentStateForRuntime(ctx, f.parent, f.base, head); err != nil {
+		t.Fatalf("stat-only change refused: %v", err)
+	}
+	if _, err := f.m.EnsureRuntime(ctx, "writer2", f.parent, f.base, head); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := RuntimeViewCommit(ctx, f.parent, f.base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.m.EnsureRuntime(ctx, "view2", f.parent, f.base, head); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.m.ApplyRuntimeView(ctx, "view2", f.parent, f.base, head, commit); err != nil {
+		t.Fatal(err)
+	}
+	if after := checkoutBytes(t, f.parent); after != before {
+		t.Fatalf("preparing workspaces rewrote the parent (index or files):\n%s\n---\n%s", before, after)
+	}
+	if _, err := os.Lstat(filepath.Join(f.parent, ".git", "index.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("index.lock left behind: %v", err)
+	}
+	// A real content change with the same size is still refused.
+	write(t, f.parent, "keep.txt", "KEEP\n")
+	if err := ParentStateForRuntime(ctx, f.parent, f.base, head); err == nil || !strings.Contains(err.Error(), "keep.txt") {
+		t.Fatalf("content edit not refused: %v", err)
+	}
+}
+
+// M1: the parent's fsmonitor hook (user config) is never run by the check.
+func TestParentStateForRuntimeRunsNoParentHooks(t *testing.T) {
+	ctx := context.Background()
+	f, head := integratedFixture(t)
+	marker := filepath.Join(t.TempDir(), "fsmonitor-ran")
+	hook := filepath.Join(t.TempDir(), "fsmonitor.sh")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch "+marker+"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, f.parent, "config", "core.fsmonitor", hook)
+	if err := ParentStateForRuntime(ctx, f.parent, f.base, head); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.EnsureRuntime(ctx, "w", f.parent, f.base, head); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("parent fsmonitor hook ran: %v", err)
+	}
+}
+
+// M2: the clone ignores inherited GIT_* variables and runs no global hooks.
+func TestEnsureRuntimeIgnoresGitEnvAndGlobalHooks(t *testing.T) {
+	ctx := context.Background()
+	f, head := integratedFixture(t)
+	decoy := filepath.Join(t.TempDir(), "decoy.git")
+	home := t.TempDir()
+	hooks := filepath.Join(home, "hooks")
+	marker := filepath.Join(home, "hook-ran")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"post-checkout", "reference-transaction"} {
+		if err := os.WriteFile(filepath.Join(hooks, name), []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[core]\n\thooksPath = "+hooks+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("GIT_DIR", decoy)
+	t.Setenv("GIT_WORK_TREE", f.parent)
+	ws, err := f.m.EnsureRuntime(ctx, "env-writer", f.parent, f.base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(decoy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clone honoured GIT_DIR: %v", err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("global hook ran during the clone: %v", err)
+	}
+	if err = ValidateOwnedMetadata(ctx, ws.Path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(ws.Path, ".git", "HEAD")); err != nil {
+		t.Fatalf("workspace metadata missing: %v", err)
+	}
+}
+
+// M9: views of type changes (file -> symlink, file -> directory) and of
+// content under eol .gitattributes equal the head exactly.
+func TestRuntimeViewTypeChangesAndEOL(t *testing.T) {
+	ctx := context.Background()
+	f := newIntegrationFixture(t, map[string]string{"keep.txt": "keep\n", "link": "was a file\n", "dir": "was a file\n",
+		".gitattributes": "*.crlf text eol=crlf\n", "a.crlf": "one\ntwo\n"})
+	result := f.agent(t, "writer", func(dir string) {
+		if err := os.Remove(filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("keep.txt", filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(dir, "dir")); err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir, "dir/inner.txt", "inner\n")
+		write(t, dir, "a.crlf", "one\r\ntwo\r\nthree\r\n")
+	})
+	res, err := f.m.ApplyOnIntegrated(ctx, "writer", f.parent, f.base, f.baseTree(t), result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := res.TreeAfter
+	before := checkoutBytes(t, f.parent)
+	commit, err := RuntimeViewCommit(ctx, f.parent, f.base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := f.m.EnsureRuntime(ctx, "view", f.parent, f.base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.m.ApplyRuntimeView(ctx, "view", f.parent, f.base, head, commit); err != nil {
+		t.Fatal(err)
+	}
+	if after := checkoutBytes(t, f.parent); after != before {
+		t.Fatal("view preparation changed the parent")
+	}
+	if got := git(t, ws.Path, "rev-parse", "HEAD^{tree}"); got != head {
+		t.Fatalf("view tree %s, want %s", got, head)
+	}
+	if err = ValidateCommitted(ctx, ws.Path, commit); err != nil {
+		t.Fatalf("view not clean: %v", err)
+	}
+	if target, err := os.Readlink(filepath.Join(ws.Path, "link")); err != nil || target != "keep.txt" {
+		t.Fatalf("link = %q %v", target, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(ws.Path, "dir", "inner.txt")); err != nil || string(data) != "inner\n" {
+		t.Fatalf("dir/inner.txt = %q %v", data, err)
+	}
+	if blob := git(t, ws.Path, "cat-file", "-p", "HEAD:a.crlf"); blob != "one\ntwo\nthree" {
+		t.Fatalf("a.crlf blob = %q", blob)
 	}
 }
