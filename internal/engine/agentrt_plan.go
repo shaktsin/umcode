@@ -411,7 +411,7 @@ func (e *Engine) planModelPool(ctx context.Context, taskID string) ([]modelRoute
 	if err != nil {
 		return nil, scope, err
 	}
-	pool := e.runtimeModelPool(ctx, enabledModelScope(scope), agentNeeds{})
+	pool := e.runtimeModelPool(ctx, scope, agentNeeds{})
 	if e.planModelPoolHook != nil {
 		pool = e.planModelPoolHook(pool)
 	}

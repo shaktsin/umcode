@@ -273,11 +273,13 @@ func enabledModelScope(scope store.AgentModelScope) store.AgentModelScope {
 }
 
 // runtimeModelPool turns the task's frozen approved models into the pool an
-// agent may run on, marking models no approved key can route right now.
-// Callers pass enabledModelScope(scope).
+// agent may run on: the enabled candidates, in order (enabledModelScope), or
+// the scope's single model when the scope froze no candidates at all. When
+// every frozen candidate is disabled the pool is empty; a disabled model is
+// never offered. Models no approved key can route right now are marked.
 func (e *Engine) runtimeModelPool(ctx context.Context, scope store.AgentModelScope, needs agentNeeds) []modelRoute {
-	candidates := scope.Candidates
-	if len(candidates) == 0 && scope.Model != "" {
+	candidates := enabledModelScope(scope).Candidates
+	if len(scope.Candidates) == 0 && scope.Model != "" {
 		candidates = []protocol.ConfiguredModel{{Provider: scope.Provider, Model: scope.Model, Enabled: true}}
 	}
 	pool := make([]modelRoute, 0, len(candidates))
@@ -469,10 +471,11 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 	if err != nil {
 		return result, err
 	}
-	// The same pool the plan card offered: enabled candidates only.
-	modelScope = enabledModelScope(modelScope)
+	// The same pool the plan card offered: enabled candidates only. The
+	// pool's entries line up with the enabled candidates.
 	needs := agentNeedsFor(a.Capabilities)
 	pool := e.runtimeModelPool(ctx, modelScope, needs)
+	modelScope = enabledModelScope(modelScope)
 	actual, trail, chooseErr := chooseRuntimeModel(a.ModelRequested, pool, needs)
 	if persistErr := e.updateRuntimeAgent(ctx, task.ID, a.ID, func(c *protocol.RuntimeAgent) bool {
 		c.ModelActual, c.RouteTrail = actual, trail
