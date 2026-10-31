@@ -148,6 +148,9 @@ type Engine struct {
 	// planModelPoolHook is a test seam that may edit the plan model pool
 	// (planModelPool) before use; set before use.
 	planModelPoolHook func([]modelRoute) []modelRoute
+	// planCardTimeout, when set (tests), replaces the policy approval
+	// timeout of agent plan cards.
+	planCardTimeout time.Duration
 	// agentPlanDecided records each plan card's decision (outcome and
 	// canonical approve edits) under agentPlanMu, so a repeat is recognised
 	// after the waiting tool call has returned.
