@@ -21,7 +21,7 @@ func TestCancelledAgentRefusalBeforeApplyKeepsNewAgent(t *testing.T) {
 }
 
 // M6 + I2: the "not verified" accept refusal says why, and, when the head
-// cannot be verified, that applied revisions are final.
+// cannot be verified, how to amend it (Plan 4 Task 6 replaced the dead end).
 func TestAcceptRefusalExplainsUnverifiedHead(t *testing.T) {
 	env := runtimeVerificationEnv(t)
 	a := env.writer(t, "a", "a.txt", "from a\n")
@@ -37,7 +37,7 @@ func TestAcceptRefusalExplainsUnverifiedHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = env.integrate(t, env.ctx, accept)
-	if err == nil || !strings.Contains(err.Error(), "check go test ./... is failed") || !strings.Contains(err.Error(), "applied revisions are final") || !strings.Contains(err.Error(), "cancel") {
+	if err == nil || !strings.Contains(err.Error(), "check go test ./... is failed") || !strings.Contains(err.Error(), amendAdvice) || !strings.Contains(err.Error(), "cancel") {
 		t.Fatalf("failed check: %v", err)
 	}
 	if got := env.revision(t, b.ID); got.State != store.RevisionSubmitted {
@@ -52,12 +52,14 @@ func TestAcceptRefusalExplainsNoChecksPlanned(t *testing.T) {
 	b := env.writer(t, "b", "b.txt", "from b\n")
 	env.mustIntegrate(t, `{"action":"accept","agent":"`+a.ID+`"}`)
 	_, err := env.integrate(t, env.ctx, `{"action":"accept","agent":"`+b.ID+`"}`)
-	if err == nil || !strings.Contains(err.Error(), "no checks planned") || !strings.Contains(err.Error(), "applied revisions are final") {
+	if err == nil || !strings.Contains(err.Error(), "no checks planned") || !strings.Contains(err.Error(), amendAdvice) {
 		t.Fatalf("no checks: %v", err)
 	}
 }
 
-// I2: the dead end is stated in the tool description.
+// I2 (updated by Plan 4 Task 6): the description states that applied
+// revisions stay applied, how to amend the integrated state, and that the
+// task can still be cancelled.
 func TestIntegrateDescriptionStatesAppliedIsFinal(t *testing.T) {
 	env := runtimeVerificationEnv(t)
 	tool, ok := env.e.Tools.Get("agent.integrate")
@@ -65,7 +67,7 @@ func TestIntegrateDescriptionStatesAppliedIsFinal(t *testing.T) {
 		t.Fatal("agent.integrate not registered")
 	}
 	d := tool.Description()
-	for _, want := range []string{"Applied revisions are final", "cancel the task", "new delegated task"} {
+	for _, want := range []string{"cannot be dropped", amendAdvice, "cancel the task", "new delegated task"} {
 		if !strings.Contains(d, want) {
 			t.Fatalf("description lacks %q: %s", want, d)
 		}

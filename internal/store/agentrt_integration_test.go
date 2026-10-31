@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func rev(task, agent, result string) AgentRevision {
@@ -315,5 +316,30 @@ func TestRevisionTablesAddedToExistingRuntimeDatabase(t *testing.T) {
 		if err = s.DB.QueryRow(q).Scan(&n); err != nil {
 			t.Fatalf("%s after upgrade: %v", q, err)
 		}
+	}
+}
+
+// Plan 4 Task 6: the head records its amendments (count, last reason and the
+// tree the last amend produced); the reason is bounded.
+func TestHeadAmendmentsRoundTrip(t *testing.T) {
+	s, task := runtimeFixture(t)
+	h := AgentIntegrationHead{TaskID: task.ID, HeadTree: "t1", AppliedCount: 1}
+	if err := s.SetAgentIntegrationHead(t.Context(), h, 0); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.AgentIntegrationHead(t.Context(), task.ID)
+	if err != nil || got.Amendments != 0 || got.AmendReason != "" || got.AmendedTree != "" {
+		t.Fatalf("fresh head %+v %v", got, err)
+	}
+	h.HeadTree, h.Amendments, h.AmendReason, h.AmendedTree = "t2", 1, strings.Repeat("é", 3000), "t2"
+	if err = s.SetAgentIntegrationHead(t.Context(), h, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.AgentIntegrationHead(t.Context(), task.ID)
+	if got.HeadTree != "t2" || got.Amendments != 1 || got.AmendedTree != "t2" || got.AppliedCount != 1 {
+		t.Fatalf("amended head %+v", got)
+	}
+	if len(got.AmendReason) > maxAmendReason || !strings.HasPrefix(got.AmendReason, "éé") || !utf8.ValidString(got.AmendReason) {
+		t.Fatalf("reason not bounded on a rune boundary: %d bytes", len(got.AmendReason))
 	}
 }
