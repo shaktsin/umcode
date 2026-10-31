@@ -696,3 +696,34 @@ func TestDelegationWorkspaceDefaultRunner(t *testing.T) {
 func (*delegationProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
 	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
 }
+
+// delegation/enable lifts a decline only together with the token it issues;
+// a refused enable (dirty checkout) clears nothing.
+func TestDelegationEnableClearsDeclinesOnlyWithToken(t *testing.T) {
+	e, th, root, _ := delegationFixtureWith(t, runtimeV2On)
+	sug, err := e.Store.CreateAgentSuggestion(t.Context(), store.AgentSuggestion{ThreadID: th.ID, TurnID: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Store.DecideAgentSuggestion(t.Context(), sug.ID, store.SuggestionDeclined); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "dirty.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.PrepareDelegation(t.Context(), th.ID); err == nil {
+		t.Fatal("enable on a dirty checkout accepted")
+	}
+	if ok, _ := e.Store.ThreadDeclinedSuggestion(t.Context(), th.ID); !ok {
+		t.Fatal("refused enable cleared the decline")
+	}
+	if err = os.Remove(filepath.Join(root, "dirty.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := e.PrepareDelegation(t.Context(), th.ID); err != nil || r.ActivationToken == "" {
+		t.Fatalf("enable: %+v %v", r, err)
+	}
+	if ok, _ := e.Store.ThreadDeclinedSuggestion(t.Context(), th.ID); ok {
+		t.Fatal("successful enable kept the decline")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
@@ -349,5 +350,160 @@ func TestSuggestStartupExpiresPending(t *testing.T) {
 	got, err := env.e.Store.GetAgentSuggestion(t.Context(), id)
 	if err != nil || got.State != store.SuggestionExpired {
 		t.Fatalf("after restart: %+v %v", got, err)
+	}
+}
+
+// An enable and a decline answering the same card at once are serialized: a
+// decline that lands while the enable is preparing delegation is never
+// silently cleared. Whichever wins, a declined card keeps suppressing.
+func TestSuggestionRespondEnableDeclineRace(t *testing.T) {
+	env := suggestFixture(t)
+	out, err := env.suggest(t, env.leadTurn(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := suggestionID(t, out)
+	declined := make(chan error, 1)
+	env.e.suggestionRespondHook = func() {
+		env.e.suggestionRespondHook = nil
+		// The decline arrives after the enable read the card as pending.
+		go func() {
+			_, err := env.e.RespondAgentSuggestion(context.WithoutCancel(t.Context()), protocol.AgentSuggestionRespondParams{SuggestionID: id, Decision: protocol.SuggestionDecline})
+			declined <- err
+		}()
+		time.Sleep(300 * time.Millisecond)
+	}
+	res, enableErr := env.e.RespondAgentSuggestion(t.Context(), protocol.AgentSuggestionRespondParams{SuggestionID: id, Decision: protocol.SuggestionEnable})
+	declineErr := <-declined
+	got, err := env.e.Store.GetAgentSuggestion(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suppressed, err := env.e.Store.ThreadDeclinedSuggestion(t.Context(), env.th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch got.State {
+	case store.SuggestionEnabled:
+		if enableErr != nil || res.ActivationToken == "" || declineErr == nil {
+			t.Fatalf("enabled: enable=%v token=%q decline=%v", enableErr, res.ActivationToken, declineErr)
+		}
+	case store.SuggestionDeclined:
+		if !suppressed {
+			t.Fatal("a recorded decline was cleared by an enable that did not succeed")
+		}
+		if enableErr == nil || res.ActivationToken != "" {
+			t.Fatalf("declined card but enable returned %+v %v", res, enableErr)
+		}
+	default:
+		t.Fatalf("state %s", got.State)
+	}
+}
+
+// Two enables at once: only one of them gets a token.
+func TestSuggestionRespondConcurrentEnablesOneToken(t *testing.T) {
+	env := suggestFixture(t)
+	out, err := env.suggest(t, env.leadTurn(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := suggestionID(t, out)
+	second := make(chan protocol.AgentSuggestionRespondResult, 1)
+	env.e.suggestionRespondHook = func() {
+		env.e.suggestionRespondHook = nil
+		go func() {
+			r, err := env.e.RespondAgentSuggestion(context.WithoutCancel(t.Context()), protocol.AgentSuggestionRespondParams{SuggestionID: id, Decision: protocol.SuggestionEnable})
+			if err != nil {
+				t.Errorf("second enable: %v", err)
+			}
+			second <- r
+		}()
+		time.Sleep(300 * time.Millisecond)
+	}
+	first, err := env.e.RespondAgentSuggestion(t.Context(), protocol.AgentSuggestionRespondParams{SuggestionID: id, Decision: protocol.SuggestionEnable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2 := <-second
+	tokens := 0
+	for _, r := range []protocol.AgentSuggestionRespondResult{first, r2} {
+		if r.Suggestion.State != store.SuggestionEnabled {
+			t.Fatalf("state %s", r.Suggestion.State)
+		}
+		if r.ActivationToken != "" {
+			tokens++
+		}
+	}
+	if tokens != 1 {
+		t.Fatalf("%d tokens issued for one card, want 1", tokens)
+	}
+}
+
+// Two agent.suggest calls racing in one turn store one row; the loser is
+// refused naming the one-per-message rule.
+func TestSuggestConcurrentInOneTurnStoresOne(t *testing.T) {
+	env := suggestFixture(t)
+	lead := env.leadTurn(t)
+	const n = 4
+	errs := make(chan error, n)
+	start := make(chan struct{})
+	for range n {
+		go func() {
+			<-start
+			_, err := env.e.suggestAgents(lead, "parallel work")
+			errs <- err
+		}()
+	}
+	close(start)
+	ok := 0
+	for range n {
+		if err := <-errs; err == nil {
+			ok++
+		} else if !strings.Contains(err.Error(), "one per user message") {
+			t.Fatalf("unexpected refusal: %v", err)
+		}
+	}
+	if ok != 1 || env.count(t) != 1 {
+		t.Fatalf("accepted %d, stored %d; want 1 and 1", ok, env.count(t))
+	}
+}
+
+// Respond-enable when delegation cannot be prepared leaves the card pending,
+// issues no token and clears no decline.
+func TestSuggestionRespondEnableFailsWhenDelegationCannotStart(t *testing.T) {
+	env := suggestFixture(t)
+	// A declined card from an earlier message must stay effective.
+	out, err := env.suggest(t, env.leadTurn(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := suggestionID(t, out)
+	out, err = env.suggest(t, env.leadTurn(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := suggestionID(t, out)
+	if _, err = env.e.RespondAgentSuggestion(t.Context(), protocol.AgentSuggestionRespondParams{SuggestionID: old, Decision: protocol.SuggestionDecline}); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(env.root, "dirty.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := env.e.RespondAgentSuggestion(t.Context(), protocol.AgentSuggestionRespondParams{SuggestionID: id, Decision: protocol.SuggestionEnable})
+	if err == nil || res.ActivationToken != "" {
+		t.Fatalf("enable on a dirty checkout: %+v %v", res, err)
+	}
+	got, err := env.e.Store.GetAgentSuggestion(t.Context(), id)
+	if err != nil || got.State != store.SuggestionPending {
+		t.Fatalf("card after failed enable: %+v %v", got, err)
+	}
+	if suppressed, err := env.e.Store.ThreadDeclinedSuggestion(t.Context(), env.th.ID); err != nil || !suppressed {
+		t.Fatalf("failed enable cleared the decline: %v %v", suppressed, err)
+	}
+	env.e.mu.Lock()
+	tokens := len(env.e.delegationTokens)
+	env.e.mu.Unlock()
+	if tokens != 0 {
+		t.Fatalf("%d activation tokens left after a failed enable", tokens)
 	}
 }

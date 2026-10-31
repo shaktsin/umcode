@@ -119,6 +119,9 @@ func (e *Engine) RespondAgentSuggestion(ctx context.Context, p protocol.AgentSug
 	if err = suggestionOpen(cur); err != nil {
 		return res, err
 	}
+	if e.suggestionRespondHook != nil {
+		e.suggestionRespondHook()
+	}
 	var activation protocol.DelegationEnableResult
 	if state == store.SuggestionEnabled {
 		if activation, err = e.PrepareDelegation(ctx, cur.ThreadID); err != nil {

@@ -134,22 +134,25 @@ type Engine struct {
 	// nested agent slices its parent's slice (see agentrt_budget.go).
 	runtimeAgentBudgets agentBudgetRegistry
 
-	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
-	delegationTokens map[string]delegationToken // protected by mu; never persisted
-	shuttingDown     bool                       // protected by mu
-	mu               sync.Mutex
-	activeTurns      map[string]*activeTurn // by turn id
-	threadTurns      map[string]string      // thread id -> running turn id
-	approvals        map[string]chan bool   // pending approval id -> decision
-	budgetWarned     map[string]string      // credential id -> month already warned
-	pausedTurns      map[string]bool        // turn id -> ended on a budget pause
-	routing          protocol.RoutingConfig // the models the user has approved
-	presets          map[protocol.Complexity]protocol.ComplexityPreset
-	defaultCplx      protocol.Complexity
-	turnLimits       protocol.ExecutionLimits
-	defaultMaxOut    atomic.Int64                  // output limit for models with unknown max output
-	turnWaiters      map[string]chan protocol.Turn // turn id -> completion (task runs)
-	wg               sync.WaitGroup
+	delegationMu sync.Mutex // serializes prepare/admit without holding the turn mutex
+	// suggestionRespondHook is a test seam run by RespondAgentSuggestion after
+	// it read the card as open; set before use.
+	suggestionRespondHook func()
+	delegationTokens      map[string]delegationToken // protected by mu; never persisted
+	shuttingDown          bool                       // protected by mu
+	mu                    sync.Mutex
+	activeTurns           map[string]*activeTurn // by turn id
+	threadTurns           map[string]string      // thread id -> running turn id
+	approvals             map[string]chan bool   // pending approval id -> decision
+	budgetWarned          map[string]string      // credential id -> month already warned
+	pausedTurns           map[string]bool        // turn id -> ended on a budget pause
+	routing               protocol.RoutingConfig // the models the user has approved
+	presets               map[protocol.Complexity]protocol.ComplexityPreset
+	defaultCplx           protocol.Complexity
+	turnLimits            protocol.ExecutionLimits
+	defaultMaxOut         atomic.Int64                  // output limit for models with unknown max output
+	turnWaiters           map[string]chan protocol.Turn // turn id -> completion (task runs)
+	wg                    sync.WaitGroup
 }
 
 type activeTurn struct {
