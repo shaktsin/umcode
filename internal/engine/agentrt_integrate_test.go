@@ -33,6 +33,8 @@ type integrateOut struct {
 	Checks       []protocol.AgentWorkflowCheck
 	Verification string
 	TaskState    protocol.AgentState
+	// CleanupWarning is set when completion retained agent workspaces.
+	CleanupWarning string
 }
 
 func (env rvEnv) integrate(t *testing.T, ctx context.Context, args string) (integrateOut, error) {
