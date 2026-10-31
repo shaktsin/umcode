@@ -8,24 +8,6 @@ import (
 	"github.com/shaktsin/umcode/internal/store"
 )
 
-// No refusal may suggest spawning a new agent once work is integrated: the
-// spawn gate (gap G1) refuses it.
-func TestRefusalsAfterApplyNeverSuggestNewAgent(t *testing.T) {
-	env := runtimeVerificationEnv(t)
-	a := env.writer(t, "a", "a.txt", "from a\n")
-	c := env.finishingWriter(t, "c", "c.txt", "from c\n")
-	env.end(t, c.ID, protocol.AgentStateCancelled)
-	env.mustIntegrate(t, `{"action":"accept","agent":"`+a.ID+`"}`)
-	env.passChecks(t)
-	_, err := env.integrate(t, env.ctx, `{"action":"accept","agent":"`+c.ID+`"}`)
-	if err == nil || !strings.Contains(err.Error(), "was cancelled after submitting") {
-		t.Fatalf("accept cancelled agent: %v", err)
-	}
-	if strings.Contains(err.Error(), "new agent") || !strings.Contains(err.Error(), "new delegated task") {
-		t.Fatalf("refusal after an apply must point to a new delegated task, not a new agent: %v", err)
-	}
-}
-
 // Before anything is applied a new agent can still be spawned, so the advice
 // stays.
 func TestCancelledAgentRefusalBeforeApplyKeepsNewAgent(t *testing.T) {

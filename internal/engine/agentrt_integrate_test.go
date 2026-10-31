@@ -391,28 +391,6 @@ func TestRuntimeVerificationUntrackedOutputExplained(t *testing.T) {
 	}
 }
 
-func TestSpawnAfterAcceptExplainsCleanCheckout(t *testing.T) {
-	env := runtimeVerificationEnv(t)
-	a := env.writer(t, "a", "a.txt", "from a\n")
-	env.mustIntegrate(t, `{"action":"accept","agent":"`+a.ID+`"}`)
-	_, err := callAgentTool(t, env.e, env.ctx, "agent.spawn", "late", `{"planEntry":"worker","assignment":{"prompt":"look"}}`)
-	if err == nil || !strings.Contains(err.Error(), "before the first accept") {
-		t.Fatalf("spawn after the first accept: err = %v", err)
-	}
-}
-
-func TestAcceptRefusedWhileAnAgentHasNoWorkspace(t *testing.T) {
-	env := runtimeVerificationEnv(t)
-	a := env.writer(t, "a", "a.txt", "from a\n")
-	waiting := env.liveAgent(t, "waiting", readOnlyCaps) // running, no checkout yet
-	if _, err := env.integrate(t, env.ctx, `{"action":"accept","agent":"`+a.ID+`"}`); err == nil || !strings.Contains(err.Error(), waiting.ID) {
-		t.Fatalf("accept while an agent has no workspace: err = %v", err)
-	}
-	if st := env.parentStatus(t); st != "" {
-		t.Fatalf("parent changed: %s", st)
-	}
-}
-
 // recordingSub collects every notification without blocking the bus.
 type recordingSub struct {
 	mu     sync.Mutex
@@ -534,7 +512,7 @@ func TestEndToEndTwoWritersOneConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept beta: %v", err)
 	}
-	wantConflict := `Conflict in a.go. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; or fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}. No new agent can be spawned once work is integrated: to redo the work with the conflict as context, finish this task (drop or resolve, verify, complete) and start a new delegated task.`
+	wantConflict := `Conflict in a.go. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; or fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}. A new writer agent works on the task base, not on the integrated state, so it would hit the same conflict: to redo the work on top of the integrated state, finish this task (drop or resolve, verify, complete) and start a new delegated task.`
 	if out.Message != wantConflict || out.Revision.State != store.RevisionConflict || !slices.Equal(out.Options, []string{"drop", "resolved"}) {
 		t.Fatalf("accept beta = %+v", out)
 	}

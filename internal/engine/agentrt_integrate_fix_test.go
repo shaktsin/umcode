@@ -73,53 +73,6 @@ func (env rvEnv) end(t *testing.T, id string, st protocol.AgentState) {
 	}
 }
 
-// I1: an agent whose workspace ID is attached but whose checkout is not
-// ready (clone in progress) blocks the first accept.
-func TestAcceptWaitsForWorkspaceBeingPrepared(t *testing.T) {
-	env := runtimeVerificationEnv(t)
-	a := env.writer(t, "a", "a.txt", "from a\n")
-	cloning := env.liveAgent(t, "cloning", readOnlyCaps)
-	if _, err := env.e.Store.EnsureRuntimeAgentExecution(t.Context(), cloning); err != nil {
-		t.Fatal(err)
-	}
-	id := "agent-view-" + env.task.ID + "-" + cloning.ID
-	w := store.AgentWorkspace{ID: id, TaskID: env.task.ID, ChildID: cloning.ID, Kind: "reviewer", SourceID: "runtime_base",
-		Root: env.e.Worktrees.Path(id), ParentRoot: env.task.ParentRoot, BaseRevision: env.task.BaseRevision, ResultRevision: env.task.BaseRevision}
-	if err := env.e.Store.SaveAgentWorkspace(t.Context(), w); err != nil {
-		t.Fatal(err)
-	}
-	cloning, err := env.e.Store.RuntimeAgent(t.Context(), env.task.ID, cloning.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cloning.WorkspaceID = id
-	if err := env.e.Store.UpdateRuntimeAgent(t.Context(), cloning, cloning.Version); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := env.integrate(t, env.ctx, `{"action":"accept","agent":"`+a.ID+`"}`); err == nil || !strings.Contains(err.Error(), cloning.ID) || !strings.Contains(err.Error(), "not ready") {
-		t.Fatalf("accept while a checkout is being prepared: err = %v", err)
-	}
-	if st := env.parentStatus(t); st != "" {
-		t.Fatalf("parent changed: %s", st)
-	}
-}
-
-// M1: an agent whose checkout is prepared after agent work was integrated
-// fails with the G1 explanation, not the raw clean-checkout refusal.
-func TestRunnerExplainsCheckoutTakenAfterAccept(t *testing.T) {
-	env := runtimeVerificationEnv(t)
-	a := env.writer(t, "a", "a.txt", "from a\n")
-	env.mustIntegrate(t, `{"action":"accept","agent":"`+a.ID+`"}`)
-	late := env.liveAgent(t, "late", readOnlyCaps)
-	shared := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100000, MaxCostUSD: 100, MaxDurationMinutes: 10}, protocol.UsageTotals{}, nil)
-	ctx, cancel := context.WithTimeout(delegation.WithBudget(t.Context(), shared), 20*time.Second)
-	defer cancel()
-	res, err := runtimeRunner{engine: env.e}.Run(ctx, late)
-	if err == nil || !strings.Contains(err.Error(), "spawn every agent before the first accept") || !strings.Contains(res.Blocker, "spawn every agent before the first accept") {
-		t.Fatalf("late agent run = %+v %v", res, err)
-	}
-}
-
 // M2: a revision recorded by an agent that is still finishing keeps its
 // place in the submission order, and cannot be accepted until it completes.
 func TestAcceptWaitsForFinishingWriter(t *testing.T) {
