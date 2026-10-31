@@ -6,7 +6,12 @@ import type {
   Approval, BudgetWarning, ComplexityDefaults, Credential, EngineStatus, Model, Provider, RoutingConfig,
 } from '$lib/types';
 
-export type View = 'chat' | 'approvals' | 'tasks' | 'extensions' | 'usage' | 'project' | 'settings';
+export type View = 'chat' | 'workbench' | 'approvals' | 'tasks' | 'extensions' | 'usage' | 'project' | 'settings';
+
+function initialView(): View {
+  try { if (localStorage.getItem('umcode.view') === 'workbench') return 'workbench'; } catch { /* optional */ }
+  return 'chat';
+}
 
 export interface Toast {
   id: number;
@@ -24,7 +29,7 @@ class AppState {
   booted = $state(false);
   shell = $state('browser');
   status = $state<EngineStatus | null>(null);
-  view = $state<View>('chat');
+  view = $state<View>(initialView());
   /** Settings tab to show when the settings view opens; lets other panels deep-link. */
   settingsTab = $state<string>('keys');
   approvals = $state<Approval[]>([]);

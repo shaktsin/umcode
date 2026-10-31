@@ -3,6 +3,8 @@
   import { resolveShellLayout, type Auxiliary } from '$lib/ui/shellLayout';
   import { modalFocus } from '$lib/ui/modalFocus';
   import Rail from '$lib/components/Rail.svelte';
+  import Workbench from '$lib/components/Workbench.svelte';
+  import WorkbenchChat from '$lib/components/WorkbenchChat.svelte';
   import ConnectionBanner from '$lib/components/ConnectionBanner.svelte';
   import Splash from '$lib/components/Splash.svelte';
   import Toasts from '$lib/components/Toasts.svelte';
@@ -20,6 +22,8 @@
   import { chat } from '$lib/stores/chat.svelte';
   import { inspector } from '$lib/stores/inspector.svelte';
   import { shouldRedirectToProviders } from '$lib/firstRun';
+  import { projects } from '$lib/stores/projects.svelte';
+  import { workbench } from '$lib/workbench/store.svelte';
 
   // Column widths are per project, and only a convenience, so a browser that
   // refuses storage simply gets the defaults.
@@ -28,6 +32,12 @@
   let inspectorWidth = $state(460);
   let viewportWidth = $state(window.innerWidth);
   let viewportHeight = $state(window.innerHeight);
+  let workbenchChatOpen = $state(false);
+  $effect(() => { void workbench.activate(projects.activeId, app.conn === 'open'); });
+  $effect(() => { try { localStorage.setItem('umcode.view', app.view); } catch { /* optional */ } });
+  function beforeUnload(event: BeforeUnloadEvent) {
+    if (workbench.hasDrafts) { event.preventDefault(); event.returnValue = ''; }
+  }
   let railCollapsedPreference = $state(false);
   try { railCollapsedPreference = localStorage.getItem('umcode.railCollapsed') === '1'; } catch { /* optional storage */ }
   let activeAuxiliary = $state<Auxiliary | null>(null);
@@ -38,7 +48,7 @@
   $effect(() => {
     if (!app.catalogReady || firstRunHandled) return;
     firstRunHandled = true;
-    if (shouldRedirectToProviders({ conn: app.conn, catalogReady: app.catalogReady, hasEnabledCredential: app.hasEnabledCredential })) app.view = 'settings';
+    if (app.view !== 'workbench' && shouldRedirectToProviders({ conn: app.conn, catalogReady: app.catalogReady, hasEnabledCredential: app.hasEnabledCredential })) app.view = 'settings';
   });
   $effect(() => { try { localStorage.setItem('umcode.railCollapsed',railCollapsedPreference?'1':'0'); } catch { /* optional */ } });
   function showPanel(panel:Auxiliary) { activeAuxiliary=panel; void tick().then(()=>document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus()); }
@@ -110,13 +120,13 @@
   const showChat = $derived(app.view === 'chat');
 </script>
 
-<svelte:window onkeydown={onKey} onresize={onResize} />
+<svelte:window onkeydown={onKey} onresize={onResize} onbeforeunload={beforeUnload} />
 
 {#if !app.booted}
   <Splash />
 {:else}
 <div class="flex h-full overflow-hidden">
-  <Rail bind:collapsedPreference={railCollapsedPreference} autoCollapsed={viewportWidth < 960} />
+  <Rail bind:collapsedPreference={railCollapsedPreference} autoCollapsed={viewportWidth < 960 || app.view === 'workbench'} />
   <div class="flex flex-col flex-1 min-w-0">
     <ConnectionBanner />
     {#if showChat && (chat.sides.length || inspector.open)}
@@ -130,6 +140,19 @@
       <div class="flex-1 min-w-0 flex flex-col" data-main-region>
         {#if showChat}
           <ChatColumn view={chat.main} variant="main" />
+        {:else if app.view === 'workbench'}
+          <div class="flex flex-1 min-h-0 min-w-0 relative">
+            {#if viewportWidth >= 1180}
+              <div class="flex w-[340px] shrink-0 border-r border-line min-h-0" data-workbench-chat><WorkbenchChat /></div>
+            {:else if workbenchChatOpen}
+              <div class="panel-backdrop" role="presentation" onclick={() => workbenchChatOpen = false}></div>
+              <div class="absolute inset-y-2 left-2 z-[60] flex flex-col bg-paper border border-line rounded-xl overflow-hidden shadow-xl" style:width="min(340px, calc(100% - 16px))" role="dialog" aria-modal="true" aria-label="Workbench chat" tabindex="-1" use:modalFocus={() => workbenchChatOpen = false}>
+                <div class="overlay-heading"><span>Project chat</span><button class="icon-button" aria-label="Close workbench chat" onclick={() => workbenchChatOpen = false}>✕</button></div>
+                <div class="flex flex-1 min-h-0"><WorkbenchChat /></div>
+              </div>
+            {/if}
+            <Workbench compactChat={viewportWidth < 1180} chatVisible={workbenchChatOpen} onToggleChat={() => workbenchChatOpen = !workbenchChatOpen} />
+          </div>
         {:else}
           <main class="flex-1 overflow-y-auto">
             <div class="page-content max-w-5xl mx-auto">
@@ -147,7 +170,7 @@
 
       {#each ['side','inspector'] as name}
         {@const panel = name as Auxiliary}
-        {@const requested = panel === 'side' ? showChat && chat.sides.length > 0 : inspector.open}
+        {@const requested = panel === 'side' ? showChat && chat.sides.length > 0 : inspector.open && app.view !== 'workbench'}
         {@const inlineWidth = layout.inline[panel]}
         {@const overlaid = layout.overlay?.panel === panel && (panel !== 'side' || showChat)}
         {#if requested}
