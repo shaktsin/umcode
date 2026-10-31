@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 )
@@ -189,8 +190,19 @@ func TestPlanEventsAndCardRefresh(t *testing.T) {
 	if st, ok := sub.status(c1.PlanID, protocol.PlanSuperseded); !ok || st != "expired" {
 		t.Fatalf("superseded event status %q (seen %v)", st, ok)
 	}
-	if _, ok := sub.status(c2.PlanID, protocol.PlanProposed); !ok {
-		t.Fatal("no proposal event")
+	// The proposal event follows the card's creation; wait for it.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if st, ok := sub.status(c2.PlanID, protocol.PlanProposed); ok {
+			if st != "pending" {
+				t.Fatalf("proposal event status %q", st)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no proposal event")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	res, err := env.e.RespondAgentPlanAs(context.WithoutCancel(t.Context()), "client-7", protocol.AgentPlanRespondParams{PlanID: c2.PlanID, Decision: protocol.PlanDecisionApprove, Drop: []string{"reviewer"}, Models: map[string]string{"writer": "second"}})
 	if err != nil || res.Plan.State != protocol.PlanApproved {

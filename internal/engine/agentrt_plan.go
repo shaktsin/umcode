@@ -166,7 +166,8 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 	}
 	defer e.forgetPlanWait(plan.ID, wait)
 
-	allowed, err := e.persistAndWaitApproval(waitCtx, sctx, approval, timeout, "agent.plan.request")
+	// The proposal is announced once its card exists.
+	allowed, err := e.persistAndWaitApprovalNotify(waitCtx, sctx, approval, timeout, "agent.plan.request", func() { e.publishAgentPlan(plan, "pending") })
 	if errors.Is(context.Cause(waitCtx), errPlanSuperseded) && !allowed {
 		return "", fmt.Errorf("agent.propose_plan: %w; answer the newer plan card", errPlanSuperseded)
 	}
@@ -237,25 +238,27 @@ func (e *Engine) saveProposedPlan(ctx context.Context, plan protocol.AgentPlan, 
 	if err := e.Store.SaveAgentPlan(ctx, plan); err != nil {
 		return err
 	}
-	e.publishAgentPlan(plan, "")
 	superseded, err := e.Store.SupersedeProposedAgentPlans(ctx, plan.TaskID, plan.ID)
 	if err != nil {
 		return err
 	}
 	for _, id := range superseded {
-		if sp, err := e.Store.AgentPlan(ctx, id); err == nil {
-			e.publishAgentPlan(sp, "")
-		}
-		old := e.agentPlanWaits[id]
-		if old == nil {
-			continue
-		}
-		if err := e.Store.DecideApproval(ctx, old.approvalID, "expired", "superseded"); err == nil {
-			if a, gerr := e.Store.GetApproval(ctx, old.approvalID); gerr == nil {
-				e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: a})
+		if old := e.agentPlanWaits[id]; old != nil {
+			if err := e.Store.DecideApproval(ctx, old.approvalID, "expired", "superseded"); err == nil {
+				if a, gerr := e.Store.GetApproval(ctx, old.approvalID); gerr == nil {
+					e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: a})
+				}
 			}
+			old.cancel(errPlanSuperseded)
 		}
-		old.cancel(errPlanSuperseded)
+		// Announce the superseded plan with its card's real status.
+		if sp, err := e.Store.AgentPlan(ctx, id); err == nil {
+			status := ""
+			if a, err := e.Store.LatestApprovalForNode(ctx, "agent_plan", id); err == nil {
+				status = a.Status
+			}
+			e.publishAgentPlan(sp, status)
+		}
 	}
 	if e.agentPlanWaits == nil {
 		e.agentPlanWaits = map[string]*agentPlanWait{}
@@ -455,7 +458,13 @@ const (
 // superseded", "plan already decided"); repeating the recorded decision
 // returns the plan unchanged.
 func (e *Engine) RespondAgentPlan(ctx context.Context, p protocol.AgentPlanRespondParams) (protocol.AgentPlanRespondResult, error) {
-	res, _, err := e.respondAgentPlan(ctx, p, "agent/plan/respond")
+	return e.RespondAgentPlanAs(ctx, "app", p)
+}
+
+// RespondAgentPlanAs is RespondAgentPlan recording clientID (the answering
+// connection) as the card's decided_by, as approval/respond does.
+func (e *Engine) RespondAgentPlanAs(ctx context.Context, clientID string, p protocol.AgentPlanRespondParams) (protocol.AgentPlanRespondResult, error) {
+	res, _, err := e.respondAgentPlan(ctx, p, clientID)
 	return res, err
 }
 
@@ -472,13 +481,17 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 	if outcome == "" {
 		return res, none, protocol.Errorf(protocol.CodeInvalidParams, "decision must be %q, %q or %q", protocol.PlanDecisionApprove, protocol.PlanDecisionDecline, protocol.PlanDecisionRevise)
 	}
-	if outcome != planApproved && (len(p.Models) > 0 || len(p.Drop) > 0 || p.Limits != nil) {
+	edits := len(p.Models) > 0 || len(p.Drop) > 0 || p.Limits != nil
+	if outcome != planApproved && edits {
 		return res, none, protocol.Errorf(protocol.CodeInvalidParams, "models, drop and limits apply only to approve")
 	}
 	feedback := strings.TrimSpace(p.Feedback)
 	if outcome == planRevise && feedback == "" {
 		return res, none, protocol.Errorf(protocol.CodeInvalidParams, "revise needs feedback for the lead")
 	}
+	// Once validation passes, the decision runs to completion even if the
+	// request is cancelled: a deadline must never leave a half state.
+	sctx := context.WithoutCancel(ctx)
 
 	e.agentPlanMu.Lock()
 	defer e.agentPlanMu.Unlock()
@@ -503,15 +516,35 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 	done := func(pl protocol.AgentPlan, a protocol.Approval) (protocol.AgentPlanRespondResult, protocol.Approval, error) {
 		return protocol.AgentPlanRespondResult{Plan: pl, ApprovalStatus: a.Status}, a, nil
 	}
+	rec, recorded := e.agentPlanDecided[plan.ID]
+	// sameApprove reports whether a repeat approve carries the same edits as
+	// the recorded one (without a record only an edit-free repeat is).
+	sameApprove := func() error {
+		if recorded && rec.outcome == planApproved {
+			pool, _, err := e.planModelPool(ctx, plan.TaskID)
+			if err != nil {
+				return err
+			}
+			if planEditsKey(pool, p) == rec.edits {
+				return nil
+			}
+		} else if !edits {
+			return nil
+		}
+		return protocol.Errorf(protocol.CodeConflict, "plan %s: %s with different edits; the approved plan is unchanged", plan.ID, planDecidedText)
+	}
 
 	switch plan.State {
 	case protocol.PlanSuperseded:
 		return res, none, protocol.Errorf(protocol.CodeConflict, "plan %s: %v; answer the newer plan card", plan.ID, errPlanSuperseded)
 	case protocol.PlanApproved:
-		if outcome == planApproved {
-			return done(plan, approval)
+		if outcome != planApproved {
+			return res, none, protocol.Errorf(protocol.CodeConflict, "plan %s: %s (approved)", plan.ID, planDecidedText)
 		}
-		return res, none, protocol.Errorf(protocol.CodeConflict, "plan %s: %s (approved)", plan.ID, planDecidedText)
+		if err := sameApprove(); err != nil {
+			return res, none, err
+		}
+		return done(plan, approval)
 	case protocol.PlanProposed:
 	default:
 		return res, none, protocol.Errorf(protocol.CodeConflict, "plan %s is %s", plan.ID, plan.State)
@@ -526,21 +559,31 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 		if outcome != planApproved {
 			return res, none, protocol.Errorf(protocol.CodeConflict, "plan %s: %s (approved)", plan.ID, planDecidedText)
 		}
-		if err := e.bindApprovedPlan(ctx, plan.ID, plan.TaskID); err != nil {
+		if err := sameApprove(); err != nil {
+			return res, none, err
+		}
+		if err := e.bindApprovedPlan(sctx, plan.ID, plan.TaskID); err != nil {
 			return res, none, planRefusal(plan.ID, err)
 		}
-		if plan, err = e.Store.AgentPlan(ctx, plan.ID); err != nil {
+		if plan, err = e.Store.AgentPlan(sctx, plan.ID); err != nil {
 			return res, none, err
 		}
 		return done(plan, approval)
 	case "denied":
 		// Declined and revised plans stay proposed; the card says denied.
-		prev := planDeclined
-		if w != nil && w.outcome != "" {
+		// Only the recorded decision may be repeated.
+		prev := ""
+		switch {
+		case w != nil && w.outcome != "":
 			prev = w.outcome
+		case recorded:
+			prev = rec.outcome
 		}
-		if outcome != planApproved && (w == nil || w.outcome == "" || w.outcome == outcome) {
+		if outcome != planApproved && outcome == prev {
 			return done(plan, approval)
+		}
+		if prev == "" {
+			prev = "declined or revised"
 		}
 		return res, none, protocol.Errorf(protocol.CodeConflict, "plan %s: %s (%s)", plan.ID, planDecidedText, prev)
 	case "expired":
@@ -564,11 +607,16 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 
 	if outcome != planApproved {
 		w.outcome, w.feedback = outcome, feedback
-		decided, err := e.respondApproval(ctx, approval.ID, false, false, by)
+		decided, err := e.respondApproval(sctx, approval.ID, false, false, by)
 		if err != nil {
-			w.outcome, w.feedback = "", ""
-			return res, none, e.planCardRefusal(ctx, plan.ID, approval.ID, err)
+			cur, gerr := e.Store.GetApproval(sctx, approval.ID)
+			if gerr != nil || cur.Status != "denied" {
+				w.outcome, w.feedback = "", ""
+				return res, none, e.planCardRefusal(sctx, plan.ID, approval.ID, err)
+			}
+			decided = cur
 		}
+		e.recordPlanDecision(plan.ID, planDecision{outcome: outcome})
 		e.publishAgentPlan(plan, decided.Status)
 		return done(plan, decided)
 	}
@@ -585,34 +633,126 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 	if err != nil {
 		return res, none, err
 	}
+	pool, _, err := e.planModelPool(ctx, task.ID)
+	if err != nil {
+		return res, none, err
+	}
+	key := planEditsKey(pool, p)
 	before, _ := json.Marshal(plan)
 	after, _ := json.Marshal(edited)
 	changed := string(before) != string(after)
 	if changed {
-		if err := e.Store.SaveAgentPlan(ctx, edited); err != nil {
+		if err := e.Store.SaveAgentPlan(sctx, edited); err != nil {
 			return res, none, err
 		}
 	}
 	w.outcome, w.feedback = planApproved, ""
-	decided, err := e.respondApproval(ctx, approval.ID, true, false, by)
+	decided, err := e.respondApproval(sctx, approval.ID, true, false, by)
 	if err != nil {
-		w.outcome = ""
-		if changed {
-			if rerr := e.Store.SaveAgentPlan(context.WithoutCancel(ctx), plan); rerr != nil {
-				e.Log.Warn("restore plan after failed approval", "plan", plan.ID, "err", rerr)
+		// Restore only a card that was not approved: an approved card
+		// wakes the waiter, which binds the stored (edited) plan.
+		cur, gerr := e.Store.GetApproval(sctx, approval.ID)
+		if gerr != nil || cur.Status != "approved" {
+			w.outcome = ""
+			if changed {
+				if rerr := e.Store.SaveAgentPlan(sctx, plan); rerr != nil {
+					e.Log.Warn("restore plan after failed approval", "plan", plan.ID, "err", rerr)
+				}
 			}
+			return res, none, e.planCardRefusal(sctx, plan.ID, approval.ID, err)
 		}
-		return res, none, e.planCardRefusal(ctx, plan.ID, approval.ID, err)
+		decided = cur
+		e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: cur})
 	}
-	if err := e.bindApprovedPlan(ctx, plan.ID, task.ID); err != nil {
+	e.recordPlanDecision(plan.ID, planDecision{outcome: planApproved, edits: key})
+	if err := e.bindApprovedPlan(sctx, plan.ID, task.ID); err != nil {
 		return res, none, planRefusal(plan.ID, err)
 	}
-	stored, err := e.Store.AgentPlan(ctx, plan.ID)
+	stored, err := e.Store.AgentPlan(sctx, plan.ID)
 	if err != nil {
 		return res, none, err
 	}
+	if changed {
+		// The stored card shows what was approved, so a restarted client
+		// rebuilds the approved shape.
+		if card, err := e.agentPlanCard(sctx, stored); err == nil {
+			if payload, err := json.Marshal(card); err == nil {
+				if err := e.Store.UpdateApprovalArgs(sctx, approval.ID, payload); err != nil {
+					e.Log.Warn("refresh plan card", "plan", plan.ID, "err", err)
+				} else if a, err := e.Store.GetApproval(sctx, approval.ID); err == nil {
+					decided = a
+				}
+			}
+		}
+	}
 	e.publishAgentPlan(stored, decided.Status)
 	return done(stored, decided)
+}
+
+// planDecision is the recorded answer to a plan card: the outcome and, for
+// approve, the canonical edits (planEditsKey), so a repeat is recognised.
+type planDecision struct {
+	outcome string
+	edits   string
+}
+
+// recordPlanDecision remembers a card's decision for the engine's lifetime
+// (caller holds agentPlanMu).
+func (e *Engine) recordPlanDecision(planID string, d planDecision) {
+	if e.agentPlanDecided == nil {
+		e.agentPlanDecided = map[string]planDecision{}
+	}
+	e.agentPlanDecided[planID] = d
+}
+
+// planEditsKey is a canonical form of an approve's edits: agent names
+// case-folded, models resolved to their pool reference, drops sorted and
+// limits clamped as validation does.
+func planEditsKey(pool []modelRoute, p protocol.AgentPlanRespondParams) string {
+	var k struct {
+		Models map[string]string    `json:"m,omitempty"`
+		Drop   []string             `json:"d,omitempty"`
+		Limits *protocol.PlanLimits `json:"l,omitempty"`
+	}
+	for name, ref := range p.Models {
+		if k.Models == nil {
+			k.Models = map[string]string{}
+		}
+		m := poolModelRef(pool, ref)
+		if m == "" {
+			m = "?" + ref
+		}
+		k.Models[strings.ToLower(strings.TrimSpace(name))] = m
+	}
+	for _, name := range p.Drop {
+		n := strings.ToLower(strings.TrimSpace(name))
+		if !slices.Contains(k.Drop, n) {
+			k.Drop = append(k.Drop, n)
+		}
+	}
+	slices.Sort(k.Drop)
+	if p.Limits != nil {
+		l, err := clampPlanLimits(*p.Limits)
+		if err != nil {
+			l = *p.Limits
+		}
+		k.Limits = &l
+	}
+	b, _ := json.Marshal(k)
+	return string(b)
+}
+
+// clampPlanLimits refuses negative or non-finite limits, clamps them to the
+// ceilings and fills zeros from the defaults.
+func clampPlanLimits(l protocol.PlanLimits) (protocol.PlanLimits, error) {
+	if l.MaxConcurrent < 0 || l.MaxDepth < 0 || l.MaxTotal < 0 || l.SliceShare < 0 || math.IsNaN(l.SliceShare) || math.IsInf(l.SliceShare, 0) {
+		return l, protocol.Errorf(protocol.CodeInvalidParams, "plan limits cannot be negative or not a number")
+	}
+	l.MaxConcurrent = min(l.MaxConcurrent, tools.MaxPlanConcurrent)
+	l.MaxDepth = min(l.MaxDepth, tools.MaxPlanDepth)
+	l.MaxTotal = min(l.MaxTotal, tools.MaxPlanTotal)
+	l.SliceShare = min(l.SliceShare, tools.MaxPlanSliceShare)
+	return l.Normalized(), nil
 }
 
 // validatePlanApproval applies an approve's edits to a proposed plan and
@@ -649,15 +789,11 @@ func (e *Engine) validatePlanApproval(ctx context.Context, plan protocol.AgentPl
 	}
 	limits := plan.Limits
 	if p.Limits != nil {
-		l := *p.Limits
-		if l.MaxConcurrent < 0 || l.MaxDepth < 0 || l.MaxTotal < 0 || l.SliceShare < 0 || math.IsNaN(l.SliceShare) || math.IsInf(l.SliceShare, 0) {
-			return plan, protocol.Errorf(protocol.CodeInvalidParams, "plan limits cannot be negative or not a number")
+		l, err := clampPlanLimits(*p.Limits)
+		if err != nil {
+			return plan, err
 		}
-		l.MaxConcurrent = min(l.MaxConcurrent, tools.MaxPlanConcurrent)
-		l.MaxDepth = min(l.MaxDepth, tools.MaxPlanDepth)
-		l.MaxTotal = min(l.MaxTotal, tools.MaxPlanTotal)
-		l.SliceShare = min(l.SliceShare, tools.MaxPlanSliceShare)
-		limits = l.Normalized()
+		limits = l
 	}
 	if limits.Network {
 		scope, err := e.projectShellScope(ctx, task.ProjectID)

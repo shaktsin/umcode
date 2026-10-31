@@ -41,8 +41,20 @@ func (s *planEvents) Notify(method string, params any) {
 	s.mu.Unlock()
 }
 
-// sawState reports whether an event announced plan id in state st.
+// sawState reports whether an event announced plan id in state st, waiting
+// briefly (a proposal is announced just after its card is stored).
 func (s *planEvents) sawState(id string, st protocol.PlanState) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for !s.seen(id, st) {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
+}
+
+func (s *planEvents) seen(id string, st protocol.PlanState) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ev := range s.got {

@@ -69,6 +69,12 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 // persistAndWaitApproval is shared transport; workflow decisions never consult
 // remembered tool decisions and commit their graph before this waiter wakes.
 func (e *Engine) persistAndWaitApproval(ctx, sctx context.Context, a protocol.Approval, timeout time.Duration, auditEvent string) (bool, error) {
+	return e.persistAndWaitApprovalNotify(ctx, sctx, a, timeout, auditEvent, nil)
+}
+
+// persistAndWaitApprovalNotify is persistAndWaitApproval that runs onCreated
+// (when set) once the approval is stored and announced.
+func (e *Engine) persistAndWaitApprovalNotify(ctx, sctx context.Context, a protocol.Approval, timeout time.Duration, auditEvent string, onCreated func()) (bool, error) {
 	if x := childExecutionFrom(ctx); x != nil {
 		if err := e.setChildApprovalState(sctx, x, true); err != nil {
 			return false, err
@@ -98,6 +104,9 @@ func (e *Engine) persistAndWaitApproval(ctx, sctx context.Context, a protocol.Ap
 		_ = e.Store.Audit(sctx, auditEvent, workflowApprovalAudit(a, "pending"))
 	} else {
 		_ = e.Store.Audit(sctx, auditEvent, map[string]any{"id": a.ID, "tool": a.Tool, "risk": a.Risk, "summary": a.ActionSummary, "args": a.Args})
+	}
+	if onCreated != nil {
+		onCreated()
 	}
 
 	timer := time.NewTimer(timeout)
@@ -179,6 +188,11 @@ func (e *Engine) respondApproval(ctx context.Context, id string, approve, rememb
 		// A plan card is one decision; it is never remembered for the chat.
 		remember = false
 	}
+	if e.approvalDecideHook != nil {
+		if err := e.approvalDecideHook(id, false); err != nil {
+			return protocol.Approval{}, err
+		}
+	}
 	if a.Kind == "workflow" {
 		_, err = e.Store.DecideWorkflowApproval(ctx, id, status, clientID)
 		remember = false
@@ -196,6 +210,11 @@ func (e *Engine) respondApproval(ctx context.Context, id string, approve, rememb
 	e.mu.Unlock()
 	if ch != nil {
 		ch <- approve
+	}
+	if e.approvalDecideHook != nil {
+		if err := e.approvalDecideHook(id, true); err != nil {
+			return protocol.Approval{}, err
+		}
 	}
 	decided, _ := e.Store.GetApproval(ctx, id)
 	if remember && decided.ID != "" && !isComputerUseTool(decided.Tool) {
