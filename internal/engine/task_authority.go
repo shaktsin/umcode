@@ -128,9 +128,12 @@ func (e *Engine) requirementApproval(ctx context.Context, task protocol.Executio
 // recordOnlyAgentTool names the activation cards whose only effects are the
 // engine's own records: agent.suggest stores a suggestion and agent.propose_plan
 // a proposed plan and its card. When such a call is cut off (turn interrupted,
-// engine restarted), its outcome is not uncertain: the card expires, the plan
-// stays proposed and nothing starts, so it never blocks later actions as an
-// uncertain mutation would.
+// engine restarted), nothing outside the engine's records was changed: either
+// the card expired and the plan stays proposed, or the user's decision was
+// stored just before the cut and the plan is approved. Even then nothing runs
+// until the lead makes further tool calls (agent.spawn), which pass their own
+// checks, and the stored states are readable (agent/plan/get). So the call
+// never blocks later actions as an uncertain mutation would.
 func recordOnlyAgentTool(name string) bool {
 	return name == "agent.suggest" || name == "agent.propose_plan"
 }

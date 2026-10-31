@@ -110,7 +110,11 @@ type PlanCard struct {
 }
 
 // PlanCardAgent is one plan entry on the card: the proposal, what it is
-// granted after the capability clamp and what was rejected.
+// granted after the capability clamp and what was rejected. Granted is
+// authoritative for display: it is what an agent of this entry can get now.
+// The embedded Capabilities is the stored grant of the plan entry, the
+// ceiling: Granted is never wider and can be narrower when the environment
+// changed since the proposal (for example the sandbox went away).
 type PlanCardAgent struct {
 	PlanAgent
 	Granted  AgentCapabilities     `json:"granted"`
