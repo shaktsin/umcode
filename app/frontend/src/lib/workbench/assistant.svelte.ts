@@ -14,6 +14,7 @@ export class WorkbenchAssistantState {
   error = $state('');
   focusRequest = $state(0);
   revision = $state('');
+  private appliedKey = $state('');
   private binding: Binding | null = null;
   private generation = 0;
   private tracking = 0;
@@ -37,6 +38,7 @@ export class WorkbenchAssistantState {
     if (token === this.tracking && sameModel(this.current, current) && this.current?.text === current.text) this.revision = revision;
   }
   matches(proposal: WorkbenchProposal) { return sameModel(this.current, proposal) && this.revision === proposal.revision; }
+  wasApplied(proposal: WorkbenchProposal) { return this.appliedKey === JSON.stringify(proposal); }
   bind(commit: (graph: Graph) => void) {
     const current = this.current;
     if (!current) return () => {};
@@ -69,6 +71,7 @@ export class WorkbenchAssistantState {
     if (this.previewStale || !this.binding) { this.error = changed().message; throw changed(); }
     // No await between the final identity/text check and the editor commit.
     this.binding.commit(readGraph(JSON.stringify(preview.graph)));
+    this.appliedKey = JSON.stringify(preview.proposal);
     this.cancel();
   }
   cancel() { this.generation++; this.preview = null; this.error = ''; }

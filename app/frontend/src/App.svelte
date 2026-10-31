@@ -24,6 +24,7 @@
   import { shouldRedirectToProviders } from '$lib/firstRun';
   import { projects } from '$lib/stores/projects.svelte';
   import { workbench } from '$lib/workbench/store.svelte';
+  import { workbenchAssistant } from '$lib/workbench/assistantStore.svelte';
 
   // Column widths are per project, and only a convenience, so a browser that
   // refuses storage simply gets the defaults.
@@ -32,7 +33,10 @@
   let inspectorWidth = $state(460);
   let viewportWidth = $state(window.innerWidth);
   let viewportHeight = $state(window.innerHeight);
-  let workbenchChatOpen = $state(false);
+  function initialWorkbenchChat() { try { return localStorage.getItem('umcode.workbench.chat') === 'open'; } catch { return false; } }
+  let workbenchChatOpen = $state(initialWorkbenchChat());
+  $effect(() => { try { localStorage.setItem('umcode.workbench.chat', workbenchChatOpen ? 'open' : 'closed'); } catch { /* optional */ } });
+  $effect(() => { if (workbenchAssistant.preview && viewportWidth < 1180) workbenchChatOpen = false; });
   $effect(() => { void workbench.activate(projects.activeId, app.conn === 'open'); });
   $effect(() => { try { localStorage.setItem('umcode.view', app.view); } catch { /* optional */ } });
   function beforeUnload(event: BeforeUnloadEvent) {
@@ -142,16 +146,19 @@
           <ChatColumn view={chat.main} variant="main" />
         {:else if app.view === 'workbench'}
           <div class="flex flex-1 min-h-0 min-w-0 relative">
-            {#if viewportWidth >= 1180}
-              <div class="flex w-[340px] shrink-0 border-r border-line min-h-0" data-workbench-chat><WorkbenchChat /></div>
+            {#if workbenchChatOpen && viewportWidth >= 1180}
+              <div class="flex flex-col w-[340px] shrink-0 border-r border-line min-h-0" data-workbench-chat>
+                <div class="overlay-heading"><span>Model assistant</span><button class="icon-button" aria-label="Close workbench chat" onclick={() => workbenchChatOpen = false}>✕</button></div>
+                <div class="flex flex-1 min-h-0"><WorkbenchChat /></div>
+              </div>
             {:else if workbenchChatOpen}
               <div class="panel-backdrop" role="presentation" onclick={() => workbenchChatOpen = false}></div>
-              <div class="absolute inset-y-2 left-2 z-[60] flex flex-col bg-paper border border-line rounded-xl overflow-hidden shadow-xl" style:width="min(340px, calc(100% - 16px))" role="dialog" aria-modal="true" aria-label="Workbench chat" tabindex="-1" use:modalFocus={() => workbenchChatOpen = false}>
-                <div class="overlay-heading"><span>Project chat</span><button class="icon-button" aria-label="Close workbench chat" onclick={() => workbenchChatOpen = false}>✕</button></div>
+              <div class="absolute inset-y-2 left-2 z-[60] flex flex-col bg-paper border border-line rounded-xl overflow-hidden shadow-xl" data-workbench-chat style:width="min(340px, calc(100% - 16px))" role="dialog" aria-modal="true" aria-label="Workbench chat" tabindex="-1" use:modalFocus={() => workbenchChatOpen = false}>
+                <div class="overlay-heading"><span>Model assistant</span><button class="icon-button" aria-label="Close workbench chat" onclick={() => workbenchChatOpen = false}>✕</button></div>
                 <div class="flex flex-1 min-h-0"><WorkbenchChat /></div>
               </div>
             {/if}
-            <Workbench compactChat={viewportWidth < 1180} chatVisible={workbenchChatOpen} onToggleChat={() => workbenchChatOpen = !workbenchChatOpen} />
+            <Workbench chatVisible={workbenchChatOpen} onToggleChat={() => workbenchChatOpen = !workbenchChatOpen} onOpenChat={() => workbenchChatOpen = true} />
           </div>
         {:else}
           <main class="flex-1 overflow-y-auto">

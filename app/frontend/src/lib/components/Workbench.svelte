@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { ArrowLeft, Layers3, FolderOpen, MessageCircle, Plus, RefreshCw } from '@lucide/svelte';
   import VisualBuilder from './workbench/VisualBuilder.svelte';
   import ModelChooser from './workbench/ModelChooser.svelte';
@@ -8,10 +8,15 @@
   import { dialog } from '$lib/stores/dialog.svelte';
   import { createProject } from '$lib/createProject';
   import { workbench } from '$lib/workbench/store.svelte';
+  import { workbenchAssistant } from '$lib/workbench/assistantStore.svelte';
   import { describeWorkbenchTask, workbenchTasks, type WorkbenchTask } from '$lib/workbench/types';
   import type { WorkbenchTab } from '$lib/workbench/state.svelte';
 
-  let { compactChat = false, chatVisible = false, onToggleChat = () => {} }: { compactChat?: boolean; chatVisible?: boolean; onToggleChat?: () => void } = $props();
+  let { chatVisible = false, onToggleChat = () => {}, onOpenChat = () => {} }: { chatVisible?: boolean; onToggleChat?: () => void; onOpenChat?: () => void } = $props();
+  $effect(() => {
+    void workbench.projectId; void workbench.selected?.model.id; void workbench.draft;
+    untrack(() => { void workbenchAssistant.track().catch(() => {}); });
+  });
   let task = $state<WorkbenchTask>('text-generation');
   let name = $state('');
   let inputType = $state<InputModality>('text');
@@ -55,7 +60,7 @@
 
 <main class="workbench" data-workbench aria-label="ML Workbench">
   <header class="workbench-heading">
-    {#if compactChat}<button class="icon-button" aria-label={chatVisible ? 'Hide workbench chat' : 'Show workbench chat'} aria-expanded={chatVisible} onclick={onToggleChat}><MessageCircle size={16} /></button>{/if}
+    <button class="btn-ghost btn-sm" aria-label={chatVisible ? 'Hide workbench chat' : 'Show workbench chat'} aria-expanded={chatVisible} onclick={onToggleChat}><MessageCircle size={16} />Assistant</button>
     <div class="workbench-title"><Layers3 size={17} /><h1>ML Workbench</h1><span class="preview-badge">Visual builder</span></div>
     <div class="workbench-pickers">
       <label class="sr-only" for="workbench-project">Workbench project</label>
@@ -142,7 +147,7 @@
       </nav>
       {#if workbench.tab === 'Build'}
         {#key `${workbench.projectId}/${workbench.selected.model.id}`}
-          <VisualBuilder text={workbench.draft} onchange={(text) => workbench.draft = text} onSave={() => void workbench.save()} onReload={() => void reload()} disabled={!workbench.connected || workbench.busy} dirty={workbench.dirty} task={workbench.selected.model.task} name={workbench.selected.model.name} />
+          <VisualBuilder text={workbench.draft} onchange={(text) => workbench.draft = text} onSave={() => void workbench.save()} onReload={() => void reload()} onAsk={onOpenChat} disabled={!workbench.connected || workbench.busy} dirty={workbench.dirty} task={workbench.selected.model.task} name={workbench.selected.model.name} />
         {/key}
       {:else}
         <section class="workbench-empty"><Layers3 size={30} strokeWidth={1.4} /><p class="eyebrow">{workbench.tab} · Coming later</p><h2>{unavailable[workbench.tab][0]}</h2><p>{unavailable[workbench.tab][1]}</p><button class="btn-outline" onclick={() => workbench.tab = 'Build'}>Back to Build</button></section>

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Trash2, X } from '@lucide/svelte';
+  import { Trash2, X, MessageCircle } from '@lucide/svelte';
   import { definition, parseNumericSetting, shapeLabel, visibleFields, type LayerNode, type Analysis, type Config, type Field } from '$lib/workbench/graph';
-  let { node, analysis, onconfig, ondelete, onclose }: { node: LayerNode | null; analysis: Analysis; onconfig: (config: Config) => void; ondelete: () => void; onclose: () => void } = $props();
+  let { node, analysis, onconfig, ondelete, onclose, onask = () => {} }: { node: LayerNode | null; analysis: Analysis; onconfig: (config: Config) => void; ondelete: () => void; onclose: () => void; onask?: () => void } = $props();
   const layer = $derived(node ? definition(node.kind) : null);
   let inputError = $state('');
   $effect(() => { void node?.id; inputError = ''; });
@@ -37,6 +37,7 @@
     {#each analysis.errors.filter(e => e.nodeId === node?.id) as error}<p class="layer-error" role="status">{error.message}</p>{/each}
     {#if node.kind === 'transformer'}<p class="description">Each repeated block contains layer norm, {node.config.causal ? 'causal' : 'bidirectional'} attention, and a feed-forward network with residual connections.</p>{/if}
     {#if node.kind === 'attention' || node.kind === 'transformer'}<p class="description">{node.config.causal ? 'The causal mask limits attention to earlier positions, for next-token prediction.' : 'All positions can attend to one another, for image patches and encoders.'}</p>{/if}
+    <button class="btn-outline delete-layer" onclick={onask}><MessageCircle size={13} />Ask about this layer</button>
     <button class="btn-outline delete-layer" onclick={ondelete}><Trash2 size={13} />Remove layer</button>
   {:else}
     <div class="inspector-empty"><h3>Select a layer</h3><p>Click a layer on the canvas to change its settings and inspect the output size.</p></div>

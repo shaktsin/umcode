@@ -6,6 +6,7 @@ import type { DelegationUpdated } from '$lib/delegation';
 import { app } from './app.svelte';
 import { projects } from './projects.svelte';
 import { errMsg } from '$lib/format';
+import type { WorkbenchContext } from '$lib/workbench/assistant';
 import { inspector } from './inspector.svelte';
 import type { Attachment, BrowserVerificationResult, Item, ModelRouteResult, ModelSelection, RouteChangedEvent, SearchHit, Thread, Turn } from '$lib/types';
 
@@ -134,7 +135,7 @@ export class ThreadView {
     if (output && it.tool) it.tool.output = (it.tool.output || '') + output;
   }
 
-  async send(text: string, attachments: Attachment[] = [], start?: () => Promise<Thread>) {
+  async send(text: string, attachments: Attachment[] = [], start?: () => Promise<Thread>, workbench?: WorkbenchContext) {
     if (this.delegation.pending) return;
     text = text.trim();
     if (!text && attachments.length === 0) return;
@@ -148,9 +149,9 @@ export class ThreadView {
         this.turns = [];
         this.items = [];
       }
-      if (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId) await this.delegation.bind(this.id, this.thread?.projectId);
-      await app.call('turn/start', { threadId: this.id, text, attachments, ...this.delegation.submission() });
-      void this.delegation.hydrate();
+      if (!workbench && (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId)) await this.delegation.bind(this.id, this.thread?.projectId);
+      await app.call('turn/start', { threadId: this.id, text, attachments, ...(workbench ? { workbench } : this.delegation.submission()) });
+      if (!workbench) void this.delegation.hydrate();
     } catch (e) {
       this.sending = false;
       app.toast('error', errMsg(e));
@@ -373,8 +374,8 @@ class ChatState {
   }
 
   /** Send in the main chat, creating the thread in the open project on first send. */
-  async send(text: string, attachments: Attachment[] = []) {
-    await this.main.send(text, attachments, () => this.startMainThread());
+  async send(text: string, attachments: Attachment[] = [], workbench?: WorkbenchContext) {
+    await this.main.send(text, attachments, () => this.startMainThread(), workbench);
   }
 
   // ---- side chats ----

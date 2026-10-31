@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { SvelteFlowProvider } from '@xyflow/svelte';
   import { Undo2, Redo2, Maximize2, Save, RefreshCw, Code2, Download, SlidersHorizontal, X, Plus } from '@lucide/svelte';
   import { EditorState } from '$lib/workbench/editor.svelte';
@@ -10,14 +10,19 @@
   import type { WorkbenchTask } from '$lib/workbench/types';
   import ModelCanvas from './ModelCanvas.svelte';
   import LayerInspector from './LayerInspector.svelte';
-  let { text, onchange, onSave, onReload, disabled, dirty, task, name }: { text: string; onchange: (text: string) => void; onSave: () => void; onReload: () => void; disabled: boolean; dirty: boolean; task: WorkbenchTask; name: string } = $props();
+  import { workbenchAssistant } from '$lib/workbench/assistantStore.svelte';
+  let { text, onchange, onSave, onReload, disabled, dirty, task, name, onAsk = () => {} }: { text: string; onchange: (text: string) => void; onSave: () => void; onReload: () => void; disabled: boolean; dirty: boolean; task: WorkbenchTask; name: string; onAsk?: () => void } = $props();
   const editor = new EditorState();
   let selected = $state<string | null>(null), properties = $state(false), showCode = $state(false), search = $state(''), message = $state('');
   let issuesOpen = $state(true);
   let canvas = $state<ModelCanvas>();
   let alive = true;
+  onMount(() => workbenchAssistant.bind(apply));
   onDestroy(() => { alive = false; });
   $effect(() => { editor.sync(text); });
+  const preview = $derived(workbenchAssistant.preview);
+  $effect(() => { if (preview) { properties = false; showCode = false; void tick().then(() => canvas?.fit()); } });
+  $effect(() => { if (selected && !editor.graph?.nodes.some(node => node.id === selected)) { selected = null; workbenchAssistant.selectedNodeId = null; } });
   const analysis = $derived(editor.graph ? analyzeGraph(editor.graph) : { errors: [], shapes: {}, parameters: 0, order: [] });
   const selectedNode = $derived(editor.graph?.nodes.find(n => n.id === selected) ?? null);
   const inputMode = $derived(editor.graph?.nodes.find(n => n.kind === 'input')?.config.mode);
@@ -31,14 +36,16 @@
   const groups = $derived(modality === 'image' ? ['Input & output', 'Vision', ...layerGroups.filter(group => group !== 'Input & output' && group !== 'Vision')] : layerGroups);
   const generated = $derived.by(() => { if (!editor.graph || analysis.errors.length) return null; return generatePython(editor.graph); });
   function apply(graph: Graph) { editor.commit(graph); onchange(editor.text); message = ''; }
-  function history(redo = false) { if (redo) editor.redo(); else editor.undo(); onchange(editor.text); }
-  function select(id: string | null) { selected = id; if (id && !showCode) properties = true; }
+  function history(redo = false) { if (preview) return; if (redo) editor.redo(); else editor.undo(); onchange(editor.text); }
+  function select(id: string | null) { selected = id; workbenchAssistant.selectedNodeId = id; if (id && !showCode) properties = true; }
   function config(value: Config) { if (editor.graph && selected) apply({ ...editor.graph, nodes: editor.graph.nodes.map(n => n.id === selected ? { ...n, config: value } : n) }); }
-  function remove() { if (editor.graph && selected) { apply(removeLayers(editor.graph, [selected])); selected = null; } }
+  function remove() { if (editor.graph && selected) { apply(removeLayers(editor.graph, [selected])); select(null); } }
+  async function ask() { properties = false; workbenchAssistant.ask(); onAsk(); await tick(); canvas?.fit(); }
+  function applySuggestion() { try { workbenchAssistant.apply(); message = 'Suggestion applied to your draft. Save model to keep it.'; } catch (error) { message = (error as Error).message; } }
   async function starter(preset: StarterPreset) {
     if (editor.graph?.nodes.length && !await dialog.confirm('Replace the current layers with this starter architecture?', { okLabel: 'Use starter' })) return;
     if (!alive) return;
-    apply(starterGraph(preset)); selected = null; properties = false;
+    apply(starterGraph(preset)); select(null); properties = false;
     await tick(); canvas?.fit();
   }
   function exportModel() {
@@ -49,6 +56,7 @@
   }
   function shortcuts(event: KeyboardEvent) {
     if (!(event.metaKey || event.ctrlKey) || event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)) return;
+    if (preview) { if (['z', 's'].includes(event.key.toLowerCase())) event.preventDefault(); return; }
     if (event.key.toLowerCase() === 'z') { event.preventDefault(); history(event.shiftKey); }
     if (event.key.toLowerCase() === 's') { event.preventDefault(); if (!disabled) onSave(); }
   }
@@ -59,26 +67,37 @@
   {#if editor.error}
     <div class="unsupported"><h2>This model needs a different builder</h2><p>{editor.error}</p></div>
   {:else if editor.graph}
+    {#if preview}
+      <section class="assistant-preview" aria-label="Model change preview">
+        <div class="preview-heading"><h2 id="workbench-preview-heading" tabindex="-1">Preview · {preview.proposal.modelName}</h2><span>Draft unchanged</span></div>
+        <p>{preview.proposal.explanation}</p>
+        <ul>{#each preview.changes as change}<li>{change}</li>{/each}</ul>
+        <p>{preview.before.parameters.toLocaleString()} → {preview.after.parameters.toLocaleString()} parameters</p>
+        {#if preview.after.errors.length}<p class="has-errors">{preview.after.errors.length} {preview.after.errors.length === 1 ? 'issue remains' : 'issues remain'}; you can continue building after applying.</p><ul class="has-errors">{#each preview.after.errors as issue}<li>{issue.message}</li>{/each}</ul>{/if}
+        {#if workbenchAssistant.previewStale}<p class="has-errors" role="alert">Model changed since this suggestion. Cancel and ask for an updated suggestion.</p>{/if}
+        <div class="preview-actions"><button class="btn-outline btn-sm" onclick={() => workbenchAssistant.cancel()}>Cancel preview</button><button class="btn-primary btn-sm" disabled={workbenchAssistant.previewStale || disabled} onclick={applySuggestion}>Apply changes</button></div>
+      </section>
+    {/if}
     <div class="builder-toolbar">
-      <div class="toolbar-group"><button class="icon-button" aria-label="Undo model change" disabled={!editor.canUndo} onclick={() => history()}><Undo2 size={15} /></button><button class="icon-button" aria-label="Redo model change" disabled={!editor.canRedo} onclick={() => history(true)}><Redo2 size={15} /></button><button class="icon-button" aria-label="Fit model to canvas" onclick={() => canvas?.fit()}><Maximize2 size={15} /></button></div>
-      <div class="starter-actions"><span>{modality === 'image' ? 'Vision' : modality === 'features' ? 'Features' : 'Start with'}</span>{#each starterOptions as option (option.id)}<button class="btn-ghost btn-sm" onclick={() => void starter(option.id as StarterPreset)}>{option.id === 'gpt2' ? 'GPT-2 size' : option.name}</button>{/each}</div>
-      <div class="toolbar-group toolbar-right"><button class="icon-button" aria-label="Show layer properties" aria-pressed={properties} onclick={() => { properties = !properties; showCode = false; }}><SlidersHorizontal size={15} /></button><button class="btn-ghost btn-sm" aria-pressed={showCode} onclick={() => { showCode = !showCode; properties = false; }}><Code2 size={14} />Code</button><button class="btn-outline btn-sm" disabled={!generated} onclick={exportModel}><Download size={13} />Export .py</button></div>
+      <div class="toolbar-group"><button class="icon-button" aria-label="Undo model change" disabled={!!preview || !editor.canUndo} onclick={() => history()}><Undo2 size={15} /></button><button class="icon-button" aria-label="Redo model change" disabled={!!preview || !editor.canRedo} onclick={() => history(true)}><Redo2 size={15} /></button><button class="icon-button" aria-label="Fit model to canvas" onclick={() => canvas?.fit()}><Maximize2 size={15} /></button></div>
+      <div class="starter-actions"><span>{modality === 'image' ? 'Vision' : modality === 'features' ? 'Features' : 'Start with'}</span>{#each starterOptions as option (option.id)}<button class="btn-ghost btn-sm" disabled={!!preview} onclick={() => void starter(option.id as StarterPreset)}>{option.id === 'gpt2' ? 'GPT-2 size' : option.name}</button>{/each}</div>
+      <div class="toolbar-group toolbar-right"><button class="icon-button" disabled={!!preview} aria-label="Show layer properties" aria-pressed={properties} onclick={() => { properties = !properties; showCode = false; }}><SlidersHorizontal size={15} /></button><button class="btn-ghost btn-sm" disabled={!!preview} aria-pressed={showCode} onclick={() => { showCode = !showCode; properties = false; }}><Code2 size={14} />Code</button><button class="btn-outline btn-sm" disabled={!!preview || !generated} onclick={exportModel}><Download size={13} />Export .py</button></div>
     </div>
     <div class="builder-body">
       <aside class="layer-palette" aria-label="Layer palette"><label class="sr-only" for="layer-search">Search layers</label><input id="layer-search" class="input" placeholder="Search layers" bind:value={search} />
         {#each groups as group}
           {#if layers.some(l => l.group === group && (l.name + l.description).toLowerCase().includes(search.toLowerCase()))}<h3>{group}</h3>{/if}
           {#each layers.filter(l => l.group === group && (l.name + l.description).toLowerCase().includes(search.toLowerCase())) as layer (layer.kind)}
-            <button class="palette-layer" draggable="true" data-palette-kind={layer.kind} title={`${layer.description}. Drag to the canvas or click to add.`} aria-label={`Add ${layer.name} layer`} ondragstart={(e) => { e.dataTransfer?.setData('application/umcode-layer', layer.kind); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'; }} onclick={() => { try { canvas?.add(layer.kind); } catch (e) { message = (e as Error).message; } }}><span style:background={layer.color}></span>{layer.name}<Plus size={11} /></button>
+            <button class="palette-layer" disabled={!!preview} draggable={!preview} data-palette-kind={layer.kind} title={`${layer.description}. Drag to the canvas or click to add.`} aria-label={`Add ${layer.name} layer`} ondragstart={(e) => { if (preview) { e.preventDefault(); return; } e.dataTransfer?.setData('application/umcode-layer', layer.kind); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'; }} onclick={() => { try { canvas?.add(layer.kind); } catch (e) { message = (e as Error).message; } }}><span style:background={layer.color}></span>{layer.name}<Plus size={11} /></button>
           {/each}
         {/each}
         <p class="palette-help">Drag to add.<br />Join the dots to connect.<br />Select a layer to edit.</p>
       </aside>
-      <SvelteFlowProvider><ModelCanvas bind:this={canvas} graph={editor.graph} {analysis} {selected} onchange={apply} onselect={select} onerror={(error) => message = error} /></SvelteFlowProvider>
-      {#if properties}<div class="properties-panel"><LayerInspector node={selectedNode} {analysis} onconfig={config} ondelete={remove} onclose={() => properties = false} /></div>{/if}
+      <SvelteFlowProvider><ModelCanvas bind:this={canvas} graph={preview?.graph ?? editor.graph} analysis={preview?.after ?? analysis} {selected} readonly={!!preview} highlighted={preview?.affectedNodeIds ?? []} onchange={apply} onselect={select} onerror={(error) => message = error} /></SvelteFlowProvider>
+      {#if properties && !preview}<div class="properties-panel"><LayerInspector node={selectedNode} {analysis} onconfig={config} ondelete={remove} onask={ask} onclose={() => properties = false} /></div>{/if}
       {#if showCode}<aside class="code-panel" aria-label="Generated PyTorch code"><div class="code-heading"><strong>PyTorch architecture</strong><button class="icon-button" aria-label="Close code preview" onclick={() => showCode = false}><X size={14} /></button></div>{#if generated}<pre>{#each generated.code.split('\n') as line, index}<span class:highlight={!!selected && generated.lineNodes[index] === selected}>{line || ' '}</span>{/each}</pre>{:else}<p>Connect the layers and resolve the highlighted settings to generate your model.</p>{/if}</aside>{/if}
     </div>
-    {#if issuesOpen && editor.graph.nodes.length && issues.length}
+    {#if !preview && issuesOpen && editor.graph.nodes.length && issues.length}
       <section class="validation-panel" aria-label="Model issues">
         <h3>Fix before exporting</h3>
         <ul>
@@ -90,16 +109,19 @@
     {/if}
     <footer class="builder-footer">
       <div class="model-summary"><strong>{new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 2 }).format(analysis.parameters)}</strong> parameters<span>·</span><span title="Float32 parameter weights only; excludes gradients, optimizer states and activations">{(analysis.parameters * 4 / 1048576).toFixed(1)} MB weights</span></div>
-      {#if message}<div class="model-validity has-errors" role="status">{message}</div>
+      {#if message}<div class="model-validity" role="status">{message}</div>
       {:else if editor.graph.nodes.length && issues.length}<button class="model-validity has-errors issues-toggle" aria-label={issuesOpen ? 'Hide model issues' : 'Show model issues'} aria-expanded={issuesOpen} onclick={() => issuesOpen = !issuesOpen}>{issues.length} {issues.length === 1 ? 'issue' : 'issues'} to fix {issuesOpen ? '▾' : '▴'}</button>
       {:else}<div class="model-validity" role="status">{editor.graph.nodes.length ? '✓ Layer sizes match' : 'Add layers or choose a starter'}</div>{/if}
-      <div class="footer-actions"><button class="icon-button" aria-label="Reload model from disk" disabled={disabled} onclick={onReload}><RefreshCw size={14} /></button><button class="btn-primary btn-sm" disabled={disabled || !dirty} onclick={onSave}><Save size={14} />Save model</button></div>
+      <div class="footer-actions"><button class="icon-button" aria-label="Reload model from disk" disabled={!!preview || disabled} onclick={onReload}><RefreshCw size={14} /></button><button class="btn-primary btn-sm" disabled={!!preview || disabled || !dirty} onclick={onSave}><Save size={14} />Save model</button></div>
     </footer>
   {/if}
 </section>
 
 <style>
   .visual-builder { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; container-type:inline-size; }
+  .assistant-preview { flex-shrink:0; max-height:220px; overflow:auto; padding:12px 16px; border-bottom:1px solid var(--color-accent); background:var(--color-accent-soft); font-size:11px; line-height:1.65; }
+  .preview-heading { display:flex; gap:10px; align-items:center; } .preview-heading h2 { font-weight:650; font-size:13px; } .preview-heading span { color:var(--color-muted); }
+  .assistant-preview ul { list-style:disc; padding-left:17px; } .preview-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
   .builder-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:7px 10px; border-bottom:1px solid var(--color-line); }
   .toolbar-group, .starter-actions { display:flex; align-items:center; gap:3px; } .toolbar-right { margin-left:auto; } .starter-actions > span { font-size:10px; color:var(--color-muted); margin:0 4px; }
   .builder-toolbar .btn-sm { font-size:11px; }

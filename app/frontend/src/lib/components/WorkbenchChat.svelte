@@ -15,7 +15,7 @@
 </script>
 
 {#if matchesProject}
-  <ChatColumn view={chat.main} variant="main" />
+  <ChatColumn view={chat.main} variant="main" workbenchMode />
 {:else}
   <section class="project-chat" aria-label="Project chat">
     <h2>Chat in {projects.active?.name ?? 'this workspace'}</h2>

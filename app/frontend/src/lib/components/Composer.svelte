@@ -15,11 +15,14 @@
   import { errMsg } from '$lib/format';
   import { composerPlaceholder } from '$lib/firstRun';
   import { filterSkills, selectSkill, slashQuery } from '$lib/skillPicker';
+  import { workbenchAssistant } from '$lib/workbench/assistantStore.svelte';
 
-  let { view, compact = false }: { view: ThreadView; compact?: boolean } = $props();
+  let { view, compact = false, workbenchMode = false }: { view: ThreadView; compact?: boolean; workbenchMode?: boolean } = $props();
 
   let text = $state('');
   let files = $state<Attachment[]>([]);
+  let preparing = $state(false);
+  let submissionGeneration = 0;
   let input: HTMLTextAreaElement | undefined = $state();
   let fileInput: HTMLInputElement | undefined = $state();
   const pickerId = $props.id();
@@ -46,13 +49,16 @@
     else if (target === 'input') void tick().then(() => input?.focus());
   });
   const docked = $derived(Boolean(dockState(app.approvals, view.id).current));
-  const busy = $derived(view.sending || !!view.running);
+  const busy = $derived(preparing || view.sending || !!view.running);
   const offline = $derived(app.conn !== 'open');
   const isMain = $derived(view === chat.main);
   const projectId = $derived(view.id ? view.thread?.projectId ?? null : isMain ? projects.activeId : null);
   const query = $derived(slashQuery(text, caret));
   const pickerOpen = $derived(focused && query !== null && !dismissed && !offline && !busy);
   const matches = $derived(filterSkills(skills, query ?? ''));
+  $effect(() => {
+    if (workbenchMode && workbenchAssistant.focusRequest > 0) void tick().then(() => input?.focus());
+  });
 
   $effect(() => {
     void query;
@@ -114,16 +120,24 @@
     return () => window.removeEventListener('umcode:compose', onCompose);
   });
 
-  function submit() {
+  async function submit() {
     if (busy || offline || app.needsProvider || view.delegation.pending) return;
     const t = text;
     const a = files;
     if (!t.trim() && a.length === 0) return;
-    text = '';
-    files = [];
-    if (isMain) void chat.send(t, a);
-    else void view.send(t, a);
+    const generation = ++submissionGeneration;
+    preparing = true;
+    try {
+      const context = workbenchMode ? await workbenchAssistant.capture() : undefined;
+      if (generation !== submissionGeneration) return;
+      if (text === t) text = '';
+      if (files === a) files = [];
+      if (isMain) await chat.send(t, a, context);
+      else await view.send(t, a, undefined, context);
+    } catch (error) { if (generation === submissionGeneration) app.toast('error', errMsg(error)); }
+    finally { if (generation === submissionGeneration) preparing = false; }
   }
+  function stop() { submissionGeneration++; preparing = false; void view.interrupt(); }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.isComposing) return;
@@ -270,6 +284,12 @@
         {/each}
       </div>
     {/if}
+    {#if workbenchMode && workbenchAssistant.current}
+      <div class="px-4 pt-2 text-[11px] text-muted" data-workbench-context aria-label="Included model context">
+        <strong>{workbenchAssistant.current.modelName}</strong>{#if workbenchAssistant.selectedLabel}<span> · {workbenchAssistant.selectedLabel}</span>{:else}<span> · Whole model</span>{/if}
+        <span class="block text-[10px]">Current draft included when you send</span>
+      </div>
+    {/if}
     <textarea
       {...{ autocorrect: 'off' }}
       autocapitalize="off"
@@ -292,7 +312,7 @@
       class="composer-input w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint"
       style="field-sizing: content; min-height: 2.75rem"
     ></textarea>
-    <DelegationActivation state={view.delegation} />
+    {#if !workbenchMode}<DelegationActivation state={view.delegation} />{/if}
     <div class="composer-toolbar">
       <button class="btn-ghost btn-sm" title="Attach files" aria-label="Attach files" onclick={() => fileInput?.click()}>
         <Paperclip class="w-4 h-4" />
@@ -309,7 +329,7 @@
       />
       <ModelPicker value={view.selection} onchange={(v) => view.setSelection(v)} compact={compact} />
       <ApprovalModePill {view} />
-      <AgentsMenu state={view.delegation} {busy} onenable={() => chat.enableDelegation(view)} />
+      {#if !workbenchMode}<AgentsMenu state={view.delegation} {busy} onenable={() => chat.enableDelegation(view)} />{/if}
       {#if blockedReason}
         <span class="composer-error" role="status" title={blockedReason}>No model available</span>
       {/if}
@@ -319,7 +339,7 @@
           title={busy ? 'Stop' : 'Send (Enter)'}
           aria-label={busy ? 'Stop' : 'Send'}
           disabled={!busy && (offline || app.needsProvider || view.delegation.pending || (!text.trim() && files.length === 0))}
-          onclick={() => busy ? view.interrupt() : submit()}
+          onclick={() => busy ? stop() : submit()}
         >
           {#if busy}<span class="stop-glyph" aria-hidden="true"></span>{:else}<ArrowUp class="w-4 h-4" />{/if}
         </button>

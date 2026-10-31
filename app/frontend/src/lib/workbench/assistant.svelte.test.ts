@@ -26,7 +26,10 @@ describe('assistant editor bridge', () => {
     await state.showProposal(await suggestion(original));
     expect(editor.text).toBe(original); expect(commit).not.toHaveBeenCalled();
     state.selectedNodeId = 'layer_2';
+    const proposed = state.preview!.proposal;
+    expect(state.wasApplied(proposed)).toBe(false);
     state.apply(); expect(commit).toHaveBeenCalledTimes(1);
+    expect(state.wasApplied(proposed)).toBe(true);
     expect(editor.graph?.nodes[1].config.outFeatures).toBe(64);
     expect(() => state.apply()).toThrow(); expect(commit).toHaveBeenCalledTimes(1);
     editor.undo(); expect(editor.text).toBe(original);
