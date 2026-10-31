@@ -916,3 +916,45 @@ func TestRunnerReportsMessageAfterLastBoundary(t *testing.T) {
 		t.Fatalf("state %q summary %q", got.State, got.Result.Summary)
 	}
 }
+
+// The runner offers exactly the plan card's pool: the task's frozen approved
+// models, enabled only. A disabled candidate is never selected, neither when
+// requested nor as a fallback, and is not given to the router's failover.
+func TestRunnerUsesEnabledPoolModelsOnly(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	scope, err := env.e.Store.AgentModelScope(t.Context(), env.task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope.Provider, scope.Model = "claude", "deterministic"
+	scope.Candidates = []protocol.ConfiguredModel{
+		{ID: "cfg-h", Provider: "claude", Model: "hidden", Enabled: false},
+		{ID: "cfg-a", Provider: "claude", Model: "deterministic", Enabled: true},
+	}
+	data, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.e.Store.DB.Exec(`UPDATE agent_model_scopes SET scope_json=? WHERE task_id=?`, string(data), env.task.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, requested := range []string{"claude/hidden", ""} {
+		a := env.newRuntimeAgent(t, "pool"+strings.ReplaceAll(requested, "/", "-"), readOnlyCaps, requested)
+		if _, err := env.run(t, a); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := env.e.Store.RuntimeAgent(t.Context(), env.task.ID, a.ID)
+		if got.ModelActual != "claude/deterministic" {
+			t.Fatalf("requested %q: actual %q (trail %v), want the enabled pool model", requested, got.ModelActual, got.RouteTrail)
+		}
+		if requested != "" && !strings.Contains(strings.Join(got.RouteTrail, "\n"), "claude/hidden: not in the approved model pool") {
+			t.Fatalf("trail does not say the disabled model is outside the pool: %v", got.RouteTrail)
+		}
+	}
+	reqs, _ := env.p.snapshot()
+	for _, r := range reqs {
+		if r.Model == "hidden" {
+			t.Fatal("a disabled model was called")
+		}
+	}
+}
