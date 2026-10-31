@@ -142,8 +142,12 @@ type Engine struct {
 	suggestionRespondHook func()
 
 	// agentPlanMu guards agentPlanWaits and serializes saving a proposed plan
-	// with superseding the task's earlier proposals (agent.propose_plan).
+	// with superseding the task's earlier proposals (agent.propose_plan) and
+	// with every plan card decision (agent/plan/respond, approval/respond).
 	agentPlanMu sync.Mutex
+	// planModelPoolHook is a test seam that may edit the plan model pool
+	// (planModelPool) before use; set before use.
+	planModelPoolHook func([]modelRoute) []modelRoute
 	// agentPlanWaits holds the decision wait of each plan card still blocking
 	// agent.propose_plan, by plan ID; in memory only (a restart expires every
 	// pending approval).

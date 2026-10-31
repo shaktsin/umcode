@@ -296,6 +296,49 @@ type AgentSuggestionRespondResult struct {
 	ExpiresAt       *time.Time      `json:"expiresAt,omitempty"`
 }
 
+// MethodAgentPlanRespond is the app's answer to an agent.propose_plan card
+// (admin connections only): approve with optional per-agent model choices,
+// dropped agents and limits, decline, or revise with feedback for the lead.
+const MethodAgentPlanRespond = "agent/plan/respond"
+
+// NotifyAgentPlanUpdated is published on the thread after every plan state
+// change (proposed, superseded, decided) so clients refresh the card.
+const NotifyAgentPlanUpdated = "agent/plan/updated"
+
+// Decisions for agent/plan/respond.
+const (
+	PlanDecisionApprove = "approve"
+	PlanDecisionDecline = "decline"
+	PlanDecisionRevise  = "revise"
+)
+
+// AgentPlanRespondParams answers one plan card. Models maps an agent name to
+// a model of the task's pool; Drop removes agents (not all of them); Limits
+// replaces the plan's limits (clamped to the ceilings). Models, Drop and
+// Limits apply only to approve; Feedback is required for revise.
+type AgentPlanRespondParams struct {
+	PlanID   string            `json:"planId"`
+	Decision string            `json:"decision"`
+	Models   map[string]string `json:"models,omitempty"`
+	Drop     []string          `json:"drop,omitempty"`
+	Limits   *PlanLimits       `json:"limits,omitempty"`
+	Feedback string            `json:"feedback,omitempty"`
+}
+
+// AgentPlanRespondResult is the stored plan after the decision and the
+// status of its card's approval (approved, denied, expired or pending).
+type AgentPlanRespondResult struct {
+	Plan           AgentPlan `json:"plan"`
+	ApprovalStatus string    `json:"approvalStatus"`
+}
+
+// AgentPlanUpdated is the agent/plan/updated payload.
+type AgentPlanUpdated struct {
+	ThreadID       string    `json:"threadId"`
+	Plan           AgentPlan `json:"plan"`
+	ApprovalStatus string    `json:"approvalStatus,omitempty"`
+}
+
 type TurnStartParams struct {
 	TaskIntent                *TaskIntentProposal `json:"taskIntent,omitempty"`
 	DelegationActivationToken string              `json:"delegationActivationToken,omitempty"`
