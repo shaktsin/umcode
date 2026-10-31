@@ -155,6 +155,20 @@ func (s *Server) routes() map[string]handler {
 		protocol.MethodProjectCreate: bind(func(ctx context.Context, c *conn, p protocol.ProjectCreateParams) (any, error) {
 			return e.CreateProject(ctx, p)
 		}),
+
+		// ML Workbench P0: project-scoped model bundle persistence.
+		protocol.MethodWorkbenchModelList: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelListParams) (any, error) {
+			return e.ListWorkbenchModels(ctx, p)
+		}),
+		protocol.MethodWorkbenchModelCreate: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelCreateParams) (any, error) {
+			return e.CreateWorkbenchModel(ctx, p)
+		}),
+		protocol.MethodWorkbenchModelOpen: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelOpenParams) (any, error) {
+			return e.OpenWorkbenchModel(ctx, p)
+		}),
+		protocol.MethodWorkbenchGraphSave: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchGraphSaveParams) (any, error) {
+			return e.SaveWorkbenchGraph(ctx, p)
+		}),
 		protocol.MethodProjectOpen: bind(func(ctx context.Context, c *conn, p protocol.ProjectIDParams) (any, error) {
 			return e.OpenProject(ctx, p.ProjectID)
 		}),
