@@ -65,6 +65,22 @@ func TestSpawnDuringApplyingRefused(t *testing.T) {
 	}
 }
 
+// N3: the spawn gate tells the lead to call resolved again for an
+// interrupted manual resolution.
+func TestSpawnDuringManualResolutionApplyingRefused(t *testing.T) {
+	env := runtimeVerificationEnv(t)
+	a := env.writer(t, "a", "a.txt", "from a\n")
+	rev := env.revision(t, a.ID)
+	rev.State, rev.Reason, rev.TreeBefore = store.RevisionApplying, "resolved manually by the lead", env.baseTree(t)
+	if err := env.e.Store.UpdateAgentRevision(t.Context(), rev, rev.Version); err != nil {
+		t.Fatal(err)
+	}
+	_, err := callAgentTool(t, env.e, env.ctx, "agent.spawn", "during-resolve", spawnWorker)
+	if err == nil || !strings.Contains(err.Error(), `agent.integrate {action:"resolved", agent:"`+a.ID+`"}`) || strings.Contains(err.Error(), "accept agent") {
+		t.Fatalf("spawn while a manual resolution is applying: %v", err)
+	}
+}
+
 // Replaces Plan 3's TestSpawnAfterAcceptExplainsCleanCheckout: spawning after
 // the first accept is allowed.
 func TestSpawnAfterAcceptAllowed(t *testing.T) {

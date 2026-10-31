@@ -480,3 +480,61 @@ func TestIntegrateWaitsForWorkspaceBeingPrepared(t *testing.T) {
 		t.Fatalf("revision %s after the preparation finished", rev.State)
 	}
 }
+
+// N3: an interrupted manual resolution is settled with resolved, not accept.
+func TestPrepareRuntimeRefusedWhileManualResolutionApplying(t *testing.T) {
+	svc, s, task := rtFixture(t)
+	a := rtWriter(t, svc, s, task, "a", rtWrite(t, "tracked", "from a\n"))
+	rev := rtRevision(t, s, task.ID, a.agent.ID)
+	rev.State, rev.Reason = store.RevisionApplying, manualResolution
+	rev.TreeBefore = workspaceGit(t, task.ParentRoot, "rev-parse", task.BaseRevision+"^{tree}")
+	if err := s.UpdateAgentRevision(t.Context(), rev, rev.Version); err != nil {
+		t.Fatal(err)
+	}
+	b := rtStartAgent(t, s, task, "late", protocol.FilesRead)
+	_, err := svc.PrepareRuntime(t.Context(), task, b, false)
+	if err == nil || !strings.Contains(err.Error(), `agent.integrate {action:"resolved", agent:"`+a.agent.ID+`"}`) || strings.Contains(err.Error(), "accept agent") {
+		t.Fatalf("prepare while a manual resolution is applying: %v", err)
+	}
+}
+
+// N4: a head view whose checkout disappeared is re-planned for the current
+// head after another accept.
+func TestPrepareRuntimeViewReplannedForNewHead(t *testing.T) {
+	svc, s, task, _ := rtAccepted(t, nil, rtWrite(t, "tracked", "from a\n"))
+	r := rtStartAgent(t, s, task, "reader", protocol.FilesRead)
+	ref, err := svc.PrepareRuntime(t.Context(), task, r, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.AgentWorkspace(t.Context(), ref.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := svc.Manager.Path(ref.ID)
+	if !filepath.IsAbs(root) || root != ref.Root {
+		t.Fatalf("unexpected checkout root %q", root)
+	}
+	if err = os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(root + ".ready"); err != nil {
+		t.Fatal(err)
+	}
+	b := rtWriter(t, svc, s, task, "b", rtWrite(t, "added", "from b\n"))
+	res, err := svc.IntegrateRuntime(t.Context(), task.ID, b.agent.ID)
+	if err != nil || len(res.Options) > 0 {
+		t.Fatalf("accept b = %+v %v", res, err)
+	}
+	again, err := svc.PrepareRuntime(t.Context(), task, r, false)
+	if err != nil {
+		t.Fatalf("re-plan: %v", err)
+	}
+	if got := workspaceGit(t, again.Root, "rev-parse", "HEAD^{tree}"); got != res.HeadTree {
+		t.Fatalf("re-planned view tree %s, want %s", got, res.HeadTree)
+	}
+	w, err := s.AgentWorkspace(t.Context(), ref.ID)
+	if err != nil || w.ResultTree != res.HeadTree || w.ResultRevision == first.ResultRevision || w.SourceID != runtimeHeadSource {
+		t.Fatalf("re-planned row = %+v %v", w, err)
+	}
+}

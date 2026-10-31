@@ -473,3 +473,117 @@ func TestRuntimeViewTypeChangesAndEOL(t *testing.T) {
 		t.Fatalf("a.crlf blob = %q", blob)
 	}
 }
+
+// N1: a project owned by another user that is trusted through the user's
+// global safe.directory (containers, CI, WSL) keeps working for the legacy
+// committed checks and for the runtime parent check, which pass
+// safe.directory for exactly the repository they operate on.
+func TestHardenedChecksHonourOwnershipException(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to chown the repository to another user")
+	}
+	ctx := context.Background()
+	f, head := integratedFixture(t)
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[safe]\n\tdirectory = *\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if err := filepath.WalkDir(f.parent, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Lchown(p, 65534, 65534)
+	}); err != nil {
+		t.Skipf("chown unavailable: %v", err)
+	}
+	if err := ValidateIndexFlags(ctx, f.parent); err != nil {
+		t.Fatalf("ValidateIndexFlags: %v", err)
+	}
+	if err := ParentStateForRuntime(ctx, f.parent, f.base, head); err != nil {
+		t.Fatalf("ParentStateForRuntime: %v", err)
+	}
+	g := newIntegrationFixture(t, map[string]string{"a.txt": "a\n"})
+	if err := filepath.WalkDir(g.parent, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Lchown(p, 65534, 65534)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCommitted(ctx, g.parent, g.base); err != nil {
+		t.Fatalf("ValidateCommitted: %v", err)
+	}
+	if _, err := g.m.EnsureCommitted(ctx, "legacy", g.parent, g.base); err != nil {
+		t.Fatalf("EnsureCommitted: %v", err)
+	}
+}
+
+// N2: the user's own global excludes file is honoured by the runtime parent
+// checks (a globally ignored .DS_Store does not block), and nothing else of
+// the global configuration is loaded.
+func TestParentChecksHonourUserGlobalExcludes(t *testing.T) {
+	ctx := context.Background()
+	for _, mode := range []string{"configured", "xdg-default", "missing-file"} {
+		t.Run(mode, func(t *testing.T) {
+			f, head := integratedFixture(t)
+			home := t.TempDir()
+			xdg := filepath.Join(home, "xdg")
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", xdg)
+			switch mode {
+			case "configured":
+				write(t, home, "my-ignore", ".DS_Store\n")
+				write(t, home, ".gitconfig", "[core]\n\texcludesFile = ~/my-ignore\n")
+			case "xdg-default":
+				write(t, xdg, "git/ignore", ".DS_Store\n")
+			case "missing-file":
+				write(t, home, ".gitconfig", "[core]\n\texcludesFile = ~/no-such-file\n")
+			}
+			write(t, f.parent, ".DS_Store", "finder\n")
+			err := ParentStateForRuntime(ctx, f.parent, f.base, head)
+			checkErr := f.m.CheckParentState(ctx, f.parent, f.base, head)
+			if mode == "missing-file" {
+				if err == nil || !strings.Contains(err.Error(), ".DS_Store") || checkErr == nil {
+					t.Fatalf("without an excludes file .DS_Store must be refused: %v / %v", err, checkErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("globally ignored .DS_Store refused: %v", err)
+			}
+			if checkErr != nil {
+				t.Fatalf("CheckParentState refused a globally ignored .DS_Store: %v", checkErr)
+			}
+			write(t, f.parent, "notes.txt", "mine\n")
+			if err := ParentStateForRuntime(ctx, f.parent, f.base, head); err == nil || !strings.Contains(err.Error(), "notes.txt") || strings.Contains(err.Error(), ".DS_Store") {
+				t.Fatalf("untracked non-ignored file: %v", err)
+			}
+		})
+	}
+}
+
+// N2: global configuration other than the excludes file is not loaded (a
+// global fsmonitor hook still never runs).
+func TestParentChecksLoadNoOtherGlobalConfig(t *testing.T) {
+	ctx := context.Background()
+	f, head := integratedFixture(t)
+	home := t.TempDir()
+	marker := filepath.Join(home, "ran")
+	write(t, home, "hook.sh", "#!/bin/sh\ntouch "+marker+"\nexit 1\n")
+	if err := os.Chmod(filepath.Join(home, "hook.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, home, "ign", ".DS_Store\n")
+	write(t, home, ".gitconfig", "[core]\n\texcludesFile = "+filepath.Join(home, "ign")+"\n\tfsmonitor = "+filepath.Join(home, "hook.sh")+"\n")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	if err := ParentStateForRuntime(ctx, f.parent, f.base, head); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("global fsmonitor hook ran: %v", err)
+	}
+}
