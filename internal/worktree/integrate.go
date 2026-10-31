@@ -65,6 +65,65 @@ func parentTree(ctx context.Context, parent string) (string, error) {
 	return hardenedOutput(ctx, parent, "write-tree")
 }
 
+// StagedTree returns the tree staged in the project checkout for an amend of
+// the integrated head. The checkout must be the repository root with
+// HEAD == base, no index flags, no conflict stages, no staged gitlink, no
+// unstaged edits, no untracked (non-ignored) files and only contained
+// symlinks and regular files; anything else is refused naming the paths
+// (wrapping ErrParentChanged). The staged content itself is not compared with
+// any tree: the caller decides (equal to the head means nothing to amend).
+//
+// It never rewrites the project's index file and never takes index.lock: the
+// checks use the read-only commands of ParentStateForRuntime, and the tree is
+// computed by write-tree on a private copy of the index bytes
+// (GIT_INDEX_FILE), so only the tree objects of the staged state (already
+// referenced by nothing, ruling R4) may be added to the object store; they
+// are needed later anyway to view or diff the head. The index bytes are read
+// before the checks and again afterwards; a change in between is refused, so
+// the returned tree is the state that was checked.
+func (m *Manager) StagedTree(ctx context.Context, parent, base string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	canonical, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return "", err
+	}
+	indexPath, err := hardenedOutput(ctx, canonical, "rev-parse", "--path-format=absolute", "--git-path", "index")
+	if err != nil {
+		return "", err
+	}
+	before, err := os.ReadFile(indexPath)
+	if err != nil {
+		return "", fmt.Errorf("read the project index: %w", err)
+	}
+	if err = parentStateForRuntime(ctx, canonical, base, "", true, amendRefusal, amendRefusal); err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp("", "umcode-staged-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
+	private := filepath.Join(dir, "index")
+	if err = os.WriteFile(private, before, 0o600); err != nil {
+		return "", err
+	}
+	// core.splitIndex=false: writing the private copy never creates a shared
+	// index file in the project's Git directory.
+	out, stderr, err := hardenedRunEnv(ctx, canonical, []string{"GIT_INDEX_FILE=" + private}, nil, "-c", "core.splitIndex=false", "write-tree")
+	if err != nil {
+		return "", fmt.Errorf("could not read the staged tree: %s", commandError(err, stderr))
+	}
+	after, err := os.ReadFile(indexPath)
+	if err != nil {
+		return "", fmt.Errorf("read the project index: %w", err)
+	}
+	if !bytes.Equal(before, after) {
+		return "", fmt.Errorf("%w: the project index changed while it was read; retry", ErrParentChanged)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // CheckParentState verifies the parent is exactly the integrated state:
 // HEAD == base, index tree == expectedTree, no unstaged differences, no
 // untracked non-ignored files and only contained symlinks/regular files.

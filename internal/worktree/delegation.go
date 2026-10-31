@@ -368,6 +368,17 @@ func (m *Manager) WithCommittedBase(ctx context.Context, parent, base string, gu
 // take index.lock or write an object (diff-index --cached instead of
 // write-tree, status instead of porcelain diff).
 func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) error {
+	return parentStateForRuntime(ctx, parent, base, headTree, false, cleanCheckoutRefusal, "delegation parent revision changed")
+}
+
+// amendRefusal prefixes StagedTree's refusals.
+const amendRefusal = "amend requires the fix staged in the project checkout with nothing else changed (HEAD at the task base, no unstaged edits, no untracked files, no conflict stages)"
+
+// parentStateForRuntime is ParentStateForRuntime's check. With anyStaged the
+// staged content is not compared with any tree (StagedTree's caller decides
+// what to do with it), but a staged gitlink is refused. refusal prefixes the
+// dirty-checkout refusals and moved the moved-HEAD refusal.
+func parentStateForRuntime(ctx context.Context, parent, base, headTree string, anyStaged bool, refusal, moved string) error {
 	canonical, err := filepath.EvalSymlinks(parent)
 	if err != nil {
 		return err
@@ -381,7 +392,7 @@ func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) e
 		return errors.New("delegation requires an initial committed Git revision")
 	}
 	if head != base {
-		return fmt.Errorf("delegation parent revision changed (%w: HEAD moved from %s to %s)", ErrParentChanged, base, head)
+		return fmt.Errorf("%s (%w: HEAD moved from %s to %s)", moved, ErrParentChanged, base, head)
 	}
 	if err = ValidateIndexFlags(ctx, canonical); err != nil {
 		return err
@@ -399,7 +410,7 @@ func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) e
 				paths = append(paths, p)
 			}
 		}
-		return fmt.Errorf("%s (%w: unresolved conflict stages at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(paths, ", "))
+		return fmt.Errorf("%s (%w: unresolved conflict stages at %s)", refusal, ErrParentChanged, strings.Join(paths, ", "))
 	}
 	entries, err := hardenedNULList(ctx, canonical, "ls-tree", "-r", "-z", "HEAD")
 	if err != nil {
@@ -408,6 +419,11 @@ func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) e
 	for _, entry := range entries {
 		if strings.HasPrefix(entry, "160000 ") {
 			return errors.New("delegation submodules are unsupported")
+		}
+	}
+	if anyStaged {
+		if err = rejectStagedGitlinks(ctx, canonical); err != nil {
+			return err
 		}
 	}
 	baseTree, err := hardenedOutput(ctx, canonical, "rev-parse", "--verify", base+"^{tree}")
@@ -419,9 +435,11 @@ func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) e
 	stagedAgainst := func(tree string) ([]string, error) {
 		return hardenedNULList(ctx, canonical, "diff-index", "--cached", "--name-only", "--no-renames", "-z", tree, "--")
 	}
-	staged, err := stagedAgainst(baseTree)
-	if err != nil {
-		return err
+	var staged []string
+	if !anyStaged {
+		if staged, err = stagedAgainst(baseTree); err != nil {
+			return err
+		}
 	}
 	if len(staged) > 0 && headTree != "" && headTree != baseTree {
 		if staged, err = stagedAgainst(headTree); err != nil {
@@ -429,7 +447,7 @@ func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) e
 		}
 	}
 	if len(staged) > 0 {
-		return fmt.Errorf("%s (%w: staged content differs from the integrated state at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(staged, ", "))
+		return fmt.Errorf("%s (%w: staged content differs from the integrated state at %s)", refusal, ErrParentChanged, strings.Join(staged, ", "))
 	}
 	// Unstaged and untracked changes come from one status call: unlike
 	// porcelain diff, which refreshes stat-dirty entries and rewrites the
@@ -457,12 +475,28 @@ func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) e
 		}
 	}
 	if len(unstaged) > 0 {
-		return fmt.Errorf("%s (%w: unstaged edits at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(unstaged, ", "))
+		return fmt.Errorf("%s (%w: unstaged edits at %s)", refusal, ErrParentChanged, strings.Join(unstaged, ", "))
 	}
 	if len(untracked) > 0 {
-		return fmt.Errorf("%s (%w: untracked files at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(untracked, ", "))
+		return fmt.Errorf("%s (%w: untracked files at %s)", refusal, ErrParentChanged, strings.Join(untracked, ", "))
 	}
 	return ValidatePaths(ctx, canonical)
+}
+
+// rejectStagedGitlinks refuses an index holding a gitlink (submodule entry):
+// a head tree with one could not be viewed or integrated.
+func rejectStagedGitlinks(ctx context.Context, canonical string) error {
+	entries, err := hardenedNULList(ctx, canonical, "ls-files", "--stage", "-z")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry, "160000 ") {
+			_, p, _ := strings.Cut(entry, "\t")
+			return fmt.Errorf("staged submodule (gitlink) at %s is unsupported", p)
+		}
+	}
+	return nil
 }
 
 // EnsureRuntime returns the owned checkout id of revision base, cloning it

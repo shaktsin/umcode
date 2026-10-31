@@ -112,7 +112,8 @@ func TestDeadEndTextPointsToAmend(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			env, _, _ := twoAppliedFailing(t, status, "passed")
 			c := env.writer(t, "c", "c.txt", "from c\n")
-			for _, args := range []string{`{"action":"accept","agent":"` + c.ID + `"}`, `{"action":"complete"}`} {
+			check := func(args string) {
+				t.Helper()
 				_, err := env.integrate(t, env.ctx, args)
 				if err == nil || !strings.Contains(err.Error(), amendAdvice) || !strings.Contains(err.Error(), "cancel") {
 					t.Fatalf("%s refusal: %v", args, err)
@@ -121,6 +122,9 @@ func TestDeadEndTextPointsToAmend(t *testing.T) {
 					t.Fatalf("%s still states the dead end: %v", args, err)
 				}
 			}
+			check(`{"action":"accept","agent":"` + c.ID + `"}`)
+			env.mustIntegrate(t, `{"action":"drop","agent":"`+c.ID+`","reason":"later"}`)
+			check(`{"action":"complete"}`)
 		})
 	}
 	env := runtimeVerificationEnv(t)

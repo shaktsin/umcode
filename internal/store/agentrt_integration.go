@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Revision states. A revision is one writer agent's base->result change set
@@ -23,6 +24,7 @@ const (
 const (
 	maxRevisionReason   = 4096
 	maxRevisionConflict = 64
+	maxAmendReason      = 4096
 )
 
 // AgentRevision is a submitted writer revision and its integration evidence.
@@ -39,12 +41,18 @@ type AgentRevision struct {
 }
 
 // AgentIntegrationHead is the per-task integrated tree and its verification
-// workflow state (opaque JSON; see DecodeRuntimeWorkflow).
+// workflow state (opaque JSON; see DecodeRuntimeWorkflow). Amendments counts
+// the lead's amends of the integrated head (staged fixes recorded as the new
+// head without any revision); AmendReason is the last amend's reason
+// (bounded) and AmendedTree the head tree that amend produced.
 type AgentIntegrationHead struct {
 	TaskID, HeadTree string
 	AppliedCount     int
 	Workflow         json.RawMessage
 	Version          int64
+	Amendments       int
+	AmendReason      string
+	AmendedTree      string
 }
 
 // RuntimeWorkflow is the decoded verification state recorded for a head tree.
@@ -111,6 +119,22 @@ func scanAgentRevision(row interface{ Scan(...any) error }) (AgentRevision, erro
 	}
 	r.CreatedAt, r.UpdatedAt = ParseTime(created), ParseTime(updated)
 	return r, nil
+}
+
+// boundUTF8 cuts s to at most max bytes without leaving a partial rune.
+func boundUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	s = s[:max]
+	// A split rune leaves at most utf8.UTFMax-1 trailing bytes.
+	for i := 0; i < utf8.UTFMax-1 && len(s) > 0; i++ {
+		if r, size := utf8.DecodeLastRuneInString(s); r != utf8.RuneError || size > 1 {
+			break
+		}
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 func boundRevisionText(reason string, conflict []string) (string, []string) {
@@ -273,8 +297,8 @@ func (s *Store) UpdateAgentRevision(ctx context.Context, r AgentRevision, expect
 func (s *Store) AgentIntegrationHead(ctx context.Context, taskID string) (AgentIntegrationHead, error) {
 	var h AgentIntegrationHead
 	var wf string
-	err := s.DB.QueryRowContext(ctx, `SELECT task_id, head_tree, applied_count, workflow_json, version FROM agent_integration_head WHERE task_id=?`, taskID).
-		Scan(&h.TaskID, &h.HeadTree, &h.AppliedCount, &wf, &h.Version)
+	err := s.DB.QueryRowContext(ctx, `SELECT task_id, head_tree, applied_count, workflow_json, version, amendments, amend_reason, amended_tree FROM agent_integration_head WHERE task_id=?`, taskID).
+		Scan(&h.TaskID, &h.HeadTree, &h.AppliedCount, &wf, &h.Version, &h.Amendments, &h.AmendReason, &h.AmendedTree)
 	if errors.Is(err, sql.ErrNoRows) {
 		return h, ErrNotFound
 	}
@@ -297,9 +321,13 @@ func (s *Store) SetAgentIntegrationHead(ctx context.Context, h AgentIntegrationH
 	} else if !json.Valid([]byte(wf)) {
 		return fmt.Errorf("%w: workflow is not valid JSON", ErrAgentTransition)
 	}
+	if h.Amendments < 0 {
+		return fmt.Errorf("%w: negative amendments", ErrAgentTransition)
+	}
+	h.AmendReason = boundUTF8(h.AmendReason, maxAmendReason)
 	if expectedVersion == 0 {
-		res, err := s.DB.ExecContext(ctx, `INSERT INTO agent_integration_head (task_id, head_tree, applied_count, workflow_json, version, updated_at) VALUES(?,?,?,?,1,?) ON CONFLICT(task_id) DO NOTHING`,
-			h.TaskID, h.HeadTree, h.AppliedCount, wf, Now())
+		res, err := s.DB.ExecContext(ctx, `INSERT INTO agent_integration_head (task_id, head_tree, applied_count, workflow_json, version, updated_at, amendments, amend_reason, amended_tree) VALUES(?,?,?,?,1,?,?,?,?) ON CONFLICT(task_id) DO NOTHING`,
+			h.TaskID, h.HeadTree, h.AppliedCount, wf, Now(), h.Amendments, h.AmendReason, h.AmendedTree)
 		if err != nil {
 			return err
 		}
@@ -310,8 +338,8 @@ func (s *Store) SetAgentIntegrationHead(ctx context.Context, h AgentIntegrationH
 		}
 		return nil
 	}
-	res, err := s.DB.ExecContext(ctx, `UPDATE agent_integration_head SET head_tree=?, applied_count=?, workflow_json=?, version=version+1, updated_at=? WHERE task_id=? AND version=?`,
-		h.HeadTree, h.AppliedCount, wf, Now(), h.TaskID, expectedVersion)
+	res, err := s.DB.ExecContext(ctx, `UPDATE agent_integration_head SET head_tree=?, applied_count=?, workflow_json=?, amendments=?, amend_reason=?, amended_tree=?, version=version+1, updated_at=? WHERE task_id=? AND version=?`,
+		h.HeadTree, h.AppliedCount, wf, h.Amendments, h.AmendReason, h.AmendedTree, Now(), h.TaskID, expectedVersion)
 	if err != nil {
 		return err
 	}
