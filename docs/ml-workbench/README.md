@@ -1,6 +1,7 @@
 # Visual ML workbench
 
-This change implements local model storage and visual architecture building from
+This change implements local model storage, visual architecture building and
+assistance with model layers from
 the [ML workbench roadmap in PR #78](https://github.com/shaktsin/umcode/pull/78).
 It is a builder milestone. Data loading/preparation, training, checkpoints and
 in-app inference are not implemented.
@@ -21,9 +22,13 @@ in-app inference are not implemented.
 | Feature vectors | Classification + Feature vectors + Feature classifier | [Feature classifier](screenshots/10-feature-classifier.png) |
 | Custom architecture | Custom + input type + Blank canvas; add and connect supported layers | [Custom vision](screenshots/11-custom-builder.png) |
 | Narrow/dark desktop | At 760px, use the chat toggle and scroll the properties overlay | [Narrow layout](screenshots/12-narrow-dark.png) |
+| Ask about a layer | Select a layer → Ask about this layer → submit a question with current draft context | [Layer question](screenshots/assistant/01-layer-question.png) |
+| Review suggested edits | Ask for a change → Preview changes → inspect shapes/parameters → Apply changes → Undo/Redo or Save model | [Canvas preview](screenshots/assistant/03-preview.png) |
+| Reject an outdated suggestion | Edit the draft after a suggestion; its Apply path is disabled until an updated suggestion is requested | [Changed draft](screenshots/assistant/05-stale-suggestion.png) |
 
-The snapshots are actual UI captures from the real-engine acceptance script,
-using temporary projects and no provider credentials. They are not mockups.
+The snapshots are actual UI captures from real-engine acceptance scripts using
+temporary projects. Builder captures require no provider; assistant captures
+use a local deterministic HTTP provider with test credentials, not a paid API.
 Full screenshot gallery: [screenshots/README.md](screenshots/README.md).
 
 ## Task, input and architecture
@@ -64,10 +69,36 @@ requires confirmation. Stale async responses cannot apply to a different
 project/selection, and edits made during save/reload remain recoverable.
 
 Existing unsupported architecture content is shown read-only with an explanatory
-message instead of being silently converted or overwritten. Wide layouts keep
-ordinary project chat beside the builder; narrow layouts offer it as an overlay.
+message instead of being silently converted or overwritten. The collapsible
+assistant opens beside wide layouts and as an overlay in narrow layouts.
 An existing chat from another project is kept behind an explicit choice so it
 cannot silently receive work intended for the selected project.
+
+## Ask questions and review changes
+
+1. Connect a provider in Settings → Providers and select an available chat model.
+2. Open a model in Build, select a layer, and choose **Ask about this layer**.
+   The composer identifies the included model/layer. Opening it makes no LLM call.
+3. Ask a question or request a change, such as “Why do these shapes mismatch?”
+   or “Add dropout after this layer.” Each submission includes the current
+   architecture, selected settings, shapes and validation issues, including
+   unsaved edits. Datasets, weights and project files are not sent automatically.
+4. A suggestion lists the proposed settings/connections, shape changes, parameter
+   counts and remaining issues. **Preview changes** highlights the candidate
+   architecture without editing the draft. Cancel leaves the draft untouched.
+5. **Apply changes** makes one undoable edit. **Save model** persists it separately.
+   Valid partial architectures can retain visible issues while being built;
+   invalid architectures still cannot export.
+
+Suggestions are bound to the submitted project, model and draft. Manual edits,
+reloads or navigation can make a suggestion outdated; ask for a new suggestion
+instead of overwriting newer work. Completed proposals remain in chat history.
+Stop/cancellation, provider errors and invalid proposals leave the model alone.
+
+Chat uses your configured assistant provider. It does not train or serve the
+architecture being built. Workbench turns can propose supported layer edits;
+generic coding/file tools and software-task state remain in ordinary Chat.
+Open a model before submitting a workbench question.
 
 ## Try locally
 
@@ -114,7 +145,7 @@ not trained-model quality.
   [Train screenshot](screenshots/13-training-placeholder.png) makes that boundary
   visible. This PR does not complete the full roadmap in #78.
 - No dataset upload/preparation, training jobs, compute/GPU connectors,
-  checkpoints, evaluation, inference playground or model-aware chat tools.
+  checkpoints, evaluation, inference playground or promotion into a chat provider.
 - One Input-to-Output path is supported. Arbitrary branching, general nested
   containers and custom Python layers are not implemented. Transformer blocks
   contain their own residual attention/MLP structure and support repeats.

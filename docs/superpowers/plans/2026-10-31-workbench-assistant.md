@@ -91,7 +91,7 @@ Reject unknown fields, invalid settings/types/ranges, unknown IDs, cycles/branch
 - [ ] Add read-only candidate preview on the canvas, affected-layer highlighting, Cancel and Apply. Guard all canvas mutations/shortcuts/palette/property actions while previewing; Apply invokes the existing history-preserving commit exactly once.
 - [ ] Test Apply/Undo/Redo and Preview/Cancel, stale proposal labels and disabled actions, no selection/context leakage into normal chat, and collapsible chat. Run check and all frontend tests GREEN; commit.
 
-### Task 4: End-to-end acceptance, local runtime and follow-up PR
+### Task 4: End-to-end acceptance, local runtime and PR #91 update
 
 **Files:** create `app/frontend/e2e/workbench-assistant.mjs`; extend e2e/product docs and add captured workflow screenshots under `docs/ml-workbench/screenshots/assistant/`.
 
@@ -102,8 +102,10 @@ Reject unknown fields, invalid settings/types/ranges, unknown IDs, cycles/branch
 - [ ] Run frontend check/all tests, focused Go tests/vet, real-engine browser workflow and native build/signature checks; report any inherited broader failures accurately.
 - [ ] Get one fresh whole-branch review, resolve consequential findings with RED→GREEN regressions, and rerun affected verification.
 - [ ] Build the local engine/app and refresh only the isolated preview processes. Preserve user models and any unrelated native app. Give a usable local URL and exact clicks; explain provider setup if required.
-- [ ] Commit/push the follow-up, open the dependent PR against #91 while it remains open, embed real screenshots, attach the created PR to this chat and verify links/state. No merge.
+- [ ] Fast-forward the original `feat/ml-workbench-p0` branch to the verified assistant work and push normally. Update existing PR #91 with the final scope, verification and real screenshots, then verify links/state. Do not open another PR or merge.
 
 ## Execution notes
 
-The user approved the design and asked to build/test locally. Execute inline with one fresh final review; no further design/plan approval gate. The managed worktree request did not complete in the prior turn and no worktree was created; the clean existing checkout is on dedicated follow-up branch `feat/ml-workbench-assistant`, preserving #91's branch.
+The user approved the design, asked to build/test locally, and selected the
+existing PR #91 for integration. Execute inline with one fresh final review;
+no further design/plan approval gate. Keep the local test environment available.

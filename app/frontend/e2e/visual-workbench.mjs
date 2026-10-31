@@ -365,6 +365,7 @@ try {
   await page.getByRole('dialog', { name: 'Projects and chats' }).getByText('Project A conversation', { exact: true }).click();
   await page.getByRole('button', { name: 'Workbench', exact: true }).click();
   await workbench.getByLabel('Workbench project', { exact: true }).selectOption(b.id);
+  if (await workbench.getByRole('button', { name: 'Show workbench chat', exact: true }).count()) await workbench.getByRole('button', { name: 'Show workbench chat', exact: true }).click();
   await page.getByRole('region', { name: 'Project chat', exact: true }).waitFor();
   assert.equal(await page.locator('[data-workbench-chat] [data-composer]').count(), 0);
   await page.getByRole('button', { name: 'Start a chat here', exact: true }).click();

@@ -470,10 +470,10 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		sctx = delegation.WithBudget(sctx, budget.shared)
 	}
 	log := e.Log.With("thread", th.ID, "turn", turn.ID)
-	if e.Work != nil && childExecutionFrom(ctx) == nil {
+	if e.Work != nil && childExecutionFrom(ctx) == nil && p.Workbench == nil {
 		_ = e.Work.Begin(sctx, th, p.Text) // failures are logged and counted by the service
 	}
-	if childExecutionFrom(ctx) == nil {
+	if childExecutionFrom(ctx) == nil && p.Workbench == nil {
 		user, taskErr := e.currentTaskUser(sctx, turn)
 		if taskErr == nil {
 			if existing, lookupErr := e.Store.ActiveExecutionTask(sctx, th.ID); lookupErr == nil {
@@ -622,7 +622,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	// turnItems is this thread's transcript, read once: the compiler reuses it
 	// for every model call in the loop instead of re-reading it each time.
 	var turnItems []protocol.Item
-	if e.Cfg != nil && e.optimizationPolicy(ctx).ContextCompiler {
+	if e.Cfg != nil && e.optimizationPolicy(ctx).ContextCompiler && p.Workbench == nil {
 		if its, ierr := e.Store.ListItems(sctx, th.ID, 0); ierr == nil {
 			turnItems = its
 		} else {
@@ -711,35 +711,36 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				layers = append(layers, promptLayer{Name: "tool_discovery", Text: discoveryInstruction})
 			}
 		}
-		identity, identityErr := e.workflowIdentityLayer(sctx, th.ID)
-		if identityErr != nil {
-			turnErr = identityErr
-			break
-		}
-		if identity.Text != "" {
-			layers = append(layers, identity)
-		}
-		if childExecutionFrom(ctx) == nil {
-			taskText, taskErr := e.taskContext(sctx, th.ID)
-			if taskErr != nil {
-				turnErr = taskErr
+		if p.Workbench == nil {
+			identity, identityErr := e.workflowIdentityLayer(sctx, th.ID)
+			if identityErr != nil {
+				turnErr = identityErr
 				break
 			}
-			if taskText != "" {
-				layers = append(layers, promptLayer{Name: "task_state", Text: taskText})
+			if identity.Text != "" {
+				layers = append(layers, identity)
 			}
-		}
-		if p.Workbench != nil {
-			layers = append(layers, promptLayer{Name: "workbench", Text: workbenchAssistantInstructions})
+			if childExecutionFrom(ctx) == nil {
+				taskText, taskErr := e.taskContext(sctx, th.ID)
+				if taskErr != nil {
+					turnErr = taskErr
+					break
+				}
+				if taskText != "" {
+					layers = append(layers, promptLayer{Name: "task_state", Text: taskText})
+				}
+			}
 		}
 		req.System = joinLayers(layers)
 		// The work record is re-read for every call, so an edit made earlier in
 		// this turn reaches the model as a stale criterion rather than a pass.
 		packets := RequestPackets{}
 		req.Messages = msgs
-		if out, ok := e.compile(ctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems, p.Text, scopeRoot(ctx)); ok && !res.contextReduced {
-			req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
-			packets = out.packets
+		if p.Workbench == nil {
+			if out, ok := e.compile(ctx, th, turn.ID, res.meta.ContextWindow, historyTokens, turnItems, p.Text, scopeRoot(ctx)); ok && !res.contextReduced {
+				req.Messages = requestMessages(out.msgs, msgs[liveFrom:])
+				packets = out.packets
+			}
 		}
 		breakdown := measureRequest(layers, req, packets, reductions)
 		if selection != nil {
@@ -1702,7 +1703,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	}
 
 	var taskSnapshot *protocol.TaskSnapshot
-	if childExecutionFrom(ctx) == nil {
+	if childExecutionFrom(ctx) == nil && workbenchContextFrom(ctx) == nil {
 		saved, lookupErr := e.Store.ActiveExecutionTask(sctx, th.ID)
 		if lookupErr == nil {
 			taskSnapshot = &saved
@@ -2131,12 +2132,12 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 		turn.Error = "child execution paused at its budget or progress limit"
 		_ = e.Store.FinishTurn(ctx, turn)
 	}
-	if errors.Is(err, context.Canceled) && childExecutionFrom(ctx) == nil {
+	if errors.Is(err, context.Canceled) && childExecutionFrom(ctx) == nil && workbenchContextFrom(ctx) == nil {
 		if saved, lookupErr := e.Store.ActiveExecutionTask(ctx, th.ID); lookupErr == nil {
 			_, _ = e.Store.TransitionExecutionTask(ctx, saved.Task.ID, protocol.TaskTransition{ExpectedRevision: saved.Task.Revision, Status: "cancelled"})
 		}
 	}
-	if e.Work != nil && childExecutionFrom(ctx) == nil {
+	if e.Work != nil && childExecutionFrom(ctx) == nil && workbenchContextFrom(ctx) == nil {
 		completedID, _ := e.Work.End(ctx, th.ID, turn.Status, paused, scopeRoot(ctx))
 		e.promoteMemory(ctx, th, turn, completedID)
 	}

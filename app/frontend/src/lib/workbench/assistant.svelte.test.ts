@@ -19,6 +19,10 @@ async function suggestion(text: string): Promise<WorkbenchProposal> {
   return { projectId: 'p', modelId: 'm', modelName: 'Tiny', revision: await graphRevision(text), explanation: 'Widen the first projection.', operations: [{ type: 'update', nodeId: 'layer_1', config: { outFeatures: 64 } }] };
 }
 describe('assistant editor bridge', () => {
+  it('requires a selected model so workbench questions cannot fall back to general coding tools', async () => {
+    const state = new WorkbenchAssistantState(() => null);
+    await expect(state.capture()).rejects.toThrow(/open.*model/i);
+  });
   it('captures selected context and preview is separate from a single undoable apply', async () => {
     const { state, editor, commit } = setup(), original = editor.text;
     state.selectedNodeId = 'layer_1';

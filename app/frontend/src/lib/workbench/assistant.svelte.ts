@@ -48,7 +48,7 @@ export class WorkbenchAssistantState {
   }
   async capture() {
     const current = this.current;
-    if (!current) return undefined;
+    if (!current) throw new Error('Open a model before asking about its layers.');
     const context = await buildContext(current.projectId, { id: current.modelId, name: current.modelName }, current.text, this.selectedNodeId);
     if (!sameModel(this.current, current) || this.current?.text !== current.text) throw changed();
     return context;

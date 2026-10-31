@@ -6,10 +6,13 @@ Chrome for browser interactions and PyTorch 2.15 for generated modules.
 | Check | Result |
 | --- | --- |
 | `npm run check` in `app/frontend` | Zero errors and warnings |
-| `npm test` in `app/frontend` | 207 tests passed in 43 files |
+| `npm test` in `app/frontend` | 234 tests passed in 46 files |
 | Real-engine visual workbench smoke | Passed all workflows and 18 light/dark layouts; no browser errors |
-| `go test -count=1 ./internal/workbench` (part of broad run) | Passed |
+| Real-engine assistant smoke | Passed local HTTP provider transport, context/proposal/apply/failure/navigation workflows and 6 light/dark layouts; no browser errors |
+| `go test -count=1 ./internal/workbench` | Passed |
 | `go test -count=1 -run '^TestWorkbench' ./internal/server` | Passed |
+| Focused assistant engine/server tests | Passed, including preservation of existing coding tasks after proposals, denied calls and cancellation |
+| Existing normal chat/optimization/context-compiler server regressions | Passed |
 | `go vet ./internal/workbench ./internal/protocol ./internal/engine ./internal/server` | Passed |
 | Broader Go suite | Not fully green: three existing server-test failures reproduced on the base branch; details below |
 | Generated PyTorch modules | Seven imports, forward/backward checks and parameter counts passed |
@@ -24,6 +27,7 @@ From the repository root:
 ```sh
 go test -count=1 ./internal/workbench
 go test -count=1 -run '^TestWorkbench' ./internal/server
+go test -count=1 -run '^TestWorkbenchAssistant' ./internal/engine ./internal/server
 go vet ./internal/workbench ./internal/protocol ./internal/engine ./internal/server
 cd app/frontend
 npm ci
@@ -34,8 +38,18 @@ npm test
 For the real-engine UI and generated modules, see the
 [browser-test commands](../../app/frontend/e2e/README.md#visual-ml-workbench).
 The acceptance script creates/cleans up its own engine home and projects. It
-uses a real engine, filesystem, WebSocket transport and Svelte app; it does not
-require an LLM provider. Model data in the committed snapshots is test data.
+uses a real engine, filesystem, WebSocket transport and Svelte app. The builder
+needs no provider; the assistant script starts a local deterministic provider
+and exercises the actual OpenAI-compatible HTTP/SSE boundary. Neither requires
+user credentials or a paid provider. Model data in the snapshots is test data.
+
+Assistant acceptance covers selected-layer and exact unsaved context, explanatory
+answers, settings changes, layer insertion/reconnection, read-only Preview/Cancel,
+Apply/Undo/Redo/Save, partial models, stale text/model/project protection, forbidden
+tool calls, context/provider failures, cancellation during context preparation
+and provider streaming, disabled submission without a model, and history reload.
+It tests 760/1180/1440px in both themes. The fake provider establishes UI/runtime
+correctness; it does not establish answer quality from an actual LLM.
 
 ## Generated-module checks
 
@@ -54,6 +68,11 @@ causal-prefix independence for the text starter. This establishes runnable
 architecture/code generation, not trained-model quality.
 
 ## Broader Go suite
+
+The broad results below are from the builder verification before assistant
+support. The assistant revision was checked with the focused/new Go suites and
+existing normal-chat regressions above; the full repository suite was not rerun
+for that addition. A green full Go suite is not claimed.
 
 The initial `go test -count=1 -timeout=180s ./...` run passed the other packages
 but exhausted its three-minute per-package budget in `internal/delegation`,
@@ -93,8 +112,8 @@ generated-module checks passed separately.
 
 ## Limits of this verification
 
-- Browser workflows and native build/signature are verified. The new native
-  app was not launched over the existing running UMCode instance, so native
+- Browser workflows and native build/signature are verified. The rebuilt native
+  app was not launched as part of these checks, so native
   window/download behavior is not established by these checks.
 - Data preparation, training jobs, compute connectors, checkpoint inference,
   evaluations and pretrained weights are outside this implementation and are

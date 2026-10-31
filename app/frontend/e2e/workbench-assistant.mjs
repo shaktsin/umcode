@@ -39,7 +39,8 @@ const provider = httpServer(async (req, res) => {
     if (question.includes('Wait then')) await new Promise(resolve => setTimeout(resolve, 1200));
     if (question.includes('forbidden')) tool = { name: 'file__write', arguments: JSON.stringify({ path: 'assistant-escaped.txt', content: 'should never be written' }) };
     else if (/Widen|Wait then|Invalid|Insert|Partial/.test(question)) {
-      let operations = [{ type: 'update', nodeId: snapshot.selectedNodeId ?? graph.nodes.find(n => n.kind === 'linear').id, config: { outFeatures: question.includes('Invalid') ? -1 : 64 } }];
+      const selected = graph.nodes.find(n => n.id === snapshot.selectedNodeId) ?? graph.nodes.find(n => n.kind === 'linear');
+      let operations = [{ type: 'update', nodeId: selected.id, config: { outFeatures: question.includes('Invalid') ? -1 : selected.config.outFeatures === 64 ? 96 : 64 } }];
       if (question.includes('Insert')) { const edge = graph.edges.find(e => e.source === snapshot.selectedNodeId) ?? graph.edges[0]; operations = [{ type: 'disconnect', edgeId: edge.id }, { type: 'add', ref: 'new_dropout', kind: 'dropout', config: { dropout: .2 } }, { type: 'connect', source: edge.source, target: 'new_dropout' }, { type: 'connect', source: 'new_dropout', target: edge.target }]; }
       if (question.includes('Partial')) operations = [{ type: 'remove', nodeId: graph.nodes.find(n => n.kind === 'output').id }];
       tool = { name: 'workbench__propose_edit', arguments: JSON.stringify({ explanation: question.includes('Insert') ? 'Add dropout after the selected layer for regularization.' : 'Widen the selected projection to represent more features.', operations }) };
@@ -88,6 +89,8 @@ try {
   await workbench.getByRole('button', { name: 'Ask about this layer', exact: true }).click();
   const chat = page.locator('[data-workbench-chat]'); await chat.waitFor();
   const message = chat.getByRole('textbox', { name: 'Message', exact: true }); await message.waitFor();
+  assert.equal(await chat.getByRole('button', { name: /^Approval mode/ }).count(), 0, 'Model suggestions do not expose file-action approval controls');
+  assert.equal((await message.getAttribute('placeholder')).includes('/ for skills'), false, 'Workbench guidance does not advertise unavailable coding skills');
   assert.equal(requests.length, requestCount, 'Opening chat never calls the provider');
   assert.equal(await message.evaluate(el => document.activeElement === el), true);
   const chatBox = await chat.boundingBox(), composerBox = await chat.locator('[data-composer]').boundingBox();
@@ -115,6 +118,13 @@ try {
   assert.equal(await readFile(graphFile, 'utf8'), diskBefore, 'Assistant never writes the graph');
   await proposal.getByRole('button', { name: 'Preview changes', exact: true }).click();
   const preview = workbench.getByRole('region', { name: 'Model change preview' }); await preview.waitFor();
+  await eventually(async () => {
+    const view = await canvas.boundingBox();
+    for (const node of await canvas.locator('.svelte-flow__node').all()) {
+      const box = await node.boundingBox();
+      assert.ok(box.x >= view.x && box.y >= view.y && box.x + box.width <= view.x + view.width + 1 && box.y + box.height <= view.y + view.height + 1, 'Preview fits the full architecture after its layout settles');
+    }
+  });
   await page.screenshot({ path: join(artifacts, '03-preview.png'), animations: 'disabled' });
   await preview.getByRole('button', { name: 'Cancel preview', exact: true }).click();
   await workbench.getByRole('button', { name: 'Undo model change', exact: true }).isDisabled().then(value => assert.equal(value, true));
@@ -128,8 +138,134 @@ try {
   await page.screenshot({ path: join(artifacts, '04-applied-draft.png'), animations: 'disabled' });
   await workbench.getByRole('button', { name: 'Save model', exact: true }).click();
   await eventually(async () => { assert.equal(JSON.parse(await readFile(graphFile, 'utf8')).nodes[1].config.outFeatures, 64); });
+  const proposals = () => chat.getByRole('region', { name: 'Suggested model changes' });
+  async function askProposal(text) { const count = await proposals().count(); await ask(text); await eventually(async () => assert.equal(await proposals().count(), count + 1)); return proposals().nth(count); }
+  async function editWidth(value) {
+    await workbench.getByRole('button', { name: 'Fit model to canvas', exact: true }).click();
+    await canvas.locator('[data-layer-kind="linear"]').first().click();
+    const field = workbench.getByLabel('Output features', { exact: true }); await field.fill(String(value)); await field.press('Tab');
+  }
+  await editWidth(48);
+  const unsaved = await askProposal('Widen this layer from my unsaved draft');
+  assert.equal(JSON.parse(snapshots.at(-1).graphJson).nodes[1].config.outFeatures, 48, 'Assistant receives unsaved settings');
+  assert.equal(JSON.parse(await readFile(graphFile, 'utf8')).nodes[1].config.outFeatures, 64);
+  await editWidth(50);
+  await unsaved.getByText('Model changed since this suggestion.', { exact: false }).waitFor();
+  assert.equal(await unsaved.getByRole('button', { name: 'Preview changes', exact: true }).isDisabled(), true);
+  await page.screenshot({ path: join(artifacts, '05-stale-suggestion.png'), animations: 'disabled' });
+  const invalid = await askProposal('Invalid change');
+  await invalid.getByText('This suggestion cannot be applied:', { exact: false }).waitFor();
+  assert.equal(await invalid.getByRole('button', { name: 'Preview changes', exact: true }).isDisabled(), true);
+  const insertion = await askProposal('Insert dropout after this layer');
+  await insertion.getByRole('button', { name: 'Preview changes', exact: true }).click(); await preview.waitFor();
+  assert.equal(await canvas.locator('[data-layer-kind="dropout"]').count(), 1);
+  assert.equal(await workbench.getByRole('button', { name: 'Add Input layer', exact: true }).isDisabled(), true);
+  assert.equal(await workbench.getByRole('button', { name: 'Save model', exact: true }).isDisabled(), true);
+  const previewCount = await canvas.locator('.svelte-flow__node').count();
+  await page.keyboard.press('Delete'); await page.keyboard.press('Meta+z');
+  assert.equal(await canvas.locator('.svelte-flow__node').count(), previewCount, 'Preview cannot mutate the draft');
+  await preview.getByRole('button', { name: 'Cancel preview', exact: true }).click();
+  assert.equal(await canvas.locator('[data-layer-kind="dropout"]').count(), 0);
+  await insertion.getByRole('button', { name: 'Preview changes', exact: true }).click();
+  await preview.getByRole('button', { name: 'Apply changes', exact: true }).click();
+  await workbench.getByRole('button', { name: 'Undo model change', exact: true }).click();
+  assert.equal(await canvas.locator('[data-layer-kind="dropout"]').count(), 0);
+  await workbench.getByRole('button', { name: 'Redo model change', exact: true }).click();
+  assert.equal(await canvas.locator('[data-layer-kind="dropout"]').count(), 1);
+  await workbench.getByRole('button', { name: 'Save model', exact: true }).click();
+  await eventually(async () => assert.equal(JSON.parse(await readFile(graphFile, 'utf8')).nodes.length, 6));
+  const partial = await askProposal('Partial model: remove Output');
+  await partial.getByRole('button', { name: 'Preview changes', exact: true }).click();
+  await preview.getByText('issue remains', { exact: false }).waitFor();
+  await preview.getByRole('button', { name: 'Apply changes', exact: true }).click();
+  assert.equal(await canvas.locator('[data-layer-kind="output"]').count(), 0);
+  assert.equal(await workbench.getByRole('button', { name: 'Export .py', exact: true }).isDisabled(), true);
+  await workbench.getByRole('button', { name: 'Undo model change', exact: true }).click();
+  assert.equal(await canvas.locator('[data-layer-kind="output"]').count(), 1);
+  const countBeforeDelayed = await proposals().count(), snapshotsBeforeDelayed = snapshots.length;
+  await ask('Wait then widen this layer'); await eventually(async () => assert.equal(snapshots.length, snapshotsBeforeDelayed + 1));
+  await editWidth(52);
+  await eventually(async () => assert.equal(await proposals().count(), countBeforeDelayed + 1));
+  await proposals().last().getByText('Model changed since this suggestion.', { exact: false }).waitFor();
+  const copied = await rpc('workbench/model/create', { projectId: project.id, name: 'Different model', task: 'classification' });
+  // Capture the current draft through the actual submission transport before cloning it.
+  const captured = snapshots.length; await ask('Explain the current model'); await eventually(async () => assert.equal(snapshots.length, captured + 1));
+  const currentText = snapshots.at(-1).graphJson;
+  await rpc('workbench/graph/save', { projectId: project.id, modelId: copied.id, graphJson: currentText });
+  await workbench.getByRole('button', { name: 'Refresh project models', exact: true }).click();
+  await eventually(async () => assert.equal(await workbench.getByLabel('Project model', { exact: true }).isEnabled(), true));
+  const beforeSwitch = await proposals().count(); await ask('Wait then widen this layer');
+  await workbench.getByLabel('Project model', { exact: true }).selectOption(copied.id);
+  await eventually(async () => assert.equal(await proposals().count(), beforeSwitch + 1));
+  await proposals().last().getByText('Open Feature classifier', { exact: false }).waitFor();
+  assert.equal(await proposals().last().getByRole('button', { name: 'Preview changes', exact: true }).isDisabled(), true);
+  await workbench.getByLabel('Project model', { exact: true }).selectOption(model.id); await canvas.waitFor();
+  await workbench.getByText('Unsaved changes', { exact: true }).waitFor();
+  const otherRoot = join(fixture, 'other-project'); await mkdir(otherRoot);
+  const other = await rpc('project/create', { root: otherRoot, name: 'Other project' });
+  await workbench.getByLabel('Workbench project', { exact: true }).selectOption(other.id);
+  await page.getByRole('region', { name: 'Project chat', exact: true }).waitFor();
+  assert.equal(await preview.count(), 0);
+  await workbench.getByLabel('Workbench project', { exact: true }).selectOption(project.id); await canvas.waitFor();
+  await workbench.getByText('Unsaved changes', { exact: true }).waitFor();
+  const beforeForbidden = await proposals().count(); await ask('Try a forbidden file tool');
+  await chat.getByRole('button', { name: 'Send', exact: true }).waitFor();
+  assert.equal(await proposals().count(), beforeForbidden);
+  await assert.rejects(readFile(join(root, 'assistant-escaped.txt')), { code: 'ENOENT' });
+  const layouts = [];
+  for (const theme of ['light', 'dark']) for (const [width, height] of [[760, 520], [1180, 780], [1440, 900]]) {
+    await page.emulateMedia({ colorScheme: theme }); await page.setViewportSize({ width, height });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    if (!await chat.count()) await workbench.getByRole('button', { name: 'Show workbench chat', exact: true }).click();
+    await message.waitFor({ state: 'visible' });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal page overflow');
+    const box = await chat.boundingBox(), compose = await chat.locator('[data-composer]').boundingBox();
+    assert.ok(compose.x + compose.width <= box.x + box.width + 1, 'Composer fits at ' + width);
+    await page.screenshot({ path: join(artifacts, `06-chat-${theme}-${width}.png`), animations: 'disabled' });
+    const buttons = await chat.getByRole('button', { name: 'Preview changes', exact: true }).all();
+    let enabled; for (const button of buttons.reverse()) if (await button.isEnabled()) { enabled = button; break; }
+    assert.ok(enabled, 'Current model suggestion is available after navigation'); await enabled.click(); await preview.waitFor();
+    if (width < 1180) assert.equal(await chat.count(), 0, 'Preview closes the narrow overlay');
+    const applyBox = await preview.getByRole('button', { name: 'Apply changes', exact: true }).boundingBox();
+    assert.ok(applyBox.y >= 0 && applyBox.y + applyBox.height <= height, 'Apply is reachable at ' + width);
+    await page.screenshot({ path: join(artifacts, `07-preview-${theme}-${width}.png`), animations: 'disabled' });
+    await preview.getByRole('button', { name: 'Cancel preview', exact: true }).click();
+    layouts.push({ theme, width, height, passed: true });
+  }
+  await page.emulateMedia({ colorScheme: 'light' }); await page.setViewportSize({ width: 1440, height: 900 });
+  if (!await chat.count()) await workbench.getByRole('button', { name: 'Show workbench chat', exact: true }).click();
+  const beforeCancelTool = await proposals().count(), beforeCancelSnapshot = snapshots.length;
+  await ask('Wait then widen, cancellation test'); await eventually(async () => assert.equal(snapshots.length, beforeCancelSnapshot + 1));
+  await chat.getByRole('button', { name: 'Stop', exact: true }).click(); await chat.getByRole('button', { name: 'Send', exact: true }).waitFor();
+  await page.waitForTimeout(1400); assert.equal(await proposals().count(), beforeCancelTool, 'Cancelled tool never becomes actionable');
+  const beforeContextFailure = snapshots.length;
+  await page.evaluate(() => { window.__assistantDigest = crypto.subtle.digest; crypto.subtle.digest = async () => { throw new Error('Fixture context error'); }; });
+  await ask('Keep my question after a context error'); await page.getByText('Fixture context error', { exact: true }).waitFor();
+  assert.equal(await message.inputValue(), 'Keep my question after a context error'); assert.equal(snapshots.length, beforeContextFailure);
+  await page.evaluate(() => { crypto.subtle.digest = window.__assistantDigest; delete window.__assistantDigest; });
+  const beforeProviderFailure = await proposals().count(); await ask('Provider failure');
+  await chat.getByText('Fixture provider rejected this request', { exact: true }).waitFor();
+  await chat.getByRole('button', { name: 'Send', exact: true }).waitFor(); assert.equal(await proposals().count(), beforeProviderFailure);
+  await workbench.getByRole('button', { name: 'Save model', exact: true }).click(); await workbench.getByText('Saved in project', { exact: true }).waitFor();
+  const threads = await rpc('thread/list', { projectId: project.id, archived: false, limit: 20 }), savedThread = threads.threads[0];
+  const history = await rpc('thread/read', { threadId: savedThread.id });
+  assert.ok(history.items.some(item => item.data?.workbenchProposal));
+  await page.reload(); await canvas.waitFor();
+  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects and chats' }).getByText(savedThread.title, { exact: true }).click();
+  await page.getByRole('button', { name: 'Workbench', exact: true }).click();
+  if (!await chat.count()) await workbench.getByRole('button', { name: 'Show workbench chat', exact: true }).click();
+  await eventually(async () => assert.ok(await proposals().count() > 0, 'Persisted proposals render after reload'));
+  assert.equal(JSON.parse(await readFile(graphFile, 'utf8')).nodes[1].config.outFeatures, 52);
+  await workbench.getByRole('button', { name: 'Back to models', exact: true }).click();
+  await message.fill('Keep this question until a model is selected');
+  const beforeNoModel = snapshots.length;
+  assert.equal(await chat.getByRole('button', { name: 'Send', exact: true }).isDisabled(), true);
+  await message.press('Enter'); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  assert.equal(snapshots.length, beforeNoModel, 'No model cannot fall back to generic coding tools');
+  assert.equal(await message.inputValue(), 'Keep this question until a model is selected');
   assert.deepEqual(errors, []);
-  await writeFile(join(artifacts, 'report.json'), JSON.stringify({ realEngine: true, realProviderTransport: true, paidProvider: false, snapshots: snapshots.length, browserErrors: errors }, null, 2));
+  await writeFile(join(artifacts, 'report.json'), JSON.stringify({ realEngine: true, realProviderTransport: true, paidProvider: false, snapshots: snapshots.length, layouts, workflows: ['selected-layer questions', 'unsaved context', 'explanations', 'preview/cancel', 'apply/undo/redo/save', 'insert/reconnect', 'partial models', 'stale draft/model/project', 'forbidden tool', 'context failure preserves question', 'provider failure', 'cancel during capture/provider call', 'history reload'], browserErrors: errors }, null, 2));
   console.log('Workbench assistant smoke passed; artifacts: ' + artifacts);
 } catch (err) {
   await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(artifacts, 'failure.png') }).catch(() => {});

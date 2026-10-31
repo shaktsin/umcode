@@ -1,8 +1,10 @@
 package server_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/workbench"
 )
 
@@ -52,6 +55,15 @@ func TestWorkbenchAssistantRPCContextAndProposal(t *testing.T) {
 	turn, _, _ := h.waitTurn(started.Turn.ID, func(a protocol.Approval) bool { t.Errorf("proposal asked for tool approval: %s", a.Tool); return false })
 	if turn.Status != protocol.TurnCompleted {
 		t.Fatalf("turn: %+v", turn)
+	}
+	h.fake.mu.Lock()
+	privateClassifications := len(h.fake.intentCalls)
+	h.fake.mu.Unlock()
+	if privateClassifications != 0 {
+		t.Fatal("architecture guidance entered the software-task classifier instead of using its submitted model context")
+	}
+	if _, err := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("architecture guidance created or changed a software execution task")
 	}
 	items, err := h.eng.Store.ListItems(h.ctx, th.ID, 0)
 	if err != nil {
@@ -127,4 +139,31 @@ func TestWorkbenchAssistantRPCRejectsForeignContextAndOtherTools(t *testing.T) {
 	})
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Hello"}, &started)
 	h.waitTurn(started.Turn.ID, nil)
+}
+
+func TestWorkbenchAssistantPreservesExistingCodingTask(t *testing.T) {
+	h, th, c := assistantRPCFixture(t)
+	h.fake.push(textReply("The project is ready to discuss."))
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Explain this project"}, &started)
+	h.waitTurn(started.Turn.ID, nil)
+	before, err := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, _ := json.Marshal(before)
+	for _, scripts := range [][]func(llm.Request, string) ([]llm.Event, error){
+		{toolReply("workbench__propose_edit", `{"explanation":"Widen the projection","operations":[{"type":"update","nodeId":"dense","config":{"outFeatures":8}}]}`), textReply("You can preview this change.")},
+		{toolReply("file__write", `{"path":"not-written.txt","content":"no"}`), textReply("Only architecture suggestions are available.")},
+		{func(llm.Request, string) ([]llm.Event, error) { return nil, context.Canceled }},
+	} {
+		h.fake.push(scripts...)
+		h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Help with this layer", Workbench: &c}, &started)
+		h.waitTurn(started.Turn.ID, nil)
+		after, err := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
+		actual, _ := json.Marshal(after)
+		if err != nil || string(actual) != string(expected) {
+			t.Fatalf("workbench changed the existing coding task: %v\nbefore=%s\nafter=%s", err, expected, actual)
+		}
+	}
 }

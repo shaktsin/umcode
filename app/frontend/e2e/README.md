@@ -106,6 +106,20 @@ graph protection; and chat project isolation. It checks 760/1180/1440px in both
 themes, producing 18 layout captures and additional workflow screenshots.
 Data, training and inference are placeholders, not tested runtime features.
 
+The assistant acceptance test uses a real engine plus its own deterministic
+OpenAI-compatible HTTP/SSE provider, so no user API key or paid provider is used:
+
+```sh
+PLAYWRIGHT_MODULE=/tmp/umcode-browser-tools/node_modules/playwright-core/index.mjs \
+  UMCODE_TEST_ENGINE=/tmp/umcode-workbench-test node e2e/workbench-assistant.mjs
+```
+
+It covers selected-layer questions and unsaved context, proposals, Preview/Cancel,
+Apply/Undo/Redo/Save, layer insertion/reconnection, partial architectures, stale
+draft/model/project checks, unavailable tools, context/provider errors,
+cancellation, history reload and six light/dark layouts. It writes captures and
+`report.json` to `/tmp/umcode-workbench-assistant` (or `UI_ARTIFACT_DIR`).
+
 Generated architectures can also be checked with real PyTorch:
 
 ```sh

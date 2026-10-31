@@ -1,5 +1,9 @@
 # Workflow snapshots
 
+The [assistant gallery](assistant/README.md) adds layer questions, suggestions,
+canvas preview, applied drafts, stale-suggestion protection and a narrow dark
+preview to the builder workflows below.
+
 Captured from the real Svelte app and Go engine by
 `app/frontend/e2e/visual-workbench.mjs`, using temporary test projects. The
 validation messages, model names, generated code and parameter counts come from

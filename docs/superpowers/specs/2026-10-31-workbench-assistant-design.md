@@ -1,7 +1,7 @@
 # Layer-by-layer assistance in the ML workbench
 
-Status: proposed follow-up to PR #91; builder check found no important open
-questions. No product implementation yet.
+Status: approved addition to PR #91; builder check found no important open
+questions. Implementation and acceptance verification are in progress.
 
 ## Intent and size
 
@@ -11,15 +11,15 @@ starting point for questions about dimensions, settings, purpose and next steps.
 The assistant can explain and propose changes; the user previews and applies
 them to the draft.
 
-This is a medium feature suitable for one focused follow-up PR. It crosses chat
+This is a medium feature added to the visual workbench PR. It crosses chat
 input, protocol/engine handling, proposal validation, the builder UI and tests.
 It reuses provider routing, chat streaming/history, supported layer definitions,
 shape analysis, parameter counts, draft persistence and undo. It introduces no
 new ML runtime, training or inference implementation. Exact file/line counts
 and a duration are not estimated before the implementation plan.
 
-PR #91 remains the builder milestone. The follow-up starts from its head and
-depends on it; if #91 is still open, use a stacked PR and explain the dependency.
+PR #91 includes both the visual builder and architecture assistance. It remains
+a builder milestone; training, inference and deployment are separate work.
 
 ## Decisions from the conversation
 
@@ -28,7 +28,7 @@ depends on it; if #91 is still open, use a stacked PR and explain the dependency
   and validation issues, including unsaved changes.
 - Explain, propose, preview, Apply and Undo; Save remains a separate action.
 - Recheck a proposal if the user changes the model while waiting for a reply.
-- Deliver this in a separate follow-up PR.
+- Include this work in the existing PR #91.
 
 ## Approaches
 
@@ -57,6 +57,8 @@ layer. Questions without a selected layer use the whole current model.
 Use the existing project chat and its provider selection, not a new conversation
 database or a new LLM connection. Every workbench turn carries its own explicit
 model context; a response/proposal is bound to that turn's model and project.
+Reuse the transcript and provider without creating or changing the conversation's
+software execution-task/work records. Model guidance is advisory until Apply.
 Switching models does not rewrite previous message labels or retarget proposals.
 The existing wrong-project chat guard remains in force.
 
@@ -179,6 +181,6 @@ reproduced on its base; do not claim a green full Go suite without rerunning it.
 Internal helper names, component extraction, exact operation field names,
 canvas highlighting style and revision encoding are implementation choices.
 They may be settled without changing the interaction and bounds above.
-The independent builder check returned "nothing important left". This design is
-ready for user review; product code has not been written and the follow-up PR
-has not yet been opened.
+The independent builder check returned "nothing important left" and the user
+approved implementation. Verification and screenshots are recorded with the
+product documentation in `docs/ml-workbench/`.
