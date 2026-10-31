@@ -217,7 +217,8 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 	if err != nil {
 		return "", err
 	}
-	e.publishAgentPlan(stored, "approved")
+	// respondAgentPlan, the only path that approves a plan card, announced
+	// the approved plan.
 	approved := planCardFor(stored, pool, lead, opts, nil)
 	type agentOut struct {
 		Name     string                         `json:"name"`
@@ -736,6 +737,16 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 		if err := e.Store.SaveAgentPlan(sctx, edited); err != nil {
 			return res, none, err
 		}
+		// The card shows what is approved before the decision is stored, so
+		// approval/resolved (published with the decision) and any later read
+		// carry the edited card.
+		if card, err := e.agentPlanCard(sctx, edited); err == nil {
+			if payload, err := json.Marshal(card); err == nil {
+				if err := e.Store.UpdateApprovalArgs(sctx, approval.ID, payload); err != nil {
+					e.Log.Warn("refresh plan card", "plan", plan.ID, "err", err)
+				}
+			}
+		}
 	}
 	w.outcome, w.feedback = planApproved, ""
 	decided, committed, err := e.respondApprovalCommitted(sctx, approval.ID, true, false, by)
@@ -748,6 +759,9 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 			if changed {
 				if rerr := e.Store.SaveAgentPlan(sctx, plan); rerr != nil {
 					e.Log.Warn("restore plan after failed approval", "plan", plan.ID, "err", rerr)
+				}
+				if rerr := e.Store.UpdateApprovalArgs(sctx, approval.ID, approval.Args); rerr != nil {
+					e.Log.Warn("restore plan card after failed approval", "plan", plan.ID, "err", rerr)
 				}
 			}
 			return res, none, e.planCardRefusal(sctx, plan.ID, approval.ID, err)
@@ -762,19 +776,7 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 	if err != nil {
 		return res, none, err
 	}
-	if changed {
-		// The stored card shows what was approved, so a restarted client
-		// rebuilds the approved shape.
-		if card, err := e.agentPlanCard(sctx, stored); err == nil {
-			if payload, err := json.Marshal(card); err == nil {
-				if err := e.Store.UpdateApprovalArgs(sctx, approval.ID, payload); err != nil {
-					e.Log.Warn("refresh plan card", "plan", plan.ID, "err", err)
-				} else if a, err := e.Store.GetApproval(sctx, approval.ID); err == nil {
-					decided = a
-				}
-			}
-		}
-	}
+	// The one approved announcement (the waiting tool does not repeat it).
 	e.publishAgentPlan(stored, decided.Status)
 	return done(stored, decided)
 }
