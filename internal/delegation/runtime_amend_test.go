@@ -279,3 +279,57 @@ func TestAmendDoesNotChangeRevisionStates(t *testing.T) {
 		t.Fatal("states changed")
 	}
 }
+
+// An amend can rewrite an applied agent's files, so after an amended head is
+// completed the applied agents' checkouts may hold the only copy of their
+// original results: cleanup keeps them and says so. Without an amend they are
+// discarded as before.
+func TestCleanupRuntimeKeepsWorkspacesAfterAmend(t *testing.T) {
+	complete := func(t *testing.T, s *store.Store, task protocol.AgentTask) func() error {
+		return func() error {
+			return s.UpdateAgentTaskState(t.Context(), task.ID, task.ThreadID, task.ProjectID, task.State, protocol.AgentStateCompleted)
+		}
+	}
+	t.Run("amended", func(t *testing.T) {
+		svc, s, task, a, b := rtTwoApplied(t)
+		ctx := t.Context()
+		fixed := rtStageFix(t, task.ParentRoot, "rewritten by the lead\n")
+		if _, err := svc.AmendRuntimeHead(ctx, task.ID, "rewrite a's file"); err != nil {
+			t.Fatal(err)
+		}
+		rtVerify(t, s, task.ID)
+		if err := svc.FinishRuntime(ctx, task.ID, fixed, 2, complete(t, s, task)); err != nil {
+			t.Fatal(err)
+		}
+		err := svc.CleanupRuntime(ctx, task.ID)
+		if err == nil || !strings.Contains(err.Error(), "amended 1 time") || !strings.Contains(err.Error(), a.agent.ID) || !strings.Contains(err.Error(), b.agent.ID) {
+			t.Fatalf("cleanup after amend: %v, want a retained-workspaces warning naming both agents", err)
+		}
+		for _, w := range []rtAgent{a, b} {
+			got, err := s.AgentWorkspace(ctx, w.ws.ID)
+			if err != nil || got.Cleaned {
+				t.Fatalf("workspace %s = %+v %v, want retained", w.ws.ID, got, err)
+			}
+			if _, err := os.Stat(got.Root); err != nil {
+				t.Fatalf("workspace dir of %s: %v", w.agent.ID, err)
+			}
+		}
+	})
+	t.Run("not amended", func(t *testing.T) {
+		svc, s, task, a, b := rtTwoApplied(t)
+		ctx := t.Context()
+		rtVerify(t, s, task.ID)
+		h := rtHeadRow(t, s, task.ID)
+		if err := svc.FinishRuntime(ctx, task.ID, h.HeadTree, 2, complete(t, s, task)); err != nil {
+			t.Fatal(err)
+		}
+		if err := svc.CleanupRuntime(ctx, task.ID); err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range []rtAgent{a, b} {
+			if got, err := s.AgentWorkspace(ctx, w.ws.ID); err != nil || !got.Cleaned {
+				t.Fatalf("workspace %s = %+v %v, want cleaned", w.ws.ID, got, err)
+			}
+		}
+	})
+}
