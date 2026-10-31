@@ -156,7 +156,12 @@ type AgentIntegrationReport struct {
 	BlockedAgents []string `json:"blockedAgents,omitempty"`
 	// Blocked explains an interrupted apply that could not be settled.
 	Blocked string `json:"blocked,omitempty"`
-	Message string `json:"message"`
+	// Amendments counts the lead's agent.integrate amend steps: HeadTree
+	// then also holds the lead's own staged fixes, not only agent work.
+	Amendments int `json:"amendments,omitempty"`
+	// AmendReason is the reason given for the latest amendment.
+	AmendReason string `json:"amendReason,omitempty"`
+	Message     string `json:"message"`
 }
 
 type AgentWorkflowCheck struct {

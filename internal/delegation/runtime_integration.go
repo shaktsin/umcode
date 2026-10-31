@@ -702,9 +702,10 @@ func (s *WorkspaceService) ResolveRuntimeManually(ctx context.Context, taskID, a
 // reading the staged tree and that write, nothing was recorded: the head is
 // still the old tree and the checkout holds the user's staged state, which
 // reconcile leaves alone (with no revision applying it only repairs a head
-// missing an applied revision). Verification, status and the next accept
-// report that the checkout differs from the head, and amend run again
-// records it. Nothing ever adopts a checkout tree automatically.
+// missing an applied revision). Status does not read the checkout, so it
+// still reports the old head; the operations that check the checkout
+// (verification, accept, resolve, complete and spawning) refuse because it
+// differs from the head, and amend run again records it. Nothing ever adopts a checkout tree automatically.
 func (s *WorkspaceService) AmendRuntimeHead(ctx context.Context, taskID, reason string) (RuntimeIntegration, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
@@ -909,7 +910,10 @@ func (s *WorkspaceService) FinishRuntime(ctx context.Context, taskID, headTree s
 
 // CleanupRuntime discards the checkouts of a completed task's applied runtime
 // revisions: their work is in the verified integrated head. Dropped, conflicted
-// and never-integrated work and manually resolved revisions are retained. Each
+// and never-integrated work and manually resolved revisions are retained. When
+// the head was amended, every applied checkout is retained too: an amend can
+// rewrite an agent's files, so its checkout may hold the only copy of the
+// agent's original result; the returned warning names the agents. Each
 // checkout must still be exactly its result revision (DiscardCommitted), else
 // it is retained and reported; the errors are warnings for the caller.
 func (s *WorkspaceService) CleanupRuntime(ctx context.Context, taskID string) error {
@@ -926,6 +930,22 @@ func (s *WorkspaceService) CleanupRuntime(ctx context.Context, taskID string) er
 	revs, err := s.Store.AgentRevisions(ctx, taskID)
 	if err != nil {
 		return err
+	}
+	h, err := s.Store.AgentIntegrationHead(ctx, taskID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	if err == nil && h.Amendments > 0 {
+		var kept []string
+		for _, r := range revs {
+			if r.State == store.RevisionApplied {
+				kept = append(kept, r.AgentID)
+			}
+		}
+		if len(kept) == 0 {
+			return nil
+		}
+		return fmt.Errorf("the integrated state was amended %d time(s) by the lead (last: %s), so the workspaces of the applied agents (%s) are retained: an amend can rewrite an agent's files, so a workspace may hold the only copy of its original result", h.Amendments, h.AmendReason, strings.Join(kept, ", "))
 	}
 	var errs []error
 	for _, r := range revs {
