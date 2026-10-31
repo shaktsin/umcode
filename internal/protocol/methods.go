@@ -296,6 +296,34 @@ type AgentSuggestionRespondResult struct {
 	ExpiresAt       *time.Time      `json:"expiresAt,omitempty"`
 }
 
+// MethodAgentSuggestionGet reads one agent.suggest card's stored state
+// (pending, enabled, declined or expired). Read-only; admin connections only.
+const MethodAgentSuggestionGet = "agent/suggestion/get"
+
+type AgentSuggestionGetParams struct {
+	SuggestionID string `json:"suggestionId"`
+}
+
+// MethodAgentPlanGet reads one plan with its card and the card's approval
+// status (pending, approved, denied or expired). Read-only; admin
+// connections only.
+const MethodAgentPlanGet = "agent/plan/get"
+
+type AgentPlanGetParams struct {
+	PlanID string `json:"planId"`
+}
+
+// AgentPlanGetResult is the stored plan, the card as stored on its approval
+// (rebuilt from the plan when it has none) and that approval's ID and status.
+// A superseded plan has State superseded; its card reads expired (or denied
+// when it was answered before the newer proposal).
+type AgentPlanGetResult struct {
+	Plan           AgentPlan `json:"plan"`
+	Card           *PlanCard `json:"card,omitempty"`
+	ApprovalID     string    `json:"approvalId,omitempty"`
+	ApprovalStatus string    `json:"approvalStatus,omitempty"`
+}
+
 // MethodAgentPlanRespond is the app's answer to an agent.propose_plan card
 // (admin connections only): approve with optional per-agent model choices,
 // dropped agents and limits, decline, or revise with feedback for the lead.

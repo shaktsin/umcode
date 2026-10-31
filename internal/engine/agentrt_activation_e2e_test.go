@@ -572,6 +572,34 @@ func TestE2ESuggestEnablePlanApproveSpawnIntegrate(t *testing.T) {
 	}
 }
 
+// restartedEngine starts a second engine on x's store and secrets, as after a
+// restart, with runtime_v2 on and x's scripted provider.
+func restartedEngine(t *testing.T, x *activationE2E) (*Engine, *runtimeScriptProvider) {
+	t.Helper()
+	cfg := config.Default(t.TempDir())
+	cfg.LLM.Provider = "claude"
+	cfg.LLM.Model = "deterministic"
+	runtimeV2On(cfg)
+	p := &runtimeScriptProvider{script: x.script}
+	reg := llm.NewRegistry()
+	reg.Register(p)
+	restarted, err := New(t.Context(), Options{Config: cfg, Store: x.e.Store, Secrets: x.e.Secrets, LLMs: reg, DisableMCP: true, DisableScheduler: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.Shutdown(context.Background()) })
+	return restarted, p
+}
+
+// suggestTurnOn runs suggestTurn on another engine (a restarted one).
+func (x *activationE2E) suggestTurnOn(t *testing.T, e *Engine, p *runtimeScriptProvider) string {
+	t.Helper()
+	prevE, prevP := x.e, x.p
+	x.e, x.p = e, p
+	defer func() { x.e, x.p = prevE, prevP }()
+	return x.suggestTurn(t)
+}
+
 // rtCheckoutState fingerprints the project checkout: HEAD, raw index bytes
 // and status.
 func rtCheckoutState(t *testing.T, root string) string {
@@ -740,18 +768,8 @@ func TestE2ERestartWithPendingPlan(t *testing.T) {
 	x.admitted(t)
 
 	// The engine restarts on the same store while the card is pending.
-	cfg := config.Default(t.TempDir())
-	cfg.LLM.Provider = "claude"
-	cfg.LLM.Model = "deterministic"
-	runtimeV2On(cfg)
-	p2 := &runtimeScriptProvider{script: x.script}
-	reg := llm.NewRegistry()
-	reg.Register(p2)
-	restarted, err := New(t.Context(), Options{Config: cfg, Store: x.e.Store, Secrets: x.e.Secrets, LLMs: reg, DisableMCP: true, DisableScheduler: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { restarted.Shutdown(context.Background()) })
+	restarted, p2 := restartedEngine(t, x)
+	var err error
 	if got, _ := x.e.Store.GetApproval(t.Context(), a.ID); got.Status != "expired" {
 		t.Fatalf("card after restart %q, want expired", got.Status)
 	}

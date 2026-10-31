@@ -343,6 +343,44 @@ func (e *Engine) decideAgentPlan(ctx context.Context, planID, outcome, feedback,
 	return a, err
 }
 
+// GetAgentPlan is agent/plan/get: the stored plan, its card as stored on the
+// card's approval (rebuilt from the plan when there is no approval) and the
+// approval's status. It never changes anything.
+func (e *Engine) GetAgentPlan(ctx context.Context, p protocol.AgentPlanGetParams) (protocol.AgentPlanGetResult, error) {
+	var res protocol.AgentPlanGetResult
+	if delegationChild(ctx) || childExecutionFrom(ctx) != nil {
+		return res, protocol.Errorf(protocol.CodeInvalidRequest, "agents and child tasks cannot read plan cards")
+	}
+	if p.PlanID == "" {
+		return res, protocol.Errorf(protocol.CodeInvalidParams, "planId required")
+	}
+	plan, err := e.Store.AgentPlan(ctx, p.PlanID)
+	if errors.Is(err, store.ErrNotFound) {
+		return res, protocol.Errorf(protocol.CodeNotFound, "agent plan %s not found", p.PlanID)
+	}
+	if err != nil {
+		return res, err
+	}
+	res.Plan = plan
+	a, err := e.Store.LatestApprovalForNode(ctx, "agent_plan", plan.ID)
+	switch {
+	case err == nil:
+		res.ApprovalID, res.ApprovalStatus = a.ID, a.Status
+		var card protocol.PlanCard
+		if json.Unmarshal(a.Args, &card) == nil && card.PlanID == plan.ID {
+			res.Card = &card
+		}
+	case !errors.Is(err, store.ErrNotFound):
+		return res, err
+	}
+	if res.Card == nil && e.AgentRuntime != nil {
+		if card, cerr := e.agentPlanCard(ctx, plan); cerr == nil {
+			res.Card = &card
+		}
+	}
+	return res, nil
+}
+
 // agentPlanCard rebuilds a stored plan's card from the plan, the task's model
 // pool and the current capability clamp.
 func (e *Engine) agentPlanCard(ctx context.Context, plan protocol.AgentPlan) (protocol.PlanCard, error) {
