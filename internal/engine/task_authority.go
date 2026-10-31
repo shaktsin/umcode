@@ -124,6 +124,17 @@ func (e *Engine) requirementApproval(ctx context.Context, task protocol.Executio
 	}
 	return a, true, nil
 }
+
+// recordOnlyAgentTool names the activation cards whose only effects are the
+// engine's own records: agent.suggest stores a suggestion and agent.propose_plan
+// a proposed plan and its card. When such a call is cut off (turn interrupted,
+// engine restarted), its outcome is not uncertain: the card expires, the plan
+// stays proposed and nothing starts, so it never blocks later actions as an
+// uncertain mutation would.
+func recordOnlyAgentTool(name string) bool {
+	return name == "agent.suggest" || name == "agent.propose_plan"
+}
+
 func (e *Engine) checkTaskAuthority(ctx context.Context, th protocol.Thread, snapshot protocol.TaskSnapshot, op protocol.TaskOperation) (protocol.AuthorityDecision, error) {
 	latest, err := e.Store.ActiveExecutionTask(ctx, th.ID)
 	if err != nil {
@@ -196,7 +207,7 @@ func (e *Engine) checkTaskAuthority(ctx context.Context, th protocol.Thread, sna
 	}
 	if !workflowDiscoveryTool(op.Tool) {
 		for _, past := range latest.Operations {
-			if past.Status == "outcome_unknown" && past.ResolvedByID == "" {
+			if past.Status == "outcome_unknown" && past.ResolvedByID == "" && !recordOnlyAgentTool(past.Tool) {
 				d := taskDenied(op, "outcome_unknown", "A previous action's effects are uncertain.", "Inspect and verify its effects before any further mutation; do not replay it.")
 				d.Failure.BlockerID = past.ID
 				return d, nil
