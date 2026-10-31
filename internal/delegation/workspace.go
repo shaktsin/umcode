@@ -740,11 +740,15 @@ const (
 // the task is applying: the project checkout may be mid-write.
 const IntegrationApplyingText = "an integration is being applied to the project checkout"
 
-// IntegrationApplyingAdvice is the refusal for agentID's applying revision.
-// Under the task lock an applying revision is an interrupted or blocked
-// apply, which waiting never settles, so it tells the lead how to settle it.
-func IntegrationApplyingAdvice(agentID string) string {
-	return fmt.Sprintf("%s (agent %s's revision is applying); if no accept is running, its apply was interrupted: accept agent %s again (agent.integrate {action:\"accept\", agent:%q}) to settle it, and if it stays blocked check agent.integrate {action:\"status\"}", IntegrationApplyingText, agentID, agentID, agentID)
+// IntegrationApplyingAdvice is the refusal for rev, a revision that is
+// applying. Under the task lock an applying revision is an interrupted or
+// blocked apply, which waiting never settles, so it tells the lead how to
+// settle it: accept again, or resolved again for a manual resolution.
+func IntegrationApplyingAdvice(rev store.AgentRevision) string {
+	if rev.Reason == manualResolution {
+		return fmt.Sprintf("%s (agent %s's manual resolution is being recorded); if no agent.integrate call is running, it was interrupted: call agent.integrate {action:\"resolved\", agent:%q} again to record it, and if it stays blocked check agent.integrate {action:\"status\"}", IntegrationApplyingText, rev.AgentID, rev.AgentID)
+	}
+	return fmt.Sprintf("%s (agent %s's revision is applying); if no accept is running, its apply was interrupted: accept agent %s again (agent.integrate {action:\"accept\", agent:%q}) to settle it, and if it stays blocked check agent.integrate {action:\"status\"}", IntegrationApplyingText, rev.AgentID, rev.AgentID, rev.AgentID)
 }
 
 // PrepareRuntime gives a runtime agent its own private checkout. A
@@ -821,7 +825,7 @@ func (s *WorkspaceService) prepareRuntimeLocked(ctx context.Context, t protocol.
 	}
 	for _, r := range revs {
 		if r.State == store.RevisionApplying {
-			return WorkspaceRef{}, errors.New(IntegrationApplyingAdvice(r.AgentID))
+			return WorkspaceRef{}, errors.New(IntegrationApplyingAdvice(r))
 		}
 	}
 	h, err := s.head(ctx, t, false)

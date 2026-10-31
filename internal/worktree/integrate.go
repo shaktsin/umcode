@@ -113,7 +113,7 @@ func checkParentState(ctx context.Context, parent, base, expectedTree string) er
 	if len(unstaged) > 0 {
 		return fmt.Errorf("%w: unstaged edits at %s", ErrParentChanged, strings.Join(unstaged, ", "))
 	}
-	untracked, err := hardenedNULList(ctx, canonical, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := hardenedNULList(ctx, canonical, append(userExcludesArgs(ctx), "ls-files", "--others", "--exclude-standard", "-z")...)
 	if err != nil {
 		return err
 	}
@@ -812,6 +812,65 @@ func ValidateOwnedMetadata(ctx context.Context, root string) error {
 	return nil
 }
 
+// userExcludesArgs returns `-c core.excludesFile=<path>` for the user's own
+// global excludes file, so the hardened parent checks ignore what the user
+// ignores globally (for example .DS_Store) without loading any other global
+// configuration. The path is core.excludesFile from the user's global config
+// files only (XDG then ~/.gitconfig, read with `git config --file`, no
+// includes), or git's default $XDG_CONFIG_HOME/git/ignore
+// (~/.config/git/ignore); it must be absolute and an existing regular file,
+// else nothing is passed.
+func userExcludesArgs(ctx context.Context) []string {
+	if p := userExcludesFile(ctx); p != "" {
+		return []string{"-c", "core.excludesFile=" + p}
+	}
+	return nil
+}
+
+func userExcludesFile(ctx context.Context) string {
+	home, _ := os.UserHomeDir()
+	xdg := os.Getenv("XDG_CONFIG_HOME")
+	if xdg == "" && home != "" {
+		xdg = filepath.Join(home, ".config")
+	}
+	var configs []string
+	if xdg != "" {
+		configs = append(configs, filepath.Join(xdg, "git", "config"))
+	}
+	if home != "" {
+		configs = append(configs, filepath.Join(home, ".gitconfig"))
+	}
+	path := ""
+	for _, file := range configs { // later files win, as in git
+		if info, err := os.Stat(file); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		cmd := exec.CommandContext(ctx, "git", "--no-pager", "config", "--file", file, "--path", "--get", "core.excludesFile")
+		cmd.Dir = filepath.Dir(file)
+		for _, e := range os.Environ() {
+			if !strings.HasPrefix(e, "GIT_") {
+				cmd.Env = append(cmd.Env, e)
+			}
+		}
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_CEILING_DIRECTORIES="+filepath.Dir(file))
+		if out, err := cmd.Output(); err == nil {
+			if v := strings.TrimSpace(string(out)); v != "" {
+				path = v
+			}
+		}
+	}
+	if path == "" && xdg != "" {
+		path = filepath.Join(xdg, "git", "ignore")
+	}
+	if !filepath.IsAbs(path) {
+		return ""
+	}
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return path
+}
+
 // HardenedGit runs Git with hooks, fsmonitor, pagers and every transport
 // disabled by command-line overrides (which win over repository config), no
 // system/global configuration, no inherited GIT_* environment and no optional
@@ -823,9 +882,21 @@ func HardenedGit(ctx context.Context, dir string, stdin []byte, args ...string) 
 
 // hardenedRunEnv is HardenedGit with extra GIT_* variables (for example a
 // private GIT_INDEX_FILE) added after the inherited ones are removed.
+//
+// Git honours safe.directory only from protected configuration, which the
+// hardened environment does not load, so a repository owned by another user
+// and trusted through the user's global safe.directory (containers, CI, WSL)
+// would be refused. The runner therefore passes safe.directory for exactly
+// the repository it operates on: the canonical path of dir, which callers
+// take from the admitted project/parent or a manager-owned checkout path,
+// never from agent output; never "*" or a "/*" prefix pattern.
 func hardenedRunEnv(ctx context.Context, dir string, env []string, stdin []byte, args ...string) ([]byte, string, error) {
 	prefix := []string{"--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null",
-		"-c", "protocol.allow=never", "-C", dir}
+		"-c", "protocol.allow=never"}
+	if canonical, err := filepath.EvalSymlinks(dir); err == nil && filepath.IsAbs(canonical) && !strings.HasSuffix(canonical, "*") {
+		prefix = append(prefix, "-c", "safe.directory="+canonical)
+	}
+	prefix = append(prefix, "-C", dir)
 	cmd := exec.CommandContext(ctx, "git", append(prefix, args...)...)
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(e, "GIT_") {
