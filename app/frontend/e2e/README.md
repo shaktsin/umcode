@@ -88,7 +88,9 @@ built from the same checkout:
 
 ```sh
 go -C ../.. build -o /tmp/umcode-workbench-test ./cmd/umcode
-UMCODE_TEST_ENGINE=/tmp/umcode-workbench-test node e2e/visual-workbench.mjs
+npm install --prefix /tmp/umcode-browser-tools --no-package-lock playwright-core
+PLAYWRIGHT_MODULE=/tmp/umcode-browser-tools/node_modules/playwright-core/index.mjs \
+  UMCODE_TEST_ENGINE=/tmp/umcode-workbench-test node e2e/visual-workbench.mjs
 ```
 
 It requires an installed `playwright-core` module. `PLAYWRIGHT_MODULE` can point

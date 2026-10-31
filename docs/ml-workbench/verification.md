@@ -11,6 +11,7 @@ Chrome for browser interactions and PyTorch 2.15 for generated modules.
 | `go test -count=1 ./internal/workbench` (part of broad run) | Passed |
 | `go test -count=1 -run '^TestWorkbench' ./internal/server` | Passed |
 | `go vet ./internal/workbench ./internal/protocol ./internal/engine ./internal/server` | Passed |
+| Broader Go suite | Not fully green: three existing server-test failures reproduced on the base branch; details below |
 | Generated PyTorch modules | Seven imports, forward/backward checks and parameter counts passed |
 | `make app-build` | arm64 bundle built and ad-hoc signed |
 | `codesign --verify --deep --strict` on the built bundle | Passed |
@@ -60,13 +61,35 @@ but exhausted its three-minute per-package budget in `internal/delegation`,
 the timeout had been active for only 1–11 seconds; the budget applied to their
 entire package suite. No assertion failure was reported in that run.
 
-Those four database-heavy packages are being rerun with a longer budget:
+Those four database-heavy packages were rerun with a longer budget:
 
 ```sh
 go test -count=1 -timeout=20m ./internal/delegation ./internal/engine ./internal/server ./internal/store
 ```
 
-Status: extended package verification in progress.
+`internal/delegation` passed in 332.750s, `internal/engine` in 505.777s and
+`internal/store` in 416.327s. `internal/server` finished in 340.031s with three
+failures. All three also reproduced on the unchanged base commit
+`12f40f1a2c4495f2da47dfafb0b1036117bf41e0` in a separate detached worktree:
+
+- `TestShellEditAfterPassKeepsWorkOpen` and `TestWorkGetActiveOnly`: their
+  sandboxed `npm run test` fails before the intended check because Node cannot
+  read `/opt/homebrew/etc/openssl@4/openssl.cnf` (`Operation not permitted`).
+  The same two failures reproduced on both the base and PR branches.
+- `TestOptimizationBundleAcrossChats`: intermittent `retrieval=false` assertion.
+  It passed in the first targeted rerun on both branches, then reproduced in a
+  five-run baseline check. The five-run PR check passed.
+
+Targeted reproduction commands, run on both the base and PR checkouts:
+
+```sh
+go test -count=1 -timeout=3m -run '^(TestOptimizationBundleAcrossChats|TestShellEditAfterPassKeepsWorkOpen|TestWorkGetActiveOnly)$' ./internal/server
+go test -count=5 -timeout=3m -run '^TestOptimizationBundleAcrossChats$' ./internal/server
+```
+
+No full-suite success is claimed. The existing sandbox and optimization behavior
+was left unchanged; workbench-specific storage/RPC, frontend, browser and
+generated-module checks passed separately.
 
 ## Limits of this verification
 
