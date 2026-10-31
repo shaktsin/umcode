@@ -331,6 +331,12 @@ func (e *Engine) permittedTool(c turnTool, p *protocol.Project) bool {
 	return e.permittedToolFor(context.Background(), c, p)
 }
 func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.Project) bool {
+	if workbenchContextFrom(ctx) != nil {
+		return c.tool.Name() == "workbench.propose_edit" && !c.plugin
+	}
+	if c.tool.Name() == "workbench.propose_edit" {
+		return false
+	}
 	if !childToolAllowed(ctx, c.tool.Name()) || (childExecutionFrom(ctx) != nil && c.plugin) {
 		return false
 	}

@@ -227,6 +227,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	e.Tasks.Register(reg)
 	reg.Add(&taskProposalTool{engine: e})
 	reg.Add(&taskContextTool{engine: e})
+	reg.Add(&workbenchProposalTool{})
 	if err := e.loadComplexity(ctx); err != nil {
 		return nil, err
 	}
