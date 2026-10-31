@@ -115,8 +115,12 @@ func ValidateCommitted(ctx context.Context, root, expected string) error {
 
 // ValidateIndexFlags rejects index settings that make status/add/diff omit
 // actual tracked bytes. User flags are never cleared or rewritten implicitly.
+//
+// It runs through the hardened runner (no fsmonitor hook, no inherited GIT_*
+// environment, no system or global configuration); ls-files never refreshes
+// or writes the index.
 func ValidateIndexFlags(ctx context.Context, root string) error {
-	entries, err := gitNULList(ctx, root, "ls-files", "-v", "-z")
+	entries, err := hardenedNULList(ctx, root, "ls-files", "-v", "-z")
 	if err != nil {
 		return err
 	}
@@ -358,9 +362,11 @@ func (m *Manager) WithCommittedBase(ctx context.Context, parent, base string, gu
 // integration head after accepted revisions; "" when there is none), nothing
 // is unstaged or untracked, and every path is a contained symlink or regular
 // file. Anything else is refused with ValidateCommitted's refusal text and
-// the offending paths. It only reads: plumbing through the hardened runner
-// with optional index locks disabled, so the index file is never rewritten
-// and no object is written.
+// the offending paths. It only reads, always through the hardened runner
+// (no hooks or fsmonitor, no inherited GIT_* environment, optional index
+// locks disabled): no command used can refresh or rewrite the index file,
+// take index.lock or write an object (diff-index --cached instead of
+// write-tree, status instead of porcelain diff).
 func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) error {
 	canonical, err := filepath.EvalSymlinks(parent)
 	if err != nil {
@@ -425,16 +431,31 @@ func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) e
 	if len(staged) > 0 {
 		return fmt.Errorf("%s (%w: staged content differs from the integrated state at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(staged, ", "))
 	}
-	unstaged, err := hardenedNULList(ctx, canonical, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z", "--")
+	// Unstaged and untracked changes come from one status call: unlike
+	// porcelain diff, which refreshes stat-dirty entries and rewrites the
+	// index under index.lock, status honours GIT_OPTIONAL_LOCKS=0 (set by the
+	// hardened runner), so the project's index file is never written even
+	// when a tracked file was only touched. Staged entries (the integrated
+	// head) were checked above; only the worktree column and untracked
+	// entries matter here.
+	status, err := hardenedNULList(ctx, canonical, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none")
 	if err != nil {
 		return err
+	}
+	var unstaged, untracked []string
+	for _, entry := range status {
+		if len(entry) < 4 || entry[2] != ' ' {
+			return fmt.Errorf("invalid Git status record %q", entry)
+		}
+		switch xy, p := entry[:2], entry[3:]; {
+		case xy == "??":
+			untracked = append(untracked, p)
+		case xy[1] != ' ':
+			unstaged = append(unstaged, p)
+		}
 	}
 	if len(unstaged) > 0 {
 		return fmt.Errorf("%s (%w: unstaged edits at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(unstaged, ", "))
-	}
-	untracked, err := hardenedNULList(ctx, canonical, "ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return err
 	}
 	if len(untracked) > 0 {
 		return fmt.Errorf("%s (%w: untracked files at %s)", cleanCheckoutRefusal, ErrParentChanged, strings.Join(untracked, ", "))
@@ -510,28 +531,54 @@ func (m *Manager) cloneRevision(ctx context.Context, id, source, revision string
 		_ = os.Remove(marker)
 		return Workspace{}, cause
 	}
-	if out, err := exec.CommandContext(ctx, "git", "init", "--quiet", "--object-format="+objectFormat, path).CombinedOutput(); err != nil {
-		return cleanup(fmt.Errorf("initialize workspace Git metadata: %s", commandError(err, string(out))))
+	if _, err := cloneGit(ctx, "", "init", "--quiet", "--template=", "--object-format="+objectFormat, path); err != nil {
+		return cleanup(fmt.Errorf("initialize workspace Git metadata: %w", err))
 	}
-	if _, err = gitBytes(ctx, path, "fetch", "--depth=1", "--no-tags", root, revision); err != nil {
+	if _, err = cloneGit(ctx, path, "fetch", "--depth=1", "--no-tags", root, revision); err != nil {
 		return cleanup(fmt.Errorf("copy the task base revision into the workspace: %w", err))
 	}
-	if _, err = gitBytes(ctx, path, "checkout", "--quiet", "--detach", "FETCH_HEAD"); err != nil {
+	if _, err = cloneGit(ctx, path, "checkout", "--quiet", "--detach", "FETCH_HEAD"); err != nil {
 		return cleanup(fmt.Errorf("check out the task base revision in the workspace: %w", err))
 	}
 	if err = os.Remove(filepath.Join(path, ".git", "FETCH_HEAD")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return cleanup(fmt.Errorf("remove temporary Git source reference: %w", err))
 	}
-	if head, err := gitOutput(ctx, path, "rev-parse", "--verify", "HEAD^{commit}"); err != nil || head != revision {
+	if head, err := hardenedOutput(ctx, path, "rev-parse", "--verify", "HEAD^{commit}"); err != nil || head != revision {
 		return cleanup(errors.New("workspace checkout is not the task base revision"))
 	}
-	if got, err := gitOutput(ctx, path, "rev-parse", "--verify", "HEAD^{tree}"); err != nil || got != tree {
+	if got, err := hardenedOutput(ctx, path, "rev-parse", "--verify", "HEAD^{tree}"); err != nil || got != tree {
 		return cleanup(errors.New("workspace checkout tree is not the task base tree"))
 	}
 	if err = os.WriteFile(marker, []byte(common+"\n"+revision+"\n"+revision+"\n"), 0o600); err != nil {
 		return cleanup(fmt.Errorf("mark workspace ready: %w", err))
 	}
 	return Workspace{Path: path, ProjectRoot: root, SourceCommit: revision, BaselineCommit: revision, Created: true}, nil
+}
+
+// cloneGit runs Git for cloneRevision: like the legacy Ensure (global
+// configuration still applies), but with every inherited GIT_* variable
+// removed (a GIT_DIR or GIT_WORK_TREE in the engine's environment must not
+// redirect the clone, for example into the parent), hooks disabled
+// (core.hooksPath=/dev/null, so no global post-checkout or
+// reference-transaction hook runs in the new workspace) and only the local
+// file transport the fetch from the parent needs. dir "" runs without -C.
+func cloneGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	prefix := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.allow=never", "-c", "protocol.file.allow=always"}
+	if dir != "" {
+		prefix = append(prefix, "-C", dir)
+	}
+	cmd := exec.CommandContext(ctx, "git", append(prefix, args...)...)
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "GIT_") {
+			cmd.Env = append(cmd.Env, e)
+		}
+	}
+	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), commandError(err, string(b)))
+	}
+	return b, nil
 }
 
 // viewCommitBody is the fixed commit object of a runtime view: the

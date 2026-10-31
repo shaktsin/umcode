@@ -738,7 +738,14 @@ const (
 
 // IntegrationApplyingText refuses a new agent workspace while a revision of
 // the task is applying: the project checkout may be mid-write.
-const IntegrationApplyingText = "an integration is being applied; try again"
+const IntegrationApplyingText = "an integration is being applied to the project checkout"
+
+// IntegrationApplyingAdvice is the refusal for agentID's applying revision.
+// Under the task lock an applying revision is an interrupted or blocked
+// apply, which waiting never settles, so it tells the lead how to settle it.
+func IntegrationApplyingAdvice(agentID string) string {
+	return fmt.Sprintf("%s (agent %s's revision is applying); if no accept is running, its apply was interrupted: accept agent %s again (agent.integrate {action:\"accept\", agent:%q}) to settle it, and if it stays blocked check agent.integrate {action:\"status\"}", IntegrationApplyingText, agentID, agentID, agentID)
+}
 
 // PrepareRuntime gives a runtime agent its own private checkout. A
 // write-capable agent gets an isolated writable checkout of the task's
@@ -814,13 +821,25 @@ func (s *WorkspaceService) prepareRuntimeLocked(ctx context.Context, t protocol.
 	}
 	for _, r := range revs {
 		if r.State == store.RevisionApplying {
-			return WorkspaceRef{}, fmt.Errorf("%s (agent %s's revision is applying to the project checkout)", IntegrationApplyingText, r.AgentID)
+			return WorkspaceRef{}, errors.New(IntegrationApplyingAdvice(r.AgentID))
 		}
 	}
 	h, err := s.head(ctx, t, false)
 	if err != nil {
 		return WorkspaceRef{}, err
 	}
+	// Refuse an unusable project checkout before any workspace identity is
+	// recorded, so a refused first preparation leaves nothing stale behind
+	// (EnsureRuntime checks again under the manager lock).
+	if err = worktree.ParentStateForRuntime(ctx, t.ParentRoot, t.BaseRevision, h.HeadTree); err != nil {
+		return WorkspaceRef{}, err
+	}
+	// A view shows the recorded integration head (built from its objects in
+	// the parent), not whatever the parent currently holds: the parent check
+	// also accepts an index reset to the base tree, and a parent whose
+	// integration was discarded with reset --hard still gets the recorded
+	// head while its objects exist (after gc --prune the view fails closed).
+	// The next accept refuses such a parent anyway.
 	integrated := h.AppliedCount > 0
 	id := "agent-" + t.ID + "-" + a.ID
 	planned := store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: a.ID, Kind: "implementer", Root: s.Manager.Path(id), ParentRoot: t.ParentRoot, BaseRevision: t.BaseRevision}
@@ -836,11 +855,21 @@ func (s *WorkspaceService) prepareRuntimeLocked(ctx context.Context, t protocol.
 		}
 	}
 	if existing, readErr := s.Store.AgentWorkspace(ctx, id); readErr == nil {
-		if existing.TaskID != t.ID || existing.ChildID != a.ID || existing.Kind != planned.Kind {
+		if existing.TaskID != t.ID || existing.ChildID != a.ID || existing.Kind != planned.Kind || (writable && existing.SourceID != planned.SourceID) {
 			return ref(existing), errors.New("agent workspace ownership changed")
 		}
-		if existing.SourceID != planned.SourceID || existing.ResultRevision != planned.ResultRevision {
-			return ref(existing), fmt.Errorf("agent %s's view was prepared for an earlier integrated state; cancel it and spawn a new agent", a.ID)
+		if !writable && (existing.SourceID != planned.SourceID || existing.ResultRevision != planned.ResultRevision) {
+			_, statErr := os.Lstat(s.Manager.Path(id))
+			// A view whose checkout was never created (its first
+			// preparation failed after the identity was recorded) is
+			// re-planned for the current head; the store keeps SourceID
+			// fixed, so only a head-to-head re-plan is possible.
+			if !errors.Is(statErr, os.ErrNotExist) || existing.SourceID != planned.SourceID || existing.Cleaned || existing.Cleaning {
+				return ref(existing), fmt.Errorf("agent %s's view was prepared for an earlier integrated state; cancel it and spawn a new agent", a.ID)
+			}
+			if err = s.Store.SaveAgentWorkspace(ctx, planned); err != nil {
+				return ref(existing), err
+			}
 		}
 	} else if !errors.Is(readErr, store.ErrNotFound) {
 		return WorkspaceRef{}, readErr
