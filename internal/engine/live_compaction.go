@@ -16,6 +16,12 @@ var errCompactionNoReduction = errors.New("automatic context compaction could no
 // compactLiveMessages operates on a copy of the actual live interaction.
 // Sources keep their trust level; summaries are conversational data, never system instructions.
 func (e *Engine) compactLiveMessages(ctx, sctx context.Context, turn protocol.Turn, res *resolved, msgs []llm.Message, budget *turnBudget) ([]llm.Message, error) {
+	return e.compactLiveMessagesForCapacity(ctx, sctx, turn, res, msgs, budget, false)
+}
+
+// A failed full-request admission can require history reduction even when the
+// history alone occupies less than half the window.
+func (e *Engine) compactLiveMessagesForCapacity(ctx, sctx context.Context, turn protocol.Turn, res *resolved, msgs []llm.Message, budget *turnBudget, force bool) ([]llm.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -38,7 +44,7 @@ func (e *Engine) compactLiveMessages(ctx, sctx context.Context, turn protocol.Tu
 	// The current request is required input. If it cannot fit, admission
 	// fails; a saved original is not permission to send only its prefix.
 	r, _ := countRequestInput(llm.Request{Messages: out})
-	if r.EstimatedInput < window/2 {
+	if !force && r.EstimatedInput < window/2 {
 		return out, nil
 	}
 	current := -1

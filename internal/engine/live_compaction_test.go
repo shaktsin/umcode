@@ -145,6 +145,43 @@ func TestLiveCompactionSummarizesOlderHistoryWithinCapacity(t *testing.T) {
 	}
 }
 
+func TestLiveCompactionWhenFixedPromptConsumesWindow(t *testing.T) {
+	e, turn := liveFixture(t)
+	p := &budgetProvider{events: []llm.Event{{Type: llm.EventTextDelta, Text: "Earlier work is saved; continue with the current request."}, {Type: llm.EventDone, StopReason: "stop", Usage: llm.Usage{Reported: true, InputTokens: 100, OutputTokens: 20}}}}
+	e.LLMs.Register(p)
+	cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic"}, cred: cred}
+	key, _ := capacityIdentity(res)
+	window := 51200
+	if err := e.Store.SetModelCapacityProfile(t.Context(), protocol.ModelCapacityProfile{Provider: key.Provider, EndpointID: key.EndpointID, Model: key.Model, Backend: "generic", ContextWindow: &window}); err != nil {
+		t.Fatal(err)
+	}
+	current := llm.Text(llm.RoleUser, "Continue the task")
+	res.currentInput = current
+	req := llm.Request{
+		System: strings.Repeat("policy ", 13500),
+		Messages: []llm.Message{
+			llm.Text(llm.RoleUser, strings.Repeat("earlier detail ", 1300)),
+			llm.Text(llm.RoleAssistant, "Earlier work was underway."),
+			current,
+		},
+		MaxTokens: 32768,
+	}
+	prepared, report, err := e.prepareModelRequest(t.Context(), t.Context(), turn, &res, req, "chat", newTurnBudget(protocol.ExecutionLimits{MaxDurationMinutes: 5, MaxTokens: 100000, MaxCostUSD: 10}))
+	if err != nil {
+		t.Fatal("compaction did not reclaim historical context:", err)
+	}
+	if report.Reductions == 0 || len(p.requests) == 0 || prepared.Messages[len(prepared.Messages)-1].JoinedText() != current.JoinedText() {
+		t.Fatal("history was not summarized while preserving the current request")
+	}
+	if report.EstimatedInput+report.ReservedOutput+report.Margin > window {
+		t.Fatal("compacted request still exceeds the serving window")
+	}
+}
+
 func TestOversizedCurrentInputFailsWithoutClipping(t *testing.T) {
 	e, turn := liveFixture(t)
 	res := resolved{sel: protocol.ModelSelection{Provider: "fixture", Model: "small"}, meta: models.Meta{ContextWindow: 8192}}
