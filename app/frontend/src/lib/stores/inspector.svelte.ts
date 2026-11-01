@@ -1,9 +1,9 @@
 import { app } from './app.svelte';
 import { projects } from './projects.svelte';
-import type { BrowserArtifact, BrowserVerificationResult, FileChangeData, PreviewEvent, PreviewSession, ProjectArtifactContent, ProjectFileContent, RevertResult } from '$lib/types';
+import type { RuntimeAgent, BrowserArtifact, BrowserVerificationResult, FileChangeData, PreviewEvent, PreviewSession, ProjectArtifactContent, ProjectFileContent, RevertResult } from '$lib/types';
 import type { TurnDetailsResult } from '$lib/turnDetails';
 
-export type TabKind = 'turnDetails' | 'file' | 'diff' | 'output' | 'preview' | 'browser' | 'artifact';
+export type TabKind = 'turnDetails' | 'file' | 'diff' | 'output' | 'preview' | 'browser' | 'artifact' | 'agent';
 
 export interface InspectorTab {
   id: string;
@@ -26,6 +26,9 @@ export interface InspectorTab {
   reload?: number;
   browser?: BrowserVerificationResult;
   artifact?: BrowserArtifact;
+  /** agent: the runtime agent as last seen; kept current by syncAgent */
+  agent?: RuntimeAgent;
+  taskId?: string;
   dataUrl?: string;
   loading?: boolean;
   error?: string;
@@ -136,6 +139,19 @@ class Inspector {
     this.finishRead(id, token, result
       ? { content: result.content, truncated: result.truncated, binary: result.binary }
       : { error: 'Child snapshot is unavailable. Its retained workspace may have been cleaned.' });
+  }
+
+  /** Open a runtime agent's detail (assignment, capabilities, models, result). */
+  openAgent(agent: RuntimeAgent, threadId: string, projectId?: string) {
+    this.revealVersion++;
+    this.show({ id: scopedId('agent', projectId, threadId, JSON.stringify([agent.taskId, agent.id])), kind: 'agent', title: agent.name, threadId, projectId, taskId: agent.taskId, agent });
+  }
+
+  /** Refresh an already open agent tab with a newer agent; never opens or focuses one. */
+  syncAgent(agent: RuntimeAgent, threadId: string, projectId?: string) {
+    const id = scopedId('agent', projectId, threadId, JSON.stringify([agent.taskId, agent.id]));
+    const tab = this.tabs.find(t => t.id === id);
+    if (tab && tab.agent !== agent) this.tabs = this.tabs.map(t => t.id === id ? { ...t, agent, title: agent.name } : t);
   }
 
   /** Open one file change (a unified diff) from a turn. */
