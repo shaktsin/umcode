@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/workbench"
@@ -29,6 +30,8 @@ func (e *Engine) CreateWorkbenchModel(ctx context.Context, p protocol.WorkbenchM
 	if err != nil {
 		return nil, err
 	}
+	e.workbenchMu.Lock()
+	defer e.workbenchMu.Unlock()
 	model, err := workbench.Create(project.Root, p.Name, p.Task)
 	if err != nil {
 		if errors.Is(err, workbench.ErrExists) {
@@ -63,6 +66,13 @@ func (e *Engine) SaveWorkbenchGraph(ctx context.Context, p protocol.WorkbenchGra
 	if err != nil {
 		return nil, err
 	}
+	e.workbenchMu.Lock()
+	defer e.workbenchMu.Unlock()
+	if p.ModelCreatedAt != "" {
+		if _, err := matchingWorkbenchModel(project.Root, p.ModelID, p.ModelCreatedAt); err != nil {
+			return nil, err
+		}
+	}
 	graph := p.Graph
 	if p.GraphJSON != "" {
 		if len(graph) != 0 {
@@ -80,4 +90,50 @@ func (e *Engine) SaveWorkbenchGraph(ctx context.Context, p protocol.WorkbenchGra
 	return struct {
 		OK bool `json:"ok"`
 	}{OK: true}, nil
+}
+
+func (e *Engine) DeleteWorkbenchModel(ctx context.Context, p protocol.WorkbenchModelDeleteParams) (any, error) {
+	project, err := e.project(ctx, p.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if p.ModelCreatedAt == "" {
+		return nil, protocol.Errorf(protocol.CodeInvalidParams, "model version is required; refresh the model list")
+	}
+	e.workbenchMu.Lock()
+	defer e.workbenchMu.Unlock()
+	if _, err := matchingWorkbenchModel(project.Root, p.ModelID, p.ModelCreatedAt); err != nil {
+		return nil, err
+	}
+	trashPath, err := workbench.Delete(project.Root, p.ModelID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, protocol.Errorf(protocol.CodeNotFound, "model bundle %q is unavailable", p.ModelID)
+		}
+		return nil, protocol.Errorf(protocol.CodeInvalidParams, "move model to project Trash: %v", err)
+	}
+	_ = e.Store.Audit(ctx, "workbench.model.delete", map[string]any{"projectId": project.ID, "modelId": p.ModelID, "trashPath": trashPath})
+	return struct {
+		OK        bool   `json:"ok"`
+		TrashPath string `json:"trashPath"`
+	}{true, trashPath}, nil
+}
+
+// The persisted creation timestamp distinguishes a replacement bundle that
+// reuses a deleted model's name. Call under workbenchMu before mutating files.
+func matchingWorkbenchModel(root, id, expected string) (workbench.Model, error) {
+	opened, err := workbench.Open(root, id)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return workbench.Model{}, protocol.Errorf(protocol.CodeNotFound, "model bundle %q is unavailable", id)
+		}
+		return workbench.Model{}, protocol.Errorf(protocol.CodeInvalidParams, "model is unavailable: %v", err)
+	}
+	if expected != "" {
+		created, err := time.Parse(time.RFC3339Nano, expected)
+		if err != nil || !created.Equal(opened.Model.CreatedAt) {
+			return workbench.Model{}, protocol.Errorf(protocol.CodeConflict, "this model was replaced; refresh before trying again")
+		}
+	}
+	return opened.Model, nil
 }

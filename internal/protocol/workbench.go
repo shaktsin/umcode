@@ -6,6 +6,7 @@ const (
 	MethodWorkbenchModelList   = "workbench/model/list"
 	MethodWorkbenchModelCreate = "workbench/model/create"
 	MethodWorkbenchModelOpen   = "workbench/model/open"
+	MethodWorkbenchModelDelete = "workbench/model/delete"
 	MethodWorkbenchGraphSave   = "workbench/graph/save"
 )
 
@@ -24,10 +25,17 @@ type WorkbenchModelOpenParams struct {
 	ModelID   string `json:"modelId"`
 }
 
+type WorkbenchModelDeleteParams struct {
+	ProjectID      string `json:"projectId"`
+	ModelID        string `json:"modelId"`
+	ModelCreatedAt string `json:"modelCreatedAt"`
+}
+
 type WorkbenchGraphSaveParams struct {
-	ProjectID string          `json:"projectId"`
-	ModelID   string          `json:"modelId"`
-	Graph     json.RawMessage `json:"graph"`
+	ProjectID      string          `json:"projectId"`
+	ModelID        string          `json:"modelId"`
+	ModelCreatedAt string          `json:"modelCreatedAt,omitempty"`
+	Graph          json.RawMessage `json:"graph"`
 	// GraphJSON preserves numeric literals through JavaScript clients. Exactly
 	// one of graph or graphJson must be supplied; graph remains supported.
 	GraphJSON string `json:"graphJson,omitempty"`

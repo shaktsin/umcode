@@ -15,6 +15,7 @@ in-app inference are not implemented.
 | Understand errors | Read the issue list; click a layer-specific issue to inspect its settings; invalid architectures cannot export | [Validation](screenshots/04-validation.png) |
 | Inspect/export Python | Open Code, select a layer to highlight its code, then Export .py | [Generated code](screenshots/05-code-export.png) |
 | Close/reopen safely | Back to models → reopen; unsaved architecture edits remain in memory and are marked on the card | [Draft navigation](screenshots/02-models-and-drafts.png) |
+| Delete a model | Use the model card's trash icon or Delete model while editing; confirm or cancel | [Delete confirmation](screenshots/deletion/02-delete-confirmation.png) |
 | Text classification | Classification + Text + Small text classifier | [Classifier](screenshots/06-text-classifier.png) |
 | Create an image model | Classification + Vision (images) + Small CNN or Small Vision Transformer | [Vision setup](screenshots/07-create-vision.png) |
 | Edit a CNN | Set image channels/height/width; configure convolutions, normalization and pooling | [CNN](screenshots/08-cnn-builder.png) |
@@ -57,8 +58,8 @@ dataset validation.
 
 Models live under the selected project's `models/<id>/` folder, with metadata,
 the saved architecture, adapter/code scaffolding and a reserved `runs/` folder.
-The engine exposes four project-scoped RPCs for listing, creating, opening and
-saving. Saves use atomic replacement and preserve exact JSON numeric literals;
+The engine exposes five project-scoped RPCs for listing, creating, opening,
+saving and deleting. Saves use atomic replacement and preserve exact JSON numeric literals;
 bounded regular-file reads reject linked/oversized bundles.
 
 Selection is remembered per project. Drafts remain in memory across model,
@@ -67,6 +68,20 @@ unsaved drafts are marked on cards. **Save model writes to disk; closing a model
 does not auto-save.** Unsaved drafts are session-only. Reloading a dirty model
 requires confirmation. Stale async responses cannot apply to a different
 project/selection, and edits made during save/reload remain recoverable.
+
+**Delete model** is available on model cards and while a model is open. Its
+confirmation names the model and explains that unsaved edits will be discarded.
+Cancel keeps the model and draft. Confirm moves the complete saved bundle into
+the project's `models/.trash/<id>-<unique>/` directory, with its architecture,
+files and any saved datasets/checkpoints. This is project-local recovery storage,
+separate from Finder Trash. The success message gives the recovery path; move
+that folder back to `models/<original-id>/` when the original name is free to
+recover it, then refresh. There is no in-app Restore action yet.
+
+Only explicit app clients can invoke deletion. The expected model creation
+timestamp rejects stale deletion requests when a name has been reused; late
+responses cannot discard a replacement model's draft. Deleting the final model
+shows an empty list. Projects stay empty until the user chooses **New model**.
 
 Existing unsupported architecture content is shown read-only with an explanatory
 message instead of being silently converted or overwritten. The collapsible

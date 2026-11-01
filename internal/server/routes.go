@@ -166,6 +166,12 @@ func (s *Server) routes() map[string]handler {
 		protocol.MethodWorkbenchModelOpen: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelOpenParams) (any, error) {
 			return e.OpenWorkbenchModel(ctx, p)
 		}),
+		protocol.MethodWorkbenchModelDelete: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelDeleteParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can delete models")
+			}
+			return e.DeleteWorkbenchModel(ctx, p)
+		}),
 		protocol.MethodWorkbenchGraphSave: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchGraphSaveParams) (any, error) {
 			return e.SaveWorkbenchGraph(ctx, p)
 		}),

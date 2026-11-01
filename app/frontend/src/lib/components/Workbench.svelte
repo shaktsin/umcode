@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { ArrowLeft, Layers3, FolderOpen, MessageCircle, Plus, RefreshCw } from '@lucide/svelte';
+  import { ArrowLeft, Layers3, FolderOpen, MessageCircle, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
   import VisualBuilder from './workbench/VisualBuilder.svelte';
   import ModelChooser from './workbench/ModelChooser.svelte';
   import { inputModalities, modelGraph, relevantStarterPresets, type InputModality, type StartingPoint } from '$lib/workbench/presets';
@@ -23,7 +23,7 @@
   let starting = $state<StartingPoint>('text');
   let screen = $state<'auto' | 'models' | 'create'>('auto');
   $effect(() => { void workbench.projectId; screen = 'auto'; });
-  const showModels = $derived(screen === 'models' || screen === 'auto' && workbench.models.length > 0);
+  const showModels = $derived(screen !== 'create');
   $effect(() => { if (task === 'text-generation') inputType = 'text'; });
   const starters = $derived(relevantStarterPresets(task, inputType));
   $effect(() => { starting = task === 'custom' ? 'blank' : starters.find(s => s.id !== 'blank')?.id ?? 'blank'; });
@@ -41,6 +41,18 @@
     if (workbench.projectId === project && !workbench.selected && screen === 'models') document.getElementById('project-models-heading')?.focus();
   }
   function startCreate() { workbench.newModel(); screen = 'create'; }
+
+  async function deleteModel(modelId: string) {
+    const projectId = workbench.projectId;
+    const model = workbench.models.find(item => item.id === modelId);
+    if (!projectId || !model || !workbench.connected || workbench.busy) return;
+    const message = `Delete “${model.name}”?\n\nThe saved model folder and all its contents will move to this project's models/.trash/ folder for recovery. Any unsaved model changes will be discarded.`;
+    if (!await dialog.confirm(message, { okLabel: 'Delete model', danger: true })) return;
+    if (workbench.projectId !== projectId || workbench.models.find(item => item.id === modelId)?.createdAt !== model.createdAt) return;
+    if (await workbench.deleteModel(modelId)) {
+      if (workbench.projectId === projectId && !workbench.selected) screen = 'models';
+    }
+  }
 
   async function create() {
     const project = workbench.projectId, preset = starting, input = inputType;
@@ -81,7 +93,7 @@
     </section>
   {:else}
     <div class="workbench-toolbar">
-      {#if workbench.selected || !showModels && workbench.models.length > 0}<button class="btn-ghost btn-sm" onclick={() => void closeModel()}><ArrowLeft size={14} />Back to models</button>{/if}
+      {#if workbench.selected || !showModels}<button class="btn-ghost btn-sm" onclick={() => void closeModel()}><ArrowLeft size={14} />Back to models</button>{/if}
       <label class="sr-only" for="workbench-model">Project model</label>
       <select id="workbench-model" class="select model-picker" value={workbench.selected?.model.id ?? ''} disabled={!workbench.connected || workbench.loading || workbench.busy} onchange={(e) => e.currentTarget.value ? void workbench.open(e.currentTarget.value) : void closeModel()}>
         <option value="">Choose a model</option>
@@ -89,6 +101,7 @@
       </select>
       <button class="icon-button" aria-label="Refresh project models" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={() => void workbench.refresh()}><RefreshCw size={14} /></button>
       {#if workbench.selected}<span class="task-badge">{describeWorkbenchTask(workbench.selected.model.task)}</span>{/if}
+      {#if workbench.selected}<button class="btn-ghost btn-sm delete-model" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={() => void deleteModel(workbench.selected!.model.id)}><Trash2 size={14} />Delete model</button>{/if}
       <button class="btn-outline btn-sm new-model" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={startCreate}><Plus size={14} />New model</button>
     </div>
     {#if workbench.error}<div class="workbench-feedback is-error" role="alert">{workbench.error}</div>{/if}
@@ -98,7 +111,7 @@
     {#if workbench.loading}
       <section class="workbench-empty" aria-live="polite"><p>Loading project models…</p></section>
     {:else if !workbench.selected && showModels}
-      <ModelChooser models={workbench.models} projectName={projects.active?.name ?? 'this project'} disabled={!workbench.connected || workbench.busy} hasDraft={(id) => workbench.hasModelDraft(id)} onopen={(id) => void workbench.open(id)} oncreate={startCreate} />
+      <ModelChooser models={workbench.models} projectName={projects.active?.name ?? 'this project'} disabled={!workbench.connected || workbench.busy} hasDraft={(id) => workbench.hasModelDraft(id)} onopen={(id) => void workbench.open(id)} ondelete={(id) => void deleteModel(id)} oncreate={startCreate} />
     {:else if !workbench.selected}
       <form class="new-model-layout" onsubmit={(e) => { e.preventDefault(); void create(); }}>
         <section class="task-selection">
@@ -146,7 +159,7 @@
         <span class="graph-state" class:is-dirty={workbench.dirty}>{workbench.dirty ? 'Unsaved changes' : 'Saved in project'}</span>
       </nav>
       {#if workbench.tab === 'Build'}
-        {#key `${workbench.projectId}/${workbench.selected.model.id}`}
+        {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
           <VisualBuilder text={workbench.draft} onchange={(text) => workbench.draft = text} onSave={() => void workbench.save()} onReload={() => void reload()} onAsk={onOpenChat} disabled={!workbench.connected || workbench.busy} dirty={workbench.dirty} task={workbench.selected.model.task} name={workbench.selected.model.name} />
         {/key}
       {:else}
@@ -158,6 +171,7 @@
 
 <style>
   .workbench { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; background:var(--color-paper); }
+  .delete-model { color:var(--color-rust); }
   .workbench-heading, .workbench-toolbar, .workbench-tabs { display:flex; flex-wrap:wrap; align-items:center; gap:8px; border-bottom:1px solid var(--color-line); flex-shrink:0; padding:10px 16px; }
   .workbench-heading { min-height:48px; }
   .workbench-title { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }

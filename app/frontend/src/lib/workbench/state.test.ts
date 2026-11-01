@@ -22,6 +22,84 @@ const basicCall = async (method: string, params: any) => {
 };
 
 describe('workbench state', () => {
+  it('keeps a replacement model and its draft when an older deletion finishes late', async () => {
+    const pending = deferred<{ ok: boolean; trashPath: string }>();
+    const old = model('one'), replacement = { ...model('one'), createdAt: '2026-10-31T01:00:00Z' };
+    let disk: WorkbenchModel | null = old;
+    const state = new WorkbenchState(async (method, params: any) => {
+      if (method === 'workbench/model/delete') { disk = null; return pending.promise; }
+      if (method === 'workbench/model/list') return { models: disk ? [disk] : [] };
+      if (method === 'workbench/model/create') { disk = replacement; return disk; }
+      if (method === 'workbench/model/open') return { ...bundle(params.modelId), model: disk };
+      return { ok: true };
+    }, memoryStorage());
+    await state.activate('a', true); await state.open('one');
+    const removing = state.deleteModel('one');
+    await state.activate('b', true); await state.activate('a', true);
+    await state.create('one', 'custom'); state.draft = '{"newDraft":true}';
+    pending.resolve({ ok: true, trashPath: 'models/.trash/old-one' }); await removing;
+    expect(state.models).toHaveLength(1); expect(state.selected?.model.createdAt).toBe(replacement.createdAt);
+    expect(state.draft).toBe('{"newDraft":true}');
+  });
+
+  it('does not reuse unsaved graph edits after a model ID is recreated externally', async () => {
+    let current = model('one');
+    const state = new WorkbenchState(async (method, params: any) => {
+      if (method === 'workbench/model/list') return { models: [current] };
+      if (method === 'workbench/model/open') return { ...bundle(params.modelId), model: current };
+      return { ok: true };
+    });
+    await state.activate('a', true); await state.open('one'); state.draft = '{"oldDraft":true}';
+    current = { ...current, createdAt: '2026-10-31T01:00:00Z' };
+    await state.refresh();
+    expect(state.dirty).toBe(false); expect(state.draft).not.toContain('oldDraft');
+  });
+
+  it('deletes only the requested model and its saved selection and draft', async () => {
+    const storage = memoryStorage();
+    const state = new WorkbenchState(async (method, params: any) => {
+      if (method === 'workbench/model/delete') {
+        expect(params).toEqual({ projectId: 'a', modelId: 'one', modelCreatedAt: '2026-10-30T00:00:00Z' });
+        return { ok: true, trashPath: 'models/.trash/one-unique' };
+      }
+      return basicCall(method, params);
+    }, storage);
+    await state.activate('a', true); await state.open('one');
+    state.draft = '{"unsaved":true}';
+    expect(await state.deleteModel('one')).toBe(true);
+    expect(state.models.map(model => model.id)).toEqual(['two']);
+    expect(state.selected).toBeNull();
+    expect(state.hasModelDraft('one')).toBe(false);
+    expect(storage.getItem('umcode.workbench.model.a')).toBeNull();
+    expect(state.notice).toContain('models/.trash/one-unique');
+  });
+
+  it('keeps the model and its unsaved draft when deletion fails', async () => {
+    const state = new WorkbenchState((method, params) => {
+      if (method === 'workbench/model/delete') throw new Error('Cannot move to Trash');
+      return basicCall(method, params);
+    });
+    await state.activate('a', true); await state.open('one'); state.draft = '{"unsaved":true}';
+    expect(await state.deleteModel('one')).toBe(false);
+    expect(state.selected?.model.id).toBe('one'); expect(state.draft).toBe('{"unsaved":true}');
+    expect(state.models).toHaveLength(2); expect(state.error).toBe('Cannot move to Trash');
+  });
+
+  it('finishes a deletion in its original project after navigation', async () => {
+    const pending = deferred<{ ok: boolean; trashPath: string }>();
+    const storage = memoryStorage();
+    const state = new WorkbenchState((method, params) => method === 'workbench/model/delete' ? pending.promise : basicCall(method, params), storage);
+    await state.activate('a', true); await state.open('one'); state.draft = '{"unsaved":true}';
+    const deleting = state.deleteModel('one');
+    await state.activate('b', true); await state.open('one'); const otherDraft = state.draft;
+    pending.resolve({ ok: true, trashPath: 'models/.trash/one-unique' });
+    expect(await deleting).toBe(true);
+    expect(state.projectId).toBe('b'); expect(state.selected?.model.id).toBe('one'); expect(state.draft).toBe(otherDraft);
+    expect(storage.getItem('umcode.workbench.model.b')).toBe('one');
+    expect(storage.getItem('umcode.workbench.model.a')).toBeNull();
+    expect(state.notice).toBe('');
+  });
+
   it('restores a different last model for each project across a fresh instance', async () => {
     const storage = memoryStorage();
     const first = new WorkbenchState(basicCall, storage);

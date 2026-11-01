@@ -6,7 +6,7 @@ Chrome for browser interactions and PyTorch 2.15 for generated modules.
 | Check | Result |
 | --- | --- |
 | `npm run check` in `app/frontend` | Zero errors and warnings |
-| `npm test` in `app/frontend` | 234 tests passed in 46 files |
+| `npm test` in `app/frontend` | 239 tests passed in 46 files (including model deletion regressions) |
 | Real-engine visual workbench smoke | Passed all workflows and 18 light/dark layouts; no browser errors |
 | Real-engine assistant smoke | Passed local HTTP provider transport, context/proposal/apply/failure/navigation workflows and 6 light/dark layouts; no browser errors |
 | `go test -count=1 ./internal/workbench` | Passed |
@@ -34,6 +34,30 @@ npm ci
 npm run check
 npm test
 ```
+
+## Model deletion update
+
+The deletion-only PR update was checked independently from the local Data-tab
+work. Frontend tests, Svelte checks and the production build passed; changed
+Go packages passed vet. Focused workbench/server integration passed, and
+`go test -race ./internal/workbench ./internal/server -run 'Test(DeleteModel|Workbench(Delete|StaleDelete))' -count=1`
+passed (1.195s / 24.464s). Storage tests cover recovery bytes, other-model
+preservation, reused IDs, missing models, traversal and symlink rejection. RPC
+and client tests cover explicit app permission, project isolation, failed-delete
+draft preservation, navigation, stale deletion and replacement model drafts.
+
+Real-engine PR-only browser acceptance passed toolbar/card deletion, named
+confirmation, cancellation with unsaved edits, saved graph/data/checkpoint
+recovery, empty state after final deletion and reload, with no page errors.
+The [deletion gallery](screenshots/deletion/README.md) uses the PR's actual app
+and engine in isolated fixtures. The visual acceptance script includes these
+checks through `e2e/model-deletion.mjs` and expects an empty project to stay on
+its model list until New model is clicked.
+
+The existing full-Go-suite limitations below remain documented. A native app
+bundle/signature was not rebuilt for this deletion-only update; the native
+build results elsewhere in this record describe the earlier builder/assistant
+revision. Model deletion does not add Data loading/preparation or training.
 
 For the real-engine UI and generated modules, see the
 [browser-test commands](../../app/frontend/e2e/README.md#visual-ml-workbench).

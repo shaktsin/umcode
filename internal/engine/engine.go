@@ -101,6 +101,7 @@ type Engine struct {
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
 	shuttingDown     bool                       // protected by mu
 	mu               sync.Mutex
+	workbenchMu      sync.Mutex             // serializes short bundle mutations, never network downloads
 	activeTurns      map[string]*activeTurn // by turn id
 	threadTurns      map[string]string      // thread id -> running turn id
 	approvals        map[string]chan bool   // pending approval id -> decision

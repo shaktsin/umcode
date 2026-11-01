@@ -106,6 +106,12 @@ graph protection; and chat project isolation. It checks 760/1180/1440px in both
 themes, producing 18 layout captures and additional workflow screenshots.
 Data, training and inference are placeholders, not tested runtime features.
 
+The same visual-workbench run also calls `model-deletion.mjs` against its own
+temporary project. It checks both model Delete controls, confirmation/cancel
+with unsaved edits, complete saved-folder recovery in project-local Trash, and
+an empty model list after final deletion and reload. Deletion captures are
+`delete-models.png`, `delete-confirmation.png` and `empty-models.png`.
+
 The assistant acceptance test uses a real engine plus its own deterministic
 OpenAI-compatible HTTP/SSE provider, so no user API key or paid provider is used:
 

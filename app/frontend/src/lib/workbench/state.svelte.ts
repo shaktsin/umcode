@@ -41,11 +41,11 @@ export class WorkbenchState {
   set tab(value: WorkbenchTab) { if (this.current) this.current.tab = value; }
 
   private key(id: string) { return `umcode.workbench.model.${id}`; }
-  private remember(id: string | null) {
-    if (!this.projectId) return;
+  private remember(id: string | null, projectId = this.projectId) {
+    if (!projectId) return;
     try {
-      if (id) this.storage?.setItem(this.key(this.projectId), id);
-      else this.storage?.removeItem(this.key(this.projectId));
+      if (id) this.storage?.setItem(this.key(projectId), id);
+      else this.storage?.removeItem(this.key(projectId));
     } catch { /* Selection persistence is optional. */ }
   }
   private begin() {
@@ -94,7 +94,7 @@ export class WorkbenchState {
   private accept(bundle: OpenWorkbenchModel, replaceDraft = false) {
     const session = this.current!;
     const id = bundle.model.id, existing = session.edits[id];
-    if (!existing || replaceDraft || existing.draft === existing.saved) {
+    if (!existing || existing.bundle.model.createdAt !== bundle.model.createdAt || replaceDraft || existing.draft === existing.saved) {
       const graph = bundle.graphJson ?? JSON.stringify(bundle.graph, null, 2);
       session.edits[id] = { bundle, draft: graph, saved: graph };
     }
@@ -147,12 +147,36 @@ export class WorkbenchState {
     catch { this.error = 'Graph must contain valid JSON.'; return; }
     this.busy = true;
     try {
-      await this.call('workbench/graph/save', { projectId, modelId: edit.bundle.model.id, graphJson: submitted });
+      await this.call('workbench/graph/save', { projectId, modelId: edit.bundle.model.id, modelCreatedAt: edit.bundle.model.createdAt, graphJson: submitted });
       if (!this.valid(token)) return;
       edit.saved = submitted;
       this.notice = 'Model saved to your project.';
     } catch (error) {
       if (this.valid(token)) this.error = errMsg(error);
+    } finally { if (token === this.generation) this.busy = false; }
+  }
+
+  async deleteModel(modelId: string): Promise<boolean> {
+    const projectId = this.projectId, session = this.current;
+    const model = session?.models.find(item => item.id === modelId);
+    if (!projectId || !session || !model || !this.connected || this.busy) return false;
+    const token = this.begin(); this.busy = true;
+    try {
+      const result = await this.call('workbench/model/delete', { projectId, modelId, modelCreatedAt: model.createdAt });
+      // A successful filesystem operation belongs to its original project even
+      // if navigation invalidated the request's visible loading state.
+      const originalEdit = session.edits[modelId]?.bundle.model.createdAt === model.createdAt;
+      session.models = session.models.filter(item => item.id !== modelId || item.createdAt !== model.createdAt);
+      if (originalEdit) delete session.edits[modelId];
+      if (session.selectedId === modelId && originalEdit) {
+        session.selectedId = null;
+        this.remember(null, projectId);
+      }
+      if (this.valid(token)) this.notice = `Deleted ${model.name}. Recover the saved folder from ${result.trashPath}.`;
+      return true;
+    } catch (error) {
+      if (this.valid(token)) this.error = errMsg(error);
+      return false;
     } finally { if (token === this.generation) this.busy = false; }
   }
 

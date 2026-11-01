@@ -4,6 +4,9 @@ The [assistant gallery](assistant/README.md) adds layer questions, suggestions,
 canvas preview, applied drafts, stale-suggestion protection and a narrow dark
 preview to the builder workflows below.
 
+The [deletion gallery](deletion/README.md) adds model card controls, named
+confirmation/cancellation and the empty list after deleting the final model.
+
 Captured from the real Svelte app and Go engine by
 `app/frontend/e2e/visual-workbench.mjs`, using temporary test projects. The
 validation messages, model names, generated code and parameter counts come from

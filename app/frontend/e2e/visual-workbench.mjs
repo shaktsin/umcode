@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
+import { verifyModelDeletion } from './model-deletion.mjs';
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright-core');
 assert.ok(process.env.UMCODE_TEST_ENGINE, 'Set UMCODE_TEST_ENGINE to the built engine binary');
@@ -80,6 +81,8 @@ try {
   }, a.id);
   await page.goto(server.resolvedUrls.local[0]);
   const workbench = page.getByRole('main', { name: 'ML Workbench' });
+  await workbench.getByRole('heading', { name: 'No models in this project yet' }).waitFor();
+  await workbench.getByRole('button', { name: 'New model', exact: true }).click();
   await workbench.getByRole('heading', { name: 'What does this model do?' }).waitFor();
   await workbench.getByLabel('Model name', { exact: true }).fill('Visual model');
   await workbench.getByLabel('Starting point', { exact: true }).selectOption('blank');
@@ -228,7 +231,7 @@ try {
   const repeats = workbench.getByLabel('Repeat blocks', { exact: true });
   await repeats.fill('3'); await repeats.press('Tab');
   await workbench.getByLabel('Workbench project', { exact: true }).selectOption(b.id);
-  await workbench.getByRole('heading', { name: 'What does this model do?' }).waitFor();
+  await workbench.getByRole('heading', { name: 'No models in this project yet' }).waitFor();
   await workbench.getByLabel('Workbench project', { exact: true }).selectOption(a.id);
   await canvas.waitFor(); await card('transformer').click();
   assert.equal(await repeats.inputValue(), '3', 'Unsaved architecture survives project switching');
@@ -371,6 +374,7 @@ try {
   await page.getByRole('button', { name: 'Start a chat here', exact: true }).click();
   await page.locator('[data-workbench-chat] [data-composer]').waitFor();
   assert.equal((await rpc('thread/read', { threadId: thread.id })).thread.projectId, a.id);
+  await verifyModelDeletion({ page, workbench, rpc, projectId: b.id, root: rootB, artifacts });
   assert.deepEqual(errors, [], 'No browser errors');
   await writeFile(join(artifacts, 'report.json'), JSON.stringify({ realEngine: true, flows: ['text/vision/feature starter selection', 'palette drag/drop', 'connect ports', 'pointer/keyboard movement', 'properties', 'actionable validation messages', 'undo/redo', 'delete', 'code selection', 'Python download', 'save/reopen', 'back to models and unsaved draft retention', 'text classification', 'feature classification', 'CNN editing', 'noncausal vision Transformer', 'custom vision', 'project draft retention', 'reload confirmation', 'legacy protection', 'duplicate', 'chat project guard'], layouts, browserErrors: errors }, null, 2));
   console.log('Visual workbench smoke passed: real engine, text/CNN/ViT/custom interactions, ' + layouts.length + ' layouts; artifacts: ' + artifacts);
