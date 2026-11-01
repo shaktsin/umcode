@@ -42,6 +42,7 @@ import (
 	"github.com/shaktsin/umcode/internal/version"
 	"github.com/shaktsin/umcode/internal/visualqa"
 	"github.com/shaktsin/umcode/internal/work"
+	"github.com/shaktsin/umcode/internal/workbench"
 	"github.com/shaktsin/umcode/internal/worktree"
 )
 
@@ -97,23 +98,26 @@ type Engine struct {
 	DelegationWorkspaces       WorkspaceResolver
 	DelegationWorkspaceService *delegation.WorkspaceService
 
-	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
-	delegationTokens map[string]delegationToken // protected by mu; never persisted
-	shuttingDown     bool                       // protected by mu
-	mu               sync.Mutex
-	workbenchMu      sync.Mutex             // serializes short bundle mutations, never network downloads
-	activeTurns      map[string]*activeTurn // by turn id
-	threadTurns      map[string]string      // thread id -> running turn id
-	approvals        map[string]chan bool   // pending approval id -> decision
-	budgetWarned     map[string]string      // credential id -> month already warned
-	pausedTurns      map[string]bool        // turn id -> ended on a budget pause
-	routing          protocol.RoutingConfig // the models the user has approved
-	presets          map[protocol.Complexity]protocol.ComplexityPreset
-	defaultCplx      protocol.Complexity
-	turnLimits       protocol.ExecutionLimits
-	defaultMaxOut    atomic.Int64                  // output limit for models with unknown max output
-	turnWaiters      map[string]chan protocol.Turn // turn id -> completion (task runs)
-	wg               sync.WaitGroup
+	delegationMu      sync.Mutex                 // serializes prepare/admit without holding the turn mutex
+	delegationTokens  map[string]delegationToken // protected by mu; never persisted
+	shuttingDown      bool                       // protected by mu
+	mu                sync.Mutex
+	inferenceMu       sync.Mutex
+	inferenceManager  *workbench.InferenceManager
+	inferenceReceipts map[string]inferenceReceipt
+	workbenchMu       sync.Mutex             // serializes short bundle mutations, never network downloads
+	activeTurns       map[string]*activeTurn // by turn id
+	threadTurns       map[string]string      // thread id -> running turn id
+	approvals         map[string]chan bool   // pending approval id -> decision
+	budgetWarned      map[string]string      // credential id -> month already warned
+	pausedTurns       map[string]bool        // turn id -> ended on a budget pause
+	routing           protocol.RoutingConfig // the models the user has approved
+	presets           map[protocol.Complexity]protocol.ComplexityPreset
+	defaultCplx       protocol.Complexity
+	turnLimits        protocol.ExecutionLimits
+	defaultMaxOut     atomic.Int64                  // output limit for models with unknown max output
+	turnWaiters       map[string]chan protocol.Turn // turn id -> completion (task runs)
+	wg                sync.WaitGroup
 }
 
 type activeTurn struct {
@@ -282,6 +286,11 @@ func (e *Engine) Shutdown(ctx context.Context) {
 	e.ComputerUse.Close()
 	e.Exec.Close()
 	e.cancelAll()
+	e.inferenceMu.Lock()
+	if e.inferenceManager != nil {
+		e.inferenceManager.Close()
+	}
+	e.inferenceMu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		e.wg.Wait()

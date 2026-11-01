@@ -52,10 +52,11 @@
   const busy = $derived(preparing || view.sending || !!view.running);
   const offline = $derived(app.conn !== 'open');
   const isMain = $derived(view === chat.main);
+  const localModel = $derived(view.selection.provider === 'workbench_local');
   const noWorkbenchModel = $derived(workbenchMode && !workbenchAssistant.current);
   const projectId = $derived(view.id ? view.thread?.projectId ?? null : isMain ? projects.activeId : null);
   const query = $derived(slashQuery(text, caret));
-  const pickerOpen = $derived(!workbenchMode && focused && query !== null && !dismissed && !offline && !busy);
+  const pickerOpen = $derived(!localModel && !workbenchMode && focused && query !== null && !dismissed && !offline && !busy);
   const matches = $derived(filterSkills(skills, query ?? ''));
   $effect(() => {
     if (workbenchMode && workbenchAssistant.focusRequest > 0) void tick().then(() => input?.focus());
@@ -124,7 +125,7 @@
   async function submit() {
     if (busy || offline || app.needsProvider || view.delegation.pending || noWorkbenchModel) return;
     const t = text;
-    const a = files;
+    const a = localModel ? [] : files;
     if (!t.trim() && a.length === 0) return;
     const generation = ++submissionGeneration;
     preparing = true;
@@ -187,6 +188,7 @@
   }
 
   async function addFiles(list: FileList | File[] | null) {
+    if (localModel) return;
     if (!list) return;
     for (const f of Array.from(list)) {
       if (f.size > MAX_FILE) {
@@ -219,6 +221,8 @@
         ? 'Open a model to ask about its layers'
       : workbenchMode
         ? 'Ask about this model or layer…'
+      : localModel
+        ? 'Message this local model…'
       : compact
         ? 'Ask about this…'
         : projects.active
@@ -313,15 +317,16 @@
       aria-activedescendant={pickerOpen && matches[activeSkill] && !skillsLoading && !skillsError ? `${pickerId}-${activeSkill}` : undefined}
       onpaste={onPaste}
       rows="1"
-      placeholder={app.needsProvider ? composerPlaceholder(placeholder, true) : workbenchMode ? placeholder : `${placeholder} · / for skills`}
+      placeholder={app.needsProvider ? composerPlaceholder(placeholder, true) : workbenchMode || localModel ? placeholder : `${placeholder} · / for skills`}
       class="composer-input w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint"
       style="field-sizing: content; min-height: 2.75rem"
     ></textarea>
-    {#if !workbenchMode}<DelegationActivation state={view.delegation} />{/if}
+    {#if !workbenchMode && !localModel}<DelegationActivation state={view.delegation} />{/if}
     <div class="composer-toolbar">
-      <button class="btn-ghost btn-sm" title="Attach files" aria-label="Attach files" onclick={() => fileInput?.click()}>
+      {#if !localModel}<button class="btn-ghost btn-sm" title="Attach files" aria-label="Attach files" onclick={() => fileInput?.click()}>
         <Paperclip class="w-4 h-4" />
       </button>
+      {/if}
       <input
         bind:this={fileInput}
         type="file"
@@ -333,8 +338,8 @@
         }}
       />
       <ModelPicker value={view.selection} onchange={(v) => view.setSelection(v)} compact={compact} />
-      {#if !workbenchMode}<ApprovalModePill {view} />{/if}
-      {#if !workbenchMode}<AgentsMenu state={view.delegation} {busy} onenable={() => chat.enableDelegation(view)} />{/if}
+      {#if !workbenchMode && !localModel}<ApprovalModePill {view} />{/if}
+      {#if !workbenchMode && !localModel}<AgentsMenu state={view.delegation} {busy} onenable={() => chat.enableDelegation(view)} />{/if}
       {#if blockedReason}
         <span class="composer-error" role="status" title={blockedReason}>No model available</span>
       {/if}

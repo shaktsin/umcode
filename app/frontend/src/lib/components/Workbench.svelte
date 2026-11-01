@@ -2,8 +2,11 @@
   import { tick, untrack } from 'svelte';
   import { ArrowLeft, Layers3, FolderOpen, MessageCircle, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
   import VisualBuilder from './workbench/VisualBuilder.svelte';
+  import DataTab from './workbench/DataTab.svelte';
+  import InferenceTab from './workbench/InferenceTab.svelte';
   import ModelChooser from './workbench/ModelChooser.svelte';
   import { inputModalities, modelGraph, relevantStarterPresets, type InputModality, type StartingPoint } from '$lib/workbench/presets';
+  import { app } from '$lib/stores/app.svelte';
   import { projects } from '$lib/stores/projects.svelte';
   import { dialog } from '$lib/stores/dialog.svelte';
   import { createProject } from '$lib/createProject';
@@ -11,6 +14,7 @@
   import { workbenchAssistant } from '$lib/workbench/assistantStore.svelte';
   import { describeWorkbenchTask, workbenchTasks, type WorkbenchTask } from '$lib/workbench/types';
   import type { WorkbenchTab } from '$lib/workbench/state.svelte';
+  import { workbenchDataDrafts } from '$lib/workbench/data.svelte';
 
   let { chatVisible = false, onToggleChat = () => {}, onOpenChat = () => {} }: { chatVisible?: boolean; onToggleChat?: () => void; onOpenChat?: () => void } = $props();
   $effect(() => {
@@ -46,11 +50,14 @@
     const projectId = workbench.projectId;
     const model = workbench.models.find(item => item.id === modelId);
     if (!projectId || !model || !workbench.connected || workbench.busy) return;
-    const message = `Delete “${model.name}”?\n\nThe saved model folder and all its contents will move to this project's models/.trash/ folder for recovery. Any unsaved model changes will be discarded.`;
+    const message = `Delete “${model.name}”?\n\nSaved model files, imported datasets, and checkpoints will move to this project's models/.trash/ folder for recovery. Any unsaved model or Data-tab changes will be discarded.`;
     if (!await dialog.confirm(message, { okLabel: 'Delete model', danger: true })) return;
     if (workbench.projectId !== projectId || workbench.models.find(item => item.id === modelId)?.createdAt !== model.createdAt) return;
     if (await workbench.deleteModel(modelId)) {
       if (workbench.projectId === projectId && !workbench.selected) screen = 'models';
+      await tick(); // Let the deleted model's Data tab dispose before clearing its cache.
+      workbenchDataDrafts.delete(JSON.stringify([projectId, modelId, model.createdAt]));
+      await app.refreshCatalog().catch(() => {});
     }
   }
 
@@ -132,7 +139,7 @@
           <div class="setup-cards">
             <div><h3>Build</h3><p>Drag layers onto the canvas, connect them, and adjust their settings. Export your PyTorch model.</p></div>
             <div><h3>Train</h3><p>A folder for future runs and checkpoints. Training is not available in this preview.</p></div>
-            <div><h3>Inference</h3><p>A model configured for {task === 'custom' ? 'your custom task' : describeWorkbenchTask(task).toLowerCase()}. The inference playground comes later.</p></div>
+            <div><h3>Inference</h3><p>A model configured for {task === 'custom' ? 'your custom task' : describeWorkbenchTask(task).toLowerCase()}. Import trained weights and try predictions locally.</p></div>
           </div>
         </section>
         <aside class="model-setup">
@@ -161,6 +168,14 @@
       {#if workbench.tab === 'Build'}
         {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
           <VisualBuilder text={workbench.draft} onchange={(text) => workbench.draft = text} onSave={() => void workbench.save()} onReload={() => void reload()} onAsk={onOpenChat} disabled={!workbench.connected || workbench.busy} dirty={workbench.dirty} task={workbench.selected.model.task} name={workbench.selected.model.name} />
+        {/key}
+      {:else if workbench.tab === 'Data'}
+        {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
+          <DataTab projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} task={workbench.selected.model.task} graphText={workbench.draft} connected={workbench.connected} onBuild={() => workbench.tab = 'Build'} />
+        {/key}
+      {:else if workbench.tab === 'Inference'}
+        {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
+          <InferenceTab projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} name={workbench.selected.model.name} connected={workbench.connected} dirty={workbench.dirty} onBuild={() => workbench.tab = 'Build'} onData={() => workbench.tab = 'Data'} />
         {/key}
       {:else}
         <section class="workbench-empty"><Layers3 size={30} strokeWidth={1.4} /><p class="eyebrow">{workbench.tab} · Coming later</p><h2>{unavailable[workbench.tab][0]}</h2><p>{unavailable[workbench.tab][1]}</p><button class="btn-outline" onclick={() => workbench.tab = 'Build'}>Back to Build</button></section>

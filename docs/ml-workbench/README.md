@@ -169,3 +169,10 @@ not trained-model quality.
   Adapter files are scaffolding, not an implemented model-execution contract.
 - Exported weights start randomly. The memory number covers float32 parameter
   weights only, excluding activations, gradients and optimizer state.
+
+## Data and local inference follow-up
+
+The [Data and Inference implementation guide](data-inference.md) covers local and
+Hugging Face datasets, saved preparation, PyTorch checkpoint tests, and promotion
+into regular chat. See the [real workflow screenshots](screenshots/data-inference/README.md).
+Train remains the next core tab to implement.
