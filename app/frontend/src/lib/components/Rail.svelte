@@ -2,6 +2,7 @@
   import {
     BarChart3,
     Blocks,
+    Layers3,
     MessageCircle,
     PanelLeftClose,
     PanelLeftOpen,
@@ -17,9 +18,11 @@
   let { collapsedPreference = $bindable(false), autoCollapsed = false }: {collapsedPreference?:boolean; autoCollapsed?:boolean} = $props();
   const collapsed = $derived(autoCollapsed || collapsedPreference);
   let drawer = $state(false);
+  $effect(() => { void app.view; drawer = false; });
 
   const nav: { id: View; label: string; icon: typeof MessageCircle }[] = [
     { id: 'chat', label: 'Chat', icon: MessageCircle },
+    { id: 'workbench', label: 'Workbench', icon: Layers3 },
     { id: 'approvals', label: 'Approvals', icon: ShieldCheck },
     { id: 'extensions', label: 'Plugin', icon: Blocks },
     { id: 'tasks', label: 'Periodic', icon: Repeat2 },
@@ -44,7 +47,7 @@
   <nav class="rail-nav" aria-label="Main navigation">
     {#each nav as item}
       {@const active = app.view === item.id}
-      <button class="rail-nav-item {active ? 'is-active' : ''} {collapsed ? 'justify-center px-0' : ''}" title={collapsed ? item.label : undefined} onclick={() => { if (item.id === 'chat' && app.view === 'chat') chat.newChat(); else app.view = item.id; }}>
+      <button class="rail-nav-item {active ? 'is-active' : ''} {collapsed ? 'justify-center px-0' : ''}" aria-label={item.label} title={collapsed ? item.label : undefined} onclick={() => { if (item.id === 'chat' && app.view === 'chat') chat.newChat(); else app.view = item.id; }}>
         <item.icon class="w-[17px] h-[17px] shrink-0" strokeWidth={1.8} />
         {#if !collapsed}<span>{item.label}</span>{/if}
         {#if item.id === 'approvals' && app.approvals.length > 0}<span class="count-badge">{app.approvals.length}</span>{/if}
