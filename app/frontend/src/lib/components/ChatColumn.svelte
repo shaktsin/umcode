@@ -399,7 +399,7 @@
     {/if}
   </div>
 
-  {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} onsend={(text) => void view.submitFollowUp(text)} />{/if}
+  {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} onsend={(text) => void view.submitFollowUp(text, 'resolve')} resolveQueued={view.queuedResolve} />{/if}
   <CompactionProgress state={view.compaction} />
   <CapacityNotice selection={view.selection} />
   <Composer {view} compact={variant === 'side'} />

@@ -212,3 +212,16 @@ it('keeps the cancel integration report per task and leaves unchanged agents ide
   await s.cancel('task'); expect(s.reports.task).toEqual(report);
   await s.bind('other', 'project'); expect(s.reports).toEqual({});
 });
+it('per-agent cancel sends the runtime agent id as childId and never stores a task report', async () => {
+  const s = new DelegationState(); await s.bind('parent', 'project'); s.apply({ threadId: 'parent', taskId: 'task', task });
+  call.mockImplementation(async (m: string) => m === 'delegation/cancel' ? { task, children: [], integration: { headTree: 'h', appliedCount: 1, verified: true, message: 'partial' } } : { tasks: [] });
+  await s.cancel('task', 'agent-1');
+  expect(call).toHaveBeenCalledWith('delegation/cancel', { threadId: 'parent', taskId: 'task', childId: 'agent-1' }); expect(s.reports).toEqual({});
+});
+it('Resolve follow-ups queue together while the lead runs, never replace another follow-up, and are not shown as a suggestion wait', async () => {
+  const v = new ThreadView(); v.id = 'parent'; v.turns = [{ id: 'root', threadId: 'parent', status: 'running' } as any];
+  await v.submitFollowUp('I resolved the conflict in A; continue integration', 'resolve'); await v.submitFollowUp('I resolved the conflict in B; continue integration', 'resolve'); await v.submitFollowUp('I resolved the conflict in B; continue integration', 'resolve');
+  expect(v.queuedResolve).toBe(true); expect(v.queuedFollowUp).toBeNull();
+  expect((v as any).queued.text).toBe('I resolved the conflict in A; continue integration\nI resolved the conflict in B; continue integration');
+  await v.submitFollowUp('something else'); expect(v.followUpError).toMatch(/already waiting/); expect((v as any).queued.kind).toBe('resolve');
+});

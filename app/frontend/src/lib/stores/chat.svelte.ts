@@ -34,9 +34,11 @@ export class ThreadView {
   delegation = new DelegationState();
   cards = new AgentCards();
   /** Follow-up text for an answered suggestion, waiting for the suggesting turn to finish. */
-  private queued = $state<{ threadId: string | null; text: string } | null>(null);
+  private queued = $state<{ threadId: string | null; text: string; kind?: 'resolve' } | null>(null);
   /** Shown on the card of the thread that queued it only. */
-  get queuedFollowUp(): string | null { return this.queued && this.queued.threadId === this.id ? this.queued.text : null; }
+  get queuedFollowUp(): string | null { return this.queued && this.queued.threadId === this.id && this.queued.kind !== 'resolve' ? this.queued.text : null; }
+  /** Resolve messages waiting for the lead's running turn to end (not a suggestion follow-up). */
+  get queuedResolve(): boolean { return !!this.queued && this.queued.threadId === this.id && this.queued.kind === 'resolve'; }
   /** Why a queued follow-up was dropped (for example an expired activation). */
   followUpError = $state('');
   id = $state<string | null>(null);
@@ -131,7 +133,7 @@ export class ThreadView {
     const q = this.queued;
     if (!q || q.threadId !== this.id || this.running) return;
     this.queued = null;
-    void this.submitFollowUp(q.text);
+    void this.submitFollowUp(q.text, q.kind);
   }
 
   applyItem(it: Item) {
@@ -202,9 +204,19 @@ export class ThreadView {
   }
 
   /** Starts the follow-up turn now, or queues it while the suggesting turn is still running (the token stays held). */
-  async submitFollowUp(text: string) {
+  async submitFollowUp(text: string, kind?: 'resolve') {
     this.followUpError = '';
-    if (this.running) { this.queued = { threadId: this.id, text }; return; }
+    if (this.running) {
+      const q = this.queued;
+      if (q && q.threadId === this.id) {
+        // One slot: Resolve messages join each other; anything else must not be dropped silently.
+        if (q.kind === 'resolve' && kind === 'resolve') { if (!q.text.split('\n').includes(text)) this.queued = { ...q, text: `${q.text}\n${text}` }; return; }
+        this.followUpError = 'Another follow-up is already waiting for the current turn. Try again once it is sent.';
+        return;
+      }
+      this.queued = { threadId: this.id, text, kind };
+      return;
+    }
     this.queued = null;
     const held = this.delegation.token;
     if (held && Date.parse(held.expiresAt) <= Date.now()) {

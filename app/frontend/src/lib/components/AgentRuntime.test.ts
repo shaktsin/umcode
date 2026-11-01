@@ -27,7 +27,7 @@ it('Resolve appears only for a conflict revision and names the agent', () => {
 });
 it('shows Amended by lead with the reason and blocked text', () => {
   const b = html(IntegrationStrip, { integration: { headTree: 'h', appliedCount: 1, verified: true, amendments: 2, amendReason: 'fix <i>imports</i>', blocked: 'needs approval' }, agents: [], canResolve: true, onresolve() {} });
-  expect(b).toContain('Amended by lead'); expect(b).toContain('fix &lt;i>imports'); expect(b).toContain('needs approval');
+  expect(b).toContain('Amended by lead · fix &lt;i>imports'); expect(b).toContain('needs approval');
 });
 it('cancel report: applied work stays staged, unintegrated and blocked agents are named', () => {
   const agents = [ag('a', { name: 'Builder' }), ag('b', { name: 'Tester' })];
@@ -47,4 +47,15 @@ it('Agents renders the runtime tree to depth 3 with a summary bar, keeps legacy 
     { task: { id: 'old', threadId: 't', state: 'completed' }, children: [legacy], childErrors: {} }], reports: {}, pending: false, error: '', cancel() {} } as any;
   const b = html(Agents, { state, threadId: 't', projectId: 'p', onsend() {} });
   expect(b).toContain('Agents · 5'); expect(b).toContain('Deep'); expect(b).toContain('Cancel task'); expect(b).toContain('Legacy work'); expect(b).toContain('legacy-model'); expect(b).toContain('p/m1 ×3, p/m2');
+});
+it('amend note without a reason has no duplicated label; queued Resolve is shown and disables the button', () => {
+  const b = html(IntegrationStrip, { integration: { headTree: 'h', appliedCount: 1, verified: true, amendments: 1, revisions: [{ agentId: 'a', state: 'conflict' }] }, agents: [ag('a')], canResolve: true, resolveQueued: true, onresolve() {} });
+  expect(b).toContain('Amended by lead<'); expect(b).not.toContain('Amended by lead · Amended'); expect(b).toContain('Queued'); expect(b).toMatch(/<button[^>]*disabled[^>]*>Resolve/);
+});
+it('a reloaded cancelled task shows the rebuilt report with a single Cancel-free Agents bar', () => {
+  const state = { tasks: [{ task: { id: 'task', threadId: 't', state: 'cancelled' }, children: [], childErrors: {}, agents: [ag('a', { name: 'Builder' })], integration: { headTree: 'h', appliedCount: 3, verified: true, revisions: [{ agentId: 'a', state: 'submitted' }] } }], reports: {}, pending: false, error: '', cancel() {} } as any;
+  const b = html(Agents, { state, threadId: 't', onsend() {} });
+  expect(b).toContain('3 applied changes stay staged and kept.'); expect(b).toContain('Not integrated: Builder'); expect(b).not.toContain('Cancel task');
+  const active = { ...state, tasks: [{ ...state.tasks[0], task: { id: 'task', threadId: 't', state: 'running' } }] };
+  expect(html(Agents, { state: active, threadId: 't', onsend() {} }).match(/Cancel task/g)).toHaveLength(1);
 });
