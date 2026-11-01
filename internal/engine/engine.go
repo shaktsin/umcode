@@ -133,6 +133,10 @@ type Engine struct {
 	// runtimeAgentBudgets holds each live runtime agent's budget slice so a
 	// nested agent slices its parent's slice (see agentrt_budget.go).
 	runtimeAgentBudgets agentBudgetRegistry
+	// runtimePublishMu orders runtime delegation/updated events: each reads
+	// the stored state and takes its sequence number under it, so sequence
+	// order and state order agree (see agentrt_readmodel.go).
+	runtimePublishMu sync.Mutex
 
 	// suggestionMu serializes answers to agent.suggest cards: the open check,
 	// the activation token and the decision happen under it as one step.
@@ -274,6 +278,7 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
 	e.DelegationWorkspaceService = delegation.NewWorkspaceService(o.Store, e.Worktrees, e.validateDelegationParent, o.Store.AgentReviewEligible)
+	e.DelegationWorkspaceService.WithEvents(e.delegationRuntimeEvent)
 	e.DelegationWorkspaces = o.DelegationWorkspaces
 	if e.DelegationWorkspaces == nil {
 		e.DelegationWorkspaces = managedChildWorkspaces{service: e.DelegationWorkspaceService}

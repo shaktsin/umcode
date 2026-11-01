@@ -105,12 +105,18 @@ func (s *WorkspaceService) lockTask(taskID string) func() {
 	s.mu.Unlock()
 	l.mu.Lock()
 	return func() {
+		// Only the lock holder marks the task, so the mark read here is
+		// exactly this operation's; it is announced once the lock is free.
+		changed := s.takeIntegrationChanged(taskID)
 		l.mu.Unlock()
 		s.mu.Lock()
 		if l.refs--; l.refs == 0 {
 			delete(s.taskLocks, taskID)
 		}
 		s.mu.Unlock()
+		if changed {
+			s.emitIntegration(taskID)
+		}
 	}
 }
 
@@ -147,6 +153,7 @@ func (s *WorkspaceService) head(ctx context.Context, t protocol.AgentTask, creat
 	if err = s.Store.SetAgentIntegrationHead(ctx, h, 0); err != nil && !errors.Is(err, store.ErrAgentConflict) {
 		return h, err
 	}
+	s.integrationChanged(t.ID)
 	return s.Store.AgentIntegrationHead(ctx, t.ID)
 }
 
@@ -296,8 +303,12 @@ func (s *WorkspaceService) recordRuntimeRevision(ctx context.Context, task proto
 	if len(changed) == 0 {
 		return store.AgentRevision{}, nil
 	}
-	return s.Store.SubmitAgentRevision(ctx, store.AgentRevision{TaskID: t.ID, AgentID: a.ID, WorkspaceID: w.ID, BaseRevision: w.BaseRevision,
+	rev, err := s.Store.SubmitAgentRevision(ctx, store.AgentRevision{TaskID: t.ID, AgentID: a.ID, WorkspaceID: w.ID, BaseRevision: w.BaseRevision,
 		ResultRevision: a.Revision, ResultTree: tree, ChangedPaths: changed})
+	if err == nil {
+		s.integrationChanged(t.ID)
+	}
+	return rev, err
 }
 
 // Applied revisions are final: there is no drop of an applied revision and
@@ -434,6 +445,7 @@ func (s *WorkspaceService) updateRevision(ctx context.Context, rev store.AgentRe
 	if err := s.Store.UpdateAgentRevision(ctx, rev, rev.Version); err != nil {
 		return rev, err
 	}
+	s.integrationChanged(rev.TaskID)
 	return s.Store.AgentRevision(ctx, rev.TaskID, rev.AgentID)
 }
 
@@ -460,7 +472,17 @@ func (s *WorkspaceService) finishApply(ctx context.Context, t protocol.AgentTask
 func (s *WorkspaceService) advanceHead(ctx context.Context, h store.AgentIntegrationHead, tree string) error {
 	next := h
 	next.HeadTree, next.AppliedCount, next.Workflow = tree, h.AppliedCount+1, nil
-	return s.Store.SetAgentIntegrationHead(ctx, next, h.Version)
+	return s.setHead(ctx, next, h.Version)
+}
+
+// setHead writes the task's integration head under the task lock and marks
+// the integration changed.
+func (s *WorkspaceService) setHead(ctx context.Context, h store.AgentIntegrationHead, expectedVersion int64) error {
+	if err := s.Store.SetAgentIntegrationHead(ctx, h, expectedVersion); err != nil {
+		return err
+	}
+	s.integrationChanged(h.TaskID)
+	return nil
 }
 
 // ReconcileRuntimeIntegration settles revisions left `applying` by a crash and
@@ -751,7 +773,7 @@ func (s *WorkspaceService) AmendRuntimeHead(ctx context.Context, taskID, reason 
 	next := h
 	next.HeadTree, next.Workflow = tree, nil
 	next.Amendments, next.AmendReason, next.AmendedTree = h.Amendments+1, reason, tree
-	if err = s.Store.SetAgentIntegrationHead(context.WithoutCancel(ctx), next, h.Version); err != nil {
+	if err = s.setHead(context.WithoutCancel(ctx), next, h.Version); err != nil {
 		return RuntimeIntegration{}, err
 	}
 	return RuntimeIntegration{HeadTree: tree, NeedsVerification: true}, nil
@@ -776,6 +798,12 @@ func (s *WorkspaceService) RuntimeIntegrationStatus(ctx context.Context, taskID 
 	if err != nil {
 		return RuntimeIntegrationStatus{}, err
 	}
+	return integrationStatus(h, revs, agents), nil
+}
+
+// integrationStatus summarises a head (Version 0: not recorded yet), the
+// task's revisions and its agents.
+func integrationStatus(h store.AgentIntegrationHead, revs []store.AgentRevision, agents []protocol.RuntimeAgent) RuntimeIntegrationStatus {
 	cancelled := map[string]bool{}
 	for _, a := range agents {
 		cancelled[a.ID] = a.State == protocol.AgentStateCancelled
@@ -786,7 +814,27 @@ func (s *WorkspaceService) RuntimeIntegrationStatus(ctx context.Context, taskID 
 			st.Settled = false
 		}
 	}
-	return st, nil
+	return st
+}
+
+// ReadRuntimeIntegration is RuntimeIntegrationStatus for read-only views (the
+// delegation read model and its events): storage only, with no parent
+// validation, no Git and no task lock, so a task whose project moved stays
+// readable and an accept in progress never delays it (a view read during one
+// may show it half recorded; the event after it brings the settled state).
+// HeadTree is empty while no head is recorded. It also returns the stored
+// head (zero when not recorded) and whether there is anything to show: a
+// recorded head or at least one revision.
+func (s *WorkspaceService) ReadRuntimeIntegration(ctx context.Context, taskID string, agents []protocol.RuntimeAgent) (RuntimeIntegrationStatus, store.AgentIntegrationHead, bool, error) {
+	h, err := s.Store.AgentIntegrationHead(ctx, taskID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return RuntimeIntegrationStatus{}, h, false, err
+	}
+	revs, err := s.Store.AgentRevisions(ctx, taskID)
+	if err != nil {
+		return RuntimeIntegrationStatus{}, h, false, err
+	}
+	return integrationStatus(h, revs, agents), h, h.Version > 0 || len(revs) > 0, nil
 }
 
 // RevisionSettled reports whether a revision no longer needs a lead decision:
@@ -874,7 +922,7 @@ func (s *WorkspaceService) updateWorkflowLocked(ctx context.Context, taskID, hea
 	if h.Workflow, err = json.Marshal(next); err != nil {
 		return err
 	}
-	return s.Store.SetAgentIntegrationHead(ctx, h, h.Version)
+	return s.setHead(ctx, h, h.Version)
 }
 
 // FinishRuntime runs complete (the caller's state change to completed) under

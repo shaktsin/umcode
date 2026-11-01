@@ -151,12 +151,7 @@ func (c *Coordinator) notifyError(task protocol.AgentTask, child protocol.AgentC
 		close(ch)
 	}
 	c.changed[task.ID] = make(chan struct{})
-	// Microsecond stamps (safe as JavaScript integers) also order delayed deliveries across engine restarts.
-	next := time.Now().UnixMicro()
-	if next <= c.sequence {
-		next = c.sequence + 1
-	}
-	c.sequence = next
+	next := c.NextSequence()
 	c.sequences[child.ID] = next
 	if c.events != nil {
 		event := protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Child: cloneChild(child), Sequence: next}
@@ -166,6 +161,22 @@ func (c *Coordinator) notifyError(task protocol.AgentTask, child protocol.AgentC
 		c.events.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, event)
 	}
 }
+
+// NextSequence returns the next delegation/updated sequence number: strictly
+// increasing within the process. Microsecond stamps (safe as JavaScript
+// integers) also order delayed deliveries across engine restarts. Legacy
+// child events and runtime agent and integration events share it.
+func (c *Coordinator) NextSequence() int64 {
+	c.seqMu.Lock()
+	defer c.seqMu.Unlock()
+	next := time.Now().UnixMicro()
+	if next <= c.sequence {
+		next = c.sequence + 1
+	}
+	c.sequence = next
+	return next
+}
+
 func cloneChild(child protocol.AgentChild) protocol.AgentChild {
 	if child.Result.Review != nil {
 		review := *child.Result.Review

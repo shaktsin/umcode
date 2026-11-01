@@ -38,6 +38,65 @@ type WorkspaceService struct {
 	mu             sync.Mutex
 	// taskLocks serialises runtime integration per task (guarded by mu).
 	taskLocks map[string]*taskLock
+	// events receives runtime agent and integration changes (WithEvents).
+	events func(AgentEvent)
+	// eventsMu guards integrationDirty: the tasks whose integration changed
+	// under their task lock and not yet announced (see lockTask).
+	eventsMu         sync.Mutex
+	integrationDirty map[string]bool
+}
+
+// AgentEvent reports a persisted runtime change made by the service: Agent
+// is the agent's new state (nil if only the integration changed);
+// IntegrationChanged means the task's revisions or integration head changed
+// and the integration status should be read again. ThreadID is the task's
+// parent chat when known.
+type AgentEvent struct {
+	ThreadID, TaskID   string
+	Agent              *protocol.RuntimeAgent
+	IntegrationChanged bool
+}
+
+// WithEvents registers fn for the service's runtime changes. Agent events are
+// delivered synchronously after the write, possibly with service locks held,
+// so fn must not call back into the service for them; integration events
+// are delivered after the task's integration lock is released, so fn may
+// read the integration status. Call it before the service is used.
+func (s *WorkspaceService) WithEvents(fn func(AgentEvent)) { s.events = fn }
+
+// integrationChanged marks that the task's integration changed; the caller
+// holds the task lock, whose release announces it once.
+func (s *WorkspaceService) integrationChanged(taskID string) {
+	if s.events == nil {
+		return
+	}
+	s.eventsMu.Lock()
+	if s.integrationDirty == nil {
+		s.integrationDirty = map[string]bool{}
+	}
+	s.integrationDirty[taskID] = true
+	s.eventsMu.Unlock()
+}
+
+// takeIntegrationChanged clears and returns the task's mark.
+func (s *WorkspaceService) takeIntegrationChanged(taskID string) bool {
+	s.eventsMu.Lock()
+	defer s.eventsMu.Unlock()
+	dirty := s.integrationDirty[taskID]
+	delete(s.integrationDirty, taskID)
+	return dirty
+}
+
+// emitIntegration announces a task's integration change.
+func (s *WorkspaceService) emitIntegration(taskID string) {
+	if s.events == nil {
+		return
+	}
+	ev := AgentEvent{TaskID: taskID, IntegrationChanged: true}
+	if t, err := s.Store.AgentTask(context.Background(), taskID); err == nil {
+		ev.ThreadID = t.ThreadID
+	}
+	s.events(ev)
 }
 
 func NewWorkspaceService(s *store.Store, m *worktree.Manager, parent ParentValidator, eligible IntegrationEligibility) *WorkspaceService {
@@ -915,6 +974,10 @@ func (s *WorkspaceService) attachRuntime(ctx context.Context, t protocol.AgentTa
 		err = s.Store.UpdateRuntimeAgent(ctx, latest, latest.Version)
 		if errors.Is(err, store.ErrAgentConflict) {
 			continue
+		}
+		if err == nil && s.events != nil {
+			latest.Version++
+			s.events(AgentEvent{ThreadID: t.ThreadID, TaskID: t.ID, Agent: &latest})
 		}
 		return err
 	}

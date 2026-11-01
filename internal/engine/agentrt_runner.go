@@ -251,6 +251,9 @@ func (e *Engine) updateRuntimeAgent(ctx context.Context, taskID, id string, muta
 			return nil
 		}
 		err = e.Store.UpdateRuntimeAgent(ctx, a, a.Version)
+		if err == nil {
+			e.publishRuntimeAgent(taskID, id)
+		}
 		if !errors.Is(err, store.ErrAgentConflict) {
 			return err
 		}
