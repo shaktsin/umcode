@@ -1,0 +1,2861 @@
+<!doctype html>
+<html lang="en" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com https://persistent.oaistatic.com/plugins/visualize/; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>ML Workbench — interactive workflow concept</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+
+</head>
+<body>
+<iframe id="codex-visualization" sandbox="allow-scripts" referrerpolicy="no-referrer" title="ML Workbench — interactive workflow concept" data-srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot; data-visualize-standalone&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com https://persistent.oaistatic.com/plugins/visualize/; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;ML Workbench — interactive workflow concept&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 16px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans:
+    -apple-system-body, ui-sans-serif, -apple-system, system-ui, &quot;Segoe UI&quot;,
+    Helvetica, &quot;Apple Color Emoji&quot;, Arial, sans-serif, &quot;Segoe UI Emoji&quot;,
+    &quot;Segoe UI Symbol&quot;;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 8px);
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.75);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 2);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  -webkit-font-smoothing: antialiased;
+  font-size: var(--font-size-base);
+  line-height: calc(var(--font-size-base) * 1.625);
+  font-weight: var(--font-weight-normal);
+}
+
+.cursor-interaction {
+  cursor: var(--cursor-interaction, pointer);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: var(--cursor-interaction, pointer);
+  text-decoration: none;
+  text-underline-offset: 2px;
+  font-weight: inherit;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+li,
+.table {
+  font-family: var(--font-sans);
+}
+
+h1 {
+  font-size: calc(var(--font-size-base) * 1.5);
+  line-height: 1.3333333333;
+}
+
+h2 {
+  font-size: calc(var(--font-size-base) * 1.25);
+  line-height: 1.4;
+}
+h3 {
+  font-size: calc(var(--font-size-base) * 1.125);
+  line-height: 1.5555555556;
+}
+h4 {
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+h5,
+h6 {
+  font-size: var(--font-size-base);
+  line-height: calc(var(--font-size-base) * 1.625);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+b,
+strong,
+th {
+  font-weight: 600;
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+pre,
+pre code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--font-size-base) * 1.625);
+  font-family: var(--font-sans);
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.table :is(th, td):not(:last-child) {
+  padding-inline-end: calc(var(--font-size-base) * 1.5);
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead :is(th, td) {
+  border-bottom-color: var(--border-strong, var(--input));
+  padding-block: calc(var(--font-size-base) / 2);
+  line-height: var(--font-size-base);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+.table tbody :is(th, td) {
+  padding-block: calc(var(--font-size-base) * 0.625);
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 8px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+.widget {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  box-shadow: 0 0 0 0.5px var(--border-strong, var(--border));
+  color: var(--foreground);
+  background: var(--background);
+}
+
+#widget &gt; :not(.card, .widget, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  border: 1px solid var(--border);
+  corner-shape: var(--corner-shape);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--font-sans);
+  padding: 5px 12px;
+  border-color: color-mix(
+    in oklab,
+    light-dark(var(--primary-foreground), var(--foreground)) 5%,
+    transparent
+  );
+  border-radius: var(--radius-2xl);
+  color: light-dark(var(--primary-foreground), var(--foreground));
+  background: light-dark(var(--foreground), var(--popover));
+  box-shadow: 0 8px 18px rgb(15 23 42 / 20%);
+  letter-spacing: -0.15px;
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--foreground) 40%, var(--muted-foreground));
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-family: var(--font-sans);
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: var(--font-weight-normal);
+  line-height: 1;
+}
+
+small,
+.text-small {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+/* Match inline alignment without overriding a containing flex or grid layout. */
+.btn,
+.nav-link,
+.form-control,
+.form-select,
+.form-range,
+.form-check {
+  vertical-align: middle;
+}
+
+.btn,
+.nav-link {
+  --btn-size: calc(12px + 2 * var(--control-spacing, 12px));
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  corner-shape: var(--corner-shape);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: inherit;
+  font-family: var(--font-sans);
+  height: fit-content;
+  min-height: var(--btn-size);
+  padding-inline: var(--control-spacing, 12px);
+  border-color: transparent;
+  border-radius: var(--radius-full);
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+}
+
+.btn {
+  border-color: var(--border);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+}
+
+/* Codex Button size=&quot;compact&quot;; appearance stays with the button variant. */
+.btn-sm {
+  --btn-size: 24px;
+  padding-inline: 8px;
+  font-size: calc(var(--font-size-base) * 12 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 12 / 16), 1px);
+  line-height: 16px;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: var(--cursor-interaction, pointer);
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: light-dark(
+    color-mix(in srgb, var(--foreground) 5.5%, transparent),
+    color-mix(in srgb, var(--foreground) 8%, transparent)
+  );
+}
+
+.nav-link:not(:disabled):not([aria-disabled=&quot;true&quot;]):hover {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.btn-primary {
+  border-color: var(--border);
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: border-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: border-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--muted-foreground);
+  background: light-dark(
+    color-mix(in srgb, var(--foreground) 5.5%, transparent),
+    color-mix(in srgb, var(--foreground) 8%, transparent)
+  );
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+/* Shared preview chrome; product styles stay inside each variant. */
+.viz-dotted-background {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--foreground) 14%, transparent) 0.8px,
+    transparent 0.8px
+  );
+  background-position: center;
+  background-size: 16px 16px;
+}
+
+.viz-carousel {
+  position: relative;
+  min-width: 0;
+}
+
+.viz-carousel:has(&gt; .viz-carousel-controls) {
+  min-height: calc(60px + var(--viz-carousel-picker-height, 0px));
+  padding-bottom: 60px;
+}
+
+.viz-carousel &gt; [data-variant][hidden] {
+  display: none !important;
+}
+
+.viz-carousel &gt; [data-variant] {
+  isolation: isolate;
+}
+
+.viz-carousel-controls {
+  --viz-carousel-hover: light-dark(
+    color-mix(in srgb, var(--foreground) 5.4%, transparent),
+    color-mix(in srgb, var(--foreground) 7.8%, transparent)
+  );
+  position: absolute;
+  z-index: 2;
+  bottom: 8px;
+  left: 50%;
+  display: flex;
+  width: max-content;
+  /* Leave room for the host&#x27;s design-controls launcher at the trailing edge. */
+  max-width: calc(100% - 96px);
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  color: var(--foreground);
+  background: var(--background);
+  font-family: var(--font-sans);
+  /* Match the settings dropdown chrome independently of the content font size. */
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+  transform: translateX(-50%);
+  user-select: none;
+}
+
+/* Keep authored mockup button styles out of the shared carousel chrome. */
+.viz-carousel-controls button,
+.viz-carousel-picker &gt; summary {
+  display: flex !important;
+  height: auto !important;
+  min-height: 30px;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px;
+  padding: 0 6px !important;
+  -webkit-app-region: no-drag;
+  border: 0 !important;
+  border-radius: 14px !important;
+  color: inherit !important;
+  background: transparent !important;
+  font: inherit !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.viz-carousel-controls &gt; button,
+.viz-carousel-picker &gt; summary {
+  position: relative;
+  isolation: isolate;
+}
+
+.viz-carousel-controls &gt; button {
+  --icon-size: 16px;
+  width: 30px !important;
+  padding: 0 !important;
+}
+
+.viz-carousel-picker &gt; summary {
+  padding-inline: 12px !important;
+}
+
+.viz-carousel-controls .viz-carousel-caret {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin: 0;
+  color: inherit;
+  transform: rotate(180deg);
+}
+
+.viz-carousel-controls &gt; button &gt; svg,
+.viz-carousel-controls .viz-carousel-caret,
+.viz-carousel-count {
+  opacity: 0.5;
+}
+
+.viz-carousel-controls &gt; button::before,
+.viz-carousel-picker &gt; summary::before {
+  position: absolute;
+  z-index: -1;
+  inset: 3px;
+  border-radius: 12px;
+  content: &quot;&quot;;
+  pointer-events: none;
+}
+
+.viz-carousel-controls &gt; button:hover::before,
+.viz-carousel-picker &gt; summary:hover::before {
+  background: var(--viz-carousel-hover);
+}
+
+.viz-carousel-controls &gt; button,
+.viz-carousel-controls [data-lucide],
+.viz-carousel-controls .lucide {
+  flex-shrink: 0;
+}
+
+.viz-carousel-picker {
+  min-width: 0;
+}
+
+.viz-carousel-picker &gt; summary {
+  min-width: 0;
+  list-style: none;
+}
+
+.viz-carousel-picker &gt; summary::-webkit-details-marker {
+  display: none;
+}
+
+.viz-carousel-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.viz-carousel-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viz-carousel-options {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  max-height: 240px;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  box-shadow: 0 4px 12px light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 25%));
+}
+
+.viz-carousel-options &gt; button {
+  border-radius: max(0px, calc(var(--radius-lg) - 5px)) !important;
+  width: 100% !important;
+  min-height: 28px;
+  justify-content: flex-start !important;
+  padding: 4px 8px !important;
+  font-size: var(--font-size-small) !important;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.viz-carousel-options &gt; [aria-current=&quot;true&quot;],
+.viz-carousel-options &gt; button:hover {
+  background: var(--viz-carousel-hover) !important;
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled=&quot;true&quot;] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  height: calc(12px + 2 * var(--control-spacing, 12px));
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  padding-inline: calc(4px + var(--control-spacing, 12px) / 2);
+  border-color: var(--input);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: var(--font-weight-normal);
+  line-height: 1.4285714286;
+}
+.form-control:is(
+  [type=&quot;file&quot;],
+  [type=&quot;date&quot;],
+  [type=&quot;datetime-local&quot;],
+  [type=&quot;month&quot;],
+  [type=&quot;week&quot;],
+  [type=&quot;color&quot;]
+) {
+  height: calc(12px + 2 * var(--control-spacing, 12px));
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  line-height: 18px;
+}
+.form-control:is(
+  [type=&quot;date&quot;],
+  [type=&quot;datetime-local&quot;],
+  [type=&quot;month&quot;],
+  [type=&quot;week&quot;]
+) {
+  padding-inline: var(--control-spacing, 12px);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+  padding: 0;
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+  min-height: calc(10px + 2 * var(--control-spacing, 12px));
+  padding-inline: var(--control-spacing, 12px);
+  margin-inline-end: var(--control-spacing, 12px);
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: calc(12px + 2 * var(--control-spacing, 12px));
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  resize: vertical;
+  min-height: 96px;
+  padding: 8px 10px;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: none;
+}
+.form-control:disabled {
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  opacity: 1;
+}
+.form-control[aria-invalid=&quot;true&quot;] {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 20%, transparent);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: fit-content;
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  margin: 0;
+  /* The secondary icon role is 14px at compact density and 16px at web density. */
+  --icon-size: calc(10px + var(--control-spacing, 12px) / 2);
+  /* Settings dropdowns retain a 12px inset and a 4px text-to-chevron gap. */
+  padding: 0 calc(16px + var(--icon-size)) 0 12px;
+  outline: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(
+      45deg,
+      transparent calc(50% - 0.6px),
+      var(--muted-foreground) calc(50% - 0.6px) calc(50% + 0.6px),
+      transparent calc(50% + 0.6px)
+    ),
+    linear-gradient(
+      135deg,
+      transparent calc(50% - 0.6px),
+      var(--muted-foreground) calc(50% - 0.6px) calc(50% + 0.6px),
+      transparent calc(50% + 0.6px)
+    );
+  background-position:
+    calc(100% - 12px - var(--icon-size) / 2) 50%,
+    calc(100% - 12px - var(--icon-size) * 0.18) 50%;
+  background-repeat: no-repeat;
+  background-size: calc(var(--icon-size) * 0.32) calc(var(--icon-size) * 0.32);
+  cursor: var(--cursor-interaction, default);
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+}
+
+.form-select :is(option, optgroup) {
+  color: var(--popover-foreground);
+  background-color: var(--popover);
+}
+
+.form-select :is(option, optgroup):disabled {
+  color: var(--muted-foreground);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: light-dark(
+    color-mix(in srgb, var(--foreground) 5.5%, transparent),
+    color-mix(in srgb, var(--foreground) 8%, transparent)
+  );
+}
+
+.form-select:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.form-select:disabled {
+  opacity: 0.4;
+}
+
+.form-check {
+  display: flex;
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  corner-shape: round;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  width: calc(10px + var(--control-spacing, 12px) / 2);
+  height: calc(10px + var(--control-spacing, 12px) / 2);
+  border-color: var(--border-strong, var(--input));
+  border-radius: calc(var(--radius-sm) / 2);
+  background-color: transparent;
+  color: var(--foreground);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:is(:checked, :indeterminate) {
+  border-color: var(--border-strong, var(--input));
+  background-color: color-mix(in srgb, var(--popover) 96%, transparent);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+  background-color: var(--foreground);
+}
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:indeterminate::before {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 65%;
+  height: 6.65%;
+  margin: auto;
+  border-radius: var(--radius-full);
+  background: var(--foreground);
+  mask: none;
+  content: &quot;&quot;;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  border-radius: var(--radius-full);
+  width: 16px;
+  height: 16px;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--input);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 0;
+  background: radial-gradient(
+    circle,
+    var(--primary-foreground) 0 3px,
+    var(--foreground) 3px
+  );
+  box-shadow: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:focus-visible {
+  border-color: var(--ring);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+.form-check:not(.form-switch) .form-check-input[type=&quot;radio&quot;]:disabled,
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;radio&quot;]:disabled
+  + .form-check-label {
+  opacity: 0.5;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+  border-color: #fff;
+  background: #fff;
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--blue);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+  outline: none;
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  accent-color: var(--primary);
+  height: calc(12px + 2 * var(--control-spacing, 12px));
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  outline: none;
+  border-radius: var(--radius-full);
+  color: var(--foreground);
+  background: transparent;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  background: var(--form-range-track, var(--border));
+  height: 2px;
+  border-radius: var(--radius-full);
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  margin-top: -9px;
+  border-color: transparent;
+  background: currentColor;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Outline the native track and thumb, preserving the larger input hit area. */
+.form-range:focus-visible::-webkit-slider-runnable-track {
+  outline: 2px auto Highlight;
+  outline-color: -webkit-focus-ring-color;
+}
+
+.form-range::-moz-range-track {
+  background: var(--form-range-track, var(--border));
+  height: 2px;
+  border-radius: var(--radius-full);
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  border-color: transparent;
+  background: currentColor;
+  box-shadow: var(--shadow-sm);
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
+}
+
+.form-range:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--blue);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.viz-carousel-controls :is(button, summary):focus-visible {
+  outline: 2px solid var(--ring) !important;
+  outline-offset: 2px !important;
+}
+
+/* Web recipes are the default, including on renderers without inline style queries. */
+@supports (border-radius: if(style(--corner-shape: round): 1px; else: 2px)) {
+  /* Match the host&#x27;s proportional text-sm scale at every text preference. */
+  .tooltip,
+  .viz-badge,
+  .btn,
+  .nav-link,
+  .form-control,
+  .form-select {
+    font-size: if(
+      style(--corner-shape: round): round(
+          nearest,
+          calc(var(--font-size-base) * 14 / 16),
+          1px
+        );
+        else: round(nearest, calc(var(--font-size-base) * 13 / 14), 1px)
+    );
+  }
+
+  .btn-sm {
+    font-size: if(
+      style(--corner-shape: round): round(
+          nearest,
+          calc(var(--font-size-base) * 12 / 16),
+          1px
+        );
+        else: round(nearest, calc(var(--font-size-base) * 12 / 14), 1px)
+    );
+  }
+
+  .btn,
+  .nav-link,
+  .form-select {
+    border-radius: if(
+      style(--corner-shape: round): var(--radius-full); else: var(--radius-lg)
+    );
+  }
+
+  .form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+    border-radius: if(
+      style(--corner-shape: round): calc(var(--radius-sm) / 2);
+        else: calc(var(--radius-lg) * 0.4)
+    );
+  }
+
+  .tooltip {
+    font-weight: if(
+      style(--corner-shape: round): 600; else: var(--font-weight-normal)
+    );
+  }
+}
+
+@media (pointer: coarse) {
+  .viz-carousel:has(&gt; .viz-carousel-controls) {
+    min-height: calc(76px + var(--viz-carousel-picker-height, 0px));
+    padding-bottom: 76px;
+  }
+
+  .btn,
+  .nav-link,
+  .viz-carousel-controls button,
+  .viz-carousel-picker &gt; summary,
+  .form-control,
+  .form-select {
+    --btn-size: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, calc(var(--font-size-base) * 14 / 16));
+    font-size: max(
+      16px,
+      round(nearest, calc(var(--font-size-base) * 14 / 16), 1px)
+    );
+  }
+  .form-control:is(
+    [type=&quot;file&quot;],
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;week&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;color&quot;]
+  ) {
+    height: 44px;
+    min-height: 44px;
+    font-size: max(16px, calc(var(--font-size-base) * 14 / 16));
+    font-size: max(
+      16px,
+      round(nearest, calc(var(--font-size-base) * 14 / 16), 1px)
+    );
+  }
+
+  .form-control[type=&quot;file&quot;]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type=&quot;color&quot;] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;week&quot;]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: &quot;&quot;;
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;script type=&quot;application/json&quot; id=&quot;codex-visualization-widget-state&quot;&gt;__CODEX_VISUALIZATION_WIDGET_STATE__&lt;/script&gt;
+&lt;script&gt;(() =&gt; {
+  const root = document.documentElement;
+  const mediaQuery = globalThis.matchMedia(&quot;(prefers-color-scheme: dark)&quot;);
+  const apply = Reflect.apply;
+  const isArray = Array.isArray;
+  const hasOwn = Object.hasOwn;
+  const parentWindow = globalThis.parent;
+  const stringify = JSON.stringify;
+  const parse = JSON.parse;
+  const encode = TextEncoder.prototype.encode.bind(new TextEncoder());
+  const initialStateElement = document.getElementById(
+    &quot;codex-visualization-widget-state&quot;,
+  );
+  const initialGlobals = parse(initialStateElement?.textContent ?? &quot;{}&quot;);
+  initialStateElement?.remove();
+  /** @type {Record&lt;string, unknown&gt; | null} */
+  let state = initialGlobals.widgetState ?? null;
+  const statePersistence = initialGlobals.statePersistence ?? &quot;none&quot;;
+  let nextStateRequestId = 0;
+  /** @type {Map&lt;number, { resolve: () =&gt; void; reject: (error: Error) =&gt; void; timeout: ReturnType&lt;typeof globalThis.setTimeout&gt;; serializedState: string }&gt;} */
+  const pendingStateWrites = new Map();
+  const persistenceError = () =&gt;
+    Object.assign(
+      new Error(&quot;The host could not persist the widget state update&quot;),
+      {
+        code: -32000,
+        data: { code: &quot;widget_state_persistence_failed&quot;, retryable: false },
+      },
+    );
+  /**
+   * @param {object} prototype
+   * @param {string} property
+   */
+  const getPrototypeGetter = (prototype, property) =&gt; {
+    // oxlint-disable-next-line typescript/unbound-method -- invoked through captured Reflect.apply
+    const getter = Object.getOwnPropertyDescriptor(prototype, property)?.get;
+    if (getter == null) {
+      throw new Error(`Missing ${property} getter`);
+    }
+    return getter;
+  };
+  const getMessageData = getPrototypeGetter(MessageEvent.prototype, &quot;data&quot;);
+  const getMessagePorts = getPrototypeGetter(MessageEvent.prototype, &quot;ports&quot;);
+  const getMessageSource = getPrototypeGetter(MessageEvent.prototype, &quot;source&quot;);
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const addHostMessageListener = MessagePort.prototype.addEventListener;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const postHostMessage = MessagePort.prototype.postMessage;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const startHostPort = MessagePort.prototype.start;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const stopMessagePropagation = Event.prototype.stopImmediatePropagation;
+  /** @type {MessagePort | null} */
+  let hostPort = null;
+  const postToHost = (type, payload) =&gt; {
+    if (hostPort != null) {
+      apply(postHostMessage, hostPort, [{ type, ...payload }]);
+    }
+  };
+  const openExternal = ({ href }) =&gt; {
+    if (globalThis.navigator.userActivation?.isActive === true) {
+      postToHost(&quot;open-external&quot;, { href });
+    }
+  };
+  const sendFollowUpMessage = ({ context, prompt, title }) =&gt; {
+    if (globalThis.navigator.userActivation?.isActive === true) {
+      postToHost(&quot;follow-up&quot;, { context, prompt, title });
+    }
+    return Promise.resolve();
+  };
+  /**
+   * @param {Record&lt;string, unknown&gt; | ((previous: Record&lt;string, unknown&gt; | null) =&gt; Record&lt;string, unknown&gt;)} next
+   * @returns {Promise&lt;void&gt;}
+   */
+  const setWidgetState = async (next) =&gt; {
+    const nextState = typeof next === &quot;function&quot; ? next(state) : next;
+    if (
+      nextState == null ||
+      typeof nextState !== &quot;object&quot; ||
+      isArray(nextState)
+    ) {
+      throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+    }
+    const inputState = stringify(
+      nextState,
+      (_key, /** @type {unknown} */ value) =&gt; {
+        if (
+          typeof value === &quot;undefined&quot; ||
+          typeof value === &quot;function&quot; ||
+          typeof value === &quot;symbol&quot; ||
+          (typeof value === &quot;number&quot; &amp;&amp; !Number.isFinite(value))
+        ) {
+          throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+        }
+        return value;
+      },
+    );
+    const parsedState = parse(inputState);
+    if (
+      parsedState == null ||
+      typeof parsedState !== &quot;object&quot; ||
+      isArray(parsedState)
+    ) {
+      throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+    }
+    const storedState = {
+      modelContent: null,
+      privateContent: null,
+      ...parsedState,
+    };
+    const serializedState = stringify(storedState);
+    if (encode(serializedState).length &gt; 16 * 1024) {
+      throw new TypeError(
+        &quot;Widget state must be a JSON object of at most 16 KiB&quot;,
+      );
+    }
+    if (
+      hasOwn(storedState, &quot;imageIds&quot;) &amp;&amp;
+      (!isArray(storedState.imageIds) ||
+        storedState.imageIds.some(
+          (/** @type {unknown} */ id) =&gt; typeof id !== &quot;string&quot;,
+        ))
+    ) {
+      throw new TypeError(&quot;Widget state imageIds must be an array of strings&quot;);
+    }
+    if (storedState.imageIds?.length &gt; 0) {
+      throw Object.assign(
+        new TypeError(&quot;Visualization state does not support image attachments&quot;),
+        { code: -32602, data: { code: &quot;images_unsupported&quot; } },
+      );
+    }
+    state = storedState;
+    globalThis.openai.widgetState = state;
+    globalThis.dispatchEvent(
+      new CustomEvent(&quot;openai:set_globals&quot;, {
+        detail: { globals: { widgetState: state } },
+      }),
+    );
+    if (statePersistence === &quot;none&quot;) {
+      throw persistenceError();
+    }
+    const id = ++nextStateRequestId;
+    return new Promise((resolve, reject) =&gt; {
+      const timeout = globalThis.setTimeout(() =&gt; {
+        pendingStateWrites.delete(id);
+        reject(persistenceError());
+      }, 30_000);
+      pendingStateWrites.set(id, { resolve, reject, timeout, serializedState });
+      postToHost(&quot;widget-state-write&quot;, { id, state: serializedState });
+    });
+  };
+  const syncTheme = () =&gt; {
+    const theme = mediaQuery.matches ? &quot;dark&quot; : &quot;light&quot;;
+    root.dataset.theme = theme;
+    globalThis.openai = {
+      ...globalThis.openai,
+      openExternal,
+      sendFollowUpMessage,
+      setWidgetState,
+      theme,
+      visualizationStyleVariables: {},
+      visualizationTheme: theme,
+      widgetState: state,
+      statePersistence,
+      stateModelContext: &quot;none&quot;,
+    };
+    globalThis.dispatchEvent(
+      new CustomEvent(&quot;openai:set_globals&quot;, {
+        detail: { globals: globalThis.openai },
+      }),
+    );
+  };
+  const sendHeight = () =&gt; {
+    postToHost(&quot;height&quot;, {
+      height: Math.ceil(
+        Math.max(
+          document.body.scrollHeight,
+          document.body.getBoundingClientRect().height,
+        ),
+      ),
+    });
+  };
+
+  globalThis.addEventListener(
+    &quot;message&quot;,
+    (event) =&gt; {
+      const data = apply(getMessageData, event, []);
+      const ports = apply(getMessagePorts, event, []);
+      const source = apply(getMessageSource, event, []);
+      if (
+        hostPort != null ||
+        source !== parentWindow ||
+        typeof data !== &quot;object&quot; ||
+        data?.type !== &quot;codex-visualization-initialize&quot; ||
+        !isArray(ports) ||
+        ports.length !== 1
+      ) {
+        return;
+      }
+      apply(stopMessagePropagation, event, []);
+      const nextHostPort = ports[0];
+      try {
+        apply(addHostMessageListener, nextHostPort, [
+          &quot;message&quot;,
+          (event) =&gt; {
+            const data = apply(getMessageData, event, []);
+            if (typeof data === &quot;object&quot; &amp;&amp; data?.type === &quot;measure&quot;) {
+              sendHeight();
+            } else if (
+              typeof data === &quot;object&quot; &amp;&amp;
+              data?.type === &quot;widget-state-result&quot;
+            ) {
+              /** @type {unknown} */
+              const id = data.id;
+              if (typeof id !== &quot;number&quot;) {
+                return;
+              }
+              const pending = pendingStateWrites.get(id);
+              if (pending != null) {
+                pendingStateWrites.delete(id);
+                globalThis.clearTimeout(pending.timeout);
+                if (data.ok === true) {
+                  pending.resolve();
+                } else {
+                  pending.reject(persistenceError());
+                }
+              }
+            }
+          },
+        ]);
+        apply(startHostPort, nextHostPort, []);
+      } catch {
+        return;
+      }
+      hostPort = nextHostPort;
+      for (const [id, { serializedState }] of pendingStateWrites) {
+        postToHost(&quot;widget-state-write&quot;, { id, state: serializedState });
+      }
+      sendHeight();
+    },
+    { capture: true },
+  );
+  document.currentScript?.remove();
+  mediaQuery.addEventListener(&quot;change&quot;, syncTheme);
+  globalThis.addEventListener(&quot;click&quot;, (event) =&gt; {
+    if (event.defaultPrevented) {
+      return;
+    }
+    let element = null;
+    if (event.target instanceof globalThis.Element) {
+      element = event.target;
+    } else if (event.target instanceof globalThis.Node) {
+      element = event.target.parentElement;
+    }
+    const link = element?.closest(&quot;a[href]&quot;);
+    const href = link?.getAttribute(&quot;href&quot;);
+    if (href == null) {
+      return;
+    }
+    if (href.startsWith(&quot;#&quot;)) {
+      let id;
+      try {
+        id = decodeURIComponent(href.slice(1));
+      } catch {
+        return;
+      }
+      const target = id.length === 0 ? root : document.getElementById(id);
+      if (
+        target == null ||
+        globalThis.navigator.userActivation?.isActive !== true
+      ) {
+        return;
+      }
+      event.preventDefault();
+      postToHost(&quot;scroll-to&quot;, {
+        top: target.getBoundingClientRect().top + globalThis.scrollY,
+      });
+      return;
+    }
+    event.preventDefault();
+    openExternal({ href });
+  });
+  new ResizeObserver(sendHeight).observe(document.body);
+  syncTheme();
+})();
+&lt;/script&gt;
+&lt;div id=&quot;mlw-concept&quot; aria-label=&quot;ML Workbench interactive concept&quot;&gt;
+  &lt;div class=&quot;wb-window&quot;&gt;
+    &lt;header class=&quot;wb-header&quot;&gt;
+      &lt;div class=&quot;wb-brand&quot;&gt;&lt;i data-lucide=&quot;layers&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;strong&gt;ML Workbench&lt;/strong&gt;&lt;span class=&quot;wb-tag&quot;&gt;Concept preview&lt;/span&gt;&lt;/div&gt;
+      &lt;button type=&quot;button&quot; class=&quot;wb-button cursor-interaction&quot; id=&quot;wb-assistant-toggle&quot;&gt;&lt;i data-lucide=&quot;message-circle&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Ask assistant&lt;/button&gt;
+    &lt;/header&gt;
+    &lt;div class=&quot;wb-projectbar&quot;&gt;
+      &lt;button type=&quot;button&quot; class=&quot;wb-link cursor-interaction&quot; id=&quot;wb-back&quot;&gt;&lt;i data-lucide=&quot;arrow-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Models&lt;/button&gt;
+      &lt;span class=&quot;wb-divider&quot;&gt;&lt;/span&gt;&lt;strong id=&quot;wb-model-name&quot;&gt;Campaign engagement classifier&lt;/strong&gt;&lt;span class=&quot;wb-tag&quot; id=&quot;wb-task-tag&quot;&gt;Classification&lt;/span&gt;
+    &lt;/div&gt;
+    &lt;nav class=&quot;wb-tabs&quot; role=&quot;tablist&quot; aria-label=&quot;Model workflow&quot;&gt;
+      &lt;button type=&quot;button&quot; class=&quot;wb-tab cursor-interaction&quot; id=&quot;wb-tab-data&quot; role=&quot;tab&quot; aria-controls=&quot;wb-data&quot; aria-selected=&quot;true&quot; data-tab=&quot;data&quot;&gt;Data&lt;span class=&quot;wb-dot&quot;&gt;&lt;/span&gt;&lt;/button&gt;
+      &lt;button type=&quot;button&quot; class=&quot;wb-tab cursor-interaction&quot; id=&quot;wb-tab-build&quot; role=&quot;tab&quot; aria-controls=&quot;wb-build&quot; aria-selected=&quot;false&quot; data-tab=&quot;build&quot;&gt;Build&lt;/button&gt;
+      &lt;button type=&quot;button&quot; class=&quot;wb-tab cursor-interaction&quot; id=&quot;wb-tab-train&quot; role=&quot;tab&quot; aria-controls=&quot;wb-train&quot; aria-selected=&quot;false&quot; data-tab=&quot;train&quot;&gt;Train&lt;/button&gt;
+      &lt;button type=&quot;button&quot; class=&quot;wb-tab cursor-interaction&quot; id=&quot;wb-tab-inference&quot; role=&quot;tab&quot; aria-controls=&quot;wb-inference&quot; aria-selected=&quot;false&quot; data-tab=&quot;inference&quot;&gt;Inference&lt;/button&gt;
+      &lt;span class=&quot;wb-demo-note&quot;&gt;Sample data · simulated training &amp;amp; predictions&lt;/span&gt;
+    &lt;/nav&gt;
+    &lt;div class=&quot;wb-body&quot; id=&quot;wb-body&quot;&gt;
+      &lt;main class=&quot;wb-main&quot;&gt;
+        &lt;section id=&quot;wb-data&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;wb-tab-data&quot; class=&quot;wb-panel&quot;&gt;
+          &lt;div class=&quot;wb-section-head&quot;&gt;&lt;div&gt;&lt;h2&gt;Give your model something to learn&lt;/h2&gt;&lt;p&gt;Bring your data, explore a hub, or start with an example.&lt;/p&gt;&lt;/div&gt;&lt;/div&gt;
+          &lt;div class=&quot;wb-sources&quot; role=&quot;group&quot; aria-label=&quot;Dataset source&quot;&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-source cursor-interaction&quot; data-source=&quot;examples&quot; aria-pressed=&quot;true&quot;&gt;&lt;i data-lucide=&quot;sparkles&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Examples&lt;/button&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-source cursor-interaction&quot; data-source=&quot;local&quot; aria-pressed=&quot;false&quot;&gt;&lt;i data-lucide=&quot;folder-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Local files&lt;/button&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-source cursor-interaction&quot; data-source=&quot;hf&quot; aria-pressed=&quot;false&quot;&gt;Hugging Face&lt;/button&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-source cursor-interaction&quot; data-source=&quot;kaggle&quot; aria-pressed=&quot;false&quot;&gt;Kaggle&lt;/button&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-source cursor-interaction&quot; data-source=&quot;openml&quot; aria-pressed=&quot;false&quot;&gt;OpenML&lt;/button&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-source cursor-interaction&quot; data-source=&quot;uci&quot; aria-pressed=&quot;false&quot;&gt;UCI&lt;/button&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-source cursor-interaction&quot; data-source=&quot;roboflow&quot; aria-pressed=&quot;false&quot;&gt;Roboflow&lt;/button&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-source cursor-interaction&quot; data-source=&quot;url&quot; aria-pressed=&quot;false&quot;&gt;&lt;i data-lucide=&quot;link&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;URL&lt;/button&gt;
+          &lt;/div&gt;
+          &lt;div id=&quot;wb-browse&quot;&gt;
+            &lt;label class=&quot;wb-search&quot;&gt;&lt;i data-lucide=&quot;search&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;input id=&quot;wb-dataset-search&quot; type=&quot;search&quot; aria-label=&quot;Search example datasets&quot; placeholder=&quot;Search by dataset, task, or owner…&quot;&gt;&lt;/label&gt;
+            &lt;div class=&quot;wb-example-grid&quot; id=&quot;wb-examples&quot;&gt;&lt;/div&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;wb-upload&quot; id=&quot;wb-local&quot; hidden&gt;&lt;i data-lucide=&quot;upload-cloud&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;strong&gt;Drop a CSV, text file, or image folder&lt;/strong&gt;&lt;span class=&quot;wb-muted&quot;&gt;Files stay local in this concept.&lt;/span&gt;&lt;label class=&quot;wb-button cursor-interaction&quot;&gt;Choose files&lt;input type=&quot;file&quot; id=&quot;wb-file&quot; multiple hidden&gt;&lt;/label&gt;&lt;span id=&quot;wb-local-status&quot; class=&quot;wb-muted&quot; aria-live=&quot;polite&quot;&gt;&lt;/span&gt;&lt;/div&gt;
+          &lt;div class=&quot;wb-url-row&quot; id=&quot;wb-url&quot; hidden&gt;&lt;label class=&quot;wb-field wb-grow&quot;&gt;Dataset URL&lt;input id=&quot;wb-url-input&quot; type=&quot;url&quot; placeholder=&quot;https://…&quot; value=&quot;https://huggingface.co/datasets/nprak26/insurance-campaign-data&quot;&gt;&lt;/label&gt;&lt;button type=&quot;button&quot; class=&quot;wb-button cursor-interaction&quot; id=&quot;wb-preview-url&quot;&gt;Preview dataset&lt;/button&gt;&lt;/div&gt;
+          &lt;div class=&quot;wb-workspace&quot; id=&quot;wb-data-preview&quot;&gt;
+            &lt;div class=&quot;wb-data-details&quot;&gt;
+              &lt;div class=&quot;wb-section-head wb-tight&quot;&gt;&lt;div&gt;&lt;span class=&quot;wb-eyebrow&quot;&gt;Selected dataset&lt;/span&gt;&lt;h3 id=&quot;wb-dataset-title&quot;&gt;Insurance campaign&lt;/h3&gt;&lt;/div&gt;&lt;span class=&quot;wb-tag wb-good&quot;&gt;Preview ready&lt;/span&gt;&lt;/div&gt;
+              &lt;p class=&quot;wb-metadata&quot; id=&quot;wb-dataset-meta&quot;&gt;&lt;/p&gt;
+              &lt;div class=&quot;wb-table-wrap&quot;&gt;&lt;table class=&quot;wb-table&quot;&gt;&lt;caption&gt;Illustrative row preview&lt;/caption&gt;&lt;thead id=&quot;wb-preview-head&quot;&gt;&lt;/thead&gt;&lt;tbody id=&quot;wb-preview-rows&quot;&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-split-head&quot;&gt;&lt;strong&gt;Train / validation / test&lt;/strong&gt;&lt;span class=&quot;wb-muted&quot; id=&quot;wb-split-label&quot;&gt;80% / 10% / 10%&lt;/span&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-split&quot; role=&quot;img&quot; aria-label=&quot;80 percent training, 10 percent validation, 10 percent test&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;span&gt;&lt;/span&gt;&lt;/div&gt;
+              &lt;label class=&quot;wb-check&quot;&gt;&lt;input id=&quot;wb-stratify&quot; type=&quot;checkbox&quot; checked&gt;Keep label proportions across splits&lt;/label&gt;
+            &lt;/div&gt;
+            &lt;aside class=&quot;wb-setup&quot; aria-label=&quot;Prepare dataset&quot;&gt;
+              &lt;h3&gt;Prepare for your model&lt;/h3&gt;
+              &lt;label class=&quot;wb-field&quot;&gt;Input fields&lt;select id=&quot;wb-input-fields&quot;&gt;&lt;/select&gt;&lt;/label&gt;
+              &lt;label class=&quot;wb-field&quot;&gt;Target&lt;select id=&quot;wb-target&quot;&gt;&lt;/select&gt;&lt;/label&gt;
+              &lt;label class=&quot;wb-field&quot;&gt;Preparation&lt;select id=&quot;wb-preparation&quot;&gt;&lt;/select&gt;&lt;/label&gt;
+              &lt;div class=&quot;wb-compatibility&quot;&gt;&lt;i data-lucide=&quot;circle-check&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span id=&quot;wb-shape-check&quot;&gt;Matches 8 input features → 2 classes&lt;/span&gt;&lt;/div&gt;
+              &lt;button type=&quot;button&quot; class=&quot;wb-button wb-primary cursor-interaction&quot; id=&quot;wb-use-data&quot;&gt;Use dataset&lt;i data-lucide=&quot;arrow-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+            &lt;/aside&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;wb-bottomline&quot; id=&quot;wb-data-footer&quot;&gt;&lt;span id=&quot;wb-data-status&quot; aria-live=&quot;polite&quot;&gt;Example dataset selected&lt;/span&gt;&lt;button type=&quot;button&quot; class=&quot;wb-link cursor-interaction&quot; data-go=&quot;train&quot;&gt;Continue to Train&lt;i data-lucide=&quot;arrow-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;
+        &lt;/section&gt;
+
+        &lt;section id=&quot;wb-build&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;wb-tab-build&quot; class=&quot;wb-panel&quot; hidden&gt;
+          &lt;div class=&quot;wb-section-head&quot;&gt;&lt;div&gt;&lt;h2&gt;Your visual model&lt;/h2&gt;&lt;p&gt;The existing builder stays part of the same workflow.&lt;/p&gt;&lt;/div&gt;&lt;span class=&quot;wb-tag&quot;&gt;Architecture preview&lt;/span&gt;&lt;/div&gt;
+          &lt;div class=&quot;wb-architecture&quot; id=&quot;wb-architecture&quot;&gt;&lt;/div&gt;
+          &lt;div class=&quot;wb-bottomline&quot;&gt;&lt;span class=&quot;wb-good&quot;&gt;✓ Layer sizes match&lt;/span&gt;&lt;button type=&quot;button&quot; class=&quot;wb-button wb-primary cursor-interaction&quot; data-go=&quot;train&quot;&gt;Train this model&lt;i data-lucide=&quot;arrow-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;
+        &lt;/section&gt;
+
+        &lt;section id=&quot;wb-train&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;wb-tab-train&quot; class=&quot;wb-panel&quot; hidden&gt;
+          &lt;div class=&quot;wb-section-head&quot;&gt;&lt;div&gt;&lt;h2&gt;Train your model&lt;/h2&gt;&lt;p id=&quot;wb-train-subtitle&quot;&gt;Insurance campaign · 12,000 training rows · 1,500 validation rows&lt;/p&gt;&lt;/div&gt;&lt;span class=&quot;wb-tag&quot; id=&quot;wb-run-state&quot;&gt;Example run complete&lt;/span&gt;&lt;/div&gt;
+          &lt;div class=&quot;wb-training-grid&quot;&gt;
+            &lt;aside class=&quot;wb-setup&quot; aria-label=&quot;Training settings&quot;&gt;
+              &lt;h3&gt;Run settings&lt;/h3&gt;
+              &lt;label class=&quot;wb-field&quot;&gt;Compute&lt;select id=&quot;wb-device&quot;&gt;&lt;option&gt;This Mac · Apple GPU&lt;/option&gt;&lt;option&gt;This Mac · CPU&lt;/option&gt;&lt;option&gt;Remote GPU connection&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+              &lt;div id=&quot;wb-remote-compute&quot; hidden&gt;&lt;label class=&quot;wb-field&quot;&gt;Connection&lt;input value=&quot;gpu-workstation&quot; placeholder=&quot;Choose a compute connection&quot;&gt;&lt;/label&gt;&lt;span class=&quot;wb-muted&quot;&gt;Example connection&lt;/span&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-two-fields&quot;&gt;&lt;label class=&quot;wb-field&quot;&gt;Epochs&lt;input id=&quot;wb-epochs&quot; type=&quot;number&quot; min=&quot;1&quot; max=&quot;20&quot; value=&quot;6&quot;&gt;&lt;/label&gt;&lt;label class=&quot;wb-field&quot;&gt;Batch size&lt;select id=&quot;wb-batch&quot;&gt;&lt;option&gt;16&lt;/option&gt;&lt;option selected&gt;32&lt;/option&gt;&lt;option&gt;64&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;&lt;/div&gt;
+              &lt;label class=&quot;wb-field&quot;&gt;Learning rate&lt;select id=&quot;wb-lr&quot;&gt;&lt;option&gt;0.0001&lt;/option&gt;&lt;option selected&gt;0.001&lt;/option&gt;&lt;option&gt;0.01&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+              &lt;label class=&quot;wb-check&quot;&gt;&lt;input type=&quot;checkbox&quot; id=&quot;wb-best&quot; checked&gt;Save best validation checkpoint&lt;/label&gt;
+              &lt;button type=&quot;button&quot; class=&quot;wb-button wb-primary cursor-interaction&quot; id=&quot;wb-start&quot;&gt;&lt;i data-lucide=&quot;play&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Start training&lt;/button&gt;
+              &lt;button type=&quot;button&quot; class=&quot;wb-button cursor-interaction&quot; id=&quot;wb-stop&quot; hidden&gt;&lt;i data-lucide=&quot;square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Stop run&lt;/button&gt;
+              &lt;details class=&quot;wb-advanced&quot; id=&quot;wb-advanced&quot;&gt;&lt;summary&gt;Advanced settings&lt;/summary&gt;&lt;label class=&quot;wb-field&quot;&gt;Optimizer&lt;select&gt;&lt;option&gt;AdamW&lt;/option&gt;&lt;option&gt;Adam&lt;/option&gt;&lt;option&gt;SGD&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;&lt;label class=&quot;wb-field&quot;&gt;Random seed&lt;input type=&quot;number&quot; value=&quot;42&quot;&gt;&lt;/label&gt;&lt;/details&gt;
+            &lt;/aside&gt;
+            &lt;div class=&quot;wb-run-details&quot;&gt;
+              &lt;div class=&quot;wb-run-heading&quot;&gt;&lt;strong id=&quot;wb-run-name&quot;&gt;Example run · run-003&lt;/strong&gt;&lt;span class=&quot;wb-muted&quot; id=&quot;wb-epoch-label&quot;&gt;Epoch 6 of 6&lt;/span&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-progress&quot; role=&quot;progressbar&quot; id=&quot;wb-progress&quot; aria-label=&quot;Training progress&quot; aria-valuemin=&quot;0&quot; aria-valuemax=&quot;100&quot; aria-valuenow=&quot;100&quot;&gt;&lt;span&gt;&lt;/span&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-run-metrics&quot;&gt;&lt;div&gt;&lt;span class=&quot;wb-muted&quot;&gt;Training loss&lt;/span&gt;&lt;strong id=&quot;wb-loss&quot;&gt;0.31&lt;/strong&gt;&lt;/div&gt;&lt;div&gt;&lt;span class=&quot;wb-muted&quot; id=&quot;wb-val-label&quot;&gt;Validation accuracy&lt;/span&gt;&lt;strong id=&quot;wb-accuracy&quot;&gt;82.4%&lt;/strong&gt;&lt;/div&gt;&lt;div&gt;&lt;span class=&quot;wb-muted&quot;&gt;Elapsed&lt;/span&gt;&lt;strong id=&quot;wb-elapsed&quot;&gt;00:18&lt;/strong&gt;&lt;/div&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-chart-title&quot;&gt;&lt;strong&gt;Loss over epochs&lt;/strong&gt;&lt;span&gt;&lt;b class=&quot;wb-legend-train&quot;&gt;&lt;/b&gt;Train &lt;b class=&quot;wb-legend-val&quot;&gt;&lt;/b&gt;Validation&lt;/span&gt;&lt;/div&gt;
+              &lt;div id=&quot;wb-chart&quot; class=&quot;wb-chart&quot; role=&quot;img&quot; aria-label=&quot;Illustrative training and validation loss decreasing over six epochs&quot;&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-checkpoint&quot; id=&quot;wb-checkpoint&quot;&gt;&lt;i data-lucide=&quot;package-check&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;div&gt;&lt;strong&gt;Best checkpoint saved&lt;/strong&gt;&lt;span id=&quot;wb-checkpoint-note&quot;&gt;Epoch 6 · architecture, data preparation, and weights&lt;/span&gt;&lt;/div&gt;&lt;button type=&quot;button&quot; class=&quot;wb-button cursor-interaction&quot; id=&quot;wb-try-checkpoint&quot;&gt;Try checkpoint&lt;i data-lucide=&quot;arrow-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-run-log&quot;&gt;&lt;span class=&quot;wb-eyebrow&quot;&gt;Run activity&lt;/span&gt;&lt;p id=&quot;wb-run-log&quot; aria-live=&quot;polite&quot;&gt;Training finished. Best checkpoint is ready to try.&lt;/p&gt;&lt;/div&gt;
+            &lt;/div&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;wb-bottomline&quot;&gt;&lt;span class=&quot;wb-muted&quot;&gt;Illustrative run · no compute is used&lt;/span&gt;&lt;button type=&quot;button&quot; class=&quot;wb-link cursor-interaction&quot; data-go=&quot;inference&quot;&gt;Open Inference&lt;i data-lucide=&quot;arrow-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;
+        &lt;/section&gt;
+
+        &lt;section id=&quot;wb-inference&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;wb-tab-inference&quot; class=&quot;wb-panel&quot; hidden&gt;
+          &lt;div class=&quot;wb-section-head&quot;&gt;&lt;div&gt;&lt;h2&gt;Try a model&lt;/h2&gt;&lt;p&gt;Test your checkpoint, import a model, or connect a serving engine.&lt;/p&gt;&lt;/div&gt;&lt;/div&gt;
+          &lt;div class=&quot;wb-inference-settings&quot;&gt;
+            &lt;label class=&quot;wb-field&quot;&gt;Model source&lt;select id=&quot;wb-model-source&quot;&gt;&lt;option value=&quot;checkpoint&quot;&gt;Workbench checkpoint&lt;/option&gt;&lt;option value=&quot;gguf&quot;&gt;Local GGUF model&lt;/option&gt;&lt;option value=&quot;hf-model&quot;&gt;Hugging Face model&lt;/option&gt;&lt;option value=&quot;server&quot;&gt;Existing inference server&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;
+            &lt;label class=&quot;wb-field&quot;&gt;Runtime&lt;select id=&quot;wb-runtime&quot;&gt;&lt;/select&gt;&lt;/label&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;wb-model-config&quot; id=&quot;wb-checkpoint-config&quot;&gt;&lt;div&gt;&lt;i data-lucide=&quot;package&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;strong id=&quot;wb-inference-model&quot;&gt;run-003 · best checkpoint&lt;/strong&gt;&lt;span class=&quot;wb-muted&quot; id=&quot;wb-inference-metadata&quot;&gt;8 features → 2 classes · PyTorch&lt;/span&gt;&lt;/div&gt;&lt;span class=&quot;wb-tag wb-good&quot; id=&quot;wb-checkpoint-ready&quot;&gt;Ready&lt;/span&gt;&lt;/div&gt;
+          &lt;div class=&quot;wb-model-config wb-config-fields&quot; id=&quot;wb-external-config&quot; hidden&gt;
+            &lt;label class=&quot;wb-field wb-grow&quot; id=&quot;wb-model-location-label&quot;&gt;Model&lt;input id=&quot;wb-model-location&quot; value=&quot;chat-model.Q4_K_M.gguf&quot;&gt;&lt;/label&gt;
+            &lt;label class=&quot;wb-field wb-grow&quot; id=&quot;wb-endpoint-label&quot;&gt;Server address&lt;input id=&quot;wb-endpoint&quot; value=&quot;http://localhost:8080/v1&quot;&gt;&lt;/label&gt;
+            &lt;button type=&quot;button&quot; class=&quot;wb-button cursor-interaction&quot; id=&quot;wb-test-connection&quot;&gt;Test connection&lt;/button&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;wb-runtime-note&quot; id=&quot;wb-runtime-note&quot;&gt;Uses the saved architecture and preparation from this checkpoint.&lt;/div&gt;
+          &lt;div class=&quot;wb-playground&quot;&gt;
+            &lt;div class=&quot;wb-input-pane&quot;&gt;
+              &lt;div class=&quot;wb-section-head wb-tight&quot;&gt;&lt;h3 id=&quot;wb-input-heading&quot;&gt;Try an example customer&lt;/h3&gt;&lt;button type=&quot;button&quot; class=&quot;wb-link cursor-interaction&quot; id=&quot;wb-use-sample&quot;&gt;Use sample&lt;/button&gt;&lt;/div&gt;
+              &lt;div id=&quot;wb-feature-inputs&quot; class=&quot;wb-two-fields&quot;&gt;&lt;label class=&quot;wb-field&quot;&gt;Age&lt;input type=&quot;number&quot; value=&quot;42&quot;&gt;&lt;/label&gt;&lt;label class=&quot;wb-field&quot;&gt;Income&lt;input type=&quot;number&quot; value=&quot;48000&quot;&gt;&lt;/label&gt;&lt;label class=&quot;wb-field&quot;&gt;Quote requests&lt;input type=&quot;number&quot; value=&quot;3&quot;&gt;&lt;/label&gt;&lt;label class=&quot;wb-field&quot;&gt;Website visits&lt;input type=&quot;number&quot; value=&quot;5&quot;&gt;&lt;/label&gt;&lt;/div&gt;
+              &lt;label class=&quot;wb-field&quot; id=&quot;wb-prompt-label&quot; hidden&gt;Prompt&lt;textarea id=&quot;wb-prompt&quot; rows=&quot;5&quot;&gt;Explain what a neural network learns during training.&lt;/textarea&gt;&lt;/label&gt;
+              &lt;div class=&quot;wb-image-input&quot; id=&quot;wb-image-input&quot; hidden&gt;&lt;i data-lucide=&quot;image&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;strong id=&quot;wb-image-name&quot;&gt;example-cat.jpg&lt;/strong&gt;&lt;label class=&quot;wb-button cursor-interaction&quot;&gt;Choose image&lt;input id=&quot;wb-image-file&quot; type=&quot;file&quot; accept=&quot;image/*&quot; hidden&gt;&lt;/label&gt;&lt;/div&gt;
+              &lt;div class=&quot;wb-two-fields&quot; id=&quot;wb-generation-settings&quot; hidden&gt;&lt;label class=&quot;wb-field&quot;&gt;Temperature&lt;input type=&quot;number&quot; min=&quot;0&quot; max=&quot;2&quot; step=&quot;0.1&quot; value=&quot;0.7&quot;&gt;&lt;/label&gt;&lt;label class=&quot;wb-field&quot;&gt;Max new tokens&lt;select&gt;&lt;option&gt;128&lt;/option&gt;&lt;option selected&gt;256&lt;/option&gt;&lt;option&gt;512&lt;/option&gt;&lt;/select&gt;&lt;/label&gt;&lt;/div&gt;
+              &lt;button type=&quot;button&quot; class=&quot;wb-button wb-primary cursor-interaction&quot; id=&quot;wb-predict&quot;&gt;&lt;i data-lucide=&quot;play&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Run prediction&lt;/button&gt;
+            &lt;/div&gt;
+            &lt;div class=&quot;wb-output-pane&quot; aria-label=&quot;Model output&quot;&gt;&lt;div class=&quot;wb-section-head wb-tight&quot;&gt;&lt;h3&gt;Output&lt;/h3&gt;&lt;span class=&quot;wb-tag&quot;&gt;Simulated&lt;/span&gt;&lt;/div&gt;&lt;div id=&quot;wb-output&quot; aria-live=&quot;polite&quot;&gt;&lt;div class=&quot;wb-output-empty&quot;&gt;&lt;i data-lucide=&quot;flask-conical&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;Run a prediction to see the result.&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;wb-output-footer&quot; id=&quot;wb-output-footer&quot; hidden&gt;&lt;/div&gt;&lt;/div&gt;
+          &lt;/div&gt;
+          &lt;div class=&quot;wb-bottomline&quot;&gt;&lt;span class=&quot;wb-muted&quot; id=&quot;wb-chat-note&quot;&gt;Classification results stay in this playground.&lt;/span&gt;&lt;button type=&quot;button&quot; class=&quot;wb-button cursor-interaction&quot; id=&quot;wb-use-chat&quot; disabled&gt;&lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Use in chat&lt;/button&gt;&lt;/div&gt;
+        &lt;/section&gt;
+      &lt;/main&gt;
+      &lt;aside class=&quot;wb-assistant&quot; id=&quot;wb-assistant&quot; aria-label=&quot;Workbench assistant&quot; hidden&gt;&lt;div class=&quot;wb-section-head wb-tight&quot;&gt;&lt;strong&gt;Workbench assistant&lt;/strong&gt;&lt;button type=&quot;button&quot; class=&quot;wb-icon-button cursor-interaction&quot; id=&quot;wb-assistant-close&quot; aria-label=&quot;Close assistant&quot;&gt;&lt;i data-lucide=&quot;x&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;&lt;span class=&quot;wb-tag&quot; id=&quot;wb-assistant-context&quot;&gt;Data context&lt;/span&gt;&lt;div class=&quot;wb-assistant-message&quot; id=&quot;wb-assistant-message&quot;&gt;I can help choose inputs, explain a label, or check how the dataset fits your model.&lt;/div&gt;&lt;button type=&quot;button&quot; class=&quot;wb-suggestion cursor-interaction&quot; id=&quot;wb-suggestion&quot;&gt;Explain this input mapping&lt;/button&gt;&lt;label class=&quot;wb-field&quot;&gt;Ask about this model&lt;textarea rows=&quot;3&quot; id=&quot;wb-assistant-input&quot; placeholder=&quot;What should I check before training?&quot;&gt;&lt;/textarea&gt;&lt;/label&gt;&lt;button type=&quot;button&quot; class=&quot;wb-button cursor-interaction&quot; id=&quot;wb-assistant-send&quot;&gt;Preview answer&lt;/button&gt;&lt;span class=&quot;wb-muted&quot;&gt;Illustrative answer · no AI request is sent&lt;/span&gt;&lt;/aside&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;wb-toast&quot; id=&quot;wb-toast&quot; role=&quot;status&quot; hidden&gt;&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+
+&lt;style&gt;
+#mlw-concept{--w-bg:light-dark(#f7f8fc,#171b24);--w-panel:light-dark(#ffffff,#202633);--w-soft:light-dark(#eef2f8,#282f3e);--w-ink:light-dark(#192235,#edf1f8);--w-muted:light-dark(#65738b,#adb9cd);--w-line:light-dark(#dce2ed,#3b465a);--w-blue:light-dark(#3268d5,#8cafff);--w-blue-ink:light-dark(#ffffff,#10224a);--w-blue-soft:light-dark(#e8efff,#253c67);--w-green:light-dark(#217b60,#81d8b5);--w-orange:light-dark(#a5641d,#efba78);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,sans-serif;font-size:14px;line-height:1.5;color:var(--w-ink);color-scheme:light dark;width:100%;}
+#mlw-concept *{box-sizing:border-box}#mlw-concept [hidden]{display:none!important}#mlw-concept h2,#mlw-concept h3,#mlw-concept p{margin:0}#mlw-concept h2{font-size:21px;line-height:1.35;font-weight:500}#mlw-concept h3{font-size:15px;font-weight:500}#mlw-concept strong{font-weight:500}#mlw-concept button,#mlw-concept input,#mlw-concept select,#mlw-concept textarea{font:inherit}#mlw-concept button{color:inherit}#mlw-concept button:disabled{opacity:.45;cursor:default}#mlw-concept button:focus-visible,#mlw-concept input:focus-visible,#mlw-concept select:focus-visible,#mlw-concept textarea:focus-visible,#mlw-concept summary:focus-visible{outline:2px solid var(--w-blue);outline-offset:3px}#mlw-concept svg[data-lucide],#mlw-concept i[data-lucide]{width:17px;height:17px;flex-shrink:0}#mlw-concept .wb-window{background:var(--w-bg);border:1px solid var(--w-line);border-radius:14px;overflow:hidden;position:relative}#mlw-concept .wb-header{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:18px 22px;border-bottom:1px solid var(--w-line);padding-right:105px}#mlw-concept .wb-brand{display:flex;align-items:center;gap:9px;flex-wrap:wrap}#mlw-concept .wb-brand&gt;strong{font-size:18px}#mlw-concept .wb-tag{display:inline-flex;align-items:center;border:1px solid var(--w-line);border-radius:6px;padding:2px 8px;font-size:12px;white-space:normal;max-width:100%;background:var(--w-panel)}#mlw-concept .wb-projectbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 22px}#mlw-concept .wb-divider{height:20px;border-left:1px solid var(--w-line)}#mlw-concept .wb-tabs{display:flex;align-items:center;gap:8px;padding:0 22px 12px;flex-wrap:wrap;border-bottom:1px solid var(--w-line)}#mlw-concept .wb-tab{display:flex;align-items:center;gap:8px;background:transparent;border:0;border-radius:7px;padding:8px 13px;color:var(--w-muted)}#mlw-concept .wb-tab[aria-selected=true]{background:var(--w-blue-soft);color:var(--w-blue)}#mlw-concept .wb-dot{height:5px;width:5px;background:var(--w-green);border-radius:50%}#mlw-concept .wb-demo-note{margin-left:auto;font-size:12px;color:var(--w-muted)}#mlw-concept .wb-body{display:grid;grid-template-columns:minmax(0,1fr)}#mlw-concept .wb-body.wb-with-assistant{grid-template-columns:minmax(0,1fr) 250px}#mlw-concept .wb-main{min-width:0}#mlw-concept .wb-panel{padding:24px 22px 0;min-height:690px}#mlw-concept .wb-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}#mlw-concept .wb-section-head p{margin-top:5px;color:var(--w-muted)}#mlw-concept .wb-tight{margin-bottom:10px;align-items:center}#mlw-concept .wb-muted,#mlw-concept .wb-metadata{color:var(--w-muted);font-size:12px}#mlw-concept .wb-eyebrow{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--w-muted)}#mlw-concept .wb-good{color:var(--w-green)}#mlw-concept .wb-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--w-line);border-radius:7px;padding:8px 12px;background:var(--w-panel);white-space:normal;text-align:center;min-height:37px}#mlw-concept .wb-button:hover:not(:disabled),#mlw-concept .wb-source:hover{background:var(--w-soft)}#mlw-concept .wb-primary{background:var(--w-blue);color:var(--w-blue-ink);border-color:transparent}#mlw-concept .wb-primary:hover:not(:disabled){background:var(--w-blue);filter:brightness(.95)}#mlw-concept .wb-link{display:inline-flex;align-items:center;gap:6px;padding:4px 0;border:0;background:transparent;color:var(--w-blue)}#mlw-concept .wb-sources{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}#mlw-concept .wb-source{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid var(--w-line);border-radius:7px;background:var(--w-panel);font-size:12px}#mlw-concept .wb-source[aria-pressed=true]{background:var(--w-ink);border-color:transparent;color:var(--w-bg)}#mlw-concept .wb-search{display:flex;align-items:center;gap:9px;border:1px solid var(--w-line);background:var(--w-panel);border-radius:7px;padding:9px 12px;margin-bottom:12px;color:var(--w-muted)}#mlw-concept .wb-search input{background:transparent;border:0;outline-offset:5px;flex:1;min-width:0;color:var(--w-ink)}#mlw-concept .wb-example-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-bottom:22px}#mlw-concept .wb-example{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;border:1px solid var(--w-line);border-radius:8px;padding:12px;background:var(--w-panel);min-width:0}#mlw-concept .wb-example[aria-pressed=true]{background:var(--w-blue-soft);border-color:var(--w-blue)}#mlw-concept .wb-example strong{font-size:13px}#mlw-concept .wb-example .wb-example-top{display:flex;align-items:center;justify-content:space-between;width:100%;color:var(--w-muted);font-size:11px;gap:8px}#mlw-concept .wb-example .wb-example-top svg{width:15px;height:15px}#mlw-concept .wb-example span{overflow-wrap:anywhere}#mlw-concept .wb-workspace{display:grid;grid-template-columns:minmax(0,1fr) 275px;gap:20px}#mlw-concept .wb-setup{background:var(--w-panel);border:1px solid var(--w-line);border-radius:9px;padding:16px;display:flex;flex-direction:column;gap:13px;min-width:0;align-self:start}#mlw-concept .wb-field{display:flex;flex-direction:column;gap:5px;font-size:12px;min-width:0}#mlw-concept .wb-field input,#mlw-concept .wb-field select,#mlw-concept .wb-field textarea{color:var(--w-ink);background:var(--w-panel);padding:8px 9px;border:1px solid var(--w-line);border-radius:6px;width:100%;min-width:0;font-size:13px}#mlw-concept .wb-field textarea{resize:vertical}#mlw-concept .wb-compatibility{display:flex;gap:7px;align-items:flex-start;color:var(--w-green);font-size:12px;padding:5px 0}#mlw-concept .wb-data-details{min-width:0}#mlw-concept .wb-metadata{margin-bottom:12px;overflow-wrap:anywhere}#mlw-concept .wb-table-wrap{overflow-x:auto}#mlw-concept .wb-table{border-collapse:collapse;width:100%;font-size:12px;background:var(--w-panel)}#mlw-concept .wb-table caption{text-align:left;color:var(--w-muted);font-size:11px;padding:0 0 8px}#mlw-concept .wb-table th,#mlw-concept .wb-table td{text-align:left;font-weight:400;border-bottom:1px solid var(--w-line);padding:10px 11px;white-space:normal;overflow-wrap:anywhere;min-width:70px}#mlw-concept .wb-table th{background:var(--w-soft);color:var(--w-muted)}#mlw-concept .wb-table td:last-child{color:var(--w-blue)}#mlw-concept .wb-split-head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;margin:20px 0 8px}#mlw-concept .wb-split{display:flex;gap:3px;height:7px;margin-bottom:12px}#mlw-concept .wb-split span{background:var(--w-blue);width:80%;border-radius:2px}#mlw-concept .wb-split span:nth-child(2){width:10%;opacity:.55}#mlw-concept .wb-split span:nth-child(3){width:10%;opacity:.25}#mlw-concept .wb-check{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--w-muted)}#mlw-concept input[type=checkbox]{accent-color:var(--w-blue);margin:3px 0 0;flex-shrink:0}#mlw-concept .wb-bottomline{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;border-top:1px solid var(--w-line);margin-top:24px;padding:15px 0;font-size:12px;color:var(--w-green)}#mlw-concept .wb-upload{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;min-height:175px;border:1px dashed var(--w-line);border-radius:8px;margin-bottom:22px;background:var(--w-panel)}#mlw-concept .wb-upload&gt;svg{width:25px;height:25px;color:var(--w-blue)}#mlw-concept .wb-url-row{display:flex;gap:10px;align-items:flex-end;margin:15px 0 24px}#mlw-concept .wb-grow{flex:1;min-width:0}#mlw-concept .wb-training-grid{display:grid;grid-template-columns:260px minmax(0,1fr);gap:24px}#mlw-concept .wb-two-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}#mlw-concept .wb-advanced{border-top:1px solid var(--w-line);padding-top:12px;font-size:12px;color:var(--w-muted)}#mlw-concept .wb-advanced .wb-field{margin-top:12px}#mlw-concept .wb-run-details{min-width:0}#mlw-concept .wb-run-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;font-size:13px;flex-wrap:wrap}#mlw-concept .wb-progress{height:6px;background:var(--w-soft);border-radius:5px;overflow:hidden}#mlw-concept .wb-progress&gt;span{display:block;background:var(--w-blue);width:100%;height:100%}#mlw-concept .wb-run-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:20px 0 22px}#mlw-concept .wb-run-metrics&gt;div{display:flex;flex-direction:column;gap:5px}#mlw-concept .wb-run-metrics strong{font-size:24px;font-variant-numeric:tabular-nums}#mlw-concept .wb-chart-title{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;flex-wrap:wrap}#mlw-concept .wb-chart-title&gt;span{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--w-muted)}#mlw-concept .wb-chart-title b{width:15px;height:2px;background:var(--w-blue);display:inline-block}#mlw-concept .wb-chart-title b.wb-legend-val{background:var(--w-muted);margin-left:7px}#mlw-concept .wb-chart{width:100%;margin:8px 0 15px}#mlw-concept .wb-chart svg{display:block;width:100%;height:190px;overflow:visible}#mlw-concept .wb-checkpoint{background:var(--w-panel);border:1px solid var(--w-line);border-radius:8px;padding:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px}#mlw-concept .wb-checkpoint&gt;svg{color:var(--w-green)}#mlw-concept .wb-checkpoint&gt;div{display:flex;flex:1;flex-direction:column;gap:3px;min-width:140px}#mlw-concept .wb-checkpoint span{color:var(--w-muted);font-size:11px}#mlw-concept .wb-run-log{margin-top:17px;font-size:12px;color:var(--w-muted)}#mlw-concept .wb-run-log p{margin-top:6px}#mlw-concept .wb-inference-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:14px}#mlw-concept .wb-model-config{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px;border:1px solid var(--w-line);border-radius:8px;background:var(--w-panel);flex-wrap:wrap}#mlw-concept .wb-model-config&gt;div{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}#mlw-concept .wb-model-config .wb-muted{flex-basis:100%;padding-left:25px}#mlw-concept .wb-config-fields{align-items:flex-end}#mlw-concept .wb-runtime-note{margin:10px 0 22px;font-size:12px;color:var(--w-muted)}#mlw-concept .wb-playground{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}#mlw-concept .wb-input-pane,#mlw-concept .wb-output-pane{min-width:0;background:var(--w-panel);border:1px solid var(--w-line);border-radius:9px;padding:17px;display:flex;flex-direction:column;gap:15px}#mlw-concept .wb-input-pane&gt;.wb-button{align-self:flex-start;margin-top:auto}#mlw-concept .wb-output-pane{min-height:305px}#mlw-concept #wb-output{flex:1;min-width:0}#mlw-concept .wb-output-empty{min-height:185px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--w-muted);font-size:12px;text-align:center}#mlw-concept .wb-output-empty&gt;svg{width:25px;height:25px}#mlw-concept .wb-prediction{font-size:20px;margin:5px 0 18px}#mlw-concept .wb-probability{display:grid;grid-template-columns:75px minmax(0,1fr) 45px;align-items:center;gap:9px;font-size:12px;margin:12px 0}#mlw-concept .wb-probability&gt;span:nth-child(2){height:7px;background:var(--w-soft);border-radius:3px;overflow:hidden}#mlw-concept .wb-probability b{height:100%;display:block;background:var(--w-blue);border-radius:3px}#mlw-concept .wb-output-footer{display:flex;gap:14px;border-top:1px solid var(--w-line);padding-top:10px;color:var(--w-muted);font-size:11px;flex-wrap:wrap}#mlw-concept .wb-image-input{border:1px dashed var(--w-line);border-radius:6px;display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px;min-height:150px;color:var(--w-muted);font-size:12px}#mlw-concept .wb-image-input&gt;svg{height:28px;width:28px}#mlw-concept .wb-assistant{border-left:1px solid var(--w-line);padding:20px 16px;background:var(--w-panel);display:flex;flex-direction:column;gap:16px;align-self:stretch;min-width:0}#mlw-concept .wb-assistant&gt;.wb-tag{align-self:flex-start}#mlw-concept .wb-assistant-message{padding:12px;background:var(--w-soft);border-radius:8px;font-size:12px}#mlw-concept .wb-icon-button{padding:3px;display:flex;background:transparent;border:0}#mlw-concept .wb-suggestion{border:1px solid var(--w-line);padding:9px 10px;border-radius:7px;background:var(--w-panel);font-size:12px;text-align:left;color:var(--w-blue)}#mlw-concept .wb-toast{padding:12px 22px;border-top:1px solid var(--w-line);background:var(--w-blue-soft);color:var(--w-blue);font-size:12px}#mlw-concept .wb-architecture{display:flex;align-items:center;flex-direction:column;gap:17px;padding:20px 0 30px}#mlw-concept .wb-node{position:relative;border:1px solid var(--w-line);border-left:3px solid var(--w-blue);border-radius:8px;padding:12px 18px;background:var(--w-panel);width:230px;max-width:100%;font-size:13px}#mlw-concept .wb-node&gt;span{display:block;font-size:11px;color:var(--w-muted);margin-top:5px}#mlw-concept .wb-node:not(:last-child):after{content:&#x27;↓&#x27;;position:absolute;bottom:-21px;left:50%;color:var(--w-muted)}#mlw-concept .wb-compact .wb-panel{padding-top:16px}#mlw-concept .wb-compact .wb-section-head{margin-bottom:12px}#mlw-concept .wb-compact .wb-example{padding:9px}
+@media(max-width:900px){#mlw-concept .wb-body.wb-with-assistant{grid-template-columns:minmax(0,1fr)}#mlw-concept .wb-assistant{border-left:0;border-top:1px solid var(--w-line)}#mlw-concept .wb-header{padding-right:22px}#mlw-concept .wb-demo-note{flex-basis:100%;margin:2px 0 0}}
+@media(max-width:700px){#mlw-concept .wb-workspace,#mlw-concept .wb-training-grid{grid-template-columns:minmax(0,1fr)}#mlw-concept .wb-example-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#mlw-concept .wb-training-grid&gt;.wb-setup{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}#mlw-concept .wb-training-grid&gt;.wb-setup&gt;h3,#mlw-concept .wb-training-grid&gt;.wb-setup&gt;.wb-advanced{grid-column:1/-1}#mlw-concept .wb-panel{min-height:0}#mlw-concept .wb-run-metrics strong{font-size:22px}}
+@media(max-width:500px){#mlw-concept .wb-header{align-items:flex-start;padding:15px 13px}#mlw-concept .wb-brand&gt;strong{font-size:16px}#mlw-concept .wb-brand&gt;.wb-tag{margin-left:26px}#mlw-concept .wb-header&gt;.wb-button{font-size:12px;padding:7px;max-width:110px}#mlw-concept .wb-projectbar{padding:13px;gap:9px}#mlw-concept .wb-projectbar&gt;strong{order:3;flex-basis:100%}#mlw-concept .wb-divider{display:none}#mlw-concept .wb-tabs{padding:0 13px 11px;gap:3px}#mlw-concept .wb-tab{padding:7px 10px}#mlw-concept .wb-panel{padding:19px 13px 0}#mlw-concept .wb-section-head{flex-wrap:wrap}#mlw-concept .wb-playground,#mlw-concept .wb-inference-settings{grid-template-columns:minmax(0,1fr)}#mlw-concept .wb-config-fields,#mlw-concept .wb-url-row{flex-direction:column;align-items:stretch}#mlw-concept .wb-example-grid{gap:7px}#mlw-concept .wb-source{padding:8px 9px}#mlw-concept .wb-training-grid&gt;.wb-setup{display:flex}#mlw-concept .wb-input-pane,#mlw-concept .wb-output-pane{padding:13px}#mlw-concept .wb-run-metrics{gap:9px}#mlw-concept .wb-run-metrics .wb-muted{font-size:11px}#mlw-concept .wb-run-metrics strong{font-size:20px}#mlw-concept .wb-table th,#mlw-concept .wb-table td{padding:8px;min-width:65px}#mlw-concept .wb-chart svg{height:180px}}
+@media(pointer:coarse){#mlw-concept button,#mlw-concept .wb-button,#mlw-concept summary{min-height:44px}#mlw-concept input,#mlw-concept select,#mlw-concept textarea{font-size:16px!important;min-height:44px}#mlw-concept input[type=checkbox]{min-height:20px;min-width:20px}#mlw-concept .wb-check{min-height:44px;align-items:center}}
+&lt;/style&gt;
+
+&lt;script&gt;
+(() =&gt; {
+  const root=document.getElementById(&#x27;mlw-concept&#x27;);
+  const $=id=&gt;root.querySelector(&#x27;#&#x27;+id);
+  const all=selector=&gt;Array.from(root.querySelectorAll(selector));
+  const datasets={
+    insurance:{title:&#x27;Insurance campaign&#x27;,owner:&#x27;nprak26/insurance-campaign-data&#x27;,hub:&#x27;hf&#x27;,hubName:&#x27;Hugging Face&#x27;,rows:15000,task:&#x27;Classification&#x27;,kind:&#x27;features&#x27;,classes:2,model:&#x27;Campaign engagement classifier&#x27;,inputs:&#x27;8 numeric features&#x27;,target:&#x27;campaign_engagement&#x27;,prep:&#x27;Standardize numeric features&#x27;,shape:&#x27;8 input features → 2 classes&#x27;,heads:[&#x27;Age&#x27;,&#x27;Income&#x27;,&#x27;Quotes&#x27;,&#x27;Engaged&#x27;],preview:[[&#x27;42&#x27;,&#x27;48,000&#x27;,&#x27;3&#x27;,&#x27;Yes&#x27;],[&#x27;54&#x27;,&#x27;51,000&#x27;,&#x27;1&#x27;,&#x27;No&#x27;],[&#x27;41&#x27;,&#x27;31,000&#x27;,&#x27;1&#x27;,&#x27;No&#x27;]],icon:&#x27;table-2&#x27;},
+    dmv:{title:&#x27;DMV questions &amp; answers&#x27;,owner:&#x27;nprak26/MultiState-DMV-Licensing-Practice-Set&#x27;,hub:&#x27;hf&#x27;,hubName:&#x27;Hugging Face&#x27;,rows:372,task:&#x27;Text generation&#x27;,kind:&#x27;text&#x27;,model:&#x27;Small text transformer&#x27;,inputs:&#x27;instruction&#x27;,target:&#x27;response&#x27;,prep:&#x27;Tokenize · mask prompt in loss&#x27;,shape:&#x27;Prompt + response → next-token targets&#x27;,heads:[&#x27;Instruction&#x27;,&#x27;Response&#x27;],preview:[[&#x27;What shape is a yield sign?&#x27;,&#x27;An upside-down triangle.&#x27;],[&#x27;What does a red octagonal sign mean?&#x27;,&#x27;Stop.&#x27;],[&#x27;What color are warning signs?&#x27;,&#x27;Yellow with black symbols.&#x27;]],icon:&#x27;text&#x27;},
+    vision:{title:&#x27;Image classification starter&#x27;,owner:&#x27;Illustrative vision sample&#x27;,hub:&#x27;roboflow&#x27;,hubName:&#x27;Roboflow&#x27;,rows:2000,task:&#x27;Classification&#x27;,kind:&#x27;image&#x27;,classes:3,model:&#x27;Small image classifier&#x27;,inputs:&#x27;image&#x27;,target:&#x27;label&#x27;,prep:&#x27;Resize 32 × 32 · normalize RGB&#x27;,shape:&#x27;3 × 32 × 32 images → 3 classes&#x27;,heads:[&#x27;Image&#x27;,&#x27;Dimensions&#x27;,&#x27;Label&#x27;],preview:[[&#x27;example-cat.jpg&#x27;,&#x27;32 × 32&#x27;,&#x27;Cat&#x27;],[&#x27;example-dog.jpg&#x27;,&#x27;32 × 32&#x27;,&#x27;Dog&#x27;],[&#x27;example-bird.jpg&#x27;,&#x27;32 × 32&#x27;,&#x27;Bird&#x27;]],icon:&#x27;image&#x27;},
+    remote:{title:&#x27;Remote worker productivity&#x27;,owner:&#x27;nprak26/remote-worker-productivity&#x27;,hub:&#x27;hf&#x27;,hubName:&#x27;Hugging Face&#x27;,rows:1500,task:&#x27;Regression&#x27;,kind:&#x27;features&#x27;,classes:1,model:&#x27;Productivity regressor&#x27;,inputs:&#x27;6 numeric features&#x27;,target:&#x27;Productivity_Score&#x27;,prep:&#x27;Standardize numeric features&#x27;,shape:&#x27;6 input features → 1 numeric prediction&#x27;,heads:[&#x27;Experience&#x27;,&#x27;Hours / week&#x27;,&#x27;WFH days&#x27;,&#x27;Score&#x27;],preview:[[&#x27;10&#x27;,&#x27;41&#x27;,&#x27;2&#x27;,&#x27;52.2&#x27;],[&#x27;4&#x27;,&#x27;52&#x27;,&#x27;5&#x27;,&#x27;81.5&#x27;],[&#x27;3&#x27;,&#x27;43&#x27;,&#x27;3&#x27;,&#x27;82.2&#x27;]],icon:&#x27;table-2&#x27;},
+    churn:{title:&#x27;Customer churn starter&#x27;,owner:&#x27;Illustrative tabular sample&#x27;,hub:&#x27;kaggle&#x27;,hubName:&#x27;Kaggle&#x27;,rows:1000,task:&#x27;Classification&#x27;,kind:&#x27;features&#x27;,classes:2,model:&#x27;Customer churn classifier&#x27;,inputs:&#x27;8 numeric features&#x27;,target:&#x27;churn&#x27;,prep:&#x27;Standardize numeric features&#x27;,shape:&#x27;8 input features → 2 classes&#x27;,heads:[&#x27;Tenure&#x27;,&#x27;Monthly bill&#x27;,&#x27;Tickets&#x27;,&#x27;Churn&#x27;],preview:[[&#x27;12&#x27;,&#x27;65&#x27;,&#x27;1&#x27;,&#x27;No&#x27;],[&#x27;2&#x27;,&#x27;92&#x27;,&#x27;4&#x27;,&#x27;Yes&#x27;],[&#x27;36&#x27;,&#x27;54&#x27;,&#x27;0&#x27;,&#x27;No&#x27;]],icon:&#x27;table-2&#x27;},
+    iris:{title:&#x27;Iris classification&#x27;,owner:&#x27;Classic starter dataset&#x27;,hub:&#x27;openml&#x27;,hubName:&#x27;OpenML&#x27;,rows:150,task:&#x27;Classification&#x27;,kind:&#x27;features&#x27;,classes:3,model:&#x27;Iris classifier&#x27;,inputs:&#x27;4 numeric features&#x27;,target:&#x27;species&#x27;,prep:&#x27;Standardize numeric features&#x27;,shape:&#x27;4 input features → 3 classes&#x27;,heads:[&#x27;Sepal length&#x27;,&#x27;Sepal width&#x27;,&#x27;Petal length&#x27;,&#x27;Species&#x27;],preview:[[&#x27;5.1&#x27;,&#x27;3.5&#x27;,&#x27;1.4&#x27;,&#x27;Setosa&#x27;],[&#x27;7.0&#x27;,&#x27;3.2&#x27;,&#x27;4.7&#x27;,&#x27;Versicolor&#x27;],[&#x27;6.3&#x27;,&#x27;3.3&#x27;,&#x27;6.0&#x27;,&#x27;Virginica&#x27;]],icon:&#x27;flower-2&#x27;},
+    wine:{title:&#x27;Wine classification&#x27;,owner:&#x27;Classic starter dataset&#x27;,hub:&#x27;uci&#x27;,hubName:&#x27;UCI&#x27;,rows:178,task:&#x27;Classification&#x27;,kind:&#x27;features&#x27;,classes:3,model:&#x27;Wine classifier&#x27;,inputs:&#x27;13 numeric features&#x27;,target:&#x27;class&#x27;,prep:&#x27;Standardize numeric features&#x27;,shape:&#x27;13 input features → 3 classes&#x27;,heads:[&#x27;Alcohol&#x27;,&#x27;Malic acid&#x27;,&#x27;Ash&#x27;,&#x27;Class&#x27;],preview:[[&#x27;14.23&#x27;,&#x27;1.71&#x27;,&#x27;2.43&#x27;,&#x27;1&#x27;],[&#x27;13.20&#x27;,&#x27;1.78&#x27;,&#x27;2.14&#x27;,&#x27;1&#x27;],[&#x27;12.37&#x27;,&#x27;1.17&#x27;,&#x27;1.92&#x27;,&#x27;2&#x27;]],icon:&#x27;table-2&#x27;}
+  };
+  const sourceNames={examples:&#x27;Examples&#x27;,local:&#x27;Local files&#x27;,hf:&#x27;Hugging Face&#x27;,kaggle:&#x27;Kaggle&#x27;,openml:&#x27;OpenML&#x27;,uci:&#x27;UCI&#x27;,roboflow:&#x27;Roboflow&#x27;,url:&#x27;URL&#x27;};
+  let state={tab:&#x27;data&#x27;,source:&#x27;examples&#x27;,dataset:&#x27;insurance&#x27;,imported:true,checkpoint:true,run:&#x27;complete&#x27;,epoch:6,epochs:6,modelSource:&#x27;checkpoint&#x27;,runtime:&#x27;pytorch&#x27;,connected:false,predicted:false,assistant:false};
+  const saved=window.openai?.widgetState;
+  if(saved?.modelContent?.concept===&#x27;ml-workbench-tabs&#x27;&amp;&amp;datasets[saved.modelContent.dataset]){state.dataset=saved.modelContent.dataset;state.tab=[&#x27;data&#x27;,&#x27;train&#x27;,&#x27;inference&#x27;,&#x27;build&#x27;].includes(saved.modelContent.tab)?saved.modelContent.tab:&#x27;data&#x27;;state.source=sourceNames[saved.privateContent?.source]?saved.privateContent.source:&#x27;examples&#x27;;state.assistant=!!saved.privateContent?.assistant;}
+  let timer=null;let toastTimer=null;const layout={assistant:state.assistant,compact:false,advanced:false};
+  const data=()=&gt;datasets[state.dataset];
+  const icons=()=&gt;{if(globalThis.lucide)lucide.createIcons({root,attrs:{width:16,height:16}})};
+  const save=()=&gt;{if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{concept:&#x27;ml-workbench-tabs&#x27;,tab:state.tab,dataset:state.dataset,modelSource:state.modelSource,runtime:state.runtime},privateContent:{source:state.source,assistant:state.assistant}}).catch(()=&gt;{});};
+  const toast=message=&gt;{$(&#x27;wb-toast&#x27;).textContent=message;$(&#x27;wb-toast&#x27;).hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=&gt;{$(&#x27;wb-toast&#x27;).hidden=true},4500)};
+  function showTab(tab,persist=true){state.tab=tab;all(&#x27;[data-tab]&#x27;).forEach(b=&gt;b.setAttribute(&#x27;aria-selected&#x27;,String(b.dataset.tab===tab)));[&#x27;data&#x27;,&#x27;build&#x27;,&#x27;train&#x27;,&#x27;inference&#x27;].forEach(t=&gt;{$(&#x27;wb-&#x27;+t).hidden=t!==tab});$(&#x27;wb-assistant-context&#x27;).textContent=tab.charAt(0).toUpperCase()+tab.slice(1)+&#x27; context&#x27;;$(&#x27;wb-suggestion&#x27;).textContent={data:&#x27;Explain this input mapping&#x27;,build:&#x27;Explain this architecture&#x27;,train:&#x27;Explain these training settings&#x27;,inference:&#x27;Which runtime fits this model?&#x27;}[tab];drawChart();if(persist)save();}
+  function sourceView(persist=true){all(&#x27;[data-source]&#x27;).forEach(b=&gt;b.setAttribute(&#x27;aria-pressed&#x27;,String(b.dataset.source===state.source)));$(&#x27;wb-browse&#x27;).hidden=[&#x27;local&#x27;,&#x27;url&#x27;].includes(state.source);$(&#x27;wb-local&#x27;).hidden=state.source!==&#x27;local&#x27;;$(&#x27;wb-url&#x27;).hidden=state.source!==&#x27;url&#x27;;$(&#x27;wb-data-preview&#x27;).hidden=state.source===&#x27;local&#x27;;$(&#x27;wb-data-footer&#x27;).hidden=state.source===&#x27;local&#x27;;$(&#x27;wb-dataset-search&#x27;).placeholder=state.source===&#x27;hf&#x27;?&#x27;Search datasets or an owner, e.g. nprak26…&#x27;:state.source===&#x27;examples&#x27;?&#x27;Search example datasets…&#x27;:&#x27;Search &#x27;+sourceNames[state.source]+&#x27; examples…&#x27;;renderCards();if(persist)save();}
+  function renderCards(){const term=$(&#x27;wb-dataset-search&#x27;).value.toLowerCase();const keys=Object.keys(datasets).filter(k=&gt;(state.source===&#x27;examples&#x27;?[&#x27;insurance&#x27;,&#x27;dmv&#x27;,&#x27;vision&#x27;].includes(k):datasets[k].hub===state.source)&amp;&amp;JSON.stringify(datasets[k]).toLowerCase().includes(term));$(&#x27;wb-examples&#x27;).innerHTML=keys.map(k=&gt;{const d=datasets[k];return &#x27;&lt;button type=&quot;button&quot; class=&quot;wb-example cursor-interaction&quot; data-dataset=&quot;&#x27;+k+&#x27;&quot; aria-pressed=&quot;&#x27;+(state.dataset===k)+&#x27;&quot;&gt;&lt;span class=&quot;wb-example-top&quot;&gt;&lt;span&gt;&#x27;+d.hubName+&#x27;&lt;/span&gt;&lt;i data-lucide=&quot;&#x27;+d.icon+&#x27;&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/span&gt;&lt;strong&gt;&#x27;+d.title+&#x27;&lt;/strong&gt;&lt;span class=&quot;wb-muted&quot;&gt;&#x27;+d.rows.toLocaleString()+&#x27; rows · &#x27;+d.task+&#x27;&lt;/span&gt;&lt;/button&gt;&#x27;}).join(&#x27;&#x27;)||&#x27;&lt;p class=&quot;wb-muted&quot;&gt;No example matches. Use a dataset URL to preview another.&lt;/p&gt;&#x27;;all(&#x27;[data-dataset]&#x27;).forEach(b=&gt;b.addEventListener(&#x27;click&#x27;,()=&gt;chooseDataset(b.dataset.dataset)));icons();}
+  function chooseDataset(id,persist=true){if(state.dataset!==id){clearInterval(timer);state.dataset=id;state.imported=false;state.checkpoint=false;state.run=&#x27;idle&#x27;;state.epoch=0;state.connected=false;state.predicted=false;}const d=data();$(&#x27;wb-model-name&#x27;).textContent=d.model;$(&#x27;wb-task-tag&#x27;).textContent=d.task;$(&#x27;wb-dataset-title&#x27;).textContent=d.title;$(&#x27;wb-dataset-meta&#x27;).textContent=d.owner+&#x27; · &#x27;+d.rows.toLocaleString()+&#x27; rows · &#x27;+d.hubName;$(&#x27;wb-preview-head&#x27;).innerHTML=&#x27;&lt;tr&gt;&#x27;+d.heads.map(v=&gt;&#x27;&lt;th scope=&quot;col&quot;&gt;&#x27;+v+&#x27;&lt;/th&gt;&#x27;).join(&#x27;&#x27;)+&#x27;&lt;/tr&gt;&#x27;;$(&#x27;wb-preview-rows&#x27;).innerHTML=d.preview.map(row=&gt;&#x27;&lt;tr&gt;&#x27;+row.map(v=&gt;&#x27;&lt;td&gt;&#x27;+v+&#x27;&lt;/td&gt;&#x27;).join(&#x27;&#x27;)+&#x27;&lt;/tr&gt;&#x27;).join(&#x27;&#x27;);$(&#x27;wb-input-fields&#x27;).innerHTML=&#x27;&lt;option&gt;&#x27;+d.inputs+&#x27;&lt;/option&gt;&#x27;;$(&#x27;wb-target&#x27;).innerHTML=&#x27;&lt;option&gt;&#x27;+d.target+&#x27;&lt;/option&gt;&#x27;;$(&#x27;wb-preparation&#x27;).innerHTML=&#x27;&lt;option&gt;&#x27;+d.prep+&#x27;&lt;/option&gt;&#x27;;$(&#x27;wb-shape-check&#x27;).textContent=&#x27;✓ &#x27;+d.shape;$(&#x27;wb-stratify&#x27;).parentElement.hidden=d.task!==&#x27;Classification&#x27;;$(&#x27;wb-use-data&#x27;).textContent=state.imported?&#x27;Dataset ready ✓&#x27;:&#x27;Use dataset →&#x27;;$(&#x27;wb-data-status&#x27;).textContent=state.imported?&#x27;Dataset ready · preparation saved&#x27;:&#x27;Preview selected · use dataset to prepare it&#x27;;$(&#x27;wb-train-subtitle&#x27;).textContent=d.title+&#x27; · &#x27;+Math.floor(d.rows*.8).toLocaleString()+&#x27; training rows · &#x27;+Math.floor(d.rows*.1).toLocaleString()+&#x27; validation rows&#x27;;$(&#x27;wb-val-label&#x27;).textContent=d.kind===&#x27;text&#x27;?&#x27;Validation loss&#x27;:d.task===&#x27;Regression&#x27;?&#x27;Validation MAE&#x27;:&#x27;Validation accuracy&#x27;;renderCards();renderArchitecture();renderTraining();renderInference();if(persist)save();}
+  function renderArchitecture(){renderMappingOptions();const d=data();let nodes=d.kind===&#x27;image&#x27;?[[&#x27;Image input&#x27;,&#x27;B × 3 × 32 × 32&#x27;],[&#x27;Conv2d + ReLU&#x27;,&#x27;16 channels · kernel 3&#x27;],[&#x27;Global average pool&#x27;,&#x27;B × 16&#x27;],[&#x27;Linear&#x27;,&#x27;3 classes&#x27;],[&#x27;Output&#x27;,&#x27;Class scores&#x27;]]:d.kind===&#x27;text&#x27;?[[&#x27;Token input&#x27;,&#x27;Sequence length 128&#x27;],[&#x27;Embedding&#x27;,&#x27;Width 64&#x27;],[&#x27;Transformer block × 2&#x27;,&#x27;4 attention heads · causal&#x27;],[&#x27;Linear&#x27;,&#x27;Vocabulary logits&#x27;],[&#x27;Output&#x27;,&#x27;Next-token predictions&#x27;]]:[[&#x27;Feature input&#x27;,d.inputs],[&#x27;Linear&#x27;,&#x27;32 hidden features&#x27;],[&#x27;ReLU&#x27;,&#x27;Activation&#x27;],[&#x27;Linear&#x27;,d.classes===1?&#x27;1 output&#x27;:d.classes+&#x27; classes&#x27;],[&#x27;Output&#x27;,d.classes===1?&#x27;Numeric value&#x27;:&#x27;Class scores&#x27;]];$(&#x27;wb-architecture&#x27;).innerHTML=nodes.map(n=&gt;&#x27;&lt;div class=&quot;wb-node&quot;&gt;&lt;strong&gt;&#x27;+n[0]+&#x27;&lt;/strong&gt;&lt;span&gt;&#x27;+n[1]+&#x27;&lt;/span&gt;&lt;/div&gt;&#x27;).join(&#x27;&#x27;);}
+  function renderMappingOptions(){const d=data();$(&#x27;wb-input-fields&#x27;).innerHTML=&#x27;&lt;option value=&quot;recommended&quot;&gt;&#x27;+d.inputs+&#x27; · recommended&lt;/option&gt;&lt;option value=&quot;all&quot;&gt;All available columns&lt;/option&gt;&#x27;;$(&#x27;wb-target&#x27;).innerHTML=&#x27;&lt;option value=&quot;default&quot;&gt;&#x27;+d.target+&#x27;&lt;/option&gt;&lt;option value=&quot;other&quot;&gt;Choose another target…&lt;/option&gt;&#x27;;$(&#x27;wb-preparation&#x27;).innerHTML=&#x27;&lt;option value=&quot;recommended&quot;&gt;&#x27;+d.prep+&#x27;&lt;/option&gt;&lt;option value=&quot;alternative&quot;&gt;&#x27;+(d.kind===&#x27;image&#x27;?&#x27;Resize 224 × 224&#x27;:d.kind===&#x27;text&#x27;?&#x27;Use a different tokenizer&#x27;:&#x27;Keep original numeric scale&#x27;)+&#x27;&lt;/option&gt;&#x27;;const labels=state.dataset===&#x27;iris&#x27;?[&#x27;Sepal length&#x27;,&#x27;Sepal width&#x27;,&#x27;Petal length&#x27;,&#x27;Petal width&#x27;]:state.dataset===&#x27;wine&#x27;?[&#x27;Alcohol&#x27;,&#x27;Malic acid&#x27;,&#x27;Ash&#x27;,&#x27;Magnesium&#x27;]:state.dataset===&#x27;churn&#x27;?[&#x27;Tenure&#x27;,&#x27;Monthly bill&#x27;,&#x27;Support tickets&#x27;,&#x27;Visits&#x27;]:state.dataset===&#x27;remote&#x27;?[&#x27;Experience&#x27;,&#x27;Work hours / week&#x27;,&#x27;WFH days / week&#x27;,&#x27;Meetings / week&#x27;]:[&#x27;Age&#x27;,&#x27;Income&#x27;,&#x27;Quote requests&#x27;,&#x27;Website visits&#x27;];const values=state.dataset===&#x27;iris&#x27;?[5.1,3.5,1.4,.2]:state.dataset===&#x27;wine&#x27;?[14.23,1.71,2.43,127]:state.dataset===&#x27;churn&#x27;?[12,65,1,5]:state.dataset===&#x27;remote&#x27;?[10,41,2,4]:[42,48000,3,5];all(&#x27;#wb-feature-inputs label&#x27;).forEach((label,i)=&gt;{label.firstChild.textContent=labels[i];label.querySelector(&#x27;input&#x27;).value=values[i]});}
+  function mappingChanged(){const d=data();const valid=$(&#x27;wb-input-fields&#x27;).value===&#x27;recommended&#x27;&amp;&amp;$(&#x27;wb-target&#x27;).value===&#x27;default&#x27;&amp;&amp;(d.kind===&#x27;features&#x27;||$(&#x27;wb-preparation&#x27;).value===&#x27;recommended&#x27;);state.imported=false;state.checkpoint=false;state.run=&#x27;idle&#x27;;state.epoch=0;clearInterval(timer);$(&#x27;wb-use-data&#x27;).disabled=!valid;$(&#x27;wb-use-data&#x27;).textContent=&#x27;Use dataset →&#x27;;$(&#x27;wb-data-status&#x27;).textContent=valid?&#x27;Preparation changed · use dataset to save it&#x27;:&#x27;Check the input mapping before continuing&#x27;;$(&#x27;wb-shape-check&#x27;).textContent=valid?&#x27;✓ &#x27;+d.shape:$(&#x27;wb-input-fields&#x27;).value===&#x27;all&#x27;?&#x27;All columns may include the target. Select input fields only.&#x27;:$(&#x27;wb-target&#x27;).value!==&#x27;default&#x27;?&#x27;Changing the target requires a matching model output.&#x27;:&#x27;Preparation dimensions differ from this model’s input.&#x27;;$(&#x27;wb-shape-check&#x27;).parentElement.style.color=valid?&#x27;var(--w-green)&#x27;:&#x27;var(--w-orange)&#x27;;renderTraining();renderInference();}
+  function renderTraining(){const complete=state.run===&#x27;complete&#x27;;const running=state.run===&#x27;running&#x27;;$(&#x27;wb-run-state&#x27;).textContent=complete?&#x27;Example run complete&#x27;:running?&#x27;Running · simulated&#x27;:state.run===&#x27;stopped&#x27;?&#x27;Stopped&#x27;:&#x27;Ready to train&#x27;;$(&#x27;wb-run-name&#x27;).textContent=state.run===&#x27;idle&#x27;?&#x27;New training run&#x27;:&#x27;Example run · run-003&#x27;;$(&#x27;wb-epoch-label&#x27;).textContent=&#x27;Epoch &#x27;+state.epoch+&#x27; of &#x27;+state.epochs;const progress=Math.round(state.epoch/state.epochs*100);$(&#x27;wb-progress&#x27;).setAttribute(&#x27;aria-valuenow&#x27;,progress);$(&#x27;wb-progress&#x27;).firstElementChild.style.width=progress+&#x27;%&#x27;;$(&#x27;wb-loss&#x27;).textContent=state.epoch?(1.25-.94*state.epoch/state.epochs).toFixed(2):&#x27;—&#x27;;$(&#x27;wb-accuracy&#x27;).textContent=!state.epoch?&#x27;—&#x27;:data().kind===&#x27;text&#x27;?(1.42-.91*state.epoch/state.epochs).toFixed(2):data().task===&#x27;Regression&#x27;?(14-8*state.epoch/state.epochs).toFixed(1):(55+27.4*state.epoch/state.epochs).toFixed(1)+&#x27;%&#x27;;$(&#x27;wb-elapsed&#x27;).textContent=&#x27;00:&#x27;+String(state.epoch*3).padStart(2,&#x27;0&#x27;);$(&#x27;wb-checkpoint&#x27;).hidden=!state.checkpoint;$(&#x27;wb-checkpoint-note&#x27;).textContent=&#x27;Epoch &#x27;+state.epochs+&#x27; · architecture, data preparation, and weights&#x27;;$(&#x27;wb-start&#x27;).disabled=running;$(&#x27;wb-stop&#x27;).hidden=!running;$(&#x27;wb-epochs&#x27;).disabled=running;drawChart();}
+  function drawChart(){const host=$(&#x27;wb-chart&#x27;);if(!host.clientWidth)return;const width=host.clientWidth,height=190,left=46,right=12,top=10,bottom=35;const innerWidth=width-left-right,innerHeight=height-top-bottom;const x=e=&gt;left+(e-1)/Math.max(1,state.epochs-1)*innerWidth,y=v=&gt;top+(1-v/1.6)*innerHeight;let markup=&#x27;&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;0 0 &#x27;+width+&#x27; &#x27;+height+&#x27;&quot; aria-hidden=&quot;true&quot;&gt;&#x27;;[0,.8,1.6].forEach(v=&gt;markup+=&#x27;&lt;line x1=&quot;&#x27;+left+&#x27;&quot; x2=&quot;&#x27;+(width-right)+&#x27;&quot; y1=&quot;&#x27;+y(v)+&#x27;&quot; y2=&quot;&#x27;+y(v)+&#x27;&quot; stroke=&quot;var(--w-line)&quot;/&gt;&lt;text x=&quot;&#x27;+(left-8)+&#x27;&quot; y=&quot;&#x27;+(y(v)+4)+&#x27;&quot; text-anchor=&quot;end&quot; fill=&quot;var(--w-muted)&quot; font-size=&quot;11&quot;&gt;&#x27;+v.toFixed(1)+&#x27;&lt;/text&gt;&#x27;);const ticks=[...new Set([1,Math.ceil(state.epochs/2),state.epochs])];ticks.forEach(e=&gt;markup+=&#x27;&lt;text x=&quot;&#x27;+x(e)+&#x27;&quot; y=&quot;&#x27;+(height-18)+&#x27;&quot; text-anchor=&quot;middle&quot; fill=&quot;var(--w-muted)&quot; font-size=&quot;11&quot;&gt;&#x27;+e+&#x27;&lt;/text&gt;&#x27;);markup+=&#x27;&lt;text x=&quot;&#x27;+(left+innerWidth/2)+&#x27;&quot; y=&quot;&#x27;+(height-2)+&#x27;&quot; text-anchor=&quot;middle&quot; fill=&quot;var(--w-muted)&quot; font-size=&quot;11&quot;&gt;Epoch&lt;/text&gt;&lt;text transform=&quot;translate(10,82) rotate(-90)&quot; text-anchor=&quot;middle&quot; fill=&quot;var(--w-muted)&quot; font-size=&quot;11&quot;&gt;Loss&lt;/text&gt;&#x27;;if(state.epoch){const series=[{color:&#x27;var(--w-blue)&#x27;,start:1.25,drop:.94},{color:&#x27;var(--w-muted)&#x27;,start:1.42,drop:.91}];series.forEach(s=&gt;{let pts=[];for(let e=1;e&lt;=state.epoch;e++)pts.push(x(e)+&#x27;,&#x27;+y(s.start-s.drop*Math.pow(e/state.epochs,.7)));markup+=&#x27;&lt;polyline points=&quot;&#x27;+pts.join(&#x27; &#x27;)+&#x27;&quot; fill=&quot;none&quot; stroke=&quot;&#x27;+s.color+&#x27;&quot; stroke-width=&quot;2&quot; stroke-linejoin=&quot;round&quot;/&gt;&lt;circle cx=&quot;&#x27;+x(state.epoch)+&#x27;&quot; cy=&quot;&#x27;+y(s.start-s.drop*Math.pow(state.epoch/state.epochs,.7))+&#x27;&quot; r=&quot;3&quot; fill=&quot;&#x27;+s.color+&#x27;&quot;/&gt;&#x27;});}host.innerHTML=markup+&#x27;&lt;/svg&gt;&#x27;;}
+  function startTraining(){if(!state.imported){toast(&#x27;Use the selected dataset in Data before starting a run.&#x27;);showTab(&#x27;data&#x27;);return}clearInterval(timer);state.epochs=Math.max(1,Math.min(20,Number($(&#x27;wb-epochs&#x27;).value)||6));$(&#x27;wb-epochs&#x27;).value=state.epochs;state.epoch=0;state.run=&#x27;running&#x27;;state.checkpoint=false;state.predicted=false;$(&#x27;wb-run-log&#x27;).textContent=&#x27;Preparing &#x27;+data().title+&#x27; and initializing the model…&#x27;;renderTraining();renderInference();timer=setInterval(()=&gt;{state.epoch++;$(&#x27;wb-run-log&#x27;).textContent=&#x27;Epoch &#x27;+state.epoch+&#x27;: training and validation complete.&#x27;;if(state.epoch&gt;=state.epochs){clearInterval(timer);state.run=&#x27;complete&#x27;;state.checkpoint=true;$(&#x27;wb-run-log&#x27;).textContent=&#x27;Training finished. Best checkpoint is ready to try.&#x27;;renderInference();save()}renderTraining()},650);}
+  function renderInference(){const kind=state.modelSource;const custom=kind===&#x27;checkpoint&#x27;;const imported=kind===&#x27;hf-model&#x27;;const gguf=kind===&#x27;gguf&#x27;;$(&#x27;wb-checkpoint-config&#x27;).hidden=!custom;$(&#x27;wb-external-config&#x27;).hidden=custom;const runtimeOptions=custom?[[&#x27;pytorch&#x27;,&#x27;PyTorch · this checkpoint&#x27;]]:gguf?[[&#x27;llamacpp&#x27;,&#x27;llama.cpp · local GGUF&#x27;]]:imported?[[&#x27;transformers&#x27;,&#x27;Transformers / PyTorch&#x27;]]:[[&#x27;vllm&#x27;,&#x27;vLLM&#x27;],[&#x27;sglang&#x27;,&#x27;SGLang&#x27;],[&#x27;llamacpp&#x27;,&#x27;llama.cpp&#x27;]];if(!runtimeOptions.some(v=&gt;v[0]===state.runtime))state.runtime=runtimeOptions[0][0];$(&#x27;wb-runtime&#x27;).innerHTML=runtimeOptions.map(v=&gt;&#x27;&lt;option value=&quot;&#x27;+v[0]+&#x27;&quot;&#x27;+(state.runtime===v[0]?&#x27; selected&#x27;:&#x27;&#x27;)+&#x27;&gt;&#x27;+v[1]+&#x27;&lt;/option&gt;&#x27;).join(&#x27;&#x27;);$(&#x27;wb-model-source&#x27;).value=kind;$(&#x27;wb-endpoint-label&#x27;).hidden=imported;$(&#x27;wb-model-location&#x27;).value=imported?&#x27;nprak26/IndicLaw-Class&#x27;:gguf?&#x27;chat-model.Q4_K_M.gguf&#x27;:&#x27;your-org/chat-model&#x27;;$(&#x27;wb-model-location-label&#x27;).firstChild.textContent=gguf?&#x27;Model file&#x27;:imported?&#x27;Model repository&#x27;:&#x27;Served model&#x27;;$(&#x27;wb-endpoint&#x27;).value=state.runtime===&#x27;vllm&#x27;?&#x27;http://localhost:8000/v1&#x27;:state.runtime===&#x27;sglang&#x27;?&#x27;http://localhost:30000/v1&#x27;:&#x27;http://localhost:8080/v1&#x27;;$(&#x27;wb-test-connection&#x27;).textContent=state.connected?&#x27;Connected ✓&#x27;:imported?&#x27;Check access&#x27;:&#x27;Test connection&#x27;;$(&#x27;wb-inference-model&#x27;).textContent=state.checkpoint?&#x27;run-003 · best checkpoint&#x27;:&#x27;No checkpoint yet&#x27;;$(&#x27;wb-inference-metadata&#x27;).textContent=data().shape+&#x27; · PyTorch&#x27;;$(&#x27;wb-checkpoint-ready&#x27;).textContent=state.checkpoint?&#x27;Ready&#x27;:&#x27;Train first&#x27;;$(&#x27;wb-runtime-note&#x27;).textContent=custom?&#x27;Uses this checkpoint’s saved architecture and preparation.&#x27;:imported?&#x27;IndicLaw-Class is a gated text classifier. Authorize access on Hugging Face before downloading its files.&#x27;:gguf?&#x27;Supported GGUF models run through llama.cpp. Connect to a running local server.&#x27;:&#x27;Connect to an existing &#x27;+(state.runtime===&#x27;sglang&#x27;?&#x27;SGLang&#x27;:state.runtime===&#x27;vllm&#x27;?&#x27;vLLM&#x27;:&#x27;llama.cpp&#x27;)+&#x27; server. Available models depend on that server.&#x27;;const chat=gguf||kind===&#x27;server&#x27;;const text=chat||imported||(custom&amp;&amp;data().kind===&#x27;text&#x27;);const image=custom&amp;&amp;data().kind===&#x27;image&#x27;;$(&#x27;wb-feature-inputs&#x27;).hidden=text||image;$(&#x27;wb-prompt-label&#x27;).hidden=!text;$(&#x27;wb-generation-settings&#x27;).hidden=!chat&amp;&amp;!(custom&amp;&amp;data().kind===&#x27;text&#x27;);$(&#x27;wb-image-input&#x27;).hidden=!image;$(&#x27;wb-input-heading&#x27;).textContent=text?(imported?&#x27;Classify a text query&#x27;:&#x27;Try a prompt&#x27;):image?&#x27;Try an image&#x27;:&#x27;Try an example row&#x27;;$(&#x27;wb-prompt-label&#x27;).firstChild.textContent=imported?&#x27;Text to classify&#x27;:&#x27;Prompt&#x27;;$(&#x27;wb-prompt&#x27;).value=imported?&#x27;builder flat delay case haakbeku&#x27;:custom&amp;&amp;data().kind===&#x27;text&#x27;?&#x27;What shape is a yield sign?&#x27;:&#x27;Explain what a neural network learns during training.&#x27;;$(&#x27;wb-chat-note&#x27;).textContent=chat?&#x27;Connect and test this model, then make it available in chat.&#x27;:&#x27;Prediction results stay in this playground.&#x27;;$(&#x27;wb-use-chat&#x27;).disabled=!chat||!state.connected||!state.predicted;$(&#x27;wb-use-chat&#x27;).innerHTML=&#x27;&lt;i data-lucide=&quot;messages-square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Use in chat&#x27;;$(&#x27;wb-predict&#x27;).disabled=custom?!state.checkpoint:false;$(&#x27;wb-predict&#x27;).innerHTML=&#x27;&lt;i data-lucide=&quot;play&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&#x27;+(chat||(custom&amp;&amp;data().kind===&#x27;text&#x27;)?&#x27;Generate&#x27;:imported?&#x27;Classify text&#x27;:&#x27;Run prediction&#x27;);$(&#x27;wb-output&#x27;).innerHTML=&#x27;&lt;div class=&quot;wb-output-empty&quot;&gt;&lt;i data-lucide=&quot;flask-conical&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;&#x27;+(custom&amp;&amp;!state.checkpoint?&#x27;Train a model to create a checkpoint.&#x27;:&#x27;Run a prediction to see the result.&#x27;)+&#x27;&lt;/span&gt;&lt;/div&gt;&#x27;;$(&#x27;wb-output-footer&#x27;).hidden=true;icons();}
+  function runPrediction(){const custom=state.modelSource===&#x27;checkpoint&#x27;;if(!custom&amp;&amp;!state.connected){toast(state.modelSource===&#x27;hf-model&#x27;?&#x27;Check model access before running this preview.&#x27;:&#x27;Test the server connection before running this preview.&#x27;);return}if(custom&amp;&amp;!state.checkpoint)return;state.predicted=true;const chat=[&#x27;gguf&#x27;,&#x27;server&#x27;].includes(state.modelSource);let output=&#x27;&#x27;;if(chat){output=&#x27;&lt;p&gt;A neural network learns patterns by adjusting its weights to reduce prediction error. During training, it compares predictions with examples and uses that error to improve the next prediction.&lt;/p&gt;&#x27;}else if(state.modelSource===&#x27;hf-model&#x27;){output=&#x27;&lt;div class=&quot;wb-eyebrow&quot;&gt;Predicted category&lt;/div&gt;&lt;div class=&quot;wb-prediction&quot;&gt;Consumer Complaints&lt;/div&gt;&lt;div class=&quot;wb-muted&quot;&gt;Illustrative result · 89% confidence&lt;/div&gt;&#x27;}else if(data().kind===&#x27;text&#x27;){output=&#x27;&lt;p&gt;An upside-down triangle.&lt;/p&gt;&#x27;}else if(data().task===&#x27;Regression&#x27;){output=&#x27;&lt;div class=&quot;wb-eyebrow&quot;&gt;Predicted productivity score&lt;/div&gt;&lt;div class=&quot;wb-prediction&quot;&gt;76.2 / 100&lt;/div&gt;&lt;span class=&quot;wb-muted&quot;&gt;Illustrative numeric prediction&lt;/span&gt;&#x27;}else{const labels=data().kind===&#x27;image&#x27;?[&#x27;Cat&#x27;,&#x27;Dog&#x27;,&#x27;Bird&#x27;]:data().classes===3?[&#x27;Class 1&#x27;,&#x27;Class 2&#x27;,&#x27;Class 3&#x27;]:[&#x27;Engaged&#x27;,&#x27;Not engaged&#x27;];const values=labels.length===3?[87,9,4]:[78,22];output=&#x27;&lt;div class=&quot;wb-eyebrow&quot;&gt;Prediction&lt;/div&gt;&lt;div class=&quot;wb-prediction&quot;&gt;&#x27;+labels[0]+&#x27;&lt;/div&gt;&#x27;+labels.map((v,i)=&gt;&#x27;&lt;div class=&quot;wb-probability&quot;&gt;&lt;span&gt;&#x27;+v+&#x27;&lt;/span&gt;&lt;span&gt;&lt;b style=&quot;width:&#x27;+values[i]+&#x27;%&quot;&gt;&lt;/b&gt;&lt;/span&gt;&lt;span&gt;&#x27;+values[i]+&#x27;%&lt;/span&gt;&lt;/div&gt;&#x27;).join(&#x27;&#x27;)} $(&#x27;wb-output&#x27;).innerHTML=output;$(&#x27;wb-output-footer&#x27;).hidden=false;$(&#x27;wb-output-footer&#x27;).textContent=chat?&#x27;Example metrics · first token 180 ms · 42 tokens/s&#x27;:&#x27;Example metrics · 24 ms · batch size 1&#x27;;$(&#x27;wb-use-chat&#x27;).disabled=!chat||!state.connected;save();}
+  function toggleAssistant(value,persist=true){state.assistant=value;layout.assistant=value;$(&#x27;wb-assistant&#x27;).hidden=!value;$(&#x27;wb-body&#x27;).classList.toggle(&#x27;wb-with-assistant&#x27;,value);$(&#x27;wb-assistant-toggle&#x27;).setAttribute(&#x27;aria-pressed&#x27;,String(value));if(persist)save();drawChart();}
+  all(&#x27;[data-tab]&#x27;).forEach(b=&gt;b.addEventListener(&#x27;click&#x27;,()=&gt;showTab(b.dataset.tab)));all(&#x27;[data-go]&#x27;).forEach(b=&gt;b.addEventListener(&#x27;click&#x27;,()=&gt;showTab(b.dataset.go)));all(&#x27;[data-source]&#x27;).forEach(b=&gt;b.addEventListener(&#x27;click&#x27;,()=&gt;{state.source=b.dataset.source;$(&#x27;wb-dataset-search&#x27;).value=&#x27;&#x27;;sourceView()}));$(&#x27;wb-dataset-search&#x27;).addEventListener(&#x27;input&#x27;,renderCards);$(&#x27;wb-use-data&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{state.imported=true;$(&#x27;wb-use-data&#x27;).textContent=&#x27;Dataset ready ✓&#x27;;$(&#x27;wb-data-status&#x27;).textContent=&#x27;Dataset ready · preparation saved&#x27;;toast(&#x27;Dataset and preparation selected for this example.&#x27;);save()});$(&#x27;wb-preview-url&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{const url=$(&#x27;wb-url-input&#x27;).value;if(!/^https?:\/\//.test(url)){toast(&#x27;Enter an http or https dataset URL.&#x27;);return}const key=Object.keys(datasets).find(k=&gt;url.includes(datasets[k].owner));chooseDataset(key||&#x27;insurance&#x27;);toast(&#x27;Illustrative preview only · no URL was downloaded.&#x27;)});$(&#x27;wb-file&#x27;).addEventListener(&#x27;change&#x27;,e=&gt;{$(&#x27;wb-local-status&#x27;).textContent=e.target.files.length+&#x27; file(s) selected · preview only&#x27;;toast(&#x27;Files selected locally. This mock does not read or upload them.&#x27;)});$(&#x27;wb-local&#x27;).addEventListener(&#x27;dragover&#x27;,e=&gt;e.preventDefault());$(&#x27;wb-local&#x27;).addEventListener(&#x27;drop&#x27;,e=&gt;{e.preventDefault();$(&#x27;wb-local-status&#x27;).textContent=e.dataTransfer.files.length+&#x27; file(s) dropped · preview only&#x27;;toast(&#x27;Files selected locally. No files were uploaded.&#x27;)});$(&#x27;wb-start&#x27;).addEventListener(&#x27;click&#x27;,startTraining);$(&#x27;wb-stop&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{clearInterval(timer);state.run=&#x27;stopped&#x27;;$(&#x27;wb-run-log&#x27;).textContent=&#x27;Run stopped. No new checkpoint was saved.&#x27;;renderTraining()});$(&#x27;wb-try-checkpoint&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{state.modelSource=&#x27;checkpoint&#x27;;state.predicted=false;renderInference();showTab(&#x27;inference&#x27;)});$(&#x27;wb-device&#x27;).addEventListener(&#x27;change&#x27;,()=&gt;{$(&#x27;wb-remote-compute&#x27;).hidden=$(&#x27;wb-device&#x27;).selectedIndex!==2});$(&#x27;wb-model-source&#x27;).addEventListener(&#x27;change&#x27;,()=&gt;{state.modelSource=$(&#x27;wb-model-source&#x27;).value;state.runtime=&#x27;&#x27;;state.connected=false;state.predicted=false;renderInference();save()});$(&#x27;wb-runtime&#x27;).addEventListener(&#x27;change&#x27;,()=&gt;{state.runtime=$(&#x27;wb-runtime&#x27;).value;state.connected=false;state.predicted=false;renderInference();save()});[&#x27;wb-endpoint&#x27;,&#x27;wb-model-location&#x27;].forEach(id=&gt;$(id).addEventListener(&#x27;input&#x27;,()=&gt;{state.connected=false;state.predicted=false;$(&#x27;wb-test-connection&#x27;).textContent=state.modelSource===&#x27;hf-model&#x27;?&#x27;Check access&#x27;:&#x27;Test connection&#x27;;$(&#x27;wb-use-chat&#x27;).disabled=true}));$(&#x27;wb-test-connection&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{if(state.modelSource===&#x27;hf-model&#x27;){toast(&#x27;Access would be checked through your Hugging Face account. This preview does not authenticate.&#x27;);state.connected=false;return}state.connected=true;$(&#x27;wb-test-connection&#x27;).textContent=&#x27;Connected ✓&#x27;;toast(&#x27;Simulated connection successful · no server was contacted.&#x27;);save()});$(&#x27;wb-predict&#x27;).addEventListener(&#x27;click&#x27;,runPrediction);$(&#x27;wb-use-sample&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{const fields=all(&#x27;#wb-feature-inputs input&#x27;);fields.forEach((v,i)=&gt;v.value=[42,48000,3,5][i]);$(&#x27;wb-image-name&#x27;).textContent=&#x27;example-cat.jpg&#x27;;$(&#x27;wb-prompt&#x27;).value=state.modelSource===&#x27;hf-model&#x27;?&#x27;builder flat delay case haakbeku&#x27;:data().kind===&#x27;text&#x27;&amp;&amp;state.modelSource===&#x27;checkpoint&#x27;?&#x27;What shape is a yield sign?&#x27;:&#x27;Explain what a neural network learns during training.&#x27;;toast(&#x27;Example input loaded.&#x27;)});$(&#x27;wb-image-file&#x27;).addEventListener(&#x27;change&#x27;,e=&gt;{if(e.target.files[0])$(&#x27;wb-image-name&#x27;).textContent=e.target.files[0].name});$(&#x27;wb-use-chat&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{toast(&#x27;Preview: this endpoint would now appear in the chat model picker.&#x27;);$(&#x27;wb-use-chat&#x27;).textContent=&#x27;Added to chat ✓&#x27;});$(&#x27;wb-assistant-toggle&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;toggleAssistant(!state.assistant));$(&#x27;wb-assistant-close&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;toggleAssistant(false));const answer=()=&gt;{$(&#x27;wb-assistant-message&#x27;).textContent={data:&#x27;Use only fields available when you make a prediction. Exclude the target from inputs, fit preparation on the training split, and keep the same preparation for validation and inference.&#x27;,build:&#x27;This starter converts the selected inputs into hidden features, applies an activation, and produces the outputs required by your task.&#x27;,train:&#x27;Start with the sample settings. Compare training and validation loss, then use the checkpoint that performs best on validation data.&#x27;,inference:&#x27;Use PyTorch for custom workbench checkpoints. llama.cpp needs a supported GGUF model; vLLM and SGLang serve their supported architectures. A text classifier uses a classification runner.&#x27;}[state.tab]};$(&#x27;wb-suggestion&#x27;).addEventListener(&#x27;click&#x27;,answer);$(&#x27;wb-assistant-send&#x27;).addEventListener(&#x27;click&#x27;,answer);$(&#x27;wb-back&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;toast(&#x27;Preview: return to your model library with unsaved-change protection.&#x27;));
+  [&#x27;wb-input-fields&#x27;,&#x27;wb-target&#x27;,&#x27;wb-preparation&#x27;].forEach(id=&gt;$(id).addEventListener(&#x27;change&#x27;,mappingChanged));
+  if([&#x27;checkpoint&#x27;,&#x27;gguf&#x27;,&#x27;hf-model&#x27;,&#x27;server&#x27;].includes(saved?.modelContent?.modelSource)){state.modelSource=saved.modelContent.modelSource;state.runtime=saved.modelContent.runtime||&#x27;&#x27;;}
+  chooseDataset(state.dataset,false);sourceView(false);showTab(state.tab,false);toggleAssistant(state.assistant,false);icons();new ResizeObserver(drawChart).observe($(&#x27;wb-chart&#x27;));
+  window.addEventListener(&#x27;openai:set_globals&#x27;,event=&gt;{const s=event.detail?.globals?.widgetState;if(s?.modelContent?.concept!==&#x27;ml-workbench-tabs&#x27;)return;if(datasets[s.modelContent.dataset]&amp;&amp;s.modelContent.dataset!==state.dataset)chooseDataset(s.modelContent.dataset,false);if([&#x27;checkpoint&#x27;,&#x27;gguf&#x27;,&#x27;hf-model&#x27;,&#x27;server&#x27;].includes(s.modelContent.modelSource)&amp;&amp;(s.modelContent.modelSource!==state.modelSource||s.modelContent.runtime!==state.runtime)){state.modelSource=s.modelContent.modelSource;state.runtime=s.modelContent.runtime||&#x27;&#x27;;state.connected=false;state.predicted=false;renderInference()}if([&#x27;data&#x27;,&#x27;build&#x27;,&#x27;train&#x27;,&#x27;inference&#x27;].includes(s.modelContent.tab)&amp;&amp;s.modelContent.tab!==state.tab)showTab(s.modelContent.tab,false);if(sourceNames[s.privateContent?.source]&amp;&amp;s.privateContent.source!==state.source){state.source=s.privateContent.source;sourceView(false)}if(!!s.privateContent?.assistant!==state.assistant)toggleAssistant(!!s.privateContent?.assistant,false)});
+  if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:()=&gt;{root.classList.toggle(&#x27;wb-compact&#x27;,layout.compact);$(&#x27;wb-advanced&#x27;).open=layout.advanced;toggleAssistant(layout.assistant)}});tweak.addToggle(layout,&#x27;assistant&#x27;,{label:&#x27;Show contextual assistant&#x27;});tweak.addToggle(layout,&#x27;compact&#x27;,{label:&#x27;Compact spacing&#x27;});tweak.addToggle(layout,&#x27;advanced&#x27;,{label:&#x27;Expand training settings&#x27;});}
+})();
+&lt;/script&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (event) =&gt; {
+    for (const target of event.composedPath()) {
+      if (target?.nodeType === Node.ELEMENT_NODE) {
+        const trigger = target.closest(&quot;[data-tooltip]&quot;);
+        if (trigger) return trigger;
+      }
+    }
+    return null;
+  };
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) =&gt; {
+    lastPointerWasTouch =
+      event.type === &quot;pointerdown&quot; &amp;&amp; event.pointerType === &quot;touch&quot;;
+  };
+  const handleTouchClick = (event) =&gt; {
+    const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch &amp;&amp; activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() =&gt; {
+      if (activeTrigger === trigger &amp;&amp; !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) =&gt; {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handlers = {
+    pointerover: handlePointerOpen,
+    pointerdown: handlePointer,
+    pointercancel: handlePointer,
+    click: handleTouchClick,
+    pointerout: handleLeave,
+    focusin: handleFocusIn,
+    focusout: handleLeave,
+    keydown: handleKeyDown,
+    contextmenu: handleContextMenu,
+  };
+  const roots = new Map();
+  const handledEvents = new WeakSet();
+  const handleEvent = (event) =&gt; {
+    if (handledEvents.has(event)) return;
+    handledEvents.add(event);
+    handlers[event.type](event);
+  };
+  const discoverRoots = (node) =&gt; {
+    if (node.shadowRoot) listen(node.shadowRoot);
+    for (const element of node.querySelectorAll(&quot;*&quot;)) {
+      if (element.shadowRoot) listen(element.shadowRoot);
+    }
+  };
+  const listen = (root) =&gt; {
+    if (roots.has(root)) return;
+    for (const type of Object.keys(handlers)) root.addEventListener(type, handleEvent);
+    const observer = new window.MutationObserver((records) =&gt; {
+      for (const { addedNodes } of records) {
+        for (const node of addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) discoverRoots(node);
+        }
+      }
+      for (const [root, cleanup] of roots) {
+        if (root.host &amp;&amp; !root.host.isConnected) {
+          cleanup();
+          roots.delete(root);
+        }
+      }
+      if (activeTrigger &amp;&amp; !activeTrigger.isConnected) closeTooltip(false);
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    roots.set(root, () =&gt; {
+      observer.disconnect();
+      for (const type of Object.keys(handlers)) root.removeEventListener(type, handleEvent);
+    });
+    discoverRoots(root);
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    for (const cleanup of roots.values()) cleanup();
+    roots.clear();
+    tooltip = null;
+  };
+
+  // Events between children of one shadow root never reach the document.
+  listen(document);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-tabs&quot;&gt;
+(() =&gt; {
+  const selector = &#x27;.nav[role=&quot;tablist&quot;] [role=&quot;tab&quot;]&#x27;;
+  const disabled = &#x27;:disabled,[aria-disabled=&quot;true&quot;]&#x27;;
+  const selectTab = (selected) =&gt; {
+    const panelId = selected.getAttribute(&quot;aria-controls&quot;);
+    for (const tab of selected.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;)) {
+      const active = tab === selected;
+      tab.classList.toggle(&quot;active&quot;, active);
+      tab.setAttribute(&quot;aria-selected&quot;, String(active));
+      const id = tab.getAttribute(&quot;aria-controls&quot;);
+      const panel = id &amp;&amp; document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden &amp;&amp; selected.id) {
+          panel.setAttribute(&quot;aria-labelledby&quot;, selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) =&gt; {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === &quot;click&quot;) {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;),
+    ).filter((candidate) =&gt; !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === &quot;ArrowRight&quot; || event.key === &quot;ArrowDown&quot;) {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === &quot;ArrowLeft&quot; || event.key === &quot;ArrowUp&quot;) {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === &quot;Home&quot;) {
+      next = 0;
+    } else if (event.key === &quot;End&quot;) {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll(&#x27;.nav[role=&quot;tablist&quot;]&#x27;)) {
+    const selected =
+      list.querySelector(&#x27;[role=&quot;tab&quot;][aria-selected=&quot;true&quot;]&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;].active&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;]&#x27;);
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener(&quot;click&quot;, interact);
+  document.addEventListener(&quot;keydown&quot;, interact);
+  window.addEventListener(&quot;pagehide&quot;, () =&gt; {
+    document.removeEventListener(&quot;click&quot;, interact);
+    document.removeEventListener(&quot;keydown&quot;, interact);
+  }, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-carousel&quot;&gt;
+  (() =&gt; {
+    for (const root of document.querySelectorAll(&quot;.viz-carousel&quot;)) {
+      const panels = Array.from(
+        root.querySelectorAll(&quot;:scope &gt; [data-variant]&quot;),
+      );
+      if (panels.length === 0) {
+        continue;
+      }
+      root.setAttribute(&quot;role&quot;, &quot;group&quot;);
+      panels.forEach((panel, index) =&gt; {
+        panel.hidden = index !== 0;
+        panel.setAttribute(&quot;role&quot;, &quot;group&quot;);
+        if (!panel.hasAttribute(&quot;aria-label&quot;)) {
+          panel.setAttribute(&quot;aria-label&quot;, panel.dataset.variant);
+        }
+      });
+      root.dataset.activeVariant = panels[0].dataset.variant;
+      if (panels.length === 1) {
+        continue;
+      }
+
+      const controls = document.createElement(&quot;div&quot;);
+      controls.className = &quot;viz-carousel-controls&quot;;
+      // Portable copy of the settings dropdown&#x27;s legacy glyph; no 14px icon-package preset matches it.
+      // https://github.com/openai/openai/blob/master/codex/codex-apps/webview/src/icons/chevron.svg
+      controls.innerHTML = `
+      &lt;button type=&quot;button&quot; class=&quot;viz-carousel-previous cursor-interaction&quot;&gt;&lt;i data-lucide=&quot;chevron-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+      &lt;details class=&quot;viz-carousel-picker&quot;&gt;
+        &lt;summary class=&quot;cursor-interaction&quot;&gt;
+          &lt;span class=&quot;viz-carousel-count tabular-nums&quot;&gt;&lt;/span&gt;
+          &lt;span class=&quot;viz-carousel-name&quot;&gt;&lt;/span&gt;
+          &lt;svg class=&quot;viz-carousel-caret&quot; width=&quot;14&quot; height=&quot;14&quot; viewBox=&quot;0 0 20 21&quot; fill=&quot;none&quot; aria-hidden=&quot;true&quot; focusable=&quot;false&quot;&gt;
+            &lt;path d=&quot;M15.2793 7.71101C15.539 7.45131 15.961 7.45131 16.2207 7.71101C16.4804 7.97071 16.4804 8.39272 16.2207 8.65242L10.4707 14.4024C10.211 14.6621 9.78902 14.6621 9.52932 14.4024L3.77932 8.65242L3.69436 8.54792C3.52385 8.28979 3.55205 7.93828 3.77932 7.71101C4.00659 7.48374 4.3581 7.45554 4.61623 7.62605L4.72073 7.71101L10 12.9903L15.2793 7.71101Z&quot; fill=&quot;currentColor&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;0.6&quot; /&gt;
+          &lt;/svg&gt;
+        &lt;/summary&gt;
+        &lt;div class=&quot;viz-carousel-options&quot;&gt;&lt;/div&gt;
+      &lt;/details&gt;
+      &lt;button type=&quot;button&quot; class=&quot;viz-carousel-next cursor-interaction&quot;&gt;&lt;i data-lucide=&quot;chevron-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;`;
+      const previous = controls.querySelector(&quot;.viz-carousel-previous&quot;);
+      const next = controls.querySelector(&quot;.viz-carousel-next&quot;);
+      const picker = controls.querySelector(&quot;.viz-carousel-picker&quot;);
+      const summary = picker.querySelector(&quot;summary&quot;);
+      const count = controls.querySelector(&quot;.viz-carousel-count&quot;);
+      const name = controls.querySelector(&quot;.viz-carousel-name&quot;);
+      const options = controls.querySelector(&quot;.viz-carousel-options&quot;);
+      const status = document.createElement(&quot;span&quot;);
+      status.className = &quot;sr-only&quot;;
+      status.setAttribute(&quot;role&quot;, &quot;status&quot;);
+      status.setAttribute(&quot;aria-live&quot;, &quot;polite&quot;);
+      status.setAttribute(&quot;aria-atomic&quot;, &quot;true&quot;);
+      previous.setAttribute(
+        &quot;aria-label&quot;,
+        root.dataset.previousLabel ?? &quot;Previous variant&quot;,
+      );
+      next.setAttribute(&quot;aria-label&quot;, root.dataset.nextLabel ?? &quot;Next variant&quot;);
+
+      let active = 0;
+      let mousePointerId = null;
+      let summaryPointerHandled = false;
+      summary.addEventListener(&quot;pointerdown&quot;, (event) =&gt; {
+        summaryPointerHandled =
+          event.pointerType === &quot;mouse&quot; &amp;&amp; event.button === 0 &amp;&amp; !event.ctrlKey;
+        if (!summaryPointerHandled) {
+          return;
+        }
+        event.preventDefault();
+        summary.focus({ preventScroll: true });
+        picker.open = !picker.open;
+        mousePointerId = picker.open ? event.pointerId : null;
+      });
+      summary.addEventListener(&quot;click&quot;, (event) =&gt; {
+        if (summaryPointerHandled &amp;&amp; event.detail &gt; 0) {
+          event.preventDefault();
+        }
+      });
+      const choices = panels.map((panel, index) =&gt; {
+        const choice = document.createElement(&quot;button&quot;);
+        choice.type = &quot;button&quot;;
+        choice.className = &quot;cursor-interaction&quot;;
+        choice.textContent = panel.dataset.variant;
+        choice.addEventListener(&quot;click&quot;, () =&gt; {
+          select(index);
+          summary.focus();
+        });
+        choice.addEventListener(&quot;pointerup&quot;, (event) =&gt; {
+          if (
+            picker.open &amp;&amp;
+            event.pointerType === &quot;mouse&quot; &amp;&amp;
+            event.button === 0 &amp;&amp;
+            event.pointerId === mousePointerId
+          ) {
+            choice.click();
+          }
+        });
+        options.appendChild(choice);
+        return choice;
+      });
+      const select = (index) =&gt; {
+        const changed = active !== index;
+        active = index;
+        panels.forEach((panel, position) =&gt; {
+          panel.hidden = position !== active;
+          choices[position].setAttribute(
+            &quot;aria-current&quot;,
+            String(position === active),
+          );
+        });
+        root.dataset.activeVariant = panels[active].dataset.variant;
+        count.textContent = `${active + 1} / ${panels.length}`;
+        name.textContent = panels[active].dataset.variant;
+        picker.open = false;
+        mousePointerId = null;
+        if (changed) {
+          status.textContent = `${count.textContent}: ${name.textContent}`;
+        }
+      };
+      previous.addEventListener(&quot;click&quot;, () =&gt;
+        select((active + panels.length - 1) % panels.length),
+      );
+      next.addEventListener(&quot;click&quot;, () =&gt;
+        select((active + 1) % panels.length),
+      );
+      picker.addEventListener(&quot;keydown&quot;, (event) =&gt; {
+        if (event.key === &quot;Escape&quot; &amp;&amp; picker.open) {
+          event.preventDefault();
+          picker.open = false;
+          mousePointerId = null;
+          summary.focus();
+          return;
+        }
+        if (event.altKey || event.ctrlKey || event.metaKey) {
+          return;
+        }
+        const index = choices.indexOf(document.activeElement);
+        let nextIndex;
+        if (event.key === &quot;ArrowDown&quot;) {
+          nextIndex = index &lt; 0 ? active : (index + 1) % choices.length;
+        } else if (event.key === &quot;ArrowUp&quot;) {
+          nextIndex = index &lt; 0 ? active : (index + choices.length - 1) % choices.length;
+        } else if (picker.open &amp;&amp; event.key === &quot;Home&quot;) {
+          nextIndex = 0;
+        } else if (picker.open &amp;&amp; event.key === &quot;End&quot;) {
+          nextIndex = choices.length - 1;
+        } else {
+          return;
+        }
+        event.preventDefault();
+        picker.open = true;
+        choices[nextIndex].focus();
+      });
+      picker.addEventListener(&quot;focusout&quot;, (event) =&gt; {
+        if (!picker.contains(event.relatedTarget)) {
+          picker.open = false;
+          mousePointerId = null;
+        }
+      });
+      const dismiss = (event) =&gt; {
+        if (!summary.contains(event.target)) {
+          mousePointerId = null;
+        }
+        if (!picker.contains(event.target)) {
+          picker.open = false;
+        }
+      };
+      const endPointerSelection = () =&gt; {
+        mousePointerId = null;
+      };
+      const sizePicker = () =&gt; {
+        root.style.setProperty(
+          &quot;--viz-carousel-picker-height&quot;,
+          `${picker.open ? options.offsetHeight : 0}px`,
+        );
+      };
+      picker.addEventListener(&quot;toggle&quot;, sizePicker);
+      window.addEventListener(&quot;resize&quot;, sizePicker);
+      document.addEventListener(&quot;pointerdown&quot;, dismiss);
+      document.addEventListener(&quot;pointerup&quot;, endPointerSelection);
+      document.addEventListener(&quot;pointercancel&quot;, endPointerSelection);
+      window.addEventListener(&quot;blur&quot;, endPointerSelection);
+      window.addEventListener(
+        &quot;pagehide&quot;,
+        () =&gt; {
+          document.removeEventListener(&quot;pointerdown&quot;, dismiss);
+          document.removeEventListener(&quot;pointerup&quot;, endPointerSelection);
+          document.removeEventListener(&quot;pointercancel&quot;, endPointerSelection);
+          window.removeEventListener(&quot;blur&quot;, endPointerSelection);
+          window.removeEventListener(&quot;resize&quot;, sizePicker);
+        },
+        { once: true },
+      );
+      root.append(controls, status);
+      select(0);
+    }
+  })();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+
+<script>(() => {
+  const frame = document.getElementById("codex-visualization");
+  if (!(frame instanceof HTMLIFrameElement)) {
+    return;
+  }
+  const isShare = document.documentElement.classList.contains(
+    "visualization-share-root",
+  );
+  let viewportHeight = globalThis.innerHeight;
+  let sizeFingerprint = null;
+  let sizeWriteTimeout;
+  let lastSize = null;
+  let pendingSize = null;
+  const storageKey = `codex:visualization-widget-state-v2:${JSON.stringify([
+    globalThis.location.pathname,
+    globalThis.location.search,
+  ])}`;
+  const sizeStorageKey = `${storageKey}:share-size-v1`;
+  const parseState = (serializedState) => {
+    if (
+      typeof serializedState !== "string" ||
+      new TextEncoder().encode(serializedState).length > 16 * 1024
+    ) {
+      throw new TypeError(
+        "Widget state must be a JSON object of at most 16 KiB",
+      );
+    }
+    /** @type {unknown} */
+    const state = JSON.parse(serializedState);
+    if (
+      state == null ||
+      typeof state !== "object" ||
+      Array.isArray(state) ||
+      ("imageIds" in state &&
+        (!Array.isArray(state.imageIds) || state.imageIds.length > 0))
+    ) {
+      throw new TypeError("Widget state must be a JSON object");
+    }
+    const storedState = { modelContent: null, privateContent: null, ...state };
+    const canonicalState = JSON.stringify(
+      storedState,
+      (_key, /** @type {unknown} */ value) => {
+        if (typeof value === "number" && !Number.isFinite(value)) {
+          throw new TypeError("Widget state must contain finite numbers");
+        }
+        return value;
+      },
+    );
+    if (new TextEncoder().encode(canonicalState).length > 16 * 1024) {
+      throw new TypeError(
+        "Widget state must be a JSON object of at most 16 KiB",
+      );
+    }
+    return storedState;
+  };
+  let storage = null;
+  let state = null;
+  try {
+    const localStorage = globalThis.localStorage;
+    const probeKey = `${storageKey}:probe`;
+    localStorage.setItem(probeKey, "1");
+    localStorage.removeItem(probeKey);
+    storage = localStorage;
+    const savedState = storage.getItem(storageKey);
+    if (savedState != null) {
+      try {
+        state = parseState(savedState);
+      } catch {
+        // Invalid saved state does not disable future writes.
+      }
+    }
+  } catch {
+    storage = null;
+  }
+  const persistSize = () => {
+    globalThis.clearTimeout(sizeWriteTimeout);
+    if (pendingSize == null) {
+      return;
+    }
+    try {
+      storage?.setItem(sizeStorageKey, pendingSize);
+    } catch {
+      // A denied or full cache must not affect the visualization.
+    }
+    pendingSize = null;
+  };
+  if (isShare) {
+    globalThis.addEventListener("pagehide", persistSize);
+  }
+  const initialGlobals = {
+    widgetState: state,
+    statePersistence: storage == null ? "none" : "local",
+  };
+
+  const channel = new MessageChannel();
+  channel.port1.addEventListener("message", (event) => {
+    const data = event.data;
+    if (typeof data !== "object" || data == null) {
+      return;
+    }
+    if (data.type === "widget-state-write") {
+      if (!Number.isSafeInteger(data.id) || data.id <= 0) {
+        return;
+      }
+      let ok = false;
+      try {
+        if (storage != null) {
+          const state = parseState(data.state);
+          storage.setItem(storageKey, JSON.stringify(state));
+          ok = true;
+        }
+      } catch {
+        // Storage denial, quota limits, and invalid state return a failed receipt.
+      }
+      channel.port1.postMessage({
+        type: "widget-state-result",
+        id: data.id,
+        ok,
+      });
+      return;
+    }
+    if (data.type === "height") {
+      const height = data.height;
+      if (
+        typeof height !== "number" ||
+        !Number.isFinite(height) ||
+        height < 0
+      ) {
+        return;
+      }
+      if (height <= 10_000) {
+        const width = isShare && storage != null ? frame.clientWidth : null;
+        frame.style.height = Math.ceil(height) + "px";
+        if (isShare && storage != null) {
+          const size = JSON.stringify({
+            fingerprint: sizeFingerprint,
+            width,
+            viewportHeight: globalThis.innerHeight,
+            dark: globalThis.matchMedia("(prefers-color-scheme: dark)").matches,
+            scale: globalThis.devicePixelRatio,
+            height: Math.ceil(height),
+          });
+          if (size !== lastSize) {
+            lastSize = size;
+            pendingSize = size;
+            globalThis.clearTimeout(sizeWriteTimeout);
+            sizeWriteTimeout = globalThis.setTimeout(persistSize, 100);
+          }
+        }
+      }
+      if (isShare) {
+        // Keep unusually tall content accessible without accepting an unbounded height.
+        if (height > 10_000 && Number.parseFloat(frame.style.height) === 0) {
+          frame.style.removeProperty("height");
+        }
+        frame.scrolling = height > 10_000 ? "auto" : "no";
+        document.documentElement.classList.add("visualization-share-ready");
+      }
+      return;
+    }
+    if (data.type === "scroll-to") {
+      const top = data.top;
+      if (
+        typeof top === "number" &&
+        Number.isFinite(top) &&
+        top >= 0 &&
+        globalThis.navigator.userActivation?.isActive === true
+      ) {
+        globalThis.scrollTo({
+          top: Math.ceil(
+            globalThis.scrollY + frame.getBoundingClientRect().top + top,
+          ),
+        });
+      }
+      return;
+    }
+    if (data.type === "open-external") {
+      const rawHref = data.href;
+      if (typeof rawHref !== "string") {
+        return;
+      }
+      let href;
+      try {
+        const url = new URL(rawHref, document.baseURI);
+        if (url.protocol !== "https:") {
+          return;
+        }
+        href = url.href;
+      } catch {
+        return;
+      }
+      if (globalThis.navigator.userActivation?.isActive === true) {
+        const anchor = document.createElement("a");
+        anchor.href = href;
+        anchor.rel = "noopener noreferrer";
+        anchor.target = "_blank";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }
+      return;
+    }
+    if (data.type === "follow-up") {
+      const prompt = data.prompt;
+      if (
+        typeof prompt !== "string" ||
+        globalThis.navigator.userActivation?.isActive !== true
+      ) {
+        return;
+      }
+      const title = data.title;
+      globalThis.prompt(typeof title === "string" ? title : prompt, prompt);
+    }
+  });
+  channel.port1.start();
+  const srcdoc = frame.dataset.srcdoc;
+  if (srcdoc == null) {
+    return;
+  }
+  globalThis.addEventListener("resize", () => {
+    const height = Number.parseFloat(frame.style.height);
+    if (!isShare && (!Number.isFinite(height) || height <= viewportHeight)) {
+      frame.style.removeProperty("height");
+    }
+    viewportHeight = globalThis.innerHeight;
+    channel.port1.postMessage({ type: "measure" });
+  });
+  frame.addEventListener(
+    "load",
+    () => {
+      frame.contentWindow?.postMessage(
+        { type: "codex-visualization-initialize" },
+        "*",
+        [channel.port2],
+      );
+    },
+    { once: true },
+  );
+  // Match the trusted bootstrap element, not the same text in an authored title.
+  const frameHtml = srcdoc.replace(
+    '<script type="application/json" id="codex-visualization-widget-state">__CODEX_VISUALIZATION_WIDGET_STATE__<\/script>',
+    () =>
+      '<script type="application/json" id="codex-visualization-widget-state">' +
+      JSON.stringify(initialGlobals).replaceAll("<", "\\u003c") +
+      "<\/script>",
+  );
+  if (isShare && storage != null) {
+    // Fingerprint the rendered document, including restored widget state, without
+    // storing its content. This is a layout cache, not a security identity.
+    let hash = 5381;
+    for (let index = 0; index < frameHtml.length; index += 1) {
+      hash = (hash * 33 + frameHtml.charCodeAt(index)) % 4_294_967_296;
+    }
+    sizeFingerprint = hash.toString(36);
+    try {
+      const size = JSON.parse(storage.getItem(sizeStorageKey) ?? "null");
+      if (
+        size?.fingerprint === sizeFingerprint &&
+        size.width === frame.clientWidth &&
+        size.viewportHeight === globalThis.innerHeight &&
+        size.dark ===
+          globalThis.matchMedia("(prefers-color-scheme: dark)").matches &&
+        size.scale === globalThis.devicePixelRatio &&
+        typeof size.height === "number" &&
+        Number.isFinite(size.height) &&
+        size.height >= 0 &&
+        size.height <= 10_000
+      ) {
+        frame.style.height = size.height + "px";
+      }
+    } catch {
+      // Ignore missing or invalid cache entries and measure the live frame.
+    }
+  }
+  frame.srcdoc = frameHtml;
+  delete frame.dataset.srcdoc;
+})();
+</script>
+</body>
+</html>
