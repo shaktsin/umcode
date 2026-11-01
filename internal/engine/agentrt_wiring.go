@@ -176,12 +176,25 @@ func (e *Engine) cancelledIntegrationReport(ctx context.Context, taskID string) 
 		report.Message = "The integration state could not be read (" + err.Error() + "). Applied agent work, if any, stays staged in the project checkout; nothing was reverted. Agent workspaces are retained."
 		return report, nil
 	}
+	amendReason := ""
+	if st.Amendments > 0 {
+		if h, headErr := e.Store.AgentIntegrationHead(ctx, taskID); headErr == nil {
+			amendReason = h.AmendReason
+		}
+	}
+	fillIntegrationReport(report, st, amendReason, true)
+	return report, nil
+}
+
+// fillIntegrationReport fills report from an integration status. A revision
+// left applying is a blocked agent only when applyingBlocked (the task is
+// over, so nothing will finish it); otherwise its apply is still in progress
+// and it is listed nowhere.
+func fillIntegrationReport(report *protocol.AgentIntegrationReport, st delegation.RuntimeIntegrationStatus, amendReason string, applyingBlocked bool) {
 	report.HeadTree, report.AppliedCount, report.Verified = st.HeadTree, st.AppliedCount, st.Verified
 	if st.Amendments > 0 {
 		report.Amendments = st.Amendments
-		if h, headErr := e.Store.AgentIntegrationHead(ctx, taskID); headErr == nil {
-			report.AmendReason = h.AmendReason
-		}
+		report.AmendReason = amendReason
 	}
 	for _, r := range st.Revisions {
 		switch r.State {
@@ -189,14 +202,102 @@ func (e *Engine) cancelledIntegrationReport(ctx context.Context, taskID string) 
 			report.Applied = append(report.Applied, r.AgentID)
 		case store.RevisionApplying:
 			// Not settled by the reconcile: the checkout may hold part of it.
-			report.BlockedAgents = append(report.BlockedAgents, r.AgentID)
+			if applyingBlocked {
+				report.BlockedAgents = append(report.BlockedAgents, r.AgentID)
+			}
 		case store.RevisionDropped:
 		default:
 			report.Unintegrated = append(report.Unintegrated, r.AgentID)
 		}
 	}
 	report.Message = integrationReportMessage(report)
+}
+
+// cancelRuntimeAgent cancels one runtime agent of a task, with its
+// descendants, as the lead: the call cancelRuntimeAgents makes per top-level
+// agent, so shares return to the ledger and applied work stays staged. An
+// agent whose whole subtree is already terminal is left alone (an idempotent
+// no-op). It returns an integration report only when the cancel changed the
+// task's integration state, that is when a revision the subtree had recorded
+// no longer needs a lead decision because its agent ended cancelled; the
+// report is read from storage only (no reconcile, no Git, no task lock), as
+// the task itself goes on.
+func (e *Engine) cancelRuntimeAgent(ctx context.Context, taskID, id string) (*protocol.AgentIntegrationReport, error) {
+	all, err := e.Store.RuntimeAgents(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list runtime agents: %w", err)
+	}
+	if !liveRuntimeSubtree(all, id) {
+		return nil, nil
+	}
+	before, _, _, err := e.settledRuntimeRevisions(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if err = e.AgentRuntime.Cancel(ctx, taskID, "", id); err != nil {
+		return nil, err
+	}
+	after, st, h, err := e.settledRuntimeRevisions(ctx, taskID)
+	if err != nil || after == before {
+		// The cancel itself succeeded; a status read failure only loses the
+		// report; the next integration event or delegation/list shows it.
+		return nil, nil
+	}
+	report := &protocol.AgentIntegrationReport{}
+	fillIntegrationReport(report, st, h.AmendReason, false)
 	return report, nil
+}
+
+// settledRuntimeRevisions counts the task's revisions that need no lead
+// decision (delegation.RevisionSettled), from storage only.
+func (e *Engine) settledRuntimeRevisions(ctx context.Context, taskID string) (int, delegation.RuntimeIntegrationStatus, store.AgentIntegrationHead, error) {
+	svc := e.DelegationWorkspaceService
+	if svc == nil {
+		return 0, delegation.RuntimeIntegrationStatus{}, store.AgentIntegrationHead{}, nil
+	}
+	agents, err := e.Store.RuntimeAgents(ctx, taskID)
+	if err != nil {
+		return 0, delegation.RuntimeIntegrationStatus{}, store.AgentIntegrationHead{}, err
+	}
+	st, h, _, err := svc.ReadRuntimeIntegration(ctx, taskID, agents)
+	if err != nil {
+		return 0, st, h, err
+	}
+	cancelled := map[string]bool{}
+	for _, a := range agents {
+		cancelled[a.ID] = a.State == protocol.AgentStateCancelled
+	}
+	n := 0
+	for _, r := range st.Revisions {
+		if delegation.RevisionSettled(r, cancelled[r.AgentID]) {
+			n++
+		}
+	}
+	return n, st, h, nil
+}
+
+// liveRuntimeSubtree reports whether id or one of its descendants is not
+// terminal yet.
+func liveRuntimeSubtree(all []protocol.RuntimeAgent, id string) bool {
+	in := map[string]bool{id: true}
+	for changed := true; changed; {
+		changed = false
+		for _, a := range all {
+			if !in[a.ID] && a.ParentAgentID != "" && in[a.ParentAgentID] {
+				in[a.ID], changed = true, true
+			}
+		}
+	}
+	for _, a := range all {
+		if in[a.ID] {
+			switch a.State {
+			case protocol.AgentStateCompleted, protocol.AgentStateFailed, protocol.AgentStateCancelled, protocol.AgentStateInterrupted:
+			default:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func integrationReportMessage(r *protocol.AgentIntegrationReport) string {

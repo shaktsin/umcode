@@ -84,5 +84,12 @@ func (e *Engine) ReadDelegationFile(ctx context.Context, p protocol.DelegationFi
 	if _, err := e.ownedDelegation(ctx, p.ThreadID, p.TaskID); err != nil {
 		return protocol.ProjectReadFileResult{}, err
 	}
+	// A runtime agent reads from its own retained workspace; anything else
+	// keeps the legacy child lookup (and its not-found error).
+	if _, err := e.Store.RuntimeAgent(ctx, p.TaskID, p.ChildID); err == nil {
+		return e.DelegationWorkspaceService.ReadRuntimeSnapshotFile(ctx, p.TaskID, p.ChildID, p.Revision, p.Path)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return protocol.ProjectReadFileResult{}, err
+	}
 	return e.DelegationWorkspaceService.ReadSnapshotFile(ctx, p.TaskID, p.ChildID, p.Revision, p.Path)
 }
