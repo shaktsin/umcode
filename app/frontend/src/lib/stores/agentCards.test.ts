@@ -62,3 +62,10 @@ it('refresh failures set error, keep prior state and never expose an actionable 
   reply = sug('pending'); await c.refreshSuggestion('s'); expect(c.suggestionActionable('s')).toBe(true);
   reply = sug('declined'); await c.refreshSuggestion('s'); expect(c.suggestionActionable('s')).toBe(false);
 });
+
+it('onPlanUpdated without approvalStatus reads the plan back; with one it does not', async () => {
+  const c = new AgentCards(); call.mockReset(); call.mockResolvedValue({ plan: proposed, approvalStatus: 'pending', card: { planId: 'p1' } });
+  c.onPlanUpdated({ plan: proposed }); expect(c.planActionable('p1')).toBe(false);
+  await new Promise(r => setTimeout(r)); expect(call).toHaveBeenCalledWith('agent/plan/get', { planId: 'p1' }); expect(c.planActionable('p1')).toBe(true);
+  call.mockClear(); c.onPlanUpdated({ plan: proposed, approvalStatus: 'pending' });
+});

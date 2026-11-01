@@ -10,11 +10,14 @@ export interface ApprovalRecord {
   decision: ApprovalDecision;
 }
 
-/** The approval the dock shows: this thread's own requests (not agent children's), oldest first. */
+/**
+ * The approval the dock shows: this thread's own requests (not agent children's), oldest first.
+ * An agent_plan approval is answered by the plan card inline on its agent.propose_plan item, so it is never docked.
+ */
 export function dockState(approvals: Approval[], threadId: string | null): { current: Approval | null; total: number } {
   if (!threadId) return { current: null, total: 0 };
   const mine = approvals
-    .filter((a) => a.threadId === threadId && !a.agentChildId)
+    .filter((a) => a.threadId === threadId && !a.agentChildId && a.kind !== 'agent_plan')
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   return { current: mine[0] ?? null, total: mine.length };
 }
