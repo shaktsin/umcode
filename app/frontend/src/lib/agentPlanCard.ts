@@ -29,34 +29,62 @@ export function planIdForItem(item: Item, approvals: Approval[]): string | undef
 
 export const modelUsable = (m: PlanCardModel) => m.toolsOk && m.available;
 
+/**
+ * Plan limit ceilings: tools.MaxPlanConcurrent / MaxPlanDepth / MaxPlanTotal / MaxPlanSliceShare
+ * (internal/tools/agentrt.go) as applied by clampPlanLimits (internal/engine/agentrt_plan.go).
+ * The card's own limits are the lead's proposal and only the defaults.
+ */
+export const PLAN_CEILINGS = { maxConcurrent: 8, maxDepth: 3, maxTotal: 40, sliceShare: 0.5 } as const;
+
 export interface PlanEdits { models: Record<string, string>; dropped: string[]; limits: Partial<PlanLimits>; }
 export interface PlanDraft { models: Record<string, string>; dropped: string[]; limits: PlanLimits; }
 export const noEdits = (): PlanEdits => ({ models: {}, dropped: [], limits: {} });
 
-/** The model an entry starts on: its own (when usable), else the previous plan's assignment of the same name. */
+/**
+ * What the select shows and Approve keeps: the entry's own model (even when unusable, so the user sees it),
+ * else the previous plan's assignment of the same name when usable, else '' (the chat model).
+ */
 export function defaultModel(card: PlanCard, a: PlanCardAgent): string {
+  if (a.model) return a.model;
   const usable = new Set((card.models ?? []).filter(modelUsable).map(m => m.name));
-  if (a.model && usable.has(a.model)) return a.model;
   const prev = (card.previous ?? []).find(p => p.name.toLowerCase() === a.name.toLowerCase());
   return prev && usable.has(prev.model) ? prev.model : '';
 }
 
-/** Keeps each limit within the card's ceilings. */
-export function clampLimits(l: PlanLimits, ceiling: PlanLimits): PlanLimits {
-  const int = (v: number, max: number) => Math.max(1, Math.min(Math.floor(Number.isFinite(v) ? v : 1), Math.max(1, max)));
-  const share = Number.isFinite(l.sliceShare) ? Math.min(Math.max(l.sliceShare, 0.01), ceiling.sliceShare) : ceiling.sliceShare;
-  return { maxConcurrent: int(l.maxConcurrent, ceiling.maxConcurrent), maxDepth: int(l.maxDepth, ceiling.maxDepth), maxTotal: int(l.maxTotal, ceiling.maxTotal), sliceShare: share, network: ceiling.network && l.network };
+/** The entry's own model when it is not an exact pool name: shown as a disabled option so the select never lies. */
+export const modelOutsidePool = (card: PlanCard, a: PlanCardAgent) => !!a.model && !(card.models ?? []).some(m => m.name === a.model);
+
+/**
+ * Bounds each limit to the protocol ceilings. The card does not say whether the project allows network,
+ * so the network box can only lower a plan that already has it, never turn it on.
+ */
+export function clampLimits(l: PlanLimits, proposedNetwork: boolean): PlanLimits {
+  const int = (v: number, max: number) => Math.max(1, Math.min(Math.floor(Number.isFinite(v) ? v : 1), max));
+  const share = Number.isFinite(l.sliceShare) ? Math.min(Math.max(l.sliceShare, 0.01), PLAN_CEILINGS.sliceShare) : PLAN_CEILINGS.sliceShare;
+  return { maxConcurrent: int(l.maxConcurrent, PLAN_CEILINGS.maxConcurrent), maxDepth: int(l.maxDepth, PLAN_CEILINGS.maxDepth), maxTotal: int(l.maxTotal, PLAN_CEILINGS.maxTotal), sliceShare: share, network: proposedNetwork && l.network };
+}
+
+/** An empty or invalid field is "unchanged": it keeps the last valid value instead of becoming 1. */
+export function applyLimit(edits: PlanEdits, key: 'maxConcurrent' | 'maxDepth' | 'maxTotal' | 'sliceShare', v: number): PlanEdits {
+  const limits = { ...edits.limits };
+  if (Number.isFinite(v)) limits[key] = v;
+  return { ...edits, limits };
 }
 
 export function draftOf(card: PlanCard, edits: PlanEdits): PlanDraft {
   const models: Record<string, string> = {};
   for (const a of card.agents) models[a.name] = a.name in edits.models ? edits.models[a.name] : defaultModel(card, a);
-  return { models, dropped: edits.dropped.filter(n => card.agents.some(a => a.name === n)), limits: clampLimits({ ...card.limits, ...edits.limits }, card.limits) };
+  return { models, dropped: edits.dropped.filter(n => card.agents.some(a => a.name === n)), limits: clampLimits({ ...card.limits, ...edits.limits }, card.limits.network) };
 }
 
 export const kept = (card: PlanCard, d: PlanDraft) => card.agents.filter(a => !d.dropped.includes(a.name));
-/** Approve needs at least one agent left. */
-export const canApprove = (card: PlanCard, d: PlanDraft) => kept(card, d).length > 0;
+/** maxTotal below the kept agents cannot hold the plan: flagged, and Approve stays disabled (maxConcurrent may legitimately be lower). */
+export function limitsError(card: PlanCard, d: PlanDraft): string {
+  const n = kept(card, d).length;
+  return n > 0 && d.limits.maxTotal < n ? `Max agents (${d.limits.maxTotal}) is below the ${n} kept agents. Raise it or drop agents.` : '';
+}
+/** Approve needs at least one agent left and limits that hold them. */
+export const canApprove = (card: PlanCard, d: PlanDraft) => kept(card, d).length > 0 && !limitsError(card, d);
 
 const sameLimits = (a: PlanLimits, b: PlanLimits) => a.maxConcurrent === b.maxConcurrent && a.maxDepth === b.maxDepth && a.maxTotal === b.maxTotal && a.sliceShare === b.sliceShare && a.network === b.network;
 

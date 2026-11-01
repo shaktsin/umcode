@@ -47,8 +47,25 @@ it('the previous assignment preselects the entry model', () => {
 });
 it('limits inputs are bounded by the ceilings', () => {
   const body = html(view());
-  expect(body).toMatch(/max="4"[^>]*value="4"/); expect(body).toMatch(/max="2"[^>]*value="2"/); expect(body).toMatch(/max="10"[^>]*value="10"/); expect(body).toMatch(/max="0.5"/);
+  expect(body).toMatch(/max="8"[^>]*value="4"/); expect(body).toMatch(/max="3"[^>]*value="2"/); expect(body).toMatch(/max="40"[^>]*value="10"/); expect(body).toMatch(/max="0.5"/);
   expect(body).not.toContain('Allow network for agents');
+});
+it('offers the chat-model default only for entries without a model and shows an out-of-pool model explicitly', () => {
+  const noModel = html(view());
+  expect(noModel).toContain('Chat model (default)');
+  const withModel = { ...card, agents: [{ ...card.agents[0], model: 'z/gone' }, { ...card.agents[1], model: 'a/one' }] };
+  const body = html(view({ card: withModel }));
+  expect(body).not.toContain('Chat model (default)');
+  expect(body).toMatch(/<option value="z\/gone"[^>]*disabled[^>]*selected|<option value="z\/gone"[^>]*selected[^>]*disabled/);
+  expect(body).toContain('z/gone (not in pool)');
+});
+it('flags maxTotal below the kept agents and disables Approve', () => {
+  const body = html(view({ card: { ...card, limits: { ...limits, maxTotal: 1 } } }));
+  expect(body).toContain('below the 2 kept agents'); expect(body).toMatch(/disabled[^>]*>Approve 2 agents</);
+});
+it('each Drop button has a unique accessible name', () => {
+  const body = html(view());
+  expect(body).toContain('aria-label="Drop Builder"'); expect(body).toContain('aria-label="Drop Reader"');
 });
 it('has Drop per agent, Approve, Decline and Revise (disabled without feedback) while pending', () => {
   const body = html(view());
