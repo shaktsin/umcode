@@ -6,7 +6,7 @@
   import { parseSuggestionResult } from '$lib/agentPlanCard';
   import { errMsg } from '$lib/format';
 
-  let { item, view }: { item: Item; view: Pick<ThreadView, 'cards' | 'answerSuggestion' | 'queuedFollowUp'> } = $props();
+  let { item, view }: { item: Item; view: Pick<ThreadView, 'cards' | 'answerSuggestion' | 'queuedFollowUp' | 'followUpError'> } = $props();
   const suggestionId = $derived(parseSuggestionResult(item.tool?.output)?.suggestionId ?? '');
   const reason = $derived((item.tool?.args as { reason?: string } | null)?.reason ?? '');
   const sug = $derived(suggestionId ? view.cards.suggestion(suggestionId) : undefined);
@@ -39,5 +39,6 @@
     </div>
   {/if}
   {#if view.queuedFollowUp}<p class="mt-1.5 text-muted" role="status">Waiting for the current turn to finish, then agents continue.</p>{/if}
+  {#if view.followUpError}<p class="mt-1.5 text-rust" role="alert">{view.followUpError}</p>{/if}
   {#if error || view.cards.error}<p class="mt-1.5 text-rust" role="alert">{error || view.cards.error}</p>{/if}
 </section>

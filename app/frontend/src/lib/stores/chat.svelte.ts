@@ -34,7 +34,11 @@ export class ThreadView {
   delegation = new DelegationState();
   cards = new AgentCards();
   /** Follow-up text for an answered suggestion, waiting for the suggesting turn to finish. */
-  queuedFollowUp = $state<string | null>(null);
+  private queued = $state<{ threadId: string | null; text: string } | null>(null);
+  /** Shown on the card of the thread that queued it only. */
+  get queuedFollowUp(): string | null { return this.queued && this.queued.threadId === this.id ? this.queued.text : null; }
+  /** Why a queued follow-up was dropped (for example an expired activation). */
+  followUpError = $state('');
   id = $state<string | null>(null);
   thread = $state<Thread | null>(null);
   turns = $state<Turn[]>([]);
@@ -63,6 +67,7 @@ export class ThreadView {
   }
 
   reset() {
+    this.queued = null; this.followUpError = '';
     void this.delegation.bind(null);
     this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();
     this.id = null;
@@ -77,7 +82,7 @@ export class ThreadView {
   }
 
   async load(id: string) {
-    if (this.id !== id) {this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();void this.delegation.bind(id);}
+    if (this.id !== id) {this.queued = null; this.followUpError = '';this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();void this.delegation.bind(id);}
     this.id = id;
     this.loading = true;
     const compactionVersion=this.compactionVersion;
@@ -94,6 +99,7 @@ export class ThreadView {
       this.items = (r.items ?? []).sort((a, b) => a.seq - b.seq);
       this.selection = { ...(r.thread.settings ?? {}) };
       this.sending = this.turns.some((t) => t.status === 'running');
+      this.drainQueue();
       void this.loadRoute();
     } catch (e) {
       app.toast('error', errMsg(e));
@@ -117,7 +123,15 @@ export class ThreadView {
     if (i >= 0) this.turns[i] = t;
     else this.turns = [...this.turns, t];
     if (t.status !== 'running') this.sending = this.turns.some((x) => x.status === 'running');
-    if (t.status !== 'running' && this.queuedFollowUp && !this.running) { const text = this.queuedFollowUp; this.queuedFollowUp = null; void this.submitFollowUp(text); }
+    if (t.status !== 'running') this.drainQueue();
+  }
+
+  /** Submits a follow-up queued by this thread once none of its turns is running (also after a reload that finds the turn done). */
+  private drainQueue() {
+    const q = this.queued;
+    if (!q || q.threadId !== this.id || this.running) return;
+    this.queued = null;
+    void this.submitFollowUp(q.text);
   }
 
   applyItem(it: Item) {
@@ -189,8 +203,15 @@ export class ThreadView {
 
   /** Starts the follow-up turn now, or queues it while the suggesting turn is still running (the token stays held). */
   async submitFollowUp(text: string) {
-    if (this.running) { this.queuedFollowUp = text; return; }
-    this.queuedFollowUp = null;
+    this.followUpError = '';
+    if (this.running) { this.queued = { threadId: this.id, text }; return; }
+    this.queued = null;
+    const held = this.delegation.token;
+    if (held && Date.parse(held.expiresAt) <= Date.now()) {
+      this.delegation.token = null;
+      this.followUpError = 'Activation expired — enable agents again.';
+      return;
+    }
     await this.send(text);
   }
 
