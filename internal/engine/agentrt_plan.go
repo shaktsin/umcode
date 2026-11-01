@@ -206,8 +206,12 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 		}{planDeclined, planDeclinedMessage})
 	}
 	// Approved: bind the plan to the task (idempotent if the decision
-	// already did). A plan superseded meanwhile is never approved.
-	if err = e.bindApprovedPlan(sctx, plan.ID, task.ID); err != nil {
+	// already did; it retries one that failed there). A plan superseded
+	// meanwhile is never approved.
+	e.agentPlanMu.Lock()
+	err = e.bindApprovedPlan(sctx, plan.ID, task.ID)
+	e.agentPlanMu.Unlock()
+	if err != nil {
 		if errors.Is(err, errPlanSuperseded) {
 			return "", fmt.Errorf("agent.propose_plan: %w; answer the newer plan card", errPlanSuperseded)
 		}
@@ -217,8 +221,7 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 	if err != nil {
 		return "", err
 	}
-	// respondAgentPlan, the only path that approves a plan card, announced
-	// the approved plan.
+	// The bind that approved the plan announced it.
 	approved := planCardFor(stored, pool, lead, opts, nil)
 	type agentOut struct {
 		Name     string                         `json:"name"`
@@ -243,6 +246,13 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 // again in the chat. It reports whether the task was closed; a failure is
 // logged and leaves the task as it was (the user can still cancel it).
 func (e *Engine) closeEmptyRuntimeTask(ctx context.Context, taskID string) bool {
+	return e.closeEmptyRuntimeTaskIf(ctx, taskID, false)
+}
+
+// closeEmptyRuntimeTaskIf is closeEmptyRuntimeTask; with keepProposed a task
+// that still has a proposed plan (a revised card the lead may answer later)
+// is kept as well.
+func (e *Engine) closeEmptyRuntimeTaskIf(ctx context.Context, taskID string, keepProposed bool) bool {
 	e.delegationWorkflowMu.Lock()
 	defer e.delegationWorkflowMu.Unlock()
 	// Held across the completion: no new card can be registered meanwhile
@@ -260,6 +270,11 @@ func (e *Engine) closeEmptyRuntimeTask(ctx context.Context, taskID string) bool 
 	}
 	if _, err = e.Store.ApprovedAgentPlanForTask(ctx, taskID); !errors.Is(err, store.ErrNotFound) {
 		return false
+	}
+	if keepProposed {
+		if proposed, err := e.Store.HasProposedAgentPlan(ctx, taskID); err != nil || proposed {
+			return false
+		}
 	}
 	if agents, err := e.Store.RuntimeAgents(ctx, taskID); err != nil || len(agents) > 0 {
 		return false
@@ -776,8 +791,7 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 	if err != nil {
 		return res, none, err
 	}
-	// The one approved announcement (the waiting tool does not repeat it).
-	e.publishAgentPlan(stored, decided.Status)
+	// bindApprovedPlan made the one approved announcement.
 	return done(stored, decided)
 }
 
@@ -981,12 +995,36 @@ func poolCanRun(pool []modelRoute, needs agentNeeds) bool {
 }
 
 // bindApprovedPlan approves a plan whose card was approved and binds it to
-// its task; idempotent. A plan superseded meanwhile is refused with
-// errPlanSuperseded, one approved for another task with "plan already
-// decided".
+// its task; idempotent. The bind that moves the plan from proposed to
+// approved is the single place that announces agent/plan/updated approved,
+// whichever caller (the decision or the waiting tool, retrying a bind that
+// failed) gets there; the caller holds agentPlanMu, so no two binds race. A
+// plan superseded meanwhile is refused with errPlanSuperseded, one approved
+// for another task with "plan already decided".
 func (e *Engine) bindApprovedPlan(ctx context.Context, planID, taskID string) error {
-	err := e.Store.ApproveAgentPlan(ctx, planID, taskID)
-	if err == nil || !(errors.Is(err, store.ErrAgentConflict) || errors.Is(err, store.ErrAgentTransition)) {
+	if e.planBindHook != nil {
+		if err := e.planBindHook(planID); err != nil {
+			return err
+		}
+	}
+	before, err := e.Store.AgentPlan(ctx, planID)
+	if err != nil {
+		return err
+	}
+	err = e.Store.ApproveAgentPlan(ctx, planID, taskID)
+	if err == nil {
+		if before.State == protocol.PlanProposed {
+			stored, gerr := e.Store.AgentPlan(ctx, planID)
+			if gerr != nil {
+				stored = before
+				stored.State, stored.TaskID = protocol.PlanApproved, taskID
+			}
+			// A plan is bound only after its card was approved.
+			e.publishAgentPlan(stored, "approved")
+		}
+		return nil
+	}
+	if !(errors.Is(err, store.ErrAgentConflict) || errors.Is(err, store.ErrAgentTransition)) {
 		return err
 	}
 	cur, gerr := e.Store.AgentPlan(ctx, planID)

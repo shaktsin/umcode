@@ -25,6 +25,8 @@ type planEnv struct {
 	task  protocol.AgentTask
 	lead  context.Context
 	seams *shellSeams
+	// endTurn ends the fixture's live activated turn and waits for it.
+	endTurn func()
 }
 
 // planFixture admits a runtime_v2 delegation task without any plan and
@@ -39,13 +41,14 @@ func planFixture(t *testing.T) planEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: activation.ActivationToken})
+	// The plan is proposed inside the activated turn, which stays running.
+	turn, endTurn := liveAdmittedTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: activation.ActivationToken})
 	task, err := e.Store.AgentTask(t.Context(), p.last())
 	if err != nil {
 		t.Fatal(err)
 	}
 	lead := tools.WithScope(withDelegationTask(context.WithValue(t.Context(), executionTurnKey{}, turn), task), &tools.Scope{ThreadID: th.ID, ProjectID: th.ProjectID, Root: root})
-	return planEnv{e: e, th: th, root: root, turn: turn, task: task, lead: lead, seams: seams}
+	return planEnv{e: e, th: th, root: root, turn: turn, task: task, lead: lead, seams: seams, endTurn: endTurn}
 }
 
 func (env planEnv) tool(t *testing.T) tools.Tool {
@@ -574,6 +577,9 @@ func TestProposePlanBlocksUntilDecision(t *testing.T) {
 			}
 			return textReply("planned")
 		}
+		// This subtest runs its own activated turn: end the fixture's (its
+		// empty task closes with it).
+		env.endTurn()
 		activation, err := env.e.PrepareDelegation(t.Context(), env.th.ID)
 		if err != nil {
 			// The fixture's task is still active: finish it first.

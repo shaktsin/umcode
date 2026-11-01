@@ -315,6 +315,14 @@ func (s *Store) ApprovedAgentPlanForTask(ctx context.Context, taskID string) (pr
 	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE task_id=? AND state=? ORDER BY approved_at DESC,rowid DESC LIMIT 1`, taskID, protocol.PlanApproved))
 }
 
+// HasProposedAgentPlan reports whether a task has a plan that is still
+// proposed (its card pending, revised, or declined without closing the task).
+func (s *Store) HasProposedAgentPlan(ctx context.Context, taskID string) (bool, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM agent_plans WHERE task_id=? AND state=?`, taskID, protocol.PlanProposed).Scan(&n)
+	return n > 0, err
+}
+
 // AgentPlan returns one plan by ID, whatever its state.
 func (s *Store) AgentPlan(ctx context.Context, id string) (protocol.AgentPlan, error) {
 	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE id=?`, id))

@@ -81,7 +81,8 @@ func runtimeV2Admitted(t *testing.T) (*Engine, protocol.Thread, protocol.Turn, p
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: activation.ActivationToken})
+	// The plan is approved inside the activated turn, which stays running.
+	turn, _ := liveAdmittedTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: activation.ActivationToken})
 	task, err := e.Store.AgentTask(t.Context(), p.last())
 	if err != nil {
 		t.Fatal(err)
