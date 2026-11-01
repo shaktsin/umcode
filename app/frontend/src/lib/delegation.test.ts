@@ -158,3 +158,35 @@ it('hydration skips malformed task timestamps while retaining valid snapshots', 
   expect(s.tasks.map(snapshot => snapshot.task.id)).toEqual(['task']);
   expect(s.active).toBeUndefined(); expect(s.error).toBe('');
 });
+
+const rtAgent = (id: string, version = 1, extra: any = {}) => ({ id, taskId: 'task', name: id, purpose: '', assignment: { prompt: '' }, capabilities: { files: 'read', shell: 'none', network: false, spawnMax: 0 }, budgetShare: 0, depth: 0, state: 'running', result: { summary: '' }, usage: {}, version, createdAt: '', updatedAt: '', ...extra });
+it('hydrates runtime agents, plan and integration from delegation/list', async () => {
+  const s = new DelegationState(); const integration = { headTree: 'h', appliedCount: 1, verified: false };
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], agents: [rtAgent('a'), rtAgent('b')], plan: { id: 'p' }, integration }] });
+  await s.bind('parent', 'project');
+  expect(s.tasks[0].agents?.map(a => a.id)).toEqual(['a', 'b']); expect(s.tasks[0].plan?.id).toBe('p'); expect(s.tasks[0].integration).toEqual(integration);
+});
+it('merges an agent update by id without touching siblings and ignores stale versions and sequences', async () => {
+  const s = new DelegationState(); call.mockResolvedValueOnce({ tasks: [{ task, children: [], agents: [rtAgent('a'), rtAgent('b')] }] }); await s.bind('parent', 'project');
+  const [a0, b0] = s.tasks[0].agents!;
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('a', 2, { state: 'completed' }) as any, sequence: 5 });
+  expect(s.tasks[0].agents![0].state).toBe('completed'); expect(s.tasks[0].agents![1]).toBe(b0); expect(s.tasks[0].agents![0]).not.toBe(a0);
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('a', 1, { state: 'running' }) as any, sequence: 9 });
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('a', 2, { state: 'failed' }) as any, sequence: 4 });
+  expect(s.tasks[0].agents![0].state).toBe('completed');
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('c', 1) as any, sequence: 6 });
+  expect(s.tasks[0].agents!.map(a => a.id)).toEqual(['a', 'b', 'c']);
+});
+it('integration follows event sequence; a stale one is ignored', async () => {
+  const s = new DelegationState(); call.mockResolvedValueOnce({ tasks: [{ task, children: [] }] }); await s.bind('parent', 'project');
+  s.apply({ threadId: 'parent', taskId: 'task', integration: { headTree: 'new', appliedCount: 2, verified: true }, sequence: 8 });
+  s.apply({ threadId: 'parent', taskId: 'task', integration: { headTree: 'old', appliedCount: 1, verified: false }, sequence: 7 });
+  expect(s.tasks[0].integration?.headTree).toBe('new');
+});
+it('agent/plan/updated refreshes the card state of the matching thread only', async () => {
+  const { chat } = await import('./stores/chat.svelte'); chat.main.id = 'parent'; const other = new ThreadView(); other.id = 'other'; chat.sides = [other];
+  call.mockResolvedValue({ plan: { id: 'p1' }, approvalStatus: 'pending' });
+  handlers.get('agent/plan/updated')!({ threadId: 'parent', plan: { id: 'p1', state: 'superseded' }, approvalStatus: 'expired' });
+  expect(chat.main.cards.plan('p1')?.approvalStatus).toBe('expired'); expect(chat.main.cards.plan('p1')?.plan.state).toBe('superseded');
+  expect(other.cards.plan('p1')).toBeUndefined(); chat.sides = [];
+});
