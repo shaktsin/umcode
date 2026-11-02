@@ -130,6 +130,10 @@ func ImportCheckpoint(projectRoot, modelID, expected, name, filename, encoded st
 	if err != nil {
 		return Checkpoint{}, err
 	}
+	return saveCheckpointFiles(checkpoints, model, name, graph, selection, weights, format, "chat-v1", validated)
+}
+
+func saveCheckpointFiles(checkpoints *os.Root, model Model, name string, graph json.RawMessage, selection DataSelection, weights []byte, format, promptFormat string, validated CheckpointValidation) (Checkpoint, error) {
 	selectionJSON, err := json.Marshal(selection)
 	if err != nil {
 		return Checkpoint{}, err
@@ -143,8 +147,12 @@ func ImportCheckpoint(projectRoot, modelID, expected, name, filename, encoded st
 	h.Write(selectionJSON)
 	h.Write(weights)
 	h.Write([]byte(format))
+	h.Write([]byte(promptFormat))
 	id := hex.EncodeToString(h.Sum(nil))
-	cp := Checkpoint{ID: id, Name: name, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), GraphRevision: hex.EncodeToString(revision[:]), ModelCreatedAt: model.CreatedAt.Format(time.RFC3339Nano), Task: model.Task, Format: format, ByteCount: int64(len(weights)), ChatCompatible: validated.ChatCompatible && model.Task == "text-generation", Input: validated.Input}
+	cp := Checkpoint{PromptFormat: promptFormat, ID: id, Name: name, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), GraphRevision: hex.EncodeToString(revision[:]), ModelCreatedAt: model.CreatedAt.Format(time.RFC3339Nano), Task: model.Task, Format: format, ByteCount: int64(len(weights)), ChatCompatible: validated.ChatCompatible && model.Task == "text-generation", Input: validated.Input}
+	if promptFormat == "text-v1" {
+		cp.ChatCompatible = false
+	}
 	if _, e := checkpoints.Lstat(id); e == nil {
 		existing, e := readCheckpointRoot(checkpoints, id, cp.ModelCreatedAt)
 		return existing.Checkpoint, e
@@ -215,6 +223,7 @@ func readCheckpointRoot(parent *os.Root, id, expected string) (CheckpointSnapsho
 	h.Write(selectionJSON)
 	h.Write(snap.Weights)
 	h.Write([]byte(cp.Format))
+	h.Write([]byte(cp.PromptFormat))
 	if int64(len(snap.Weights)) != cp.ByteCount || hex.EncodeToString(revision[:]) != cp.GraphRevision || hex.EncodeToString(h.Sum(nil)) != id {
 		return snap, errors.New("checkpoint files changed; import the original weights again")
 	}
@@ -232,7 +241,11 @@ func ReadCheckpoint(projectRoot, modelID, expected, id string) (CheckpointSnapsh
 		return CheckpointSnapshot{}, err
 	}
 	defer parent.Close()
-	return readCheckpointRoot(parent, id, model.CreatedAt.Format(time.RFC3339Nano))
+	snap, err := readCheckpointRoot(parent, id, model.CreatedAt.Format(time.RFC3339Nano))
+	if err == nil {
+		err = resolveCheckpointPromptFormat(projectRoot, modelID, model.CreatedAt.Format(time.RFC3339Nano), &snap)
+	}
+	return snap, err
 }
 
 func ListCheckpoints(projectRoot, modelID, expected string) ([]Checkpoint, error) {
@@ -275,6 +288,16 @@ func ListCheckpoints(projectRoot, modelID, expected string) ([]Checkpoint, error
 		}
 		if cp.ID != entry.Name() || cp.ModelCreatedAt != model.CreatedAt.Format(time.RFC3339Nano) {
 			return nil, fmt.Errorf("checkpoint %s belongs to another model version", entry.Name())
+		}
+		if cp.PromptFormat == "" {
+			snap, e := readCheckpointRoot(parent, cp.ID, cp.ModelCreatedAt)
+			if e != nil {
+				return nil, e
+			}
+			if e = resolveCheckpointPromptFormat(projectRoot, modelID, cp.ModelCreatedAt, &snap); e != nil {
+				return nil, e
+			}
+			cp = snap.Checkpoint
 		}
 		result = append(result, cp)
 	}

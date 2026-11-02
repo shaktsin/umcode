@@ -160,7 +160,7 @@ export class WorkbenchDataState {
         this.selection = selection;
         if (JSON.stringify(this.config) === JSON.stringify(submitted)) this.config = copy(selection.config);
         this.rememberDraft();
-        this.notice = 'Preparation saved in this model. Model graph Save is separate; training is not available yet.';
+        this.notice = 'Preparation saved. Open Train to train this model, or Inference to import compatible weights.';
       }
     } catch (error) { this.failed(ticket, error); } finally { this.finish(ticket); }
   }

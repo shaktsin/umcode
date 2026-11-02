@@ -102,6 +102,8 @@ type Engine struct {
 	delegationTokens  map[string]delegationToken // protected by mu; never persisted
 	shuttingDown      bool                       // protected by mu
 	mu                sync.Mutex
+	trainingMu        sync.Mutex
+	trainingManager   *workbench.TrainingManager
 	inferenceMu       sync.Mutex
 	inferenceManager  *workbench.InferenceManager
 	inferenceReceipts map[string]inferenceReceipt
@@ -286,6 +288,12 @@ func (e *Engine) Shutdown(ctx context.Context) {
 	e.ComputerUse.Close()
 	e.Exec.Close()
 	e.cancelAll()
+	e.trainingMu.Lock()
+	trainingManager := e.trainingManager
+	e.trainingMu.Unlock()
+	if trainingManager != nil {
+		trainingManager.Close()
+	}
 	e.inferenceMu.Lock()
 	if e.inferenceManager != nil {
 		e.inferenceManager.Close()

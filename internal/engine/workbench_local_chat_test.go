@@ -280,3 +280,30 @@ func workbenchLocalChatFixture(t *testing.T) (*Engine, protocol.Thread, *atomic.
 	}
 	return e, th, calls, cloud.URL
 }
+
+func TestLocalPromptMatchesCheckpointTrainingFormat(t *testing.T) {
+	for _, tc := range []struct{ format, want string }{
+		{"chat-v1", "User: Which color?\nAssistant:"},
+		{"prompt-response-v1", "Which color?\n"},
+		{"text-v1", "Which color?"},
+	} {
+		got, _, err := workbenchLocalPromptFormat(nil, "", "Which color?", 128, 32, tc.format)
+		if err != nil || got != tc.want {
+			t.Fatalf("%s: got=%q want=%q err=%v", tc.format, got, tc.want, err)
+		}
+	}
+	if _, _, err := workbenchLocalPromptFormat(nil, "", "question", 128, 32, "invented"); err == nil {
+		t.Fatal("unknown prompt format accepted")
+	}
+}
+
+func TestRawQuestionPromptPreservesTrainingWhitespaceAndRejectsUntrainedHistory(t *testing.T) {
+	got, _, err := workbenchLocalPromptFormat(nil, "", " question \n", 128, 32, "prompt-response-v1")
+	if err != nil || got != " question \n\n" {
+		t.Fatalf("raw bytes changed %q %v", got, err)
+	}
+	items := []protocol.Item{{TurnID: "old", Kind: protocol.ItemUserMessage, Status: protocol.ItemCompleted, Text: "old question"}, {TurnID: "old", Kind: protocol.ItemAgentMessage, Status: protocol.ItemCompleted, Text: "old answer"}}
+	if _, _, err = workbenchLocalPromptFormat(items, "", "next question", 256, 32, "prompt-response-v1"); err == nil || !strings.Contains(err.Error(), "new chat") {
+		t.Fatalf("unsupported history: %v", err)
+	}
+}

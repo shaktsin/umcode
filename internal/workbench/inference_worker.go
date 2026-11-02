@@ -186,7 +186,7 @@ func (m *InferenceManager) Loaded(key string) bool {
 	defer m.mu.Unlock()
 	return m.workers[key] != nil
 }
-func (m *InferenceManager) load(ctx context.Context, w *pythonWorker, graph json.RawMessage, selection DataSelection, weights []byte, format string) (CheckpointValidation, error) {
+func (m *InferenceManager) load(ctx context.Context, w *pythonWorker, graph json.RawMessage, selection DataSelection, weights []byte, format string, promptFormats ...string) (CheckpointValidation, error) {
 	dir, err := os.MkdirTemp("", "umcode-local-weights-")
 	if err != nil {
 		return CheckpointValidation{}, err
@@ -196,7 +196,11 @@ func (m *InferenceManager) load(ctx context.Context, w *pythonWorker, graph json
 	if err = os.WriteFile(path, weights, 0600); err != nil {
 		return CheckpointValidation{}, err
 	}
-	out, err := w.call(ctx, map[string]any{"op": "load", "graph": graph, "selection": selection, "weightsPath": path, "format": format})
+	promptFormat := "chat-v1"
+	if len(promptFormats) > 0 && promptFormats[0] != "" {
+		promptFormat = promptFormats[0]
+	}
+	out, err := w.call(ctx, map[string]any{"promptFormat": promptFormat, "op": "load", "graph": graph, "selection": selection, "weightsPath": path, "format": format})
 	return out.CheckpointValidation, err
 }
 func (m *InferenceManager) Validate(ctx context.Context, graph json.RawMessage, selection DataSelection, weights []byte, format string) (CheckpointValidation, error) {
@@ -229,7 +233,7 @@ func (m *InferenceManager) Load(ctx context.Context, key string, snap Checkpoint
 	if err != nil {
 		return err
 	}
-	if _, err = m.load(ctx, w, snap.Graph, snap.Selection, snap.Weights, snap.Checkpoint.Format); err != nil {
+	if _, err = m.load(ctx, w, snap.Graph, snap.Selection, snap.Weights, snap.Checkpoint.Format, snap.Checkpoint.PromptFormat); err != nil {
 		m.release(w)
 		return err
 	}

@@ -502,6 +502,9 @@ class Worker:
 
     def load(self, request):
         self.model = None  # A failed replacement must never keep an old checkpoint usable.
+        prompt_format = request.get("promptFormat") or "chat-v1"
+        require(prompt_format in ("chat-v1", "prompt-response-v1", "text-v1"), "Checkpoint prompt format is unsupported.")
+
         order, shapes = analyze(request.get("graph"))
         config, schema, statistics, compatible = prepare_selection(request.get("selection"), order, shapes)
         with torch.device("meta"):
@@ -524,6 +527,7 @@ class Worker:
         require(list(result.shape) == [1, *shapes[-1]] and bool(torch.isfinite(result).all()),
                 "Loaded checkpoint produced invalid or non-finite predictions.")
         self.model, self.config, self.schema, self.statistics = model, config, schema, statistics
+        self.prompt_format = prompt_format
         return dict(ok=True, input=schema, chatCompatible=compatible, device="cpu")
 
     def numeric_input(self, request):
@@ -579,7 +583,8 @@ class Worker:
         require(len(ids) < length if generation else len(ids)+1 <= length,
                 f"Prompt exceeds the saved {length}-token UTF-8 byte context; shorten the conversation.")
         if generation:
-            require(prompt.startswith("User:") and prompt.endswith("Assistant:"), "Text generation expects User:/Assistant: framed messages.")
+            if self.prompt_format == "chat-v1":
+                require(prompt.startswith("User:") and prompt.endswith("Assistant:"), "Text generation expects User:/Assistant: framed messages.")
         else:
             ids += [2] + [0]*(length-len(ids)-1)
         return ids

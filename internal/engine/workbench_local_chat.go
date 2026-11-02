@@ -19,12 +19,32 @@ type workbenchLocalRuntime interface {
 }
 
 func workbenchLocalPrompt(items []protocol.Item, currentTurnID, text string, window, maxOutput int) (string, bool, error) {
+	return workbenchLocalPromptFormat(items, currentTurnID, text, window, maxOutput, "chat-v1")
+}
+
+func workbenchLocalPromptFormat(items []protocol.Item, currentTurnID, text string, window, maxOutput int, format string) (string, bool, error) {
 	if strings.TrimSpace(text) == "" || len(text) > 8192 {
 		return "", false, errors.New("enter a plain text message of at most 8,192 UTF-8 bytes")
 	}
 	current := "User: " + text + "\nAssistant:"
+	switch format {
+	case "", "chat-v1":
+	case "prompt-response-v1":
+		current = text + "\n"
+	case "text-v1":
+		current = text
+	default:
+		return "", false, errors.New("checkpoint prompt format is unsupported")
+	}
 	if window < 1 || maxOutput < 1 || len(current)+1+maxOutput > window {
 		return "", false, fmt.Errorf("message and output exceed this checkpoint's %d-byte context; shorten the prompt or output", window)
+	}
+	if format == "prompt-response-v1" {
+		for _, item := range items {
+			if item.TurnID != currentTurnID && item.Status == protocol.ItemCompleted && (item.Kind == protocol.ItemUserMessage || item.Kind == protocol.ItemAgentMessage) {
+				return "", false, errors.New("this checkpoint was trained on individual question/answer pairs; start a new chat for each question")
+			}
+		}
 	}
 	type group struct{ id, text string }
 	var groups []group
@@ -43,7 +63,11 @@ func workbenchLocalPrompt(items []protocol.Item, currentTurnID, text string, win
 		if len(groups) == 0 || groups[len(groups)-1].id != it.TurnID {
 			groups = append(groups, group{id: it.TurnID})
 		}
-		groups[len(groups)-1].text += role + ": " + it.Text + "\n"
+		if format == "prompt-response-v1" || format == "text-v1" {
+			groups[len(groups)-1].text += it.Text + "\n"
+		} else {
+			groups[len(groups)-1].text += role + ": " + it.Text + "\n"
+		}
 	}
 	prompt := current
 	omitted := false
@@ -84,7 +108,7 @@ func (e *Engine) startWorkbenchLocalTurn(ctx context.Context, th protocol.Thread
 	if err != nil {
 		return protocol.Turn{}, err
 	}
-	prompt, omitted, err := workbenchLocalPrompt(items, "", p.Text, window, maxOutput)
+	prompt, omitted, err := workbenchLocalPromptFormat(items, "", p.Text, window, maxOutput, promotion.PromptFormat)
 	if err != nil {
 		return protocol.Turn{}, err
 	}

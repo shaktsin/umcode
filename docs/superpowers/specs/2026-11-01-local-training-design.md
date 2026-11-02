@@ -1,0 +1,7 @@
+# Local training first release
+
+User selected the first local CPU version plus evaluation metrics and requested immediate implementation for testing within an hour. Keep all changes local.
+
+Build → save preparation → Train → Inference → optional Chat promotion. Train saved visual graphs on saved prepared splits, never arbitrary project Python. Support numeric regression/classification and text generation/classification; image training is deferred with a clear explanation. Use PyTorch CPU, AdamW, epochs/batch size/learning rate/seed. Start from fresh weights. Show live epoch/loss, validation metrics, final held-out test metrics, stop, persistent run history and errors. Completed runs publish immutable compatible checkpoints without manual import. Regression: MAE/RMSE/R²; classification: accuracy/macro F1; text generation: loss/perplexity/token accuracy. Empty evaluation splits display unavailable, never training scores as held-out results. Runs pin graph and preparation; edits cannot change the running job. Bound resources and allow only one active local training job. Cancel on engine shutdown and model deletion. No push, remote GPU, image training, pretrained fine tuning or resumable optimizers in this iteration.
+
+Approaches: reuse trusted PyTorch graph execution with a separate async training process (chosen, minimal reuse and responsive Stop); extending the synchronous inference worker would block requests; external training service would add deployment and scope. Existing Data/Inference remain working.

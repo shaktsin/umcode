@@ -1,10 +1,16 @@
 # Visual ML workbench
 
-This change implements local model storage, visual architecture building and
-assistance with model layers from
-the [ML workbench roadmap in PR #78](https://github.com/shaktsin/umcode/pull/78).
-It is a builder milestone. Data loading/preparation, training, checkpoints and
-in-app inference are not implemented.
+The workbench supports local model storage, visual architecture building, layer
+assistance, dataset preparation, CPU training with evaluation metrics, and local
+checkpoint inference. It follows the [roadmap in PR #78](https://github.com/shaktsin/umcode/pull/78).
+
+- [Data and Inference guide](data-inference.md): local uploads, Hugging Face, saved preparation, safe weight import and local chat promotion.
+- [Train guide](local-training.md): numeric/text training, progress, cancellation, evaluation and automatic checkpoint handoff.
+- [Workflow screenshots](screenshots/data-inference/README.md): actual Data → Train → Inference → Chat flows.
+
+Training completion proves execution, not useful answer quality. Small models
+trained from scratch may still generate gibberish; see the Train guide's quality
+limits. A pretrained model or fine-tuning pipeline is not included.
 
 ## Major workflows
 
@@ -119,7 +125,9 @@ Open a model before submitting a workbench question.
 
 Build/run the engine and frontend from this checkout, using the same engine home
 and WebSocket port in both terminals. Open an existing project folder in the UI.
-No provider key is needed for model building; chat requires normal provider setup.
+No provider key is needed for model building, local training, or local-checkpoint chat.
+Layer assistance and cloud chat require normal provider setup. Install the managed
+PyTorch runtime as described in the Data/Inference guide before training or inference.
 
 ```sh
 # Terminal 1, repository root
@@ -156,11 +164,12 @@ not trained-model quality.
 
 ## Current boundaries
 
-- Data, Train and Inference deliberately display unavailable states. A
-  [Train screenshot](screenshots/13-training-placeholder.png) makes that boundary
-  visible. This PR does not complete the full roadmap in #78.
-- No dataset upload/preparation, training jobs, compute/GPU connectors,
-  checkpoints, evaluation, inference playground or promotion into a chat provider.
+- Local CPU training supports numeric and text tasks. Image training, GPU/MPS,
+  remote compute, pretrained fine-tuning, resume and early stopping are deferred.
+- Inference executes supported visual graphs with PyTorch. llama.cpp, vLLM and
+  SGLang are shown with compatibility explanations but are unavailable for these
+  custom state_dict graphs. Runtime installers and general pretrained loading are
+  future work. This PR does not complete the full roadmap in #78.
 - One Input-to-Output path is supported. Arbitrary branching, general nested
   containers and custom Python layers are not implemented. Transformer blocks
   contain their own residual attention/MLP structure and support repeats.
@@ -175,4 +184,5 @@ not trained-model quality.
 The [Data and Inference implementation guide](data-inference.md) covers local and
 Hugging Face datasets, saved preparation, PyTorch checkpoint tests, and promotion
 into regular chat. See the [real workflow screenshots](screenshots/data-inference/README.md).
-Train remains the next core tab to implement.
+The [local Train guide](local-training.md) covers training and evaluation, with
+completed runs available directly in Inference.

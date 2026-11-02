@@ -4,6 +4,7 @@
   import VisualBuilder from './workbench/VisualBuilder.svelte';
   import DataTab from './workbench/DataTab.svelte';
   import InferenceTab from './workbench/InferenceTab.svelte';
+  import TrainTab from './workbench/TrainTab.svelte';
   import ModelChooser from './workbench/ModelChooser.svelte';
   import { inputModalities, modelGraph, relevantStarterPresets, type InputModality, type StartingPoint } from '$lib/workbench/presets';
   import { app } from '$lib/stores/app.svelte';
@@ -21,6 +22,10 @@
     void workbench.projectId; void workbench.selected?.model.id; void workbench.draft;
     untrack(() => { void workbenchAssistant.track().catch(() => {}); });
   });
+  let pendingInferenceCheckpointId = $state('');
+  let pendingInferenceContext = $state('');
+  const inferenceContext = $derived(JSON.stringify([workbench.projectId, workbench.selected?.model.id, workbench.selected?.model.createdAt]));
+  $effect(() => { if (workbench.tab !== 'Inference') pendingInferenceCheckpointId = ''; });
   let task = $state<WorkbenchTask>('text-generation');
   let name = $state('');
   let inputType = $state<InputModality>('text');
@@ -32,11 +37,6 @@
   const starters = $derived(relevantStarterPresets(task, inputType));
   $effect(() => { starting = task === 'custom' ? 'blank' : starters.find(s => s.id !== 'blank')?.id ?? 'blank'; });
   const tabs: WorkbenchTab[] = ['Data', 'Build', 'Train', 'Inference'];
-  const unavailable = {
-    Data: ['Connect your training data', 'Data sources, preparation pipelines, and dataset versions will be available in a later release.'],
-    Train: ['Train on your Mac or a remote GPU', 'Compute connections, training runs, live metrics, and checkpoints will be available in a later release.'],
-    Inference: ['Try and evaluate your model', 'Checkpoint loading, the prompt playground, and evaluations will be available after training support.'],
-  };
 
   async function closeModel() {
     const project = workbench.projectId;
@@ -138,8 +138,8 @@
           <p class="eyebrow setup-label">What this sets up</p>
           <div class="setup-cards">
             <div><h3>Build</h3><p>Drag layers onto the canvas, connect them, and adjust their settings. Export your PyTorch model.</p></div>
-            <div><h3>Train</h3><p>A folder for future runs and checkpoints. Training is not available in this preview.</p></div>
-            <div><h3>Inference</h3><p>A model configured for {task === 'custom' ? 'your custom task' : describeWorkbenchTask(task).toLowerCase()}. Import trained weights and try predictions locally.</p></div>
+            <div><h3>Train</h3><p>Train numeric and text models locally on CPU, track real evaluation metrics, and save checkpoints for Inference.</p></div>
+            <div><h3>Inference</h3><p>A model configured for {task === 'custom' ? 'your custom task' : describeWorkbenchTask(task).toLowerCase()}. Train locally or import weights, then try learned predictions.</p></div>
           </div>
         </section>
         <aside class="model-setup">
@@ -173,12 +173,14 @@
         {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
           <DataTab projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} task={workbench.selected.model.task} graphText={workbench.draft} connected={workbench.connected} onBuild={() => workbench.tab = 'Build'} />
         {/key}
+      {:else if workbench.tab === 'Train'}
+        {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
+          <TrainTab projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} name={workbench.selected.model.name} connected={workbench.connected} dirty={workbench.dirty} onBuild={() => workbench.tab = 'Build'} onData={() => workbench.tab = 'Data'} onInference={(checkpointId) => { pendingInferenceCheckpointId = checkpointId; pendingInferenceContext = inferenceContext; workbench.tab = 'Inference'; }} />
+        {/key}
       {:else if workbench.tab === 'Inference'}
         {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
-          <InferenceTab projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} name={workbench.selected.model.name} connected={workbench.connected} dirty={workbench.dirty} onBuild={() => workbench.tab = 'Build'} onData={() => workbench.tab = 'Data'} />
+          <InferenceTab initialCheckpointId={pendingInferenceContext === inferenceContext ? pendingInferenceCheckpointId : ''} projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} name={workbench.selected.model.name} connected={workbench.connected} dirty={workbench.dirty} onBuild={() => workbench.tab = 'Build'} onData={() => workbench.tab = 'Data'} />
         {/key}
-      {:else}
-        <section class="workbench-empty"><Layers3 size={30} strokeWidth={1.4} /><p class="eyebrow">{workbench.tab} · Coming later</p><h2>{unavailable[workbench.tab][0]}</h2><p>{unavailable[workbench.tab][1]}</p><button class="btn-outline" onclick={() => workbench.tab = 'Build'}>Back to Build</button></section>
       {/if}
     {/if}
   {/if}
@@ -233,7 +235,6 @@
   .graph-state.is-dirty { color:var(--color-amber-warm); }
   .workbench-empty { display:flex; flex:1; flex-direction:column; align-items:center; justify-content:center; gap:16px; text-align:center; padding:32px; min-height:0; overflow-y:auto; }
   .workbench-empty > p:not(.eyebrow) { max-width:420px; color:var(--color-muted); font-size:13px; line-height:1.7; }
-  .workbench-empty .eyebrow { margin:0; }
   @media (max-width:1350px) { .task-cards { grid-template-columns:1fr; } .task-card { gap:10px; } .task-description { min-height:0; } .task-example { display:none; } .setup-cards { grid-template-columns:1fr; gap:8px; } }
   @media (max-width:800px) { .new-model-layout { flex-direction:column; } .model-setup { width:auto; border-left:0; border-top:1px solid var(--color-line); } .create-model { margin-top:12px; } .task-selection { padding:18px; } .task-cards { grid-template-columns:repeat(3,minmax(0,1fr)); } .task-card { padding:12px; } .setup-cards { grid-template-columns:repeat(3,minmax(0,1fr)); } .preview-badge { display:none; } }
   @media (max-width:540px) { .task-cards, .setup-cards { grid-template-columns:1fr; } .workbench-pickers { width:100%; margin-left:0; } .workbench-pickers select { flex:1; } .graph-state { width:100%; margin-left:0; } .model-picker { width:145px; } }

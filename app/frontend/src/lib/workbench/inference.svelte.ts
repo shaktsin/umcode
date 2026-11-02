@@ -58,10 +58,10 @@ export class WorkbenchInferenceState {
     this.loadedCheckpointId = state.loadedCheckpointId || '';
     this.issues = state.issues ?? [];
     this.promotion = state.promotion && identity(state.promotion) === identity(this.context) ? state.promotion : null;
-    if (!this.checkpoints.some(item => item.id === this.checkpointId)) this.checkpointId = this.promotion?.checkpointId || this.checkpoints[0]?.id || '';
+    if (!this.checkpoints.some(item => item.id === this.checkpointId)) this.checkpointId = this.checkpoints[0]?.id || '';
   }
 
-  async activate(context: InferenceContext, connected: boolean) {
+  async activate(context: InferenceContext, connected: boolean, initialCheckpointId = '') {
     if (this.disposed) return;
     const changed = identity(context) !== identity(this.context), reconnected = connected && !this.connected;
     if (!changed && connected === this.connected) return;
@@ -70,11 +70,20 @@ export class WorkbenchInferenceState {
       this.checkpoints = []; this.checkpointId = ''; this.runtime = 'pytorch'; this.loadedCheckpointId = ''; this.promotion = null; this.issues = [];
       this.architecture = null; this.prompt = ''; this.features = {}; this.imageBase64 = ''; this.imageName = ''; this.runtimes = inferenceRuntimes([]);
     }
-    if (connected && (changed || reconnected)) await this.refresh();
+    if (connected && (changed || reconnected)) await this.refresh(changed || !this.checkpointId ? initialCheckpointId : '');
   }
-  async refresh() {
+  async refresh(initialCheckpointId = '') {
     this.invalidate(); const ticket = this.begin('Checking local checkpoints…'); if (!ticket) return;
-    try { const state = await this.call('workbench/inference/get', { ...ticket.context }) as InferenceState; if (this.current(ticket)) this.apply(state); }
+    try {
+      const state = await this.call('workbench/inference/get', { ...ticket.context }) as InferenceState;
+      if (this.current(ticket)) {
+        this.apply(state);
+        if (initialCheckpointId) {
+          if (this.checkpoints.some(item => item.id === initialCheckpointId)) this.selectCheckpoint(initialCheckpointId);
+          else { this.selectCheckpoint(''); this.error = 'This training checkpoint is no longer available. Refresh or choose another checkpoint.'; }
+        }
+      }
+    }
     catch (error) { this.fail(ticket, error); } finally { this.finish(ticket); }
   }
   selectCheckpoint(id: string) {

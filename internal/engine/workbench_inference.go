@@ -148,7 +148,7 @@ func (e *Engine) workbenchInference(ctx context.Context, op string, p protocol.W
 		}
 		prompt := p.Prompt
 		if snap.Selection.Config.Purpose == "text-generation" {
-			prompt, _, err = workbenchLocalPrompt(nil, "", prompt, snap.Checkpoint.Input.SequenceLength, p.MaxNewTokens)
+			prompt, _, err = workbenchLocalPromptFormat(nil, "", prompt, snap.Checkpoint.Input.SequenceLength, p.MaxNewTokens, snap.Checkpoint.PromptFormat)
 			if err != nil {
 				return nil, err
 			}
@@ -183,7 +183,7 @@ func (e *Engine) workbenchInference(ctx context.Context, op string, p protocol.W
 			return nil, err
 		}
 		kept := []workbench.Promotion{}
-		promotion := workbench.Promotion{ID: store.NewID("wbl"), ProjectID: p.ProjectID, ModelID: p.ModelID, ModelCreatedAt: p.ModelCreatedAt, CheckpointID: p.CheckpointID, Name: model.Name + " · " + snap.Checkpoint.Name, Runtime: p.Runtime, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		promotion := workbench.Promotion{PromptFormat: snap.Checkpoint.PromptFormat, ID: store.NewID("wbl"), ProjectID: p.ProjectID, ModelID: p.ModelID, ModelCreatedAt: p.ModelCreatedAt, CheckpointID: p.CheckpointID, Name: model.Name + " · " + snap.Checkpoint.Name, Runtime: p.Runtime, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 		for _, x := range ps {
 			if x.ProjectID == p.ProjectID && x.ModelID == p.ModelID {
 				if x.ModelCreatedAt == p.ModelCreatedAt && x.CheckpointID == p.CheckpointID {
@@ -221,6 +221,7 @@ func (e *Engine) WorkbenchLocalPromotion(ctx context.Context, id string) (workbe
 			if !snap.Checkpoint.ChatCompatible || p.Runtime != "pytorch" {
 				return p, errors.New("promotion is not a compatible local chat checkpoint")
 			}
+			p.PromptFormat = snap.Checkpoint.PromptFormat
 			return p, nil
 		}
 	}

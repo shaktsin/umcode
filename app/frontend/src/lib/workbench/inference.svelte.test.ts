@@ -157,3 +157,42 @@ describe('inference input boundaries', () => {
     expect(state.checkpoints.map(c => c.id)).toEqual(['weights', 'next']); expect(state.error).toContain('Save Data preparation');
   });
 });
+
+describe('training checkpoint handoff', () => {
+  it('opens the explicit historical run checkpoint ahead of an older promotion and preserves later input edits', async () => {
+    const state = new WorkbenchInferenceState(async () => ({ ...loaded(), promotion }));
+    await state.activate(context, true, 'next');
+    expect(state.checkpointId).toBe('next');
+    state.setPrompt('Keep this prompt');
+    await state.activate(context, true, 'next');
+    expect(state.prompt).toBe('Keep this prompt');
+    state.selectCheckpoint('weights');
+    await state.refresh();
+    expect(state.checkpointId).toBe('weights');
+    state.dispose();
+  });
+  it('reports a missing run checkpoint instead of silently choosing promoted weights', async () => {
+    const state = new WorkbenchInferenceState(async () => ({ ...loaded(), promotion }));
+    await state.activate(context, true, 'missing');
+    expect(state.checkpointId).toBe('');
+    expect(state.error).toContain('no longer available');
+    state.dispose();
+  });
+  it('ignores an explicit handoff whose checkpoint fetch completes after a model switch', async () => {
+    const pending = deferred<InferenceState>(); let first = true;
+    const state = new WorkbenchInferenceState(async () => { if (first) { first = false; return pending.promise; } return loaded(); });
+    const opening = state.activate(context, true, 'next');
+    await state.activate({ ...context, modelId: 'other' }, true);
+    pending.resolve(loaded()); await opening;
+    expect(state.checkpointId).toBe('weights');
+    state.dispose();
+  });
+});
+
+it('defaults to the newest checkpoint rather than an older promoted sample', async () => {
+ const state=new WorkbenchInferenceState(async()=>({...loaded(),checkpoints:[checkpoint('new-run'),checkpoint('weights')],promotion}));
+ await state.activate(context,true);
+ expect(state.checkpointId).toBe('new-run');
+ expect(state.promotion?.checkpointId).toBe('weights');
+ state.dispose();
+});

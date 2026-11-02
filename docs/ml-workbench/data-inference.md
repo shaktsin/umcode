@@ -1,8 +1,8 @@
 # Data preparation and local inference
 
 This follow-up to the visual builder implements the **Data** and **Inference** tabs.
-**Train is still a placeholder.** A checkpoint trained outside the app can be imported
-and tested now; training the visual model inside Workbench is the next core workflow.
+The local Train follow-up now supports small numeric/text models with evaluation metrics.
+See [local training](local-training.md). Checkpoints trained outside the app can also be imported.
 
 ## Data
 
@@ -99,8 +99,8 @@ not general-purpose model quality. Imported weights do not prove training proven
 engine in an isolated project with synthetic examples, empty in-memory credentials,
 and a real public Hugging Face repository. No user projects or chats are in the captures.
 
-- Full frontend suite: **278 tests** after review fixes; Svelte check and production build.
-- Real Python runner: **11 tests**, including actually trained predictions, malformed
+- Full frontend suite: **288 tests** after review fixes; Svelte check and production build.
+- Real Python runners: **25 tests**, including training, held-out metrics, actually trained predictions, malformed
   and unsafe weights, graph/input limits, images, byte generation and IPC recovery.
 - Real Go worker integration: forward shapes, matching weights, normalization,
   unload, cancellation and shutdown; focused workbench/engine/server race tests.

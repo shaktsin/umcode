@@ -11,6 +11,7 @@ type CheckpointInput struct {
 }
 
 type Checkpoint struct {
+	PromptFormat   string          `json:"promptFormat,omitempty"`
 	ID             string          `json:"id"`
 	Name           string          `json:"name"`
 	CreatedAt      string          `json:"createdAt"`
@@ -31,6 +32,7 @@ type RuntimeInfo struct {
 }
 
 type Promotion struct {
+	PromptFormat   string `json:"promptFormat,omitempty"`
 	ID             string `json:"id"`
 	ProjectID      string `json:"projectId"`
 	ModelID        string `json:"modelId"`

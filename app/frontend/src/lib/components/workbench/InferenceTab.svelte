@@ -5,11 +5,11 @@
   import { chat } from '$lib/stores/chat.svelte';
   import { WorkbenchInferenceState } from '$lib/workbench/inference.svelte';
   import { checkpointSize } from '$lib/workbench/inference';
-  let { projectId, modelId, modelCreatedAt, name, connected, dirty, onBuild, onData }: { projectId: string; modelId: string; modelCreatedAt: string; name: string; connected: boolean; dirty: boolean; onBuild: () => void; onData: () => void } = $props();
+  let { projectId, modelId, modelCreatedAt, name, connected, dirty, onBuild, onData, initialCheckpointId = '' }: { projectId: string; modelId: string; modelCreatedAt: string; name: string; connected: boolean; dirty: boolean; initialCheckpointId?: string; onBuild: () => void; onData: () => void } = $props();
   const inference = new WorkbenchInferenceState((m,p,t) => app.call(m,p,t), () => app.refreshCatalog());
   let weightsInput = $state<HTMLInputElement>(), imageInput = $state<HTMLInputElement>();
   let checkpointName = $state('');
-  $effect(() => { const context = { projectId, modelId, modelCreatedAt }, online = connected; untrack(() => { void inference.activate(context, online); }); });
+  $effect(() => { const context = { projectId, modelId, modelCreatedAt }, online = connected, checkpointId = initialCheckpointId; untrack(() => { void inference.activate(context, online, checkpointId); }); });
   onDestroy(() => inference.dispose());
   async function chooseWeights(event: Event) {
     const input = event.currentTarget as HTMLInputElement, file = input.files?.[0]; input.value = '';
@@ -67,7 +67,7 @@
         <p>{inference.checkpoint?.chatCompatible ? 'Run a successful prompt test to enable promotion. The tested checkpoint will appear in your regular chat model picker.' : 'Chat promotion is available for trained causal text-generation models.'}</p>
         {#if inference.prediction}<div class="prediction" aria-label="Prediction result"><div class="section-heading"><h4>Result</h4><small>{inference.prediction.device} · {inference.prediction.durationMs} ms</small></div>{#if inference.prediction.text !== undefined}<pre>{inference.prediction.text}</pre>{:else if inference.prediction.value !== undefined}<strong class="value">{inference.prediction.value}</strong>{:else}<strong class="value">{inference.prediction.label}</strong>{#each inference.prediction.scores ?? [] as score}<div class="score"><span>{score.label}</span><meter min="0" max="1" value={score.value}></meter><span>{(score.value*100).toFixed(1)}%</span></div>{/each}{/if}{#if inference.prediction.truncated}<p>Stopped at the output or context limit.</p>{/if}</div>{/if}
       </section>
-      {#if inference.promotion}<section class="card promoted"><div><h3><Check size={14} />Available in Chat</h3><p>{inference.promotion.name} · pinned checkpoint</p></div><div class="actions"><button class="btn-primary btn-sm" onclick={() => void openChat()}><MessageCircle size={14} />Open in Chat</button><button class="btn-ghost btn-sm" disabled={!connected || inference.busy} onclick={() => void inference.unpromote()}>Remove from Chat</button></div></section>{/if}
+      {#if inference.promotion}<section class="card promoted"><div><h3><Check size={14} />Available in Chat</h3><p>{inference.promotion.name} · pinned checkpoint</p>{#if inference.promotion.promptFormat === 'prompt-response-v1'}<p>This model was trained on individual question/answer pairs. Start a new chat for each question.</p>{/if}</div><div class="actions"><button class="btn-primary btn-sm" onclick={() => void openChat()}><MessageCircle size={14} />Open in Chat</button><button class="btn-ghost btn-sm" disabled={!connected || inference.busy} onclick={() => void inference.unpromote()}>Remove from Chat</button></div></section>{/if}
     </div>
   </div>
   <div class="feedback-area" aria-live="polite">{#if inference.stage}<div class="feedback"><RefreshCw size={14} />{inference.stage}</div>{/if}{#if inference.error}<div class="feedback error" role="alert">{inference.error}</div>{/if}{#if inference.notice}<div class="feedback">{inference.notice}</div>{/if}{#each inference.issues as issue}<div class="feedback warning">{issue}</div>{/each}{#if !connected}<div class="feedback warning">Engine disconnected. Reconnect to run locally.</div>{/if}</div>
