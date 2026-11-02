@@ -182,6 +182,38 @@ func TestLiveCompactionWhenFixedPromptConsumesWindow(t *testing.T) {
 	}
 }
 
+func TestLiveCompactionSummaryCanUseAuxiliaryOutputAllowance(t *testing.T) {
+	e, turn := liveFixture(t)
+	// The fixture completes at the shared auxiliary cap; smaller caps end at length.
+	p := &stepProvider{id: "claude", step: func(_ int, req llm.Request) []llm.Event {
+		return []llm.Event{{Type: llm.EventTextDelta, Text: "partial summary"}, {Type: llm.EventDone, StopReason: "length", Usage: llm.Usage{Reported: true, OutputTokens: int64(req.MaxTokens)}}}
+	}}
+	e.LLMs.Register(p)
+	cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic"}, cred: cred, meta: models.Meta{ContextWindow: 51200}}
+	key, _ := capacityIdentity(res)
+	window := 51200
+	if err := e.Store.SetModelCapacityProfile(t.Context(), protocol.ModelCapacityProfile{Provider: key.Provider, EndpointID: key.EndpointID, Model: key.Model, Backend: "generic", ContextWindow: &window}); err != nil {
+		t.Fatal(err)
+	}
+	current := llm.Text(llm.RoleUser, "Continue")
+	res.currentInput = current
+	msgs := []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("earlier detail ", 1200)), llm.Text(llm.RoleAssistant, "Work in progress."), current}
+	out, err := e.compactLiveMessagesForCapacity(t.Context(), t.Context(), turn, &res, msgs, newTurnBudget(protocol.ExecutionLimits{MaxTokens: 100000, MaxCostUSD: 10, MaxDurationMinutes: 5}), true)
+	if err != nil || len(out) != 2 || out[1].JoinedText() != current.JoinedText() {
+		t.Fatalf("summary should fit the auxiliary allowance: %v", err)
+	}
+	if len(p.reqs) == 0 {
+		t.Fatal("no compaction request sent")
+	}
+	if p.reqs[0].MaxTokens != compactionMaxOutput {
+		t.Fatalf("compaction output allowance = %d, want %d", p.reqs[0].MaxTokens, compactionMaxOutput)
+	}
+}
+
 func TestOversizedCurrentInputFailsWithoutClipping(t *testing.T) {
 	e, turn := liveFixture(t)
 	res := resolved{sel: protocol.ModelSelection{Provider: "fixture", Model: "small"}, meta: models.Meta{ContextWindow: 8192}}
