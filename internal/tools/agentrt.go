@@ -15,6 +15,16 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
+// AgentAuthorize resolves the admitted delegation task of the calling turn.
+type AgentAuthorize func(context.Context) (protocol.AgentTask, error)
+
+type agentCallKey struct{}
+
+// WithAgentCallID carries the provider's stable call identity, never model args.
+func WithAgentCallID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, agentCallKey{}, id)
+}
+
 type runtimeAgentTool struct {
 	action    string
 	svc       agentrt.Service

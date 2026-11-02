@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -108,4 +109,168 @@ func (e *Engine) publishRuntimeWorkflow(ctx context.Context, taskID string, w ru
 	}
 	view := protocol.AgentWorkflow{TaskID: taskID, Checks: w.Checks}
 	e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &task, Workflow: &view})
+}
+
+// planVerificationChecks calls the verification.plan tool and returns its
+// checks, every one not_run, plus a blocked Visual QA check when the planner
+// requires visual QA. Shared by the legacy integrate action and the runtime
+// head (planRuntimeVerification).
+func (e *Engine) planVerificationChecks(ctx context.Context) ([]store.AgentWorkflowCheck, error) {
+	planner, ok := e.Tools.Get("verification.plan")
+	if !ok {
+		return nil, errors.New("verification planner unavailable")
+	}
+	raw, err := planner.Call(ctx, json.RawMessage(`{}`))
+	if err != nil {
+		return nil, err
+	}
+	var plan struct {
+		Checks   []store.AgentWorkflowCheck `json:"checks"`
+		VisualQA string                     `json:"visual_qa"`
+	}
+	if err = json.Unmarshal([]byte(raw), &plan); err != nil {
+		return nil, err
+	}
+	checks := plan.Checks
+	for i := range checks {
+		checks[i].Status = "not_run"
+	}
+	if strings.HasPrefix(plan.VisualQA, "required:") {
+		checks = append(checks, store.AgentWorkflowCheck{Label: "Visual QA", Command: "visual QA", Kind: "visual", Reason: plan.VisualQA, Status: "blocked", Summary: "Trusted interactive visual QA receipts are unavailable in delegated completion v1."})
+	}
+	return checks, nil
+}
+
+// verificationTarget is what a bracketed verification.run/browser.verify call
+// records into: the legacy implementer workflow, or a runtime task's
+// integration head (headTree is the tree its plan was made for).
+type verificationTarget struct {
+	legacy   *store.AgentWorkflow
+	taskID   string
+	headTree string
+}
+
+// begin/end bracket the real built-in call, after normal tool approval. Neither
+// model text nor tool arguments provide status evidence. Pre-integration and
+// child checks intentionally never create lead receipts.
+//
+// A task whose integration head row exists is a runtime task: that row is
+// written only by runtime integration (Plan 3), and it is exactly what gets
+// verified. Every other task keeps the legacy workflow target.
+func (e *Engine) beginDelegationVerification(ctx context.Context, name string) (*verificationTarget, error) {
+	if name != "verification.run" && name != "browser.verify" {
+		return nil, nil
+	}
+	task, ok := DelegationTaskFromContext(ctx)
+	if !ok {
+		return nil, nil
+	}
+	head, err := e.Store.AgentIntegrationHead(ctx, task.ID)
+	if err == nil {
+		return e.beginRuntimeVerification(ctx, head)
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	w, err := e.Store.AgentWorkflow(ctx, task.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = e.DelegationWorkspaceService.ValidateIntegrated(ctx, task.ID, w.ChildID, w.Revision); err != nil {
+		return nil, err
+	}
+	return &verificationTarget{legacy: &w}, nil
+}
+func (e *Engine) finishDelegationVerification(ctx context.Context, name string, target *verificationTarget, raw string) error {
+	if target == nil {
+		return nil
+	}
+	if target.legacy == nil {
+		return e.recordRuntimeVerification(ctx, target.taskID, target.headTree, name, raw)
+	}
+	w := target.legacy
+	e.delegationWorkflowMu.Lock()
+	defer e.delegationWorkflowMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := e.DelegationWorkspaceService.ValidateIntegrated(ctx, w.TaskID, w.ChildID, w.Revision); err != nil {
+		return err
+	}
+	current, err := e.Store.AgentWorkflow(ctx, w.TaskID)
+	if err != nil {
+		return err
+	}
+	if current.Revision != w.Revision {
+		return errors.New("verification revision changed")
+	}
+	if err = recordVerificationResults(current.Checks, name, raw); err != nil {
+		return err
+	}
+	if err = e.Store.SaveAgentWorkflow(ctx, current); err != nil {
+		return err
+	}
+	if task, readErr := e.Store.AgentTask(ctx, w.TaskID); readErr == nil {
+		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &task, Workflow: &current})
+	}
+	return nil
+}
+
+// recordVerificationResults applies the raw output of a real verification.run
+// or browser.verify call to the matching checks (same command and directory;
+// browser checks only from browser.verify). The summary is the error, else
+// the reason, else the output, truncated to 4096 bytes. Checks may be
+// partially updated when it returns an error; callers discard them then.
+func recordVerificationResults(checks []store.AgentWorkflowCheck, name, raw string) error {
+	type checkResult struct {
+		Command   string `json:"command"`
+		Directory string `json:"directory"`
+		Status    string `json:"status"`
+		Output    string `json:"output"`
+		Error     string `json:"error"`
+		Reason    string `json:"reason"`
+	}
+	var results []checkResult
+	if name == "browser.verify" {
+		var r checkResult
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			return err
+		}
+		results = append(results, r)
+	} else {
+		var r struct {
+			Results []checkResult `json:"results"`
+		}
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			return err
+		}
+		results = r.Results
+	}
+	for _, r := range results {
+		for i := range checks {
+			c := &checks[i]
+			if c.Command == r.Command && c.Directory == r.Directory && (c.Kind == "browser") == (name == "browser.verify") {
+				switch r.Status {
+				case "passed", "failed", "blocked", "not_run":
+					c.Status = r.Status
+				default:
+					return errors.New("unknown verification status")
+				}
+				c.Summary = r.Error
+				if c.Summary == "" {
+					c.Summary = r.Reason
+				}
+				if c.Summary == "" {
+					c.Summary = r.Output
+				}
+				if len(c.Summary) > 4096 {
+					c.Summary = c.Summary[:4096]
+				}
+			}
+		}
+	}
+	return nil
 }

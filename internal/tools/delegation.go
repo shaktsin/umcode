@@ -12,18 +12,12 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
-type AgentAuthorize func(context.Context) (protocol.AgentTask, error)
 type agentTool struct {
 	action    string
 	service   delegation.Service
 	authorize AgentAuthorize
 }
-type agentCallKey struct{}
 
-// WithAgentCallID carries the provider's stable call identity, never model args.
-func WithAgentCallID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, agentCallKey{}, id)
-}
 func NewAgentTools(service delegation.Service, authorize AgentAuthorize) []Tool {
 	out := make([]Tool, 0, 5)
 	for _, action := range []string{"spawn", "status", "wait", "followup", "cancel"} {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
@@ -204,4 +205,30 @@ func (c *Coordinator) CancelTask(ctx context.Context, taskID string) error {
 		}
 	}
 	return cancelErr
+}
+
+// NextSequence returns the next delegation/updated sequence number: strictly
+// increasing within the process. Microsecond stamps (safe as JavaScript
+// integers) also order delayed deliveries across engine restarts. Legacy
+// child events and runtime agent and integration events share it.
+func (c *Coordinator) NextSequence() int64 {
+	c.seqMu.Lock()
+	defer c.seqMu.Unlock()
+	next := time.Now().UnixMicro()
+	if next <= c.sequence {
+		next = c.sequence + 1
+	}
+	c.sequence = next
+	return next
+}
+
+// LiveBudget is a read-only view of an already-admitted owner.
+func (c *Coordinator) LiveBudget(taskID string) (protocol.UsageTotals, string, bool) {
+	c.mu.Lock()
+	rt := c.tasks[taskID]
+	c.mu.Unlock()
+	if rt == nil {
+		return protocol.UsageTotals{}, "", false
+	}
+	return rt.budget.Usage(), rt.budget.StopReason(), true
 }
