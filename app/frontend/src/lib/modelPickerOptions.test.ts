@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modelPickerOptions, poolModelIds } from './modelPickerOptions';
+import { modelPickerOptions, poolModelIds, toggleModelSelection } from './modelPickerOptions';
 import type { ConfiguredModel, Credential, Model } from './types';
 
 const claude: ConfiguredModel = { id: 'claude-default', name: 'Claude', provider: 'claude', model: 'claude-sonnet-5', enabled: true };
@@ -36,5 +36,23 @@ describe('connected-provider model picker', () => {
     expect(draft[1]).toEqual(expect.objectContaining({ provider: 'openai', model: openai.id, id: 'new-model' }));
     expect(poolModelIds(draft, choices, () => 'unused')).toEqual(result);
     expect(draft).toHaveLength(2);
+  });
+});
+
+// Catches credential-gating local chat models and mixing them into cloud pools.
+describe('Local Workbench model choices', () => {
+  const local: Model = { ...openai, provider: 'workbench_local', id: 'promotion', displayName: 'Tiny · Local', supportsTools: false, supportsImages: false, supportsReasoning: false, source: 'workbench' };
+  it('shows promoted chat-only checkpoints without a credential', () => {
+    expect(modelPickerOptions([local], [], [])).toEqual([expect.objectContaining({ provider: 'workbench_local', model: 'promotion', name: 'Tiny · Local' })]);
+    expect(modelPickerOptions([{ ...local, hidden: true }], [], [])).toEqual([]);
+    expect(modelPickerOptions([], [{ id: 'old', provider: 'workbench_local', model: 'removed', name: 'Removed', enabled: true }], [])).toEqual([]);
+  });
+  it('selects local exclusively and replaces local when choosing a cloud model', () => {
+    const choices = modelPickerOptions([local, openai], [claude], [key('claude'), key('openai')]);
+    const localChoice = choices.find(m => m.provider === 'workbench_local')!;
+    expect(toggleModelSelection(['claude-default'], localChoice, choices)).toEqual([localChoice.id]);
+    expect(toggleModelSelection([localChoice.id], claude, choices)).toEqual(['claude-default']);
+    expect(toggleModelSelection([localChoice.id], localChoice, choices)).toEqual([]);
+    expect(toggleModelSelection(['claude-default'], choices.find(m => m.provider === 'openai')!, choices)).toEqual(['claude-default', 'catalog:openai/gpt-5.6-terra']);
   });
 });

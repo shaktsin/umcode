@@ -225,6 +225,9 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 	if err != nil {
 		return protocol.Turn{}, err
 	}
+	if firstNonEmpty(p.Override.Provider, th.Settings.Provider) == "workbench_local" {
+		return e.startWorkbenchLocalTurn(ctx, th, p, e)
+	}
 	workbenchContext, err := e.admitWorkbenchContext(ctx, th, p.TurnStartParams)
 	if err != nil {
 		return protocol.Turn{}, protocol.Errorf(protocol.CodeInvalidParams, "%v", err)

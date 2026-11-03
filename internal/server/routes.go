@@ -157,6 +157,72 @@ func (s *Server) routes() map[string]handler {
 		}),
 
 		// ML Workbench P0: project-scoped model bundle persistence.
+		"workbench/training/get": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchTrainingParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local training")
+			}
+			return e.WorkbenchTraining(ctx, "get", p)
+		}),
+		"workbench/training/start": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchTrainingParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local training")
+			}
+			return e.WorkbenchTraining(ctx, "start", p)
+		}),
+		"workbench/training/stop": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchTrainingParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local training")
+			}
+			return e.WorkbenchTraining(ctx, "stop", p)
+		}),
+		"workbench/inference/get": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "get", p)
+		}),
+		"workbench/inference/import": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "import", p)
+		}),
+		"workbench/inference/load": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "load", p)
+		}),
+		"workbench/inference/unload": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "unload", p)
+		}),
+		"workbench/inference/predict": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "predict", p)
+		}),
+		"workbench/inference/promote": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "promote", p)
+		}),
+		"workbench/inference/unpromote": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "unpromote", p)
+		}),
+		"workbench/inference/test-architecture": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "test-architecture", p)
+		}),
 		protocol.MethodWorkbenchModelList: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelListParams) (any, error) {
 			return e.ListWorkbenchModels(ctx, p)
 		}),
@@ -174,6 +240,30 @@ func (s *Server) routes() map[string]handler {
 		}),
 		protocol.MethodWorkbenchGraphSave: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchGraphSaveParams) (any, error) {
 			return e.SaveWorkbenchGraph(ctx, p)
+		}),
+		protocol.MethodWorkbenchDataGet: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchDataGetParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can manage workbench data")
+			}
+			return e.GetWorkbenchData(ctx, p)
+		}),
+		protocol.MethodWorkbenchDataImport: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchDataImportParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can manage workbench data")
+			}
+			return e.ImportWorkbenchData(ctx, p)
+		}),
+		protocol.MethodWorkbenchDataPrepare: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchDataPrepareParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can manage workbench data")
+			}
+			return e.PrepareWorkbenchData(ctx, p)
+		}),
+		protocol.MethodWorkbenchDataHuggingFace: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchDataHuggingFaceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can manage workbench data")
+			}
+			return e.WorkbenchHuggingFace(ctx, p)
 		}),
 		protocol.MethodProjectOpen: bind(func(ctx context.Context, c *conn, p protocol.ProjectIDParams) (any, error) {
 			return e.OpenProject(ctx, p.ProjectID)
@@ -324,6 +414,11 @@ func (s *Server) routes() map[string]handler {
 			if ms == nil {
 				ms = []protocol.Model{}
 			}
+			if err != nil {
+				return nil, err
+			}
+			local, err := e.LocalWorkbenchModels(ctx, p.Provider)
+			ms = append(ms, local...)
 			return protocol.ModelListResult{Models: ms}, err
 		}),
 		protocol.MethodModelSetHidden: bind(func(ctx context.Context, c *conn, p protocol.ModelSetHiddenParams) (any, error) {

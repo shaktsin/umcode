@@ -3,6 +3,8 @@ package server_test
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,6 +136,55 @@ func TestWorkbenchStaleDeleteCannotRemoveReplacement(t *testing.T) {
 	}
 	if _, err := workbench.Open(h.ws, replacement.ID); err != nil {
 		t.Fatalf("replacement deleted: %v", err)
+	}
+}
+
+type workbenchDownloadTransport func(*http.Request) (*http.Response, error)
+
+func (f workbenchDownloadTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestWorkbenchDownloadCannotImportIntoReplacement(t *testing.T) {
+	h := newHarness(t, nil)
+	var old workbench.Model
+	h.call(protocol.MethodWorkbenchModelCreate, protocol.WorkbenchModelCreateParams{ProjectID: h.proj.ID, Name: "Downloading", Task: "classification"}, &old)
+	started, release := make(chan struct{}), make(chan struct{})
+	transport := http.DefaultTransport
+	http.DefaultTransport = workbenchDownloadTransport(func(r *http.Request) (*http.Response, error) {
+		body := `{"id":"owner/data","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","siblings":[{"rfilename":"data.csv","size":16}]}`
+		if strings.Contains(r.URL.Path, "/resolve/") {
+			close(started)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+			body = "x,label\n1,a\n2,b\n"
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = transport })
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.eng.ImportWorkbenchData(h.ctx, protocol.WorkbenchDataImportParams{ProjectID: h.proj.ID, ModelID: old.ID, Source: workbench.DataSource{Kind: "huggingface", Repo: "owner/data", Files: []string{"data.csv"}}})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("download never started")
+	}
+	h.call(protocol.MethodWorkbenchModelDelete, map[string]any{"projectId": h.proj.ID, "modelId": old.ID, "modelCreatedAt": old.CreatedAt.Format(time.RFC3339Nano)}, nil)
+	h.call(protocol.MethodWorkbenchModelCreate, protocol.WorkbenchModelCreateParams{ProjectID: h.proj.ID, Name: "Downloading", Task: "classification"}, nil)
+	close(release)
+	err := <-done
+	var rpc *protocol.Error
+	if !errors.As(err, &rpc) || rpc.Code != protocol.CodeConflict {
+		t.Fatalf("old download should reject replacement, got %v", err)
+	}
+	data, err := workbench.ReadData(h.ws, old.ID, "")
+	if err != nil || len(data.Datasets) != 0 {
+		t.Fatalf("old download changed replacement: %+v, %v", data, err)
 	}
 }
 
