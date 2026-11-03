@@ -101,6 +101,7 @@ type Engine struct {
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
 	shuttingDown     bool                       // protected by mu
 	mu               sync.Mutex
+	workbenchMu      sync.Mutex             // serializes short bundle mutations, never network downloads
 	activeTurns      map[string]*activeTurn // by turn id
 	threadTurns      map[string]string      // thread id -> running turn id
 	approvals        map[string]chan bool   // pending approval id -> decision
@@ -998,6 +999,9 @@ func (e *Engine) systemPrompt(ctx context.Context, userText string, proj *protoc
 // instructions, the skills catalog and the project's UMCODE.md files. userText
 // is used to point at a matching skill. Empty layers are omitted.
 func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *protocol.Project, instructionHint string, hookContext []string) []promptLayer {
+	if workbenchContextFrom(ctx) != nil {
+		return []promptLayer{{Name: "workbench", Text: "You are UMCode's model-building assistant. Be clear and concise. Never invent execution or validation results.\n" + workbenchAssistantInstructions}}
+	}
 	if x := childExecutionFrom(ctx); x != nil {
 		review := ""
 		if x.child.Role == protocol.AgentRoleReviewer {

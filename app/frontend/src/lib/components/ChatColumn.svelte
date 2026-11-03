@@ -20,9 +20,11 @@
   import type { Item, Turn, TaskWorkspaceResult } from '$lib/types';
   import { createProject } from '$lib/createProject';
   import { completedTurnTime, formatTurnTime, progressPhrase } from '$lib/turnProgress';
- import { compactionActive } from '$lib/compaction';
+  import { compactionActive } from '$lib/compaction';
+  import { contextFromData, proposalFromData } from '$lib/workbench/assistant';
+  import WorkbenchProposal from './workbench/WorkbenchProposal.svelte';
 
-  let { view, variant = 'main' }: { view: ThreadView; variant?: 'main' | 'side' } = $props();
+  let { view, variant = 'main', workbenchMode = false }: { view: ThreadView; variant?: 'main' | 'side'; workbenchMode?: boolean } = $props();
 
   let scroller: HTMLDivElement | undefined = $state();
   let stick = true;
@@ -223,7 +225,7 @@
   }
 </script>
 
-<div class="flex-1 min-h-0 flex flex-col">
+<div class="flex-1 min-w-0 min-h-0 flex flex-col">
   {#if variant === 'main'}
     <header class="shrink-0 border-b border-line px-5 py-2.5 bg-paper/90">
       <div class="min-h-9 flex items-center gap-3">
@@ -310,12 +312,16 @@
           {@const usageText = usageLine(g.turn?.usage)}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}
+              {@const modelContext = contextFromData(it.data)}
+              {@const proposal = it.status === 'completed' && it.kind === 'toolCall' ? proposalFromData(it.data) : null}
               {#if !isProvisionalExecution(it) && !taskFailure.hiddenItemIds.includes(it.id) && (it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim())))}
                 {#if isVisibleChatMessage(it) && hasPreviousChatMessage(g, index)}
                   <div class="h-px bg-line/70 my-2" aria-hidden="true"></div>
                 {/if}
+                {#if modelContext}<p class="text-[10px] text-muted" data-submitted-model-context>{modelContext.modelName} · {modelContext.selectedNodeId ? `Layer ${modelContext.selectedNodeId}` : 'Whole model'} · Submitted draft</p>{/if}
                 <ItemView item={it} highlight={view.highlightItem === it.id} {view} />
               {/if}
+              {#if proposal}<WorkbenchProposal {proposal} />{/if}
             {/each}
             {#if taskFailure.failure}
               <ChatError text={taskFailure.text} details={[taskFailure.details, executionOutcome.details].filter(Boolean).join("\n\n")} />
@@ -441,7 +447,7 @@
 
   {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} />{/if}
   <CapacityNotice selection={view.selection} />
-  <Composer {view} compact={variant === 'side'} />
+  <Composer {view} compact={workbenchMode || variant === 'side'} {workbenchMode} />
 </div>
 
 <style>

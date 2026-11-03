@@ -79,3 +79,62 @@ This deterministic RPC fixture validates browser rendering and interaction;
 `internal/server/delegation_e2e_test.go` separately exercises real RPC, engine,
 Git and fake-provider execution. Neither check claims native signing/window
 acceptance or supplies a trusted interactive visual-QA completion receipt.
+
+## Visual ML workbench
+
+This smoke starts its own real engine, temporary home/projects, and Vite server.
+No provider credentials are needed. Run from `app/frontend`, with an engine
+built from the same checkout:
+
+```sh
+go -C ../.. build -o /tmp/umcode-workbench-test ./cmd/umcode
+npm install --prefix /tmp/umcode-browser-tools --no-package-lock playwright-core
+PLAYWRIGHT_MODULE=/tmp/umcode-browser-tools/node_modules/playwright-core/index.mjs \
+  UMCODE_TEST_ENGINE=/tmp/umcode-workbench-test node e2e/visual-workbench.mjs
+```
+
+It requires an installed `playwright-core` module. `PLAYWRIGHT_MODULE` can point
+to its absolute `index.mjs`, `CHROME_PATH` selects a browser executable, and
+`UI_ARTIFACT_DIR` selects the screenshot/report folder (default
+`/tmp/umcode-workbench-smoke`). `e2e/workbench.mjs` is a compatibility entry point.
+
+Coverage includes text, image CNN/ViT, feature-vector and Custom starters;
+actual palette drag/drop and port wiring; property/shape errors; pointer and
+keyboard movement; undo/redo/delete; code selection/download; disk save and
+fresh-page reopen; project switching; close/reopen with unsaved drafts; legacy
+graph protection; and chat project isolation. It checks 760/1180/1440px in both
+themes, producing 18 layout captures and additional workflow screenshots.
+Data, training and inference are placeholders, not tested runtime features.
+
+The same visual-workbench run also calls `model-deletion.mjs` against its own
+temporary project. It checks both model Delete controls, confirmation/cancel
+with unsaved edits, complete saved-folder recovery in project-local Trash, and
+an empty model list after final deletion and reload. Deletion captures are
+`delete-models.png`, `delete-confirmation.png` and `empty-models.png`.
+
+The assistant acceptance test uses a real engine plus its own deterministic
+OpenAI-compatible HTTP/SSE provider, so no user API key or paid provider is used:
+
+```sh
+PLAYWRIGHT_MODULE=/tmp/umcode-browser-tools/node_modules/playwright-core/index.mjs \
+  UMCODE_TEST_ENGINE=/tmp/umcode-workbench-test node e2e/workbench-assistant.mjs
+```
+
+It covers selected-layer questions and unsaved context, proposals, Preview/Cancel,
+Apply/Undo/Redo/Save, layer insertion/reconnection, partial architectures, stale
+draft/model/project checks, unavailable tools, context/provider errors,
+cancellation, history reload and six light/dark layouts. It writes captures and
+`report.json` to `/tmp/umcode-workbench-assistant` (or `UI_ARTIFACT_DIR`).
+
+Generated architectures can also be checked with real PyTorch:
+
+```sh
+MODEL_ARTIFACT_DIR=/tmp/umcode-exported-models node e2e/export-models.mjs
+python e2e/verify-models.py /tmp/umcode-exported-models
+```
+
+Use a Python environment with `torch` and `numpy` installed. The verifier imports
+seven generated modules, checks inferred versus actual parameter counts/output
+shapes, runs training-mode backward passes with finite gradients, and checks
+causal-prefix behavior for the text starter. These checks establish architecture
+execution, not trained-model quality or native macOS download behavior.
