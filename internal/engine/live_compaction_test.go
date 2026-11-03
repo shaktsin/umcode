@@ -145,6 +145,141 @@ func TestLiveCompactionSummarizesOlderHistoryWithinCapacity(t *testing.T) {
 	}
 }
 
+func TestLiveCompactionWhenFixedPromptConsumesWindow(t *testing.T) {
+	e, turn := liveFixture(t)
+	p := &budgetProvider{events: []llm.Event{{Type: llm.EventTextDelta, Text: "Earlier work is saved; continue with the current request."}, {Type: llm.EventDone, StopReason: "stop", Usage: llm.Usage{Reported: true, InputTokens: 100, OutputTokens: 20}}}}
+	e.LLMs.Register(p)
+	cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic"}, cred: cred}
+	key, _ := capacityIdentity(res)
+	window := 51200
+	if err := e.Store.SetModelCapacityProfile(t.Context(), protocol.ModelCapacityProfile{Provider: key.Provider, EndpointID: key.EndpointID, Model: key.Model, Backend: "generic", ContextWindow: &window}); err != nil {
+		t.Fatal(err)
+	}
+	current := llm.Text(llm.RoleUser, "Continue the task")
+	res.currentInput = current
+	req := llm.Request{
+		System: strings.Repeat("policy ", 13500),
+		Messages: []llm.Message{
+			llm.Text(llm.RoleUser, strings.Repeat("earlier detail ", 1300)),
+			llm.Text(llm.RoleAssistant, "Earlier work was underway."),
+			current,
+		},
+		MaxTokens: 32768,
+	}
+	prepared, report, err := e.prepareModelRequest(t.Context(), t.Context(), turn, &res, req, "chat", newTurnBudget(protocol.ExecutionLimits{MaxDurationMinutes: 5, MaxTokens: 100000, MaxCostUSD: 10}))
+	if err != nil {
+		t.Fatal("compaction did not reclaim historical context:", err)
+	}
+	if report.Reductions == 0 || len(p.requests) == 0 || prepared.Messages[len(prepared.Messages)-1].JoinedText() != current.JoinedText() {
+		t.Fatal("history was not summarized while preserving the current request")
+	}
+	if report.EstimatedInput+report.ReservedOutput+report.Margin > window {
+		t.Fatal("compacted request still exceeds the serving window")
+	}
+}
+
+func TestLiveCompactionSummaryUsesAvailableOutputAllowance(t *testing.T) {
+	e, turn := liveFixture(t)
+	p := &budgetProvider{events: []llm.Event{{Type: llm.EventTextDelta, Text: "Complete summary."}, {Type: llm.EventDone, StopReason: "stop", Usage: llm.Usage{Reported: true, OutputTokens: 60}}}}
+	e.LLMs.Register(p)
+	cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic"}, cred: cred, meta: models.Meta{ContextWindow: 51200}}
+	key, _ := capacityIdentity(res)
+	window := 51200
+	if err := e.Store.SetModelCapacityProfile(t.Context(), protocol.ModelCapacityProfile{Provider: key.Provider, EndpointID: key.EndpointID, Model: key.Model, Backend: "generic", ContextWindow: &window}); err != nil {
+		t.Fatal(err)
+	}
+	current := llm.Text(llm.RoleUser, "Continue")
+	res.currentInput = current
+	msgs := []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("earlier detail ", 1200)), llm.Text(llm.RoleAssistant, "Work in progress."), current}
+	out, err := e.compactLiveMessagesForCapacity(t.Context(), t.Context(), turn, &res, msgs, newTurnBudget(protocol.ExecutionLimits{MaxTokens: 100000, MaxCostUSD: 10, MaxDurationMinutes: 5}), true)
+	if err != nil || len(out) != 2 || out[1].JoinedText() != current.JoinedText() {
+		t.Fatalf("summary should fit the auxiliary allowance: %v", err)
+	}
+	if len(p.requests) == 0 {
+		t.Fatal("no compaction request sent")
+	}
+	if p.requests[0].MaxTokens <= compactionMaxOutput || p.requests[0].MaxTokens > window/4 {
+		t.Fatalf("compaction output allowance = %d, want more than %d and at most %d", p.requests[0].MaxTokens, compactionMaxOutput, window/4)
+	}
+}
+
+func TestLiveCompactionRetriesTruncatedSummaryWithMoreRoom(t *testing.T) {
+	e, turn := liveFixture(t)
+	p := &budgetProvider{}
+	p.eventsFor = func(n int) []llm.Event {
+		req := p.requests[n-1]
+		if req.MaxTokens < 8000 {
+			return []llm.Event{{Type: llm.EventTextDelta, Text: "incomplete summary"}, {Type: llm.EventDone, StopReason: "length", Usage: llm.Usage{Reported: true, OutputTokens: int64(req.MaxTokens)}}}
+		}
+		return []llm.Event{{Type: llm.EventTextDelta, Text: "Complete summary of earlier work."}, {Type: llm.EventDone, StopReason: "stop", Usage: llm.Usage{Reported: true, OutputTokens: 3000}}}
+	}
+	e.LLMs.Register(p)
+	cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic"}, cred: cred, meta: models.Meta{ContextWindow: 51200}}
+	key, _ := capacityIdentity(res)
+	window := 51200
+	if err := e.Store.SetModelCapacityProfile(t.Context(), protocol.ModelCapacityProfile{Provider: key.Provider, EndpointID: key.EndpointID, Model: key.Model, Backend: "generic", ContextWindow: &window}); err != nil {
+		t.Fatal(err)
+	}
+	current := llm.Text(llm.RoleUser, "Continue")
+	res.currentInput = current
+	msgs := []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("earlier detail ", 1200)), llm.Text(llm.RoleAssistant, "Work in progress."), current}
+	out, err := e.compactLiveMessagesForCapacity(t.Context(), t.Context(), turn, &res, msgs, newTurnBudget(protocol.ExecutionLimits{MaxTokens: 100000, MaxCostUSD: 10, MaxDurationMinutes: 5}), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.requests) != 2 || p.requests[1].MaxTokens <= p.requests[0].MaxTokens {
+		t.Fatalf("expected retry with larger output allowance, got %v requests", len(p.requests))
+	}
+	if len(out) != 2 || !strings.Contains(out[0].JoinedText(), "Complete summary") || strings.Contains(out[0].JoinedText(), "incomplete summary") {
+		t.Fatalf("compacted history contains incomplete summary: %+v", out)
+	}
+}
+
+func TestLiveCompactionStopsAtEndpointOutputLimit(t *testing.T) {
+	e, turn := liveFixture(t)
+	p := &budgetProvider{}
+	p.eventsFor = func(n int) []llm.Event {
+		return []llm.Event{{Type: llm.EventTextDelta, Text: "incomplete summary"}, {Type: llm.EventDone, StopReason: "length", Usage: llm.Usage{Reported: true, OutputTokens: int64(p.requests[n-1].MaxTokens)}}}
+	}
+	e.LLMs.Register(p)
+	cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic"}, cred: cred, meta: models.Meta{ContextWindow: 51200}}
+	key, _ := capacityIdentity(res)
+	window := 51200
+	if err := e.Store.SetModelCapacityProfile(t.Context(), protocol.ModelCapacityProfile{Provider: key.Provider, EndpointID: key.EndpointID, Model: key.Model, Backend: "generic", ContextWindow: &window}); err != nil {
+		t.Fatal(err)
+	}
+	current := llm.Text(llm.RoleUser, "Continue")
+	res.currentInput = current
+	msgs := []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("earlier detail ", 1200)), llm.Text(llm.RoleAssistant, "Work in progress."), current}
+	out, err := e.compactLiveMessagesForCapacity(t.Context(), t.Context(), turn, &res, msgs, newTurnBudget(protocol.ExecutionLimits{MaxTokens: 100000, MaxCostUSD: 10, MaxDurationMinutes: 5}), true)
+	if err == nil || !strings.Contains(err.Error(), "automatic context compaction summary reached the endpoint output limit") {
+		t.Fatalf("expected explicit compaction limit error, got %v", err)
+	}
+	maxes := make([]int, 0, len(p.requests))
+	for _, req := range p.requests {
+		maxes = append(maxes, req.MaxTokens)
+	}
+	if out != nil || len(p.requests) < 2 || p.requests[len(p.requests)-1].MaxTokens != 12800 {
+		t.Fatalf("partial summary was returned or endpoint cap was not reached: output=%v allowances=%v", out, maxes)
+	}
+}
+
 func TestOversizedCurrentInputFailsWithoutClipping(t *testing.T) {
 	e, turn := liveFixture(t)
 	res := resolved{sel: protocol.ModelSelection{Provider: "fixture", Model: "small"}, meta: models.Meta{ContextWindow: 8192}}

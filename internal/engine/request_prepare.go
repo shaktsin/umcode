@@ -86,7 +86,7 @@ func (e *Engine) prepareModelRequest(ctx, sctx context.Context, turn protocol.Tu
 			}
 			ctx = context.WithValue(ctx, compactionProgressKey{}, progress)
 		}
-		reduced, err := e.compactLiveMessages(ctx, sctx, turn, res, req.Messages, budget)
+		reduced, err := e.compactLiveMessagesForCapacity(ctx, sctx, turn, res, req.Messages, budget, true)
 		if err != nil {
 			return llm.Request{}, report, err
 		}

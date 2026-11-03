@@ -20,6 +20,7 @@
   import type { Item, Turn, TaskWorkspaceResult } from '$lib/types';
   import { createProject } from '$lib/createProject';
   import { completedTurnTime, formatTurnTime, progressPhrase } from '$lib/turnProgress';
+  import { compactionActive } from '$lib/compaction';
   import { contextFromData, proposalFromData } from '$lib/workbench/assistant';
   import WorkbenchProposal from './workbench/WorkbenchProposal.svelte';
 
@@ -332,7 +333,9 @@
                 <span aria-hidden="true">{record.decision === 'denied' ? '✕' : '✓'}</span><span>{recordLine(record)}</span>
               </div>
             {/each}
-            {#if g.turn?.status === 'running'}
+            {#if g.turn?.status === 'running' && view.compaction?.turnId === g.turnId && compactionActive(view.compaction)}
+              <CompactionProgress state={view.compaction} now={progressNow} />
+            {:else if g.turn?.status === 'running'}
               <details class="turn-progress text-sm text-muted">
                 <summary class="block border-b border-line/70 pb-1.5 cursor-pointer select-none hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
                   <span class="inline-flex max-w-full items-center gap-2">
@@ -443,7 +446,6 @@
   </div>
 
   {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} />{/if}
-  <CompactionProgress state={view.compaction} />
   <CapacityNotice selection={view.selection} />
   <Composer {view} compact={workbenchMode || variant === 'side'} {workbenchMode} />
 </div>
