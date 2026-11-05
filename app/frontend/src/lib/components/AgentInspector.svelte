@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { RuntimeAgent } from '$lib/types';
-  import { agentStateLabel, type AgentChild } from '$lib/delegation';
+  import { agentStateLabel } from '$lib/delegation';
   import { agentFellBack, capabilityChips } from '$lib/agentTree';
   import { inspector } from '$lib/stores/inspector.svelte';
   import { fmtUsd } from '$lib/format';
@@ -13,7 +13,7 @@
 <div class="p-4 space-y-4 text-xs break-words selectable" data-agent-inspector>
   <header class="space-y-1">
     <h3 class="text-sm font-medium">{agent.name}</h3>
-    <p class="text-muted">{agent.purpose} · {agentStateLabel({ state: agent.state, result: agent.result } as AgentChild)}</p>
+    <p class="text-muted">{agent.purpose} · {agentStateLabel(agent)}</p>
   </header>
   <section class="space-y-1"><h4 class="font-medium">Assignment</h4>
     <p class="whitespace-pre-wrap">{agent.assignment.prompt}</p>

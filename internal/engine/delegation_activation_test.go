@@ -502,12 +502,12 @@ func TestDelegationAdmissionConcurrentReplay(t *testing.T) {
 	}
 }
 func TestDelegationAdmissionProjectChangesAndNonGit(t *testing.T) {
-	e, th, root, _ := delegationFixture(t)
+	e, th, _, _ := delegationFixture(t)
 	activation, err := e.PrepareDelegation(t.Context(), th.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := e.Store.CreateProject(t.Context(), protocol.Project{Name: "other", Root: root})
+	other, err := e.Store.CreateProject(t.Context(), protocol.Project{Name: "other", Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}

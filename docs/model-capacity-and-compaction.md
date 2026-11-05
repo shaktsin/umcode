@@ -35,7 +35,7 @@ A direct model selection stays on that endpoint/model; credential retry cannot s
 
 A `length` stop alone does not establish context exhaustion. UMCode distinguishes a known output cap, corroborated context exhaustion and an unknown interruption. Partial text remains saved and marked as interrupted; incomplete calls are discarded. A confirmed context overflow allows at most one reduction retry for that model step. Completed tool actions are represented by their recorded results and are not replayed by this retry.
 
-Review is optional and model/user-directed. A standalone reviewer receives an isolated snapshot of current lead changes, focused assignment and scoped references. It remains read-only under the existing tool allowlist. The engine does not require a structured semantic review report to finish ordinary chat execution. Explicit legacy integration/completion workflow APIs retain their opt-in contracts.
+Review is optional and model/user-directed. A read-only agent can inspect the integrated state with a focused assignment and scoped references. The engine does not require a structured semantic review report to finish ordinary chat execution. Agent tasks complete through the runtime integration tool after the lead's checks pass.
 
 ## Deterministic validation
 

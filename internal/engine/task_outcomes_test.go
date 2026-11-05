@@ -131,7 +131,7 @@ func TestDelegatedTaskRecovery(t *testing.T) {
 	snap, _ := e.Store.ActiveExecutionTask(t.Context(), th.ID)
 	parentRoot := t.TempDir()
 	childRoot := t.TempDir()
-	x := &childExecution{task: protocol.AgentTask{ID: "delegated", ThreadID: th.ID, RootTurnID: user.TurnID, ParentRoot: parentRoot}, child: protocol.AgentChild{Role: protocol.AgentRoleReviewer}, workspace: ChildWorkspace{Root: childRoot}}
+	x := &childExecution{task: protocol.AgentTask{ID: "delegated", ThreadID: th.ID, RootTurnID: user.TurnID, ParentRoot: parentRoot}, runtime: &runtimeExecution{agent: protocol.RuntimeAgent{Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead}}}, workspace: ChildWorkspace{Root: childRoot}}
 	ctx := withChildExecution(t.Context(), x)
 	ctx = tools.WithScope(ctx, &tools.Scope{Root: childRoot, ReadOnly: true, RestrictedChild: true})
 	op := protocol.TaskOperation{Tool: "file.write", Args: json.RawMessage(`{"path":"notes.txt","content":"after"}`)}
@@ -145,7 +145,7 @@ func TestDelegatedTaskRecovery(t *testing.T) {
 	if _, err := e.validateTaskRequirement(t.Context(), th, protocol.RequirementProposal{TaskID: snap.Task.ID, ExpectedRevision: snap.Task.Revision, Origin: "user", OriginRef: user.ID, Scope: json.RawMessage(`{}`), Condition: json.RawMessage(`{"type":"no_actions"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	x.child.Role = protocol.AgentRoleImplementer
+	x.runtime.agent.Capabilities.Files = protocol.FilesReadWrite
 	ctx = tools.WithScope(withChildExecution(t.Context(), x), &tools.Scope{Root: childRoot, RestrictedChild: true})
 	decision, err = e.checkChildTaskAuthority(ctx, op)
 	if err != nil || decision.Outcome != "deny" {

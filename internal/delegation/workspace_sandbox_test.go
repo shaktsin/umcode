@@ -1,6 +1,7 @@
 package delegation
 
 import (
+	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/sandbox"
 	"os"
 	"os/exec"
@@ -15,8 +16,15 @@ func TestDelegationWorkspaceSandboxCommands(t *testing.T) {
 	if sb == nil {
 		t.Skip("enforceable child command sandbox unavailable")
 	}
-	svc, _, task, child := workspaceFixture(t)
-	ws, err := svc.Prepare(t.Context(), task, child)
+	svc, st, task, _ := workspaceFixture(t)
+	child, err := st.CreateRuntimeAgent(t.Context(), protocol.RuntimeAgent{TaskID: task.ID, Name: "sandbox", Purpose: "sandbox", Assignment: protocol.AgentAssignment{Prompt: "test"}, Capabilities: protocol.AgentCapabilities{Files: protocol.FilesReadWrite}}, "sandbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.EnsureRuntimeAgentExecution(t.Context(), child); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := svc.PrepareRuntime(t.Context(), task, child, true)
 	if err != nil {
 		t.Fatal(err)
 	}

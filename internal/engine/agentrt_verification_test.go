@@ -377,10 +377,8 @@ func TestVerifiedMeansAllRequiredPassed(t *testing.T) {
 	}
 }
 
-// TestLegacyVerificationUnchanged pins the shared recording rules on the
-// legacy shape and the routing: a task without an integration head keeps the
-// legacy workflow target.
-func TestLegacyVerificationUnchanged(t *testing.T) {
+// TestRuntimeVerificationRecording pins the shared check recording rules.
+func TestRuntimeVerificationRecording(t *testing.T) {
 	checks := []store.AgentWorkflowCheck{
 		{Command: "go test ./...", Status: "not_run"},
 		{Command: "npm run e2e", Kind: "browser", Status: "not_run"},
@@ -408,16 +406,8 @@ func TestLegacyVerificationUnchanged(t *testing.T) {
 	}
 
 	env := runtimeVerificationEnv(t)
-	// Without a head row and without a legacy workflow nothing is bracketed.
+	// Without a runtime integration head no verification is bracketed.
 	if target, err := env.e.beginDelegationVerification(env.ctx, "verification.run"); err != nil || target != nil {
 		t.Fatalf("unplanned task bracketed: %+v %v", target, err)
-	}
-	// A legacy workflow (no head row) routes to the legacy target, which
-	// requires the legacy integrated implementer.
-	if err := env.e.Store.SaveAgentWorkflow(t.Context(), store.AgentWorkflow{TaskID: env.task.ID, ChildID: "missing", Revision: "r", Checks: []store.AgentWorkflowCheck{{Command: "go test ./...", Status: "not_run"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := env.e.beginDelegationVerification(env.ctx, "verification.run"); err == nil {
-		t.Fatal("legacy target skipped ValidateIntegrated")
 	}
 }

@@ -24,14 +24,6 @@ const (
 	AgentStateInterrupted     AgentState = "interrupted"
 )
 
-// AgentRole determines the child's execution and workspace policy.
-type AgentRole string
-
-const (
-	AgentRoleImplementer AgentRole = "implementer"
-	AgentRoleReviewer    AgentRole = "reviewer"
-)
-
 // AgentTask owns delegation permission for one root turn in a parent chat.
 type AgentTask struct {
 	ID           string          `json:"id"`
@@ -51,7 +43,6 @@ type AgentTask struct {
 type AgentChild struct {
 	ID               string          `json:"id"`
 	TaskID           string          `json:"taskId"`
-	Role             AgentRole       `json:"role"`
 	Model            ModelSelection  `json:"model,omitempty"`
 	Assignment       AgentAssignment `json:"assignment"`
 	State            AgentState      `json:"state"`
@@ -103,18 +94,10 @@ type AgentCheckEvidence struct {
 	Summary string `json:"summary"`
 }
 
-// AgentFollowup is a durable correction, delivered only at a runner boundary.
-type AgentFollowup struct {
-	CallID  string `json:"callId"`
-	Message string `json:"message"`
-	Round   int    `json:"round"`
-}
-
 // DelegationUpdated updates the existing child row in its owning parent chat.
 type DelegationUpdated struct {
 	ThreadID string         `json:"threadId"`
 	TaskID   string         `json:"taskId"`
-	Child    AgentChild     `json:"child,omitzero"`
 	Task     *AgentTask     `json:"task,omitempty"`
 	Workflow *AgentWorkflow `json:"workflow,omitempty"`
 	// Agent is a runtime agent's current state (runtime tasks only). Order
@@ -122,7 +105,6 @@ type DelegationUpdated struct {
 	Agent *RuntimeAgent `json:"agent,omitempty"`
 	// Integration is the task's runtime integration status after a change.
 	Integration *AgentIntegrationStatus `json:"integration,omitempty"`
-	Error       string                  `json:"error,omitempty"`
 	Sequence    int64                   `json:"sequence,omitempty"`
 }
 
@@ -217,14 +199,12 @@ type AgentWorkflow struct {
 // AgentSnapshot is a read-only, parent-scoped hydration view. Host workspace
 // roots and internal execution identities are never exposed by this RPC.
 type AgentSnapshot struct {
-	Task            AgentTask         `json:"task"`
-	Children        []AgentChild      `json:"children"`
-	ChildErrors     map[string]string `json:"childErrors,omitempty"`
-	ChildSequences  map[string]int64  `json:"childSequences,omitempty"`
-	Workflow        *AgentWorkflow    `json:"workflow,omitempty"`
-	Usage           UsageTotals       `json:"usage"`
-	BudgetAvailable bool              `json:"budgetAvailable"`
-	StopReason      string            `json:"stopReason,omitempty"`
+	Task            AgentTask      `json:"task"`
+	Children        []AgentChild   `json:"children"`
+	Workflow        *AgentWorkflow `json:"workflow,omitempty"`
+	Usage           UsageTotals    `json:"usage"`
+	BudgetAvailable bool           `json:"budgetAvailable"`
+	StopReason      string         `json:"stopReason,omitempty"`
 	// Agents, Plan and Integration are set for tasks of the agent runtime:
 	// its agents in creation order, the approved plan and the integration
 	// status. Legacy tasks leave them empty.

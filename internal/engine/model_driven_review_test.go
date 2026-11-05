@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"github.com/shaktsin/umcode/internal/protocol"
 	"strings"
 	"testing"
 )

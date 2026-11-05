@@ -13,10 +13,7 @@ func TestAgentInspectionMigrationAndOwnedUniqueness(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := agentTaskFixture(t, s, "inspections")
-	child, err := s.CreateAgentChild(t.Context(), protocol.AgentChild{TaskID: task.ID, Role: protocol.AgentRoleImplementer, Assignment: protocol.AgentAssignment{Prompt: "edit"}}, "implementer")
-	if err != nil {
-		t.Fatal(err)
-	}
+	child := seedLegacyChild(t, s, task, "implementer", protocol.AgentStateCompleted)
 	old := AgentWorkspace{ID: "legacy-inspection", TaskID: task.ID, ChildID: child.ID, Kind: "reviewer", Root: "/owned/inspection", ParentRoot: "/owned/implementer", BaseRevision: "result1", ResultRevision: "result1", SourceID: child.ID}
 	if err = s.SaveAgentWorkspace(t.Context(), old); err != nil {
 		t.Fatal(err)
@@ -45,11 +42,7 @@ func TestAgentInspectionMigrationAndOwnedUniqueness(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			owner := child
 			if kind == "reviewer" {
-				var err error
-				owner, err = s.CreateAgentChild(t.Context(), protocol.AgentChild{TaskID: task.ID, Role: protocol.AgentRoleReviewer, Assignment: protocol.AgentAssignment{Prompt: "review"}}, "bound-reviewer")
-				if err != nil {
-					t.Fatal(err)
-				}
+				owner = seedLegacyChild(t, s, task, "bound-reviewer", protocol.AgentStateCompleted, "reviewer")
 			}
 			w := AgentWorkspace{ID: kind + "-owned", TaskID: task.ID, ChildID: owner.ID, Kind: kind, Root: "/owned/" + kind, BaseRevision: "base"}
 			if err := s.SaveAgentWorkspace(t.Context(), w); err != nil {

@@ -822,10 +822,8 @@ func TestChildPromptTextIsPathSpecific(t *testing.T) {
 	env := runtimeRunnerFixture(t)
 	a := env.newRuntimeAgent(t, "prompted", readOnlyCaps, "")
 	rtCtx := withChildExecution(t.Context(), &childExecution{runtime: &runtimeExecution{agent: a}, workspace: ChildWorkspace{Root: "/w"}})
-	legacy := withChildExecution(t.Context(), &childExecution{child: protocol.AgentChild{Role: protocol.AgentRoleReviewer}, workspace: ChildWorkspace{Root: "/w", Revision: "rev"}})
 	proj := &protocol.Project{}
 	rtText := joinLayers(env.e.systemPromptLayers(rtCtx, "", proj, "", nil))
-	legacyText := joinLayers(env.e.systemPromptLayers(legacy, "", proj, "", nil))
 	for _, banned := range []string{"Reviewer command, script, hook and plugin execution is blocked", "agent.review_report", "scoped UMCode child agent"} {
 		if strings.Contains(rtText, banned) {
 			t.Fatalf("runtime prompt contains legacy text %q", banned)
@@ -833,11 +831,6 @@ func TestChildPromptTextIsPathSpecific(t *testing.T) {
 	}
 	if !strings.Contains(rtText, "You can read files but not change them.") {
 		t.Fatalf("runtime prompt lacks capability text: %q", rtText)
-	}
-	for _, want := range []string{"Reviewer command, script, hook and plugin execution is blocked", "agent.review_report", "scoped UMCode child agent"} {
-		if !strings.Contains(legacyText, want) {
-			t.Fatalf("legacy prompt lost %q", want)
-		}
 	}
 }
 

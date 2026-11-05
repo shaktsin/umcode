@@ -1,11 +1,11 @@
 <script lang="ts">
   import type { RuntimeAgent } from '$lib/types';
-  import { agentActive, agentStateLabel, type AgentChild } from '$lib/delegation';
+  import { agentActive, agentStateLabel } from '$lib/delegation';
   import { agentFellBack, capabilityChips } from '$lib/agentTree';
   let { agent, depth, selected, pending, onselect, oncancel }: { agent: RuntimeAgent; depth: number; selected: boolean; pending: boolean; onselect: () => void; oncancel: () => void } = $props();
   const fallback = $derived(agentFellBack(agent));
   const chips = $derived(capabilityChips(agent.capabilities));
-  const label = $derived(agentStateLabel({ state: agent.state, result: agent.result } as AgentChild));
+  const label = $derived(agentStateLabel(agent));
 </script>
 
 <li class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line px-2 py-1.5 min-w-0 {selected ? 'bg-raised' : ''}" style={`margin-left:${Math.min(depth, 3) * 14}px`} data-agent-row={agent.id} data-depth={depth}>

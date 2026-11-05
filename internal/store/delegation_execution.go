@@ -76,31 +76,6 @@ func (s *Store) AgentExecution(ctx context.Context, taskID, childID string) (Age
 	return x, err
 }
 
-func (s *Store) EnsureAgentExecution(ctx context.Context, task protocol.AgentTask, child protocol.AgentChild, parent protocol.Thread, msgs []llm.Message) (AgentExecution, error) {
-	if x, err := s.AgentExecution(ctx, task.ID, child.ID); err == nil {
-		return x, nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return x, err
-	}
-	data, err := json.Marshal(msgs)
-	if err != nil {
-		return AgentExecution{}, err
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return AgentExecution{}, err
-	}
-	defer tx.Rollback()
-	id, err := insertAgentExecution(ctx, tx, task.ID, child.ID, parent, string(data), true)
-	if err != nil {
-		return AgentExecution{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return AgentExecution{}, err
-	}
-	return AgentExecution{ThreadID: id, Context: msgs}, nil
-}
-
 func (s *Store) UpdateAgentExecutionModel(ctx context.Context, taskID, childID string, model protocol.ModelSelection) error {
 	data, err := json.Marshal(model)
 	if err != nil {

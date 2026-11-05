@@ -93,10 +93,7 @@ func TestMirrorRowIsInert(t *testing.T) {
 		t.Fatalf("legacy AgentChild sees mirror: %v", err)
 	}
 	// A genuine legacy child on another task is unaffected.
-	legacy, err := s.CreateAgentChild(t.Context(), protocol.AgentChild{TaskID: task.ID, Role: protocol.AgentRoleImplementer, Assignment: protocol.AgentAssignment{Prompt: "x"}}, "legacy-call")
-	if err != nil {
-		t.Fatal(err)
-	}
+	legacy := seedLegacyChild(t, s, task, "legacy", protocol.AgentStateCompleted)
 	kids, _ = s.AgentChildren(t.Context(), task.ID)
 	if len(kids) != 1 || kids[0].ID != legacy.ID {
 		t.Fatalf("legacy child lost: %+v", kids)
@@ -169,21 +166,6 @@ func TestRuntimeExecutionThreadHasEmptyApprovalMode(t *testing.T) {
 		t.Fatalf("runtime execution thread approval mode = %q, want empty", mode)
 	}
 
-	parent, err := s.GetThread(t.Context(), task.ThreadID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	child, err := s.CreateAgentChild(t.Context(), protocol.AgentChild{TaskID: task.ID, Role: protocol.AgentRoleImplementer, Assignment: protocol.AgentAssignment{Prompt: "p"}, State: protocol.AgentStateQueued}, "legacy-call")
-	if err != nil {
-		t.Fatal(err)
-	}
-	lx, err := s.EnsureAgentExecution(t.Context(), task, child, parent, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode := threadApprovalMode(t, s, lx.ThreadID); mode != "auto_all" {
-		t.Fatalf("legacy execution thread approval mode = %q, want the lead's (unchanged)", mode)
-	}
 }
 
 // threadApprovalMode reads a thread's stored mode, internal threads included.
