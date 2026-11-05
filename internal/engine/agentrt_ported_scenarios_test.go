@@ -132,7 +132,7 @@ func (x *runtimeE2E) spawnWith(t *testing.T, callID, entry, extra string) (strin
 // the old role words on purpose: authority comes from the approved
 // capabilities only, so the "reviewer" cannot write.
 func TestPortedSequentialImplementThenReview(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	x.setAgent("implementer", fakeStep{Tool: "file.write", Args: `{"path":"a.go","content":` + jsonString(e2eFromA) + `}`}, fakeStep{Text: "implemented: A returns 1"})
 	x.setAgent("reviewer",
 		fakeStep{Tool: "file.write", Args: `{"path":"a.go","content":"package a\n"}`},

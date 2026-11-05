@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/client"
+	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/plugins"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
@@ -88,6 +90,30 @@ func TestDelegationSubmittedInstalledSkill(t *testing.T) {
 	}
 }
 
+// plannedReply answers the admitted lead turn of th like textReply, after
+// approving a plan for its task, as the user's plan approval does: the
+// runtime closes a task whose admitted turn ends without a plan, and these
+// tests act on the task after the turn.
+func plannedReply(t *testing.T, h *harness, th protocol.Thread, text string) func(llm.Request, string) ([]llm.Event, error) {
+	return func(req llm.Request, key string) ([]llm.Event, error) {
+		ctx := context.Background()
+		task, err := h.eng.Store.ActiveAgentTask(ctx, th.ID, th.ProjectID)
+		if err != nil {
+			t.Errorf("active task: %v", err)
+			return textReply(text)(req, key)
+		}
+		plan := protocol.AgentPlan{ID: store.NewID("plan"), ThreadID: th.ID, Limits: protocol.DefaultPlanLimits(),
+			Agents: []protocol.PlanAgent{{Name: "worker", Purpose: "investigate", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone}}}}
+		if err = h.eng.Store.SaveAgentPlan(ctx, plan); err == nil {
+			err = h.eng.Store.ApproveAgentPlan(ctx, plan.ID, task.ID)
+		}
+		if err != nil {
+			t.Errorf("approve plan: %v", err)
+		}
+		return textReply(text)(req, key)
+	}
+}
+
 // Cancellation must be an app-owned action scoped to the owning parent chat.
 func TestDelegationRPCCancel(t *testing.T) {
 	h := newHarness(t, nil)
@@ -98,7 +124,7 @@ func TestDelegationRPCCancel(t *testing.T) {
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &other)
 	var activation protocol.DelegationEnableResult
 	h.call(protocol.MethodDelegationEnable, protocol.ThreadIDParams{ThreadID: th.ID}, &activation)
-	h.fake.push(textReply("ready"))
+	h.fake.push(plannedReply(t, h, th, "ready"))
 	var started protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "work", DelegationActivationToken: activation.ActivationToken}, &started)
 	h.waitTurn(started.Turn.ID, nil)
@@ -140,7 +166,7 @@ func TestDelegationRPCReadOwnership(t *testing.T) {
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &other)
 	var activation protocol.DelegationEnableResult
 	h.call(protocol.MethodDelegationEnable, protocol.ThreadIDParams{ThreadID: th.ID}, &activation)
-	h.fake.push(textReply("ready"))
+	h.fake.push(plannedReply(t, h, th, "ready"))
 	var started protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "work", DelegationActivationToken: activation.ActivationToken}, &started)
 	h.waitTurn(started.Turn.ID, nil)

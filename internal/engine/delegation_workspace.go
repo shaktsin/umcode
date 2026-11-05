@@ -55,19 +55,9 @@ func (e *Engine) validateDelegationParent(ctx context.Context, t protocol.AgentT
 	return nil
 }
 
+// managedChildWorkspaces gives runtime agents owned Git checkouts (see
+// RuntimeWorkspaceResolver in agentrt_runner.go).
 type managedChildWorkspaces struct{ service *delegation.WorkspaceService }
-
-func (m managedChildWorkspaces) Resolve(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild) (ChildWorkspace, error) {
-	w, err := m.service.Prepare(ctx, t, c)
-	return ChildWorkspace{ID: w.ID, Root: w.Root, Revision: w.BaseRevision}, err
-}
-func (m managedChildWorkspaces) Finalize(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild, w ChildWorkspace) (ChildWorkspace, error) {
-	r, err := m.service.Snapshot(ctx, t, c, delegation.WorkspaceRef{ID: w.ID, Root: w.Root, BaseRevision: w.Revision})
-	return ChildWorkspace{ID: r.ID, Root: r.Root, Revision: r.ResultRevision, ChangedPaths: append([]string{}, r.ChangedPaths...)}, err
-}
-
-var _ WorkspaceResolver = managedChildWorkspaces{}
-var _ ChildWorkspaceFinalizer = managedChildWorkspaces{}
 
 func privateParentRevision(ctx context.Context, root string) (string, error) {
 	b, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--verify", "HEAD^{commit}").Output()

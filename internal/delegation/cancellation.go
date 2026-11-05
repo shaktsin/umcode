@@ -40,8 +40,8 @@ func RegisterChildCancellation(ctx context.Context, cancel context.CancelFunc) e
 
 // WithChildCancellation gives ctx a cancellation owner for the engine turns an
 // execution starts (see RegisterChildCancellation): each registered turn is
-// cancelled when ctx is done. The agent runtime's runner uses it in place of
-// the coordinator's slot. stop releases the watch on ctx.
+// cancelled when ctx is done. The agent runtime's runner gives every agent
+// execution one. stop releases the watch on ctx.
 func WithChildCancellation(ctx context.Context) (context.Context, func()) {
 	h := &childCancellation{}
 	ctx = context.WithValue(ctx, cancellationKey{}, h)
@@ -49,14 +49,12 @@ func WithChildCancellation(ctx context.Context) (context.Context, func()) {
 	return ctx, func() { stop() }
 }
 
-// InheritRunnerContext preserves the durable queue and actual-turn cancellation
-// owner when the engine reconstructs its execution context. It grants no parent
-// delegation authority. Task5 must still apply its child role/policy marker.
+// InheritRunnerContext preserves the actual-turn cancellation owner when the
+// engine reconstructs its execution context. It grants no parent delegation
+// authority.
 func InheritRunnerContext(ctx, from context.Context) context.Context {
-	for _, key := range []any{queueKey{}, cancellationKey{}} {
-		if value := from.Value(key); value != nil {
-			ctx = context.WithValue(ctx, key, value)
-		}
+	if value := from.Value(cancellationKey{}); value != nil {
+		ctx = context.WithValue(ctx, cancellationKey{}, value)
 	}
 	return ctx
 }

@@ -47,15 +47,14 @@ type runtimeIntegrateResult struct {
 	CleanupWarning string                        `json:",omitempty"`
 }
 
-// registerRuntimeIntegrate registers the lead-only agent.integrate tool. It
-// replaces the legacy agent.integrate in runtime_v2 mode.
+// registerRuntimeIntegrate registers the lead-only agent.integrate tool.
 func (e *Engine) registerRuntimeIntegrate(reg *tools.Registry) {
 	reg.Add(tools.NewRuntimeIntegrateTool(e.authorizeDelegationTool, runtimeCaller, e.runtimeIntegrateCall))
 }
 
 // runtimeIntegrateCall runs one agent.integrate action for the lead. The tool
 // has already refused non-lead contexts and read-only tools. Actions are
-// serialised with the legacy workflow actions; the service additionally holds
+// serialised with runtime verification (delegationWorkflowMu); the service additionally holds
 // its per-task integration lock for each operation.
 func (e *Engine) runtimeIntegrateCall(ctx context.Context, task protocol.AgentTask, args tools.RuntimeIntegrateArgs) (any, error) {
 	svc := e.DelegationWorkspaceService

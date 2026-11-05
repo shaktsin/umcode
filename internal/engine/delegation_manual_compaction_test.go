@@ -20,7 +20,7 @@ func TestManualCompactionDelegationBudget(t *testing.T) {
 			if mode == "ordinary" {
 				delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "ordinary conversation"})
 			} else {
-				task = childExecutionTask(t, e, th)
+				task = plannedTask(t, e, th)
 				var err error
 				_, shared, err = e.DelegationCoordinator.Task(t.Context(), task, protocol.ExecutionLimits{})
 				if err != nil {
@@ -102,7 +102,7 @@ func TestManualCompactionDelegationCancellation(t *testing.T) {
 	for _, mode := range []string{"task", "rpc"} {
 		t.Run(mode, func(t *testing.T) {
 			e, th, _, _ := delegationFixture(t)
-			task := childExecutionTask(t, e, th)
+			task := plannedTask(t, e, th)
 			owner, shared, err := e.DelegationCoordinator.Task(t.Context(), task, protocol.ExecutionLimits{})
 			if err != nil {
 				t.Fatal(err)

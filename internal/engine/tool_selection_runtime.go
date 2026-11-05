@@ -334,12 +334,6 @@ func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.P
 	if !childToolAllowed(ctx, c.tool.Name()) || (childExecutionFrom(ctx) != nil && c.plugin) {
 		return false
 	}
-	if c.tool.Name() == "agent.review_report" {
-		x := childExecutionFrom(ctx)
-		if x == nil || x.runtime != nil || x.child.Role != protocol.AgentRoleReviewer {
-			return false
-		}
-	}
 	if e.suggestOnlyTool(c.tool.Name()) {
 		// Offered to the lead only, and only when the turn is not admitted.
 		if _, admitted := DelegationTaskFromContext(ctx); admitted {

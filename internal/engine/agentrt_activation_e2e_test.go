@@ -60,7 +60,7 @@ type activationE2E struct {
 	lead context.Context // the lead's admitted tool context once a task exists
 }
 
-// newActivationE2E builds an engine with runtime_v2 on over a Git project
+// newActivationE2E builds an engine over a Git project
 // holding a.go and b.go, a two-model pool (claude/deterministic and
 // claude/second), stubbed verification tools and the scripted provider.
 func newActivationE2E(t *testing.T, configure func(*config.Config)) *activationE2E {
@@ -428,7 +428,7 @@ func (x *activationE2E) approvedFlow(t *testing.T, plan string, models map[strin
 }
 
 func TestE2ESuggestEnablePlanApproveSpawnIntegrate(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	x.setAgent("alpha", fakeStep{Tool: "file.write", Args: `{"path":"a.go","content":` + jsonString(e2eFromA) + `}`}, fakeStep{Text: "alpha changed A"})
 	x.setAgent("beta", fakeStep{Tool: "file.write", Args: `{"path":"b.go","content":` + jsonString(e2eFromB) + `}`}, fakeStep{Text: "beta changed B"})
 	x.setAgent("reviewer", fakeStep{Tool: "file.read", Args: `{"path":"a.go"}`}, fakeStep{Text: "A looks right"})
@@ -573,13 +573,12 @@ func TestE2ESuggestEnablePlanApproveSpawnIntegrate(t *testing.T) {
 }
 
 // restartedEngine starts a second engine on x's store and secrets, as after a
-// restart, with runtime_v2 on and x's scripted provider.
+// restart, with x's scripted provider.
 func restartedEngine(t *testing.T, x *activationE2E) (*Engine, *runtimeScriptProvider) {
 	t.Helper()
 	cfg := config.Default(t.TempDir())
 	cfg.LLM.Provider = "claude"
 	cfg.LLM.Model = "deterministic"
-	runtimeV2On(cfg)
 	p := &runtimeScriptProvider{script: x.script}
 	reg := llm.NewRegistry()
 	reg.Register(p)
@@ -612,7 +611,7 @@ func rtCheckoutState(t *testing.T, root string) string {
 }
 
 func TestE2EDeclineThenNoRepeatSuggestion(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	suggestion := x.suggestTurn(t)
 	res, err := x.e.RespondAgentSuggestion(t.Context(), protocol.AgentSuggestionRespondParams{SuggestionID: suggestion, Decision: protocol.SuggestionDecline})
 	if err != nil || res.Suggestion.State != store.SuggestionDeclined || res.ActivationToken != "" {
@@ -644,7 +643,7 @@ func TestE2EDeclineThenNoRepeatSuggestion(t *testing.T) {
 }
 
 func TestE2EReviseThenSecondProposal(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	first := `{"agents":[` + planEntry("alpha", "change A", "read-write", "") + "," + planEntry("beta", "change B", "read-write", "") + `]}`
 	second := `{"agents":[` + planEntry("solo", "change A and B", "read-write", "") + `]}`
 	token := x.enable(t, x.suggestTurn(t))
@@ -699,7 +698,7 @@ func TestE2EReviseThenSecondProposal(t *testing.T) {
 }
 
 func TestE2EAmendAfterFailedCombinedChecks(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	x.setAgent("alpha", fakeStep{Tool: "file.write", Args: `{"path":"a.go","content":` + jsonString(e2eFromA) + `}`}, fakeStep{Text: "alpha changed A"})
 	x.setAgent("beta", fakeStep{Tool: "file.write", Args: `{"path":"b.go","content":` + jsonString(e2eFromB) + `}`}, fakeStep{Text: "beta changed B"})
 	plan := `{"agents":[` + planEntry("alpha", "change A", "read-write", "") + "," + planEntry("beta", "change B", "read-write", "") + `]}`
@@ -760,7 +759,7 @@ func TestE2EAmendAfterFailedCombinedChecks(t *testing.T) {
 }
 
 func TestE2ERestartWithPendingPlan(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	plan := `{"agents":[` + planEntry("worker", "change A", "read-write", "") + `]}`
 	token := x.enable(t, x.suggestTurn(t))
 	turn, wait := x.proposeTurn(t, token, plan)
@@ -837,68 +836,4 @@ func TestE2ERestartWithPendingPlan(t *testing.T) {
 		t.Fatal("the stale plan was approved after a newer one")
 	}
 	x.waitAgent(t, x.spawn(t, "worker"))
-}
-
-func TestE2EFlagOffUnchanged(t *testing.T) {
-	x := newActivationE2E(t, nil)
-	for _, name := range []string{"agent.suggest", "agent.propose_plan", "agent.message", "agent.list"} {
-		if _, ok := x.e.Tools.Get(name); ok {
-			t.Fatalf("%s registered with runtime_v2 off", name)
-		}
-	}
-	// An ordinary turn offers none of the activation tools; a model that
-	// calls agent.suggest anyway gets an error and nothing is stored.
-	x.setLead(e2eSuggest, e2eLeadStep{"agent.suggest", `{"reason":"parallel"}`})
-	x.turn(t, protocol.TurnStartParams{Text: e2eSuggest})
-	reqs, _ := x.p.snapshot()
-	for _, r := range reqs {
-		for _, name := range requestToolNames(r) {
-			if name == "agent.suggest" || name == "agent.propose_plan" {
-				t.Fatalf("%s offered with runtime_v2 off", name)
-			}
-		}
-	}
-	if res := x.leadResults(t, "agent.suggest"); len(res) != 1 || !res[0].IsError {
-		t.Fatalf("agent.suggest with runtime_v2 off = %+v", res)
-	}
-	if n := x.suggestionCount(t); n != 0 {
-		t.Fatalf("stored %d suggestions", n)
-	}
-	// The legacy flow is intact: delegation/enable then the token admits a
-	// task whose turn gets the legacy agent tools and no plan tools.
-	activation, err := x.e.PrepareDelegation(t.Context(), x.th.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := len(reqs)
-	x.setLead("implement it", e2eLeadStep{"agent.propose_plan", `{"agents":[]}`})
-	x.turn(t, protocol.TurnStartParams{Text: "implement it", DelegationActivationToken: activation.ActivationToken})
-	x.admitted(t)
-	if x.task.Activation != protocol.AgentActivationExplicitUser {
-		t.Fatalf("task = %+v", x.task)
-	}
-	reqs, _ = x.p.snapshot()
-	offered := map[string]bool{}
-	for _, r := range reqs[before:] {
-		for _, name := range requestToolNames(r) {
-			offered[name] = true
-		}
-	}
-	if !offered["agent.spawn"] || !offered["agent.followup"] || offered["agent.propose_plan"] || offered["agent.suggest"] {
-		t.Fatalf("admitted legacy turn offered %v", offered)
-	}
-	if res := x.leadResults(t, "agent.propose_plan"); len(res) != 1 || !res[0].IsError {
-		t.Fatalf("agent.propose_plan with runtime_v2 off = %+v", res)
-	}
-	var plans int
-	if err = x.e.Store.DB.QueryRow(`SELECT count(*) FROM agent_plans`).Scan(&plans); err != nil || plans != 0 {
-		t.Fatalf("plans = %d %v", plans, err)
-	}
-	// The activation RPCs find nothing to answer.
-	if _, err = x.e.RespondAgentSuggestion(t.Context(), protocol.AgentSuggestionRespondParams{SuggestionID: "missing", Decision: protocol.SuggestionEnable}); err == nil {
-		t.Fatal("suggestion respond accepted with runtime_v2 off")
-	}
-	if _, err = x.e.RespondAgentPlan(t.Context(), protocol.AgentPlanRespondParams{PlanID: "missing", Decision: protocol.PlanDecisionApprove}); err == nil {
-		t.Fatal("plan respond accepted with runtime_v2 off")
-	}
 }

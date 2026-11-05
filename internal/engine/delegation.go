@@ -272,7 +272,7 @@ func (e *Engine) EnableDelegation(ctx context.Context, threadID, rootTurnID stri
 
 func isDelegationTool(name string) bool {
 	name = tools.FromWire(name)
-	return name != "agent.review_report" && strings.HasPrefix(name, "agent.") || name == "delegation.enable"
+	return strings.HasPrefix(name, "agent.") || name == "delegation.enable"
 }
 
 // CancelDelegation remains available when a project folder is unavailable, so
@@ -293,30 +293,21 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 	if task.ThreadID != parent.ID {
 		return result, protocol.Errorf(protocol.CodeInvalidParams, "delegation task belongs to another chat")
 	}
-	runtimeAgent := false
 	if p.ChildID != "" {
-		if _, err = e.Store.AgentChild(ctx, task.ID, p.ChildID); err == nil {
-			err = e.DelegationCoordinator.Cancel(ctx, task.ID, p.ChildID)
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return result, err
-		} else if _, rtErr := e.Store.RuntimeAgent(ctx, task.ID, p.ChildID); e.AgentRuntime != nil && rtErr == nil {
-			// A runtime agent of this task (legacy rows never name one).
-			runtimeAgent = true
-			result.Integration, err = e.cancelRuntimeAgent(ctx, task.ID, p.ChildID)
-		} else if rtErr != nil && !errors.Is(rtErr, store.ErrNotFound) {
-			return result, rtErr
-		} else {
-			// Neither: the legacy not-found error.
+		// ChildID names a runtime agent of this task. Legacy children are
+		// read-only history: they are never active, so never cancelled.
+		if _, err = e.Store.RuntimeAgent(ctx, task.ID, p.ChildID); err != nil {
 			return result, err
 		}
+		result.Integration, err = e.cancelRuntimeAgent(ctx, task.ID, p.ChildID)
 	} else {
 		// Runtime agents first, so they end cancelled rather than failed by
-		// the task closing under them. Without a runtime this is a no-op.
+		// the task closing under them.
 		err = errors.Join(e.cancelRuntimeAgents(ctx, task.ID), e.DelegationCoordinator.CancelTask(ctx, task.ID))
 	}
-	// Whatever part of the cancel failed (for example the runtime cancel
-	// after the legacy task cancel succeeded), clients still hear the task's
-	// current state; the error is returned after publishing.
+	// Whatever part of the cancel failed (for example the task cancel after
+	// the agent cancel succeeded), clients still hear the task's current
+	// state; the error is returned after publishing.
 	cancelErr := err
 	result.Task, err = e.Store.AgentTask(ctx, task.ID)
 	if err != nil {
@@ -330,21 +321,15 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 		result.Integration, reportErr = e.cancelledIntegrationReport(ctx, task.ID)
 		cancelErr = errors.Join(cancelErr, reportErr)
 	}
-	if runtimeAgent {
-		// Runtime agents are not legacy children; their changes reach clients
-		// through the runtime's own agent events.
-		result.Children = []protocol.AgentChild{}
-	} else {
-		result.Children, err = e.DelegationCoordinator.List(ctx, task.ID)
-	}
-	if err == nil {
-		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &result.Task})
-	}
+	// Runtime agents reach clients through the runtime's own agent events;
+	// legacy children are history only. The field stays for compatibility.
+	result.Children = []protocol.AgentChild{}
+	e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &result.Task})
 	if result.Integration != nil {
 		// What the cancel left integrated, for clients showing the task.
 		e.publishRuntimeIntegration(task.ID)
 	}
-	return result, errors.Join(cancelErr, err)
+	return result, cancelErr
 }
 
 // authorizeDelegationTool revalidates the admitted context against durable

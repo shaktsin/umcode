@@ -568,7 +568,6 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			ComputeDiskMiB:   intOr(p.Tools.ComputeDiskMiB, 0),
 			ApprovalMode:     normalizedApprovalMode(th.ApprovalMode),
 			RestrictedChild:  childExecutionFrom(ctx) != nil,
-			ReadOnly:         childExecutionFrom(ctx) != nil && childExecutionFrom(ctx).runtime == nil && childExecutionFrom(ctx).child.Role == protocol.AgentRoleReviewer,
 			Record: func(c context.Context, abs string, before *string, deleted bool) {
 				rec.Record(sctx, abs, before, deleted)
 			},

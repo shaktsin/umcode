@@ -29,9 +29,7 @@ func runtimeCloseBudget(ctx context.Context) time.Duration {
 }
 
 // registerAgentRuntime builds the agent runtime on base and registers its
-// model-facing tools in place of the legacy delegation agent tools (including
-// agent.integrate, which replaces the legacy workflow action, so it must run
-// after the workflow tools are registered). The lead
+// model-facing tools. The lead
 // keeps the default RootCapabilities authority (agentrt.WithLeadCapabilities).
 func (e *Engine) registerAgentRuntime(reg *tools.Registry, base context.Context) {
 	e.AgentRuntime = agentrt.NewRuntime(e.Store, runtimeRunner{engine: e}, base, e.runtimeAgentOptions()...)
@@ -117,8 +115,7 @@ func (e *Engine) cancelRuntimeAgents(ctx context.Context, taskID string) error {
 	return errors.Join(errs...)
 }
 
-// reconcileRuntimeIntegrations runs at startup, whatever agents.runtime_v2
-// says (revisions left by an earlier flag-on run still need it). For every
+// reconcileRuntimeIntegrations runs at startup. For every
 // task with a revision left applying, or a head that missed its last applied
 // revision, it settles the revision from the actual parent tree
 // (ReconcileRuntimeIntegration): tree before ⇒ back to submitted (or conflict)
@@ -131,7 +128,7 @@ func (e *Engine) cancelRuntimeAgents(ctx context.Context, taskID string) error {
 func (e *Engine) reconcileRuntimeIntegrations(ctx context.Context) {
 	ids, err := e.Store.RuntimeIntegrationsToReconcile(ctx)
 	if err != nil {
-		// Never fatal: the engine must start whatever runtime_v2 says; an
+		// Never fatal: the engine must start; an
 		// unsettled revision is still reconciled by the next accept or
 		// completion.
 		e.Log.Warn("could not list runtime integrations to reconcile", "err", fmt.Errorf("list runtime integrations to reconcile: %w", err))

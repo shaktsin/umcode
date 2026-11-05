@@ -19,10 +19,8 @@ import (
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
-func runtimeV2On(c *config.Config) { c.Agents.RuntimeV2 = true }
-
 // agentToolNames returns the registered agent.* tool names, excluding the
-// workflow tools that are registered in both modes.
+// lead-only agent.integrate.
 func agentToolNames(e *Engine) []string {
 	workflow := map[string]bool{"agent.integrate": true, "agent.complete": true, "agent.review_report": true}
 	var names []string
@@ -35,35 +33,17 @@ func agentToolNames(e *Engine) []string {
 	return names
 }
 
-func TestRuntimeV2FlagOffKeepsLegacyTools(t *testing.T) {
+func TestRuntimeToolsRegistered(t *testing.T) {
 	e, _, _, _ := delegationFixture(t)
-	if _, ok := e.Tools.Get("agent.followup"); !ok {
-		t.Fatal("legacy agent.followup missing with runtime_v2 off")
-	}
-	if _, ok := e.Tools.Get("agent.message"); ok {
-		t.Fatal("runtime agent.message registered with runtime_v2 off")
-	}
-	if e.AgentRuntime != nil {
-		t.Fatal("agent runtime constructed with runtime_v2 off")
-	}
-	for _, n := range []string{"agent.integrate", "agent.complete", "agent.review_report"} {
-		if _, ok := e.Tools.Get(n); !ok {
-			t.Fatalf("workflow tool %s missing", n)
-		}
-	}
-}
-
-func TestRuntimeV2FlagOnRegistersRuntimeTools(t *testing.T) {
-	e, _, _, _ := delegationFixtureWith(t, runtimeV2On)
 	want := []string{"agent.cancel", "agent.list", "agent.message", "agent.propose_plan", "agent.spawn", "agent.status", "agent.suggest", "agent.wait"}
 	if got := agentToolNames(e); !slices.Equal(got, want) {
 		t.Fatalf("agent tools = %v, want %v", got, want)
 	}
 	if _, ok := e.Tools.Get("agent.followup"); ok {
-		t.Fatal("legacy agent.followup registered with runtime_v2 on")
+		t.Fatal("legacy agent.followup registered")
 	}
 	if e.AgentRuntime == nil {
-		t.Fatal("agent runtime not constructed with runtime_v2 on")
+		t.Fatal("agent runtime not constructed")
 	}
 	for _, n := range []string{"agent.integrate", "agent.complete", "agent.review_report"} {
 		if _, ok := e.Tools.Get(n); !ok {
@@ -72,11 +52,11 @@ func TestRuntimeV2FlagOnRegistersRuntimeTools(t *testing.T) {
 	}
 }
 
-// runtimeV2Admitted starts a delegated turn with runtime_v2 on and approves a
+// runtimeAdmitted starts a delegated turn and approves a
 // one-entry plan for its task, returning the admitted lead context.
-func runtimeV2Admitted(t *testing.T) (*Engine, protocol.Thread, protocol.Turn, protocol.AgentTask, context.Context) {
+func runtimeAdmitted(t *testing.T) (*Engine, protocol.Thread, protocol.Turn, protocol.AgentTask, context.Context) {
 	t.Helper()
-	e, th, root, p := delegationFixtureWith(t, runtimeV2On)
+	e, th, root, p := delegationFixture(t)
 	activation, err := e.PrepareDelegation(t.Context(), th.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -99,8 +79,8 @@ func runtimeV2Admitted(t *testing.T) (*Engine, protocol.Thread, protocol.Turn, p
 	return e, th, turn, task, admitted
 }
 
-func TestRuntimeV2SpawnKeyIncludesTurnAndOccurrence(t *testing.T) {
-	e, th, turn, task, admitted := runtimeV2Admitted(t)
+func TestRuntimeSpawnKeyIncludesTurnAndOccurrence(t *testing.T) {
+	e, th, turn, task, admitted := runtimeAdmitted(t)
 	later := protocol.Turn{ID: store.NewID("turn"), ThreadID: th.ID, Status: protocol.TurnCompleted, StartedAt: time.Now()}
 	if err := e.Store.CreateTurn(t.Context(), later); err != nil {
 		t.Fatal(err)
@@ -210,7 +190,7 @@ func blockUntilCancelled(started chan<- struct{}) func(int, context.Context, llm
 }
 
 func TestChildSpawnIsIntersectedWithOwnCaps(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	started := make(chan struct{}, 4)
 	env.p.script = blockUntilCancelled(started)
 	env.approvePlan(t, protocol.DefaultPlanLimits(),
@@ -254,7 +234,7 @@ func TestChildSpawnIsIntersectedWithOwnCaps(t *testing.T) {
 }
 
 func TestAuthorizeDelegationToolForRuntimeAgentContext(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	a := env.newRuntimeAgent(t, "kid", readOnlyCaps, "")
 	checkout := t.TempDir()
 	x := &childExecution{task: env.task, workspace: ChildWorkspace{Root: checkout}, runtime: &runtimeExecution{agent: a}}
@@ -302,7 +282,7 @@ func waitForSignal(t *testing.T, ch <-chan struct{}, what string) {
 // provider calls block until their context ends.
 func stopFixture(t *testing.T) (runtimeRunnerEnv, chan struct{}) {
 	t.Helper()
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	started := make(chan struct{}, 4)
 	env.p.script = blockUntilCancelled(started)
 	limits := protocol.DefaultPlanLimits()
@@ -379,21 +359,6 @@ func TestStopTurnCancelsRuntimeAgents(t *testing.T) {
 	requireAllCancelled(t, env)
 }
 
-func TestCancelDelegationWithoutRuntimeIsUnchanged(t *testing.T) {
-	e, th, _, _ := delegationFixture(t)
-	task := childExecutionTask(t, e, th)
-	if e.AgentRuntime != nil {
-		t.Fatal("runtime constructed with the flag off")
-	}
-	if _, err := e.CancelDelegation(t.Context(), protocol.DelegationCancelParams{ThreadID: th.ID, TaskID: task.ID}); err != nil {
-		t.Fatal(err)
-	}
-	got, err := e.Store.AgentTask(t.Context(), task.ID)
-	if err != nil || got.State != protocol.AgentStateCancelled {
-		t.Fatalf("task = %q err %v", got.State, err)
-	}
-}
-
 type exitRecorder struct {
 	started chan struct{}
 	exited  chan struct{}
@@ -408,7 +373,7 @@ func (r *exitRecorder) Run(ctx context.Context, _ protocol.RuntimeAgent) (protoc
 }
 
 func TestShutdownClosesRuntimeBeforeReturning(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	env.approvePlan(t, protocol.DefaultPlanLimits(), protocol.PlanAgent{Name: "worker", Purpose: "investigate", Capabilities: readOnlyCaps})
 	r := &exitRecorder{started: make(chan struct{}), exited: make(chan struct{})}
 	env.e.AgentRuntime = agentrt.NewRuntime(env.e.Store, r, env.e.baseCtx)
@@ -432,7 +397,7 @@ func TestShutdownClosesRuntimeBeforeReturning(t *testing.T) {
 	}
 }
 
-func TestEngineStartReconcilesRuntimeAgentsWithFlagOff(t *testing.T) {
+func TestEngineStartReconcilesRuntimeAgents(t *testing.T) {
 	e, th, _, _ := delegationFixture(t)
 	st := e.Store
 	turn := protocol.Turn{ID: store.NewID("turn"), ThreadID: th.ID, Status: protocol.TurnCompleted, StartedAt: time.Now()}
@@ -461,12 +426,9 @@ func TestEngineStartReconcilesRuntimeAgentsWithFlagOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { restarted.Shutdown(context.Background()) })
-	if restarted.AgentRuntime != nil {
-		t.Fatal("runtime constructed with runtime_v2 off")
-	}
 	got, err := st.RuntimeAgent(t.Context(), "task-old", a.ID)
 	if err != nil || got.State != protocol.AgentStateInterrupted {
-		t.Fatalf("state=%s err=%v; want interrupted after restart with the flag off", got.State, err)
+		t.Fatalf("state=%s err=%v; want interrupted after restart", got.State, err)
 	}
 }
 
@@ -524,7 +486,7 @@ func (env runtimeRunnerEnv) completeTask(t *testing.T) {
 }
 
 func TestRuntimeBudgetForgottenAfterTaskCancel(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	env.trackBudget(t)
 	if _, err := env.e.CancelDelegation(t.Context(), protocol.DelegationCancelParams{ThreadID: env.th.ID, TaskID: env.task.ID}); err != nil {
 		t.Fatal(err)
@@ -533,7 +495,7 @@ func TestRuntimeBudgetForgottenAfterTaskCancel(t *testing.T) {
 }
 
 func TestRuntimeBudgetForgottenAfterTaskCompletes(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	env.trackBudget(t)
 	time.Sleep(3 * runtimeBudgetPoll)
 	if !budgetEntry(env.e, env.task.ID) {
@@ -545,7 +507,7 @@ func TestRuntimeBudgetForgottenAfterTaskCompletes(t *testing.T) {
 }
 
 func TestRuntimeBudgetKeptWhileAgentRuns(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	env.approvePlan(t, protocol.DefaultPlanLimits(), protocol.PlanAgent{Name: "worker", Purpose: "investigate", Capabilities: readOnlyCaps})
 	r := &exitRecorder{started: make(chan struct{}), exited: make(chan struct{})}
 	rt := agentrt.NewRuntime(env.e.Store, r, env.e.baseCtx)
@@ -568,7 +530,7 @@ func TestRuntimeBudgetKeptWhileAgentRuns(t *testing.T) {
 }
 
 func TestRuntimeBudgetOneTrackerPerTask(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	for i := 0; i < 3; i++ {
 		env.trackBudget(t) // one per lead turn
 	}
@@ -589,7 +551,7 @@ func TestRuntimeBudgetOneTrackerPerTask(t *testing.T) {
 
 // A forgotten budget on an ACTIVE task fails closed without calling the model.
 func TestRuntimeLateRunnerFailsClosedOnActiveTask(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	a := env.newRuntimeAgent(t, "late", readOnlyCaps, "")
 	env.trackBudget(t)
 	kept, _ := env.e.runtimeBudgets.Load(env.task.ID)
@@ -605,7 +567,7 @@ func TestRuntimeLateRunnerFailsClosedOnActiveTask(t *testing.T) {
 // Forgetting compares the budget pointer: a fresh budget registered for the
 // task meanwhile is never clobbered, and keeps a tracker.
 func TestForgetRuntimeBudgetKeepsFreshlyRegisteredBudget(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	stale := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100}, protocol.UsageTotals{}, nil)
 	fresh := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 200}, protocol.UsageTotals{}, nil)
 	env.e.rememberRuntimeBudget(env.task.ID, fresh)
@@ -657,7 +619,7 @@ func (r *hangingRunner) Run(context.Context, protocol.RuntimeAgent) (protocol.Ag
 // A runner that never stops must not starve the rest of Shutdown: Close gets
 // at most half of the caller's deadline, so Plugins and MCP still close.
 func TestShutdownReachesPluginsAndMCPWhenRunnerHangs(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	env.approvePlan(t, protocol.DefaultPlanLimits(), protocol.PlanAgent{Name: "worker", Purpose: "investigate", Capabilities: readOnlyCaps})
 	r := &hangingRunner{started: make(chan struct{}), release: make(chan struct{})}
 	t.Cleanup(func() { close(r.release) })

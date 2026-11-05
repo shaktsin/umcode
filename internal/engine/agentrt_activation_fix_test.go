@@ -12,7 +12,7 @@ import (
 // that has no approved plan and no agents ends that empty task, so agents can
 // be enabled again later in the same chat.
 func TestPlanDeclineClosesEmptyTask(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	plan := `{"agents":[` + planEntry("worker", "change A", "read-write", "") + `]}`
 	token := x.enable(t, x.suggestTurn(t))
 	_, wait := x.proposeTurn(t, token, plan)
@@ -36,7 +36,7 @@ func TestPlanDeclineClosesEmptyTask(t *testing.T) {
 }
 
 func TestPlanCardTimeoutClosesEmptyTask(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	x.e.planCardTimeout = 300 * time.Millisecond
 	plan := `{"agents":[` + planEntry("worker", "change A", "read-write", "") + `]}`
 	token := x.enable(t, x.suggestTurn(t))
@@ -58,7 +58,7 @@ func TestPlanCardTimeoutClosesEmptyTask(t *testing.T) {
 // A task that already has an approved plan and agents is never ended by
 // declining a later plan.
 func TestPlanDeclineKeepsTaskWithAgents(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	plan := `{"agents":[` + planEntry("worker", "read A", "read", "") + `]}`
 	x.approvedFlow(t, plan, nil)
 	x.waitAgent(t, x.spawn(t, "worker"))
@@ -77,7 +77,7 @@ func TestPlanDeclineKeepsTaskWithAgents(t *testing.T) {
 // Final review I2: read-only views of a suggestion card and a plan card with
 // their real stored state; reading never changes anything.
 func TestAgentSuggestionGet(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	id := x.suggestTurn(t)
 	get := func(e *Engine) protocol.AgentSuggestion {
 		t.Helper()
@@ -117,7 +117,7 @@ func TestAgentSuggestionGet(t *testing.T) {
 }
 
 func TestAgentPlanGet(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	first := `{"agents":[` + planEntry("alpha", "change A", "read-write", "") + `]}`
 	second := `{"agents":[` + planEntry("solo", "change A", "read-write", "") + `]}`
 	token := x.enable(t, x.suggestTurn(t))
@@ -166,7 +166,7 @@ func TestAgentPlanGet(t *testing.T) {
 }
 
 func TestAgentPlanGetAfterRestart(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	token := x.enable(t, x.suggestTurn(t))
 	x.proposeTurn(t, token, `{"agents":[`+planEntry("worker", "change A", "read-write", "")+`]}`)
 	a, card := x.pendingCard(t, x.e)
@@ -183,7 +183,7 @@ func TestAgentPlanGetAfterRestart(t *testing.T) {
 // Final review m4: an edited approve announces approval/resolved with the
 // edited card, and the approved plan is announced exactly once.
 func TestPlanApproveEventsCarryEditedCardOnce(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	sub := &recordingSub{}
 	x.e.Bus.Add(sub)
 	defer x.e.Bus.Remove(sub.ID())

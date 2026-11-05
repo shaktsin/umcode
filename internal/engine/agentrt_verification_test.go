@@ -49,7 +49,7 @@ const rvPlanTwo = `{"checks":[{"label":"unit","command":"go test ./...","kind":"
 
 func runtimeVerificationEnv(t *testing.T) rvEnv {
 	t.Helper()
-	e, _, _, task, ctx := runtimeV2Admitted(t)
+	e, _, _, task, ctx := runtimeAdmitted(t)
 	env := rvEnv{e: e, task: task, root: tools.ScopeFrom(ctx).Root, ctx: ctx,
 		planner: &stubVerificationTool{name: "verification.plan", out: rvPlanTwo},
 		runner:  &stubVerificationTool{name: "verification.run"},
