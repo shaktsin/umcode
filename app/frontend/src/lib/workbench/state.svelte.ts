@@ -102,6 +102,14 @@ export class WorkbenchState {
     this.remember(id);
   }
 
+  acceptImport(projectId: string, bundle: OpenWorkbenchModel): boolean {
+    if (this.projectId !== projectId || !this.connected || !this.current) return false;
+    this.begin();
+    this.current.models = [bundle.model, ...this.models.filter(model => model.id !== bundle.model.id)];
+    this.accept(bundle); this.tab = 'Build'; this.notice = `Imported ${bundle.model.name}. Original files remain in their source folder.`;
+    return true;
+  }
+
   async open(modelId: string) {
     if (!this.projectId || !this.connected) return;
     const token = this.begin(), projectId = this.projectId;

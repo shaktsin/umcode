@@ -18,8 +18,18 @@ func (e *Engine) workbenchDataRoot(ctx context.Context, projectID, modelID strin
 	if err != nil {
 		return "", err
 	}
-	if _, err := workbench.Open(project.Root, modelID); err != nil {
+	opened, err := workbench.Open(project.Root, modelID)
+	if err != nil {
 		return "", protocol.Errorf(protocol.CodeInvalidParams, "model is unavailable: %v", err)
+	}
+	if workbench.IsImportedGraph(opened.Graph) {
+		state, err := e.importedRunner().Status(workbench.BundleTarget{ProjectRoot: project.Root, ModelID: modelID, CreatedAt: opened.Model.CreatedAt.Format(time.RFC3339Nano)})
+		if err != nil {
+			return "", err
+		}
+		if !state.Ready {
+			return "", errors.New("Data is gated: " + state.Reason)
+		}
 	}
 	return project.Root, nil
 }
@@ -99,7 +109,16 @@ func (e *Engine) PrepareWorkbenchData(ctx context.Context, p protocol.WorkbenchD
 	if _, err := matchingWorkbenchModel(root, p.ModelID, p.ModelCreatedAt); err != nil {
 		return nil, err
 	}
-	selection, err := workbench.PrepareData(root, p.ModelID, p.Config)
+	opened, err := workbench.Open(root, p.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	var selection workbench.DataSelection
+	if workbench.IsImportedGraph(opened.Graph) {
+		selection, err = workbench.PrepareImportedData(root, p.ModelID, p.Config)
+	} else {
+		selection, err = workbench.PrepareData(root, p.ModelID, p.Config)
+	}
 	if err != nil {
 		return nil, protocol.Errorf(protocol.CodeInvalidParams, "prepare dataset: %v", err)
 	}

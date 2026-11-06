@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { ChevronRight, Layers3, Plus, Trash2 } from '@lucide/svelte';
+  import { ChevronRight, Layers3, Trash2 } from '@lucide/svelte';
   import { describeWorkbenchTask, type WorkbenchModel } from '$lib/workbench/types';
-  let { models, projectName, disabled, hasDraft, onopen, ondelete, oncreate }: { models: WorkbenchModel[]; projectName: string; disabled: boolean; hasDraft: (id: string) => boolean; onopen: (id: string) => void; ondelete: (id: string) => void; oncreate: () => void } = $props();
+  let { models, projectName, disabled, hasDraft, onopen, ondelete }: { models: WorkbenchModel[]; projectName: string; disabled: boolean; hasDraft: (id: string) => boolean; onopen: (id: string) => void; ondelete: (id: string) => void } = $props();
 </script>
 
 <section class="model-overview" aria-label="Project models">
-  <header><div><h2 id="project-models-heading" tabindex="-1">Your models</h2><p>{models.length ? `Models in ${projectName}. Choose one to continue editing.` : 'Models you create will appear here.'}</p></div><button class="btn-primary btn-sm" disabled={disabled} onclick={oncreate}><Plus size={14} />Create a model</button></header>
+  <header><div><h2 id="project-models-heading" tabindex="-1">Your models</h2><p>{models.length ? `Models in ${projectName}. Choose one to continue editing.` : 'Models you create will appear here.'}</p></div></header>
   {#if models.length}
     <ul class="model-list">
       {#each models as model (model.id)}
@@ -14,7 +14,7 @@
     </ul>
     {#if models.some(model => hasDraft(model.id))}<p class="draft-note" role="status">Unsaved edits are kept in this session. Reopen the model and save it to keep them on disk.</p>{/if}
   {:else}
-    <div class="empty-models"><Layers3 size={30} /><h3>No models in this project yet</h3><p>Create a model to start building.</p></div>
+    <div class="empty-models"><Layers3 size={30} /><h3>No models in this project yet</h3><p>Choose New model above to start building.</p></div>
   {/if}
 </section>
 

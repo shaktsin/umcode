@@ -106,6 +106,7 @@ type Engine struct {
 	trainingManager   *workbench.TrainingManager
 	inferenceMu       sync.Mutex
 	inferenceManager  *workbench.InferenceManager
+	importedRuntime   *workbench.ImportedRuntime
 	inferenceReceipts map[string]inferenceReceipt
 	workbenchMu       sync.Mutex             // serializes short bundle mutations, never network downloads
 	activeTurns       map[string]*activeTurn // by turn id
@@ -295,6 +296,9 @@ func (e *Engine) Shutdown(ctx context.Context) {
 		trainingManager.Close()
 	}
 	e.inferenceMu.Lock()
+	if e.importedRuntime != nil {
+		e.importedRuntime.Close()
+	}
 	if e.inferenceManager != nil {
 		e.inferenceManager.Close()
 	}

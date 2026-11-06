@@ -35,6 +35,16 @@ func (e *Engine) workbenchTraining(ctx context.Context, op string, p protocol.Wo
 	if _, err = matchingWorkbenchModel(project.Root, p.ModelID, p.ModelCreatedAt); err != nil {
 		return nil, err
 	}
+	opened, err := workbench.Open(project.Root, p.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	if workbench.IsImportedGraph(opened.Graph) {
+		if op == "get" {
+			return workbench.TrainingState{Runs: []workbench.TrainingRun{}, Issues: []string{workbench.ImportedRuntimeMessage}}, nil
+		}
+		return nil, errors.New(workbench.ImportedRuntimeMessage)
+	}
 	manager := e.trainingRunner()
 	switch op {
 	case "get":
