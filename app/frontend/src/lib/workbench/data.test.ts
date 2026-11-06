@@ -48,6 +48,18 @@ describe('real dataset mapping', () => {
 });
 
 describe('current graph and data compatibility', () => {
+  it('uses imported preprocessing instead of native byte vocabulary or image sizes', () => {
+    const imported = (family: string, config = {}) => JSON.stringify({format:'umcode.imported.v1',version:1,source:{family,config,tensors:[]},nodes:[],edges:[]});
+    const text = {...table, columns:[{name:'text',kind:'text' as const,missing:0,uniqueCount:10,examples:['hello']},{name:'label',kind:'number' as const,missing:0,uniqueCount:2,examples:['0']}]};
+    const bert = imported('bert');
+    const config = recommendConfig(text, 'classification', bert);
+    expect(config.mode).toBe('text');
+    expect(config.inputColumns).toEqual(['text']);
+    expect(dataCompatibility(bert,text,config)).toEqual([]);
+    expect(dataCompatibility(imported('qwen2'),text,{...config,purpose:'text-generation'})).toEqual([]);
+    expect(dataCompatibility(imported('resnet'),text,config).join(' ')).toMatch(/image/i);
+    expect(dataCompatibility(bert,text,{...config,sequenceLength:4096}).join(' ')).toContain('2,048');
+  });
   it('checks numeric width and class width against the current graph', () => {
     const config = recommendConfig(table, 'classification'); const graph = starterGraph('mlp');
     const issues = dataCompatibility(JSON.stringify(graph), table, config);

@@ -1,3 +1,5 @@
+import { isImportedGraph, parseImportedGraph } from './modelImport';
+import { importedChatSummary, previewImportedProposal } from './importedAssistant';
 import { addLayer, analyzeGraph, cloneGraph, connectLayers, definition, layers, readGraph, removeLayers, shapeLabel, type Analysis, type Config, type Graph, type LayerKind, type LayerNode } from './graph';
 
 export interface WorkbenchContext {
@@ -6,7 +8,8 @@ export interface WorkbenchContext {
 }
 export type WorkbenchOperation =
   | { type: 'update'; nodeId: string; config: Config }
-  | { type: 'add'; ref: string; kind: LayerKind; config?: Config }
+  | { type: 'add'; ref: string; kind: LayerKind | 'normalization' | 'pool' | 'cnnblock'; config?: Config }
+  | { type: 'restore'; nodeId: string }
   | { type: 'remove'; nodeId: string }
   | { type: 'connect'; source: string; target: string }
   | { type: 'disconnect'; edgeId: string };
@@ -29,6 +32,11 @@ export async function graphRevision(text: string): Promise<string> {
 
 export async function buildContext(projectId: string, model: { id: string; name: string }, text: string, selectedNodeId: string | null): Promise<WorkbenchContext> {
   if (bytes(text) > 1048576) throw new Error('The model is too large to include in chat.');
+  if (isImportedGraph(text)) {
+    const summary = importedChatSummary(parseImportedGraph(text), selectedNodeId);
+    if (bytes(summary) > 16384) throw new Error('The model context is too large to include in chat.');
+    return { projectId, modelId:model.id, modelName:model.name, graphJson:text, revision:await graphRevision(text), ...(selectedNodeId ? {selectedNodeId} : {}), summary };
+  }
   const graph = readGraph(text), analysis = analyzeGraph(graph);
   if (selectedNodeId && !graph.nodes.some(node => node.id === selectedNodeId)) throw new Error('Select a layer in the current model.');
   const summary = JSON.stringify({
@@ -58,8 +66,16 @@ function settings(node: LayerNode, value: unknown): Config {
   return next;
 }
 
-export function previewProposal(text: string, proposal: WorkbenchProposal): ProposalPreview {
+function validateProposal(proposal: WorkbenchProposal) {
   if (!record(proposal) || !Array.isArray(proposal.operations) || !proposal.operations.length || proposal.operations.length > 32 || bytes(JSON.stringify(proposal)) > 65536) throw new Error('A suggestion must contain 1–32 supported changes within 64 KiB.');
+}
+export function previewWorkbenchProposal(text:string, proposal:WorkbenchProposal) {
+  if (!isImportedGraph(text)) return { type:'native' as const, ...previewProposal(text,proposal) };
+  validateProposal(proposal);
+  return previewImportedProposal(parseImportedGraph(text),proposal);
+}
+export function previewProposal(text: string, proposal: WorkbenchProposal): ProposalPreview {
+  validateProposal(proposal);
   let graph = cloneGraph(readGraph(text));
   const before = analyzeGraph(graph), changes: string[] = [], affected = new Set<string>(), refs = new Map<string, string>();
   function resolve(value: unknown): string {

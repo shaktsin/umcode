@@ -19,6 +19,80 @@ import (
 
 const assistantRPCGraph = `{"version":1,"format":"umcode.layers.v1","nodes":[{"id":"input","kind":"input","position":{"x":0,"y":0},"config":{"mode":"features","features":16}},{"id":"dense","kind":"linear","position":{"x":0,"y":130},"config":{"outFeatures":3,"bias":true,"tieEmbedding":false}},{"id":"output","kind":"output","position":{"x":0,"y":260},"config":{}}],"edges":[{"id":"a","source":"input","target":"dense"},{"id":"b","source":"dense","target":"output"}]}`
 
+func TestImportedAssistantRPCAdmitsDraftAndRejectsForgedSource(t *testing.T) {
+	h, th, c := assistantRPCFixture(t)
+	config := `{"model_type":"gpt2","n_embd":16,"n_layer":2,"n_head":4,"vocab_size":32,"n_positions":16}`
+	inspection, err := workbench.InspectImport([]workbench.ImportFile{{Name: "config.json", Size: int64(len(config)), Kind: "config", Content: config}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(inspection.Graph)
+	created, err := workbench.CreateImported(h.ws, "Imported assistant", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ModelID = created.Model.ID
+	inspection.Graph.Nodes = inspection.Graph.Nodes[1:]
+	inspection.Graph.Edges = []workbench.ImportedEdge{}
+	raw, _ = json.Marshal(inspection.Graph)
+	c.GraphJSON = string(raw)
+	c.Revision = fmt.Sprintf("%x", sha256.Sum256(raw))
+	c.SelectedNodeID = inspection.Graph.Nodes[0].ID
+	for name, mutate := range map[string]func(*protocol.WorkbenchTurnContext){
+		"revision":  func(c *protocol.WorkbenchTurnContext) { c.Revision = strings.Repeat("0", 64) },
+		"selection": func(c *protocol.WorkbenchTurnContext) { c.SelectedNodeID = "missing" },
+		"format swap": func(c *protocol.WorkbenchTurnContext) {
+			c.GraphJSON = assistantRPCGraph
+			c.Revision = fmt.Sprintf("%x", sha256.Sum256([]byte(c.GraphJSON)))
+			c.SelectedNodeID = "dense"
+		},
+		"forged source": func(c *protocol.WorkbenchTurnContext) {
+			var graph map[string]any
+			if err := json.Unmarshal([]byte(c.GraphJSON), &graph); err != nil {
+				t.Fatal(err)
+			}
+			graph["source"].(map[string]any)["warnings"] = []string{"forged"}
+			raw, _ := json.Marshal(graph)
+			c.GraphJSON = string(raw)
+			c.Revision = fmt.Sprintf("%x", sha256.Sum256([]byte(c.GraphJSON)))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := c
+			mutate(&bad)
+			if h.callErr(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Explain", Workbench: &bad}) == nil {
+				t.Fatal("invalid context admitted")
+			}
+		})
+	}
+	h.fake.push(func(req llm.Request, key string) ([]llm.Event, error) {
+		return toolReply("workbench__propose_edit", `{"explanation":"Restore original layer","operations":[{"type":"restore","nodeId":"import-1"}]}`)(req, key)
+	}, textReply("Preview and apply, then save."))
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Restore the missing layer", Workbench: &c}, &started)
+	turn, _, _ := h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { t.Error("unexpected approval"); return false })
+	if turn.Status != protocol.TurnCompleted {
+		t.Fatalf("turn: %+v", turn)
+	}
+	items, err := h.eng.Store.ListItems(h.ctx, th.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range items {
+		if strings.Contains(string(item.Data), `"type":"restore"`) && item.Status == protocol.ItemCompleted {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("restore proposal not recorded")
+	}
+	reopened, err := workbench.Open(h.ws, created.Model.ID)
+	if err != nil || string(reopened.Graph) != string(created.Graph) {
+		t.Fatalf("proposal changed saved graph: %v", err)
+	}
+}
+
 func assistantRPCFixture(t *testing.T) (*harness, protocol.Thread, protocol.WorkbenchTurnContext) {
 	t.Helper()
 	h := newHarness(t, nil)

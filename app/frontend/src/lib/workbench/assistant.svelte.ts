@@ -1,16 +1,19 @@
-import { buildContext, graphRevision, previewProposal, type ProposalPreview, type WorkbenchProposal } from './assistant';
+import { buildContext, graphRevision, previewWorkbenchProposal, type WorkbenchProposal } from './assistant';
+import { isImportedGraph, parseImportedGraph } from './modelImport';
+import { importedLayerTitle } from './importedLayers';
+import type { ImportedGraph } from './modelImportTypes';
 import { definition, readGraph, type Graph } from './graph';
 
 export interface AssistantModel { projectId: string; modelId: string; modelName: string; text: string }
-interface ActivePreview extends ProposalPreview { proposal: WorkbenchProposal; base: AssistantModel }
-interface Binding { projectId: string; modelId: string; commit: (graph: Graph) => void }
+type ActivePreview = ReturnType<typeof previewWorkbenchProposal> & { proposal: WorkbenchProposal; base: AssistantModel };
+interface Binding { projectId: string; modelId: string; commit: (text: string) => void }
 const sameModel = (a: { projectId: string; modelId: string } | null, b: { projectId: string; modelId: string }) => a?.projectId === b.projectId && a.modelId === b.modelId;
 const changed = () => new Error('Model changed since this suggestion. Ask for an updated suggestion.');
 
 /** The binding commits through the mounted editor, preserving the same manual undo history. */
 export class WorkbenchAssistantState {
   selectedNodeId = $state<string | null>(null);
-  preview = $state<ActivePreview | null>(null);
+  preview = $state.raw<ActivePreview | null>(null);
   error = $state('');
   focusRequest = $state(0);
   revision = $state('');
@@ -24,6 +27,10 @@ export class WorkbenchAssistantState {
   get selectedLabel() {
     const current = this.current;
     if (!current || !this.selectedNodeId) return '';
+    if (isImportedGraph(current.text)) {
+      try { const graph=parseImportedGraph(current.text), node=graph.nodes.find(n=>n.id===this.selectedNodeId); return node ? importedLayerTitle(node,graph.source.family)+' · '+node.id : ''; }
+      catch { return ''; }
+    }
     try { const node = readGraph(current.text).nodes.find(node => node.id === this.selectedNodeId); return node ? `${definition(node.kind).name} · ${node.id}` : ''; }
     catch { return ''; }
   }
@@ -40,6 +47,12 @@ export class WorkbenchAssistantState {
   matches(proposal: WorkbenchProposal) { return sameModel(this.current, proposal) && this.revision === proposal.revision; }
   wasApplied(proposal: WorkbenchProposal) { return this.appliedKey === JSON.stringify(proposal); }
   bind(commit: (graph: Graph) => void) {
+    return this.bindText(text => commit(readGraph(text)));
+  }
+  bindImported(commit: (graph: ImportedGraph) => void) {
+    return this.bindText(text => commit(parseImportedGraph(text)));
+  }
+  private bindText(commit: (text: string) => void) {
     const current = this.current;
     if (!current) return () => {};
     const binding = { projectId: current.projectId, modelId: current.modelId, commit };
@@ -61,7 +74,7 @@ export class WorkbenchAssistantState {
       if (!sameModel(this.binding, base)) throw new Error('Open the Build tab to preview this suggestion.');
       const revision = await this.hash(base.text);
       if (generation !== this.generation || !sameModel(this.current, base) || this.current?.text !== base.text || revision !== proposal.revision) throw changed();
-      const candidate = previewProposal(base.text, proposal);
+      const candidate = previewWorkbenchProposal(base.text, proposal);
       this.preview = { ...candidate, proposal, base: { ...base } };
     } catch (error) { this.error = (error as Error).message; throw error; }
   }
@@ -70,7 +83,7 @@ export class WorkbenchAssistantState {
     if (!preview) throw new Error('Preview this suggestion before applying it.');
     if (this.previewStale || !this.binding) { this.error = changed().message; throw changed(); }
     // No await between the final identity/text check and the editor commit.
-    this.binding.commit(readGraph(JSON.stringify(preview.graph)));
+    this.binding.commit(JSON.stringify(preview.graph));
     this.appliedKey = JSON.stringify(preview.proposal);
     this.cancel();
   }

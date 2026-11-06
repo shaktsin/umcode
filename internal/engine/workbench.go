@@ -106,6 +106,7 @@ func (e *Engine) DeleteWorkbenchModel(ctx context.Context, p protocol.WorkbenchM
 		return nil, err
 	}
 	e.trainingRunner().CancelModel(project.Root, p.ModelID, p.ModelCreatedAt)
+	e.importedRunner().CancelModel(project.Root, p.ModelID)
 	trashPath, err := workbench.Delete(project.Root, p.ModelID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
