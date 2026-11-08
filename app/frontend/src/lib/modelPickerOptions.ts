@@ -11,10 +11,11 @@ export function modelPickerOptions(
 ): ConfiguredModel[] {
   const connected = new Set(credentials.filter((c) => c.enabled).map((c) => c.provider));
   const allConfigured = new Set(configured.map((m) => `${m.provider}/${m.model}`));
-  const result = configured.filter((m) => m.enabled && connected.has(m.provider));
+  const localIds = new Set(catalog.filter(m => m.provider === 'workbench_local' && !m.hidden).map(m => m.id));
+  const result = configured.filter((m) => m.enabled && (m.provider === 'workbench_local' ? localIds.has(m.model) : connected.has(m.provider)));
 
   for (const model of catalog) {
-    if (!connected.has(model.provider) || model.hidden || !model.supportsTools) continue;
+    if (model.hidden || (model.provider !== 'workbench_local' && (!connected.has(model.provider) || !model.supportsTools))) continue;
     if (allConfigured.has(`${model.provider}/${model.id}`)) continue;
     result.push({
       id: `catalog:${model.provider}/${model.id}`,
@@ -41,4 +42,11 @@ export function poolModelIds(
     }
     return stored.id;
   });
+}
+
+/** A local checkpoint is an exclusive plain-chat selection, never a cloud fallback pool. */
+export function toggleModelSelection(selected: string[], model: ConfiguredModel, options: ConfiguredModel[]): string[] {
+  if (selected.includes(model.id)) return selected.filter(id => id !== model.id);
+  if (model.provider === 'workbench_local') return [model.id];
+  return [...selected.filter(id => options.some(option => option.id === id && option.provider !== 'workbench_local')), model.id];
 }

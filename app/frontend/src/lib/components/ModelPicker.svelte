@@ -4,7 +4,7 @@
   import PillMenu from './PillMenu.svelte';
   import { complexityPillLabel, levelMenuItems, nextComplexity } from '$lib/complexityPill';
   import { app } from '$lib/stores/app.svelte';
-  import { modelPickerOptions, poolModelIds } from '$lib/modelPickerOptions';
+  import { modelPickerOptions, poolModelIds, toggleModelSelection } from '$lib/modelPickerOptions';
   import type { Complexity, ConfiguredModel, ModelPool, ModelSelection, RoutingConfig } from '$lib/types';
 
   let { value, onchange, compact = false }: { value: ModelSelection; onchange: (v: ModelSelection) => void; compact?: boolean } = $props();
@@ -14,11 +14,11 @@
   let selected = $state<string[]>([]);
 
   const providerNames: Record<string, string> = {
-    claude: 'Anthropic API', openai: 'OpenAI API', gemini: 'Google Gemini', openai_compatible: 'OpenAI-compatible',
+    workbench_local: 'Local Workbench', claude: 'Anthropic API', openai: 'OpenAI API', gemini: 'Google Gemini', openai_compatible: 'OpenAI-compatible',
   };
   const pools = $derived(app.routing?.pools ?? []);
   const pickerModels = $derived(modelPickerOptions(app.models, app.routing?.models ?? [], app.credentials));
-  const visiblePools = $derived(pools.filter((pool) => pool.enabled && pool.models.some((id) => pickerModels.some((model) => model.id === id))));
+  const visiblePools = $derived(pools.filter((pool) => pool.enabled && !pool.models.some((id) => pickerModels.some((model) => model.id === id && model.provider === 'workbench_local')) && pool.models.some((id) => pickerModels.some((model) => model.id === id))));
   const configuredByProvider = $derived.by(() => {
     const groups: Record<string, ConfiguredModel[]> = {};
     for (const model of pickerModels) {
@@ -99,7 +99,7 @@
   }
 
   function toggleModel(model: ConfiguredModel) {
-    const next = selected.includes(model.id) ? selected.filter((id) => id !== model.id) : [...selected, model.id];
+    const next = toggleModelSelection(selected, model, pickerModels);
     void applySelected(next);
   }
 
@@ -148,8 +148,8 @@
             {#each models as model (model.id)}
               <label class="flex items-center gap-2 px-2 py-1.5 rounded-md text-xs text-ink-soft hover:bg-raised cursor-pointer">
                 <input type="checkbox" checked={selected.includes(model.id)} disabled={busy} onchange={() => toggleModel(model)} />
-                <span class="min-w-0 flex-1 truncate" title={model.model}>{model.model}</span>
-                {#if model.name && model.name !== model.model}<span class="max-w-24 truncate text-[10px] text-faint">{model.name}</span>{/if}
+                <span class="min-w-0 flex-1 truncate" title={model.model}>{model.provider === 'workbench_local' ? model.name || model.model : model.model}</span>
+                {#if model.provider !== 'workbench_local' && model.name && model.name !== model.model}<span class="max-w-24 truncate text-[10px] text-faint">{model.name}</span>{/if}
               </label>
             {/each}
           </div>
@@ -160,7 +160,7 @@
     </PopupSurface>
   </div>
 
-  <PillMenu
+  {#if value.provider !== 'workbench_local'}<PillMenu
     ariaLabel="Thinking"
     title="Thinking"
     label={complexityPillLabel(value.complexity, app.complexity?.default, compact)}
@@ -168,5 +168,5 @@
     onselect={(id) => onchange({ ...value, complexity: nextComplexity(value.complexity, id as Complexity) })}
   >
     {#snippet icon()}<Zap class="w-3.5 h-3.5 shrink-0" />{/snippet}
-  </PillMenu>
+  </PillMenu>{/if}
 </div>

@@ -14,6 +14,9 @@ describe('shouldRedirectToProviders', () => {
   it('does not redirect before the catalog has loaded', () => {
     expect(shouldRedirectToProviders({ ...ready, catalogReady: false })).toBe(false);
   });
+  it('allows a promoted local model without a cloud key', () => {
+    expect(shouldRedirectToProviders({ ...ready, hasLocalModel: true })).toBe(false);
+  });
   it('does not redirect when a credential is enabled', () => {
     expect(shouldRedirectToProviders({ ...ready, hasEnabledCredential: true })).toBe(false);
   });

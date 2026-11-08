@@ -26,6 +26,7 @@
 
   let { view, variant = 'main', workbenchMode = false }: { view: ThreadView; variant?: 'main' | 'side'; workbenchMode?: boolean } = $props();
 
+  const localModel = $derived(view.selection.provider === 'workbench_local');
   let scroller: HTMLDivElement | undefined = $state();
   let stick = true;
 
@@ -284,9 +285,11 @@
       <div class="h-full flex flex-col items-center justify-center text-center px-6">
         <Sparkles class="w-8 h-8 text-clay mb-3" />
         <h2 class="text-lg font-semibold">
-          {projects.active ? `What should we do in ${projects.active.name}?` : 'What can I help with?'}
+          {localModel ? 'Chat with your local model' : projects.active ? `What should we do in ${projects.active.name}?` : 'What can I help with?'}
         </h2>
-        {#if app.conn === 'open' && !hasKeys}
+        {#if localModel}
+          <p class="text-sm text-muted mt-2 max-w-md">This chat runs the trained checkpoint you promoted from Inference on your Mac. It supports text messages; response quality depends on its training.</p>
+        {:else if app.conn === 'open' && !hasKeys}
           <p class="text-sm text-muted mt-2 max-w-sm">Add an API key for Claude, OpenAI, Gemini or a local model server, or sign in with ChatGPT for OpenAI, to get started.</p>
           <button class="btn-primary mt-4" onclick={() => (app.view = 'settings')}><KeyRound class="w-4 h-4" />Connect a provider</button>
         {:else if !projects.active}

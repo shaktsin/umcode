@@ -191,7 +191,7 @@ class AppState {
 
   /** Connected and loaded, but no provider can answer yet. */
   get needsProvider(): boolean {
-    return this.conn === 'open' && this.catalogReady && !this.hasEnabledCredential;
+    return this.conn === 'open' && this.catalogReady && !this.hasEnabledCredential && !this.models.some(m => m.provider === 'workbench_local' && !m.hidden);
   }
 
   /** Providers that have at least one enabled key. */
