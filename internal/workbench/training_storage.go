@@ -24,6 +24,9 @@ func SnapshotTraining(projectRoot, modelID, expected string) (TrainingSnapshot, 
 	if err != nil {
 		return snap, err
 	}
+	if IsImportedGraph(snap.Graph) {
+		return snap, errors.New(ImportedRuntimeMessage)
+	}
 	if err = validateGraph(snap.Graph); err != nil {
 		return snap, err
 	}

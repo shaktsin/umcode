@@ -1,4 +1,5 @@
 import { analyzeGraph, readGraph } from './graph';
+import { isImportedGraph, parseImportedGraph } from './modelImport';
 import type { DataConfig, DataSelection, Dataset, DataSource } from './dataTypes';
 import type { WorkbenchTask } from './types';
 
@@ -20,7 +21,8 @@ export function recommendConfig(dataset: Dataset, task: WorkbenchTask, graphText
   try { graphInput = readGraph(graphText).nodes.find(n => n.kind === 'input'); } catch { /* Mapping also works before an architecture is created. */ }
   const remote = dataset.source.repo === 'nprak26/remote-worker-productivity';
   const purpose = task === 'text-generation' ? 'text-generation' : task === 'custom' && remote ? 'regression' : 'classification';
-  const mode = dataset.format === 'images' ? 'image' : task === 'text-generation' || dataset.format === 'text' || !dataset.columns.some(c => c.kind === 'number' && !isId(c.name)) ? 'text' : 'features';
+  const importedFamily = isImportedGraph(graphText) ? parseImportedGraph(graphText).source.family : '';
+  const mode = importedFamily ? (['vit','resnet','convnext'].includes(importedFamily) ? 'image' : 'text') : dataset.format === 'images' ? 'image' : task === 'text-generation' || dataset.format === 'text' || !dataset.columns.some(c => c.kind === 'number' && !isId(c.name)) ? 'text' : 'features';
   const knownTarget = dataset.source.repo === 'nprak26/insurance-campaign-data' ? 'campaignengagement' : remote ? 'productivityscore' : dataset.source.repo === 'nprak26/MultiState-DMV-Licensing-Practice-Set' ? 'response' : '';
   const target = dataset.columns.find(c => knownTarget && normalized(c.name) === knownTarget) ?? dataset.columns.find(c => /^(label|target|class|category|y)$/i.test(c.name)) ?? (purpose === 'text-generation' ? dataset.columns.find(c => /^(answer|response|completion)$/i.test(c.name)) : [...dataset.columns].reverse().find(c => c.kind !== 'image' && !isId(c.name)));
   const inputs = dataset.columns.filter(c => (!target || !targetAlias(dataset, c.name, target.name)) && !isId(c.name) && c.kind === (mode === 'features' ? 'number' : mode === 'image' ? 'image' : 'text'));
@@ -83,6 +85,13 @@ export function validateConfig(dataset: Dataset, config: DataConfig): string[] {
 export function dataCompatibility(graphText: string, dataset: Dataset, config: DataConfig, selection: DataSelection | null = null): string[] {
   const issues: string[] = [];
   try {
+    if (isImportedGraph(graphText)) {
+      const source = parseImportedGraph(graphText).source;
+      const image = ['resnet','convnext','vit'].includes(source.family);
+      if (config.mode !== (image ? 'image' : 'text')) issues.push(image ? 'This imported model needs image inputs.' : 'This imported model needs text inputs.');
+      if (config.mode === 'text' && config.sequenceLength > 2048) issues.push('Local imported-model fine-tuning supports sequences up to 2,048 tokens.');
+      return issues;
+    }
     const graph = readGraph(graphText), analysis = analyzeGraph(graph);
     if (analysis.errors.length) issues.push(...analysis.errors.slice(0, 3).map(e => `Build: ${e.message}`));
     const input = analysis.order.find(n => n.kind === 'input');

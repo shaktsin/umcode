@@ -89,6 +89,16 @@ func (e *Engine) workbenchInference(ctx context.Context, op string, p protocol.W
 	if err != nil {
 		return nil, err
 	}
+	opened, err := workbench.Open(project.Root, p.ModelID)
+	if err != nil {
+		return nil, err
+	}
+	if workbench.IsImportedGraph(opened.Graph) {
+		if op == "get" {
+			return workbench.InferenceState{Checkpoints: []workbench.Checkpoint{}, Issues: []string{workbench.ImportedRuntimeMessage}, Runtimes: []workbench.RuntimeInfo{}}, nil
+		}
+		return nil, errors.New(workbench.ImportedRuntimeMessage)
+	}
 	runner := e.inferenceRunner()
 	switch op {
 	case "get":

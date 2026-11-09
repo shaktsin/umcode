@@ -3,8 +3,13 @@
   import { ArrowLeft, Layers3, FolderOpen, MessageCircle, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
   import VisualBuilder from './workbench/VisualBuilder.svelte';
   import DataTab from './workbench/DataTab.svelte';
+  import ImportedRuntimeTab from './workbench/ImportedRuntimeTab.svelte';
   import InferenceTab from './workbench/InferenceTab.svelte';
   import TrainTab from './workbench/TrainTab.svelte';
+  import ImportedBuilder from './workbench/ImportedBuilder.svelte';
+  import ModelImportDialog from './workbench/ModelImportDialog.svelte';
+  import { isImportedGraph } from '$lib/workbench/modelImport';
+  import type { OpenWorkbenchModel } from '$lib/workbench/types';
   import ModelChooser from './workbench/ModelChooser.svelte';
   import { inputModalities, modelGraph, relevantStarterPresets, type InputModality, type StartingPoint } from '$lib/workbench/presets';
   import { app } from '$lib/stores/app.svelte';
@@ -22,6 +27,10 @@
     void workbench.projectId; void workbench.selected?.model.id; void workbench.draft;
     untrack(() => { void workbenchAssistant.track().catch(() => {}); });
   });
+  let importOpen = $state(false);
+  $effect(() => { void workbench.projectId; importOpen = false; });
+  const imported = $derived(isImportedGraph(workbench.draft));
+  function importedModel(projectId: string, bundle: OpenWorkbenchModel) { if (workbench.acceptImport(projectId, bundle)) { importOpen = false; screen = 'auto'; } }
   let pendingInferenceCheckpointId = $state('');
   let pendingInferenceContext = $state('');
   const inferenceContext = $derived(JSON.stringify([workbench.projectId, workbench.selected?.model.id, workbench.selected?.model.createdAt]));
@@ -109,7 +118,12 @@
       <button class="icon-button" aria-label="Refresh project models" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={() => void workbench.refresh()}><RefreshCw size={14} /></button>
       {#if workbench.selected}<span class="task-badge">{describeWorkbenchTask(workbench.selected.model.task)}</span>{/if}
       {#if workbench.selected}<button class="btn-ghost btn-sm delete-model" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={() => void deleteModel(workbench.selected!.model.id)}><Trash2 size={14} />Delete model</button>{/if}
-      <button class="btn-outline btn-sm new-model" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={startCreate}><Plus size={14} />New model</button>
+      <div class="model-actions" role="group" aria-label="Add a model">
+        {#if !workbench.selected || workbench.tab === 'Build'}
+        <button class="btn-outline btn-sm" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={() => importOpen = true}><FolderOpen size={14} />Import model</button>
+        {/if}
+        <button class="btn-primary btn-sm" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={startCreate}><Plus size={14} />New model</button>
+      </div>
     </div>
     {#if workbench.error}<div class="workbench-feedback is-error" role="alert">{workbench.error}</div>{/if}
     {#if workbench.notice}<div class="workbench-feedback" role="status">{workbench.notice}</div>{/if}
@@ -118,7 +132,7 @@
     {#if workbench.loading}
       <section class="workbench-empty" aria-live="polite"><p>Loading project models…</p></section>
     {:else if !workbench.selected && showModels}
-      <ModelChooser models={workbench.models} projectName={projects.active?.name ?? 'this project'} disabled={!workbench.connected || workbench.busy} hasDraft={(id) => workbench.hasModelDraft(id)} onopen={(id) => void workbench.open(id)} ondelete={(id) => void deleteModel(id)} oncreate={startCreate} />
+      <ModelChooser models={workbench.models} projectName={projects.active?.name ?? 'this project'} disabled={!workbench.connected || workbench.busy} hasDraft={(id) => workbench.hasModelDraft(id)} onopen={(id) => void workbench.open(id)} ondelete={(id) => void deleteModel(id)} />
     {:else if !workbench.selected}
       <form class="new-model-layout" onsubmit={(e) => { e.preventDefault(); void create(); }}>
         <section class="task-selection">
@@ -167,7 +181,16 @@
       </nav>
       {#if workbench.tab === 'Build'}
         {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
+          {#if imported}
+          <ImportedRuntimeTab projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} tab="Build" task={workbench.selected.model.task} graphText={workbench.draft} connected={workbench.connected} dirty={workbench.dirty} onBuild={() => workbench.tab = 'Build'} onData={() => workbench.tab = 'Data'} onInference={() => workbench.tab = 'Inference'} />
+          <ImportedBuilder text={workbench.draft} onchange={(text) => workbench.draft = text} onSave={() => void workbench.save()} onReload={() => void reload()} onAsk={onOpenChat} disabled={!workbench.connected || workbench.busy} dirty={workbench.dirty} task={workbench.selected.model.task} name={workbench.selected.model.name} />
+          {:else}
           <VisualBuilder text={workbench.draft} onchange={(text) => workbench.draft = text} onSave={() => void workbench.save()} onReload={() => void reload()} onAsk={onOpenChat} disabled={!workbench.connected || workbench.busy} dirty={workbench.dirty} task={workbench.selected.model.task} name={workbench.selected.model.name} />
+          {/if}
+        {/key}
+      {:else if imported}
+        {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
+          <ImportedRuntimeTab projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} tab={workbench.tab} task={workbench.selected.model.task} graphText={workbench.draft} connected={workbench.connected} dirty={workbench.dirty} onBuild={() => workbench.tab = 'Build'} onData={() => workbench.tab = 'Data'} onInference={() => workbench.tab = 'Inference'} />
         {/key}
       {:else if workbench.tab === 'Data'}
         {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
@@ -184,6 +207,7 @@
       {/if}
     {/if}
   {/if}
+  {#if importOpen && workbench.projectId}{@const importProject = workbench.projectId}{#key importProject}<ModelImportDialog projectId={importProject} connected={workbench.connected} onClose={() => importOpen = false} onImported={(bundle) => importedModel(importProject, bundle)} />{/key}{/if}
 </main>
 
 <style>
@@ -201,7 +225,7 @@
   .workbench-toolbar { padding-block:8px; }
   .model-picker { width:190px; min-width:0; }
   .task-badge { font-size:11px; font-weight:550; background:var(--color-accent-soft); color:var(--color-accent-strong); padding:4px 8px; border-radius:6px; }
-  .new-model { margin-left:auto; }
+  .model-actions { display:flex; align-items:center; gap:8px; margin-left:auto; flex-shrink:0; }
   .workbench-feedback { font-size:12px; padding:8px 16px; background:var(--color-surface); border-bottom:1px solid var(--color-line); overflow-wrap:anywhere; }
   .workbench-feedback.is-error { color:var(--color-rust); }
   .new-model-layout { flex:1; display:flex; min-height:0; overflow-y:auto; }

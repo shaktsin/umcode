@@ -157,6 +157,22 @@ func (s *Server) routes() map[string]handler {
 		}),
 
 		// ML Workbench P0: project-scoped model bundle persistence.
+		"workbench/import/runtime": bind(func(ctx context.Context, c *conn, p protocol.ImportRuntimeParams) (any, error) {
+			if !c.IsAdmin() { return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use imported model runtimes") }
+			return e.WorkbenchImportRuntime(ctx,p)
+		}),
+		"workbench/import/inspect": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchImportParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can import model architectures")
+			}
+			return e.InspectWorkbenchImport(ctx, p)
+		}),
+		"workbench/import/create": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchImportParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can import model architectures")
+			}
+			return e.CreateWorkbenchImport(ctx, p)
+		}),
 		"workbench/training/get": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchTrainingParams) (any, error) {
 			if !c.IsAdmin() {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local training")
