@@ -2,6 +2,18 @@ export interface RuntimeStatus {ready:boolean;task:string;reason:string;labels?:
 export interface ImportJob {id:string;status:string;epoch:number;epochs:number;trainLoss?:number;validationLoss?:number;result?:Record<string,unknown>;error?:string}
 export type RuntimeCall=(method:string,params:Record<string,unknown>,timeout?:number)=>Promise<unknown>;
 export interface ModelAsset {name:string;file:File}
+// One instance per selected folder and saved architecture. Validation retries
+// reuse published files instead of trying to overwrite an existing bundle.
+export class CompleteModelImport {
+ private copied=false;
+ async run(call:RuntimeCall,context:Record<string,unknown>,assets:ModelAsset[],current:()=>boolean,progress:(done:number,total:number)=>void){
+  if(!this.copied){await uploadModelBundle(call,context,assets,current,progress);this.copied=true;}
+  if(!current())throw Error('Model import cancelled.');
+  const status=await call('workbench/import/runtime',{...context,action:'validate'},300000) as RuntimeStatus;
+  if(!status.ready)throw Error(status.reason||'Model validation did not complete.');
+  return status;
+ }
+}
 export async function readRuntimeSnapshot(call:(action:string)=>Promise<unknown>) {
  const job=await call('job') as ImportJob|null;
  const status=await call('status') as RuntimeStatus;

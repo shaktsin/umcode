@@ -72,7 +72,7 @@ UMCODE_IMPORTED_TEST_PYTHON=/path/to/venv/bin/python go test ./internal/workbenc
 /path/to/venv/bin/python -m unittest discover -s internal/workbench/pytorch -p test_imported.py
 ```
 
-Verified locally: 325 frontend tests, Svelte checks/build, focused Go tests,
+Verified locally: 326 frontend tests, Svelte checks/build, focused Go tests,
 real GPT-2 and ResNet import → inference → training → checkpoint reload, BERT
 classification, and generation with Qwen2.5-0.5B-Instruct. The browser confirmed
 the three gated-tab explanations. Automated browser folder upload was blocked
@@ -83,6 +83,13 @@ Build-only folder setup has rendered-component regression coverage for all four
 tabs, plus a backend test proving that a different model folder is rejected
 without changing the saved Build architecture. The browser connection was
 unavailable for this follow-up, so its live visual check remains pending.
+
+Full-folder import now compares numeric configuration values exactly despite
+JSON notation changes (such as `1e-05` versus `0.00001`). It keeps copy/validation
+errors visible and retries validation without uploading already-copied files.
+Legacy GPT-2 causal-mask buffers are accepted only at their known names and
+shapes; learned-weight coverage remains strict. Seven Python tests pass, and
+the downloaded DistilGPT-2 and Qwen2.5-0.5B-Instruct folders both validate locally.
 
 The full `go test ./... -timeout=6m` run was **not green** in the restricted
 environment. It reported sandbox_apply/operation-not-permitted failures,

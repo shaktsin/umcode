@@ -1,6 +1,19 @@
 import { describe,it,expect } from 'vitest';
-import { importAvailability,modelAssets,uploadModelBundle,readRuntimeSnapshot } from './importRuntime';
+import { importAvailability,modelAssets,uploadModelBundle,readRuntimeSnapshot,CompleteModelImport } from './importRuntime';
 describe('import completeness and local copying',()=>{
+ it('retains copied files for validation retry and rejects not-ready results',async()=>{
+  let uploads=0,ready=false;
+  const state=new CompleteModelImport();
+  const call=async(_method:string,p:Record<string,unknown>)=>{
+   if(p.action==='begin'){uploads++;return {uploadId:'u'};}
+   if(p.action==='validate')return {ready,reason:'Missing runtime dependency'};
+   return {};
+  };
+  const file={size:5,slice:()=>new Blob(['hello'])} as File;
+  const run=()=>state.run(call,{},[{name:'config.json',file}],()=>true,()=>{});
+  await expect(run()).rejects.toThrow('Missing runtime dependency');
+  ready=true;await run();expect(uploads).toBe(1);
+ });
  it('does not report stale upload progress after Build edits invalidate the model',async()=>{
   let current=true,aborted=false,published=false;
   const progress:number[]=[];

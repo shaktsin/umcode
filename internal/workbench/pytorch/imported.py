@@ -101,6 +101,16 @@ def load(request):
         tied = 'transformer.wte.weight' if config.model_type == 'gpt2' else 'model.embed_tokens.weight'
         if present.get(tied) == expected.get('lm_head.weight'):
             expected.pop('lm_head.weight', None)
+    # Older GPT-2 exports persist causal masks that modern Transformers
+    # regenerates as non-persistent buffers. Never ignore learned weights or
+    # arbitrary extra keys; accept only known buffers with their exact shape.
+    if config.model_type == 'gpt2':
+        buffers = {key: tuple(value.shape) for key, value in skeleton.named_buffers()}
+        for layer in range(config.n_layer):
+            for suffix in ('bias', 'masked_bias'):
+                key = f'transformer.h.{layer}.attn.{suffix}'
+                if key not in expected and key in buffers and present.get(key) == buffers[key]:
+                    present.pop(key)
     if expected != present:
         raise ValueError('Checkpoint weights do not match the selected model architecture')
     del skeleton

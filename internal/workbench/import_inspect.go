@@ -10,6 +10,7 @@ import (
 	"path"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -484,9 +485,88 @@ func ValidateImportedGraph(raw json.RawMessage) error {
 	return nil
 }
 func importEqual(a, b any) bool {
-	x, _ := json.Marshal(a)
-	y, _ := json.Marshal(b)
-	return bytes.Equal(x, y)
+	x, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	y, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	if bytes.Equal(x, y) {
+		return true
+	}
+	// Browser JSON serialization rewrites 1e-05 as 0.00001. Compare exact
+	// decimal values, never float64 (which would merge distinct large integers).
+	decode := func(raw []byte) (any, bool) {
+		d := json.NewDecoder(bytes.NewReader(raw))
+		d.UseNumber()
+		var value any
+		if d.Decode(&value) != nil {
+			return nil, false
+		}
+		return normalizeImportNumbers(value)
+	}
+	nx, ok := decode(x)
+	if !ok {
+		return false
+	}
+	ny, ok := decode(y)
+	return ok && reflect.DeepEqual(nx, ny)
+}
+
+type importDecimal struct {
+	Digits   string
+	Exponent int64
+}
+
+func normalizeImportNumbers(value any) (any, bool) {
+	switch v := value.(type) {
+	case json.Number:
+		s := string(v)
+		exponent := int64(0)
+		if i := strings.IndexAny(s, "eE"); i >= 0 {
+			var err error
+			exponent, err = strconv.ParseInt(s[i+1:], 10, 32)
+			if err != nil {
+				return nil, false
+			}
+			s = s[:i]
+		}
+		negative := strings.HasPrefix(s, "-")
+		s = strings.TrimPrefix(s, "-")
+		if i := strings.IndexByte(s, '.'); i >= 0 {
+			exponent -= int64(len(s) - i - 1)
+			s = s[:i] + s[i+1:]
+		}
+		s = strings.TrimLeft(s, "0")
+		if s == "" {
+			return importDecimal{"0", 0}, true
+		}
+		trimmed := strings.TrimRight(s, "0")
+		exponent += int64(len(s) - len(trimmed))
+		if negative {
+			trimmed = "-" + trimmed
+		}
+		return importDecimal{trimmed, exponent}, true
+	case map[string]any:
+		for k, item := range v {
+			n, ok := normalizeImportNumbers(item)
+			if !ok {
+				return nil, false
+			}
+			v[k] = n
+		}
+	case []any:
+		for i, item := range v {
+			n, ok := normalizeImportNumbers(item)
+			if !ok {
+				return nil, false
+			}
+			v[i] = n
+		}
+	}
+	return value, true
 }
 func validateImportNodeConfig(config map[string]any) error {
 	if config == nil || len(config) > 100 {

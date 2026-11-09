@@ -6,7 +6,7 @@
   import { ModelImportState } from '$lib/workbench/modelImport.svelte';
   import { importedLayerTitle } from '$lib/workbench/importedLayers';
   import { readModelFiles } from '$lib/workbench/modelImport';
-  import { importAvailability,modelAssets,uploadModelBundle,type ModelAsset } from '$lib/workbench/importRuntime';
+  import { importAvailability,modelAssets,CompleteModelImport,type ModelAsset } from '$lib/workbench/importRuntime';
   import type { OpenWorkbenchModel } from '$lib/workbench/types';
   let { projectId, connected, onClose, onImported }: { projectId: string; connected: boolean; onClose: () => void; onImported: (model: OpenWorkbenchModel) => void } = $props();
   const importer = new ModelImportState((method, params, timeout) => app.call(method, params, timeout));
@@ -14,14 +14,16 @@
   let name = $state(''), reading = $state(false), selection = $state(''), localError = $state(''), tensorSearch = $state('');
   let generation = 0, alive = true;
   let assets=$state.raw<ModelAsset[]>([]), copying=$state(''), savedBundle=$state.raw<OpenWorkbenchModel|null>(null);
+  let completeImport=new CompleteModelImport();
   const availability=$derived.by(()=>{try{return importer.inspection?importAvailability(importer.inspection.family,assets.map(a=>a.name)):null;}catch{return null;}});
-  $effect(() => { importer.activate(projectId, connected); generation++; reading = false; selection = ''; name = ''; localError = ''; });
+  $effect(() => { importer.activate(projectId, connected); generation++; reading = false; copying = ''; selection = ''; name = ''; localError = ''; });
   onDestroy(() => { alive = false; generation++; importer.dispose(); });
   const tensors = $derived((importer.inspection?.graph.source.tensors ?? []).filter(t => t.name.toLowerCase().includes(tensorSearch.toLowerCase())));
   async function choose(input: HTMLInputElement) {
+    if(copying || importer.busy)return;
     const files = Array.from(input.files ?? []); input.value = ''; if (!files.length) return;
     const token = ++generation; importer.reset(); localError = ''; reading = true; name = ''; tensorSearch = '';
-    assets=[];savedBundle=null;
+    assets=[];savedBundle=null;completeImport=new CompleteModelImport();
     selection = files.length === 1 ? files[0].name : `${files.length} selected files`;
     const current = () => alive && generation === token && connected;
     try { assets=modelAssets(files); const metadata = await readModelFiles(files, current); if (!current()) return; reading = false; await importer.inspect(metadata); if (current() && importer.inspection) name = `${importer.inspection.name || importer.inspection.family} editable copy`; }
@@ -36,12 +38,10 @@
       if(availability?.complete){
         copying='Copying model files to this project…';
         const context={projectId,modelId:bundle.model.id,modelCreatedAt:bundle.model.createdAt};
-        await uploadModelBundle((m,p,t)=>app.call(m,p,t),context,assets,current,(done,total)=>copying='Copying model files locally · '+Math.round(done/total*100)+'%');
-        copying='Checking weights and preprocessing locally…';
-        await app.call('workbench/import/runtime',{...context,action:'validate'},300000);
+        await completeImport.run((m,p,t)=>app.call(m,p,t),context,assets,current,(done,total)=>{if(current())copying=done===total?'Checking weights and preprocessing locally…':'Copying model files locally · '+Math.round(done/total*100)+'%';});
       }
       if(current())onImported(bundle);
-    }catch(e){if(current()){localError='The architecture was saved. '+(e as Error).message+' Open it to complete runtime setup.';onImported(bundle);}}
+    }catch(e){if(current())localError='Import is not complete: '+(e as Error).message+' Your selected files are kept here. Retry import, or open the saved architecture without runtime access.';}
     finally{if(current())copying='';}
   }
 </script>
@@ -50,7 +50,7 @@
   <div class="import-dialog" role="dialog" aria-modal="true" aria-labelledby="model-import-title" tabindex="-1" use:modalFocus={onClose}>
     <header><div><h2 id="model-import-title">Import a model</h2><p>Inspect a local Transformer or CNN, then create an editable architecture in Build.</p></div><button class="icon-button" aria-label="Close model import" disabled={!!copying} onclick={onClose}><X size={17} /></button></header>
     <div class="import-content">
-      <div class="file-actions"><button class="btn-outline btn-sm" disabled={!connected || importer.busy || !!copying} onclick={() => folderInput.click()}><FolderOpen size={15} />Choose model folder</button><button class="btn-ghost btn-sm" disabled={!connected || importer.busy} onclick={() => fileInput.click()}><FileUp size={15} />Choose files</button><span>{selection}</span></div>
+      <div class="file-actions"><button class="btn-outline btn-sm" disabled={!connected || importer.busy || !!copying} onclick={() => folderInput.click()}><FolderOpen size={15} />Choose model folder</button><button class="btn-ghost btn-sm" disabled={!connected || importer.busy || !!copying} onclick={() => fileInput.click()}><FileUp size={15} />Choose files</button><span>{selection}</span></div>
       <input bind:this={folderInput} class="hidden-picker" aria-label="Select model folder" type="file" webkitdirectory multiple onchange={() => void choose(folderInput)} />
       <input bind:this={fileInput} class="hidden-picker" aria-label="Select config and weight files" type="file" multiple accept=".json,.safetensors,.model,.txt" onchange={() => void choose(fileInput)} />
       <p class="privacy">Choose <code>config.json</code> with <code>.safetensors</code> weights, or select the complete model folder once. Include every shard and its index. Complete folders are copied to this project on your Mac, never to a cloud service. Original files stay unchanged.</p>
@@ -71,7 +71,7 @@
         {#if preview.supported}<label class="model-name">Editable copy name<input class="input" maxlength="128" bind:value={name} disabled={importer.busy} /></label>{/if}
       {/if}
     </div>
-    <footer><button class="btn-ghost btn-sm" disabled={!!copying} onclick={onClose}>Cancel</button><button class="btn-primary btn-sm" disabled={!connected || reading || importer.busy || !!copying || !importer.inspection?.supported || !name.trim()} onclick={() => void create()}>Create editable copy</button></footer>
+    <footer><button class="btn-ghost btn-sm" disabled={!!copying} onclick={onClose}>Cancel</button>{#if savedBundle && localError}<button class="btn-outline btn-sm" disabled={!!copying} onclick={()=>onImported(savedBundle!)}>Open architecture only</button>{/if}<button class="btn-primary btn-sm" disabled={!connected || reading || importer.busy || !!copying || !importer.inspection?.supported || !name.trim()} onclick={() => void create()}>{savedBundle?'Retry import':availability?.complete?'Import model':'Create editable copy'}</button></footer>
   </div>
 </div>
 

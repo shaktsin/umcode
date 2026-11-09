@@ -9,6 +9,27 @@ HERE = Path(__file__).parent
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_gpt2_legacy_attention_buffers_are_not_missing_weights(self):
+        import imported
+        import torch
+        from safetensors.torch import load_file, save_file
+        from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+        from tokenizers import Tokenizer
+        from tokenizers.models import WordLevel
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp)
+            GPT2LMHeadModel(GPT2Config(vocab_size=4, n_positions=16, n_embd=8, n_layer=1, n_head=2)).save_pretrained(bundle)
+            tokenizer = Tokenizer(WordLevel({'[PAD]': 0, '[UNK]': 1, 'hello': 2, 'world': 3}, unk_token='[UNK]'))
+            PreTrainedTokenizerFast(tokenizer_object=tokenizer, pad_token='[PAD]', unk_token='[UNK]').save_pretrained(bundle)
+            weights = load_file(bundle / 'model.safetensors')
+            weights['transformer.h.0.attn.bias'] = torch.tril(torch.ones(16, 16, dtype=torch.bool)).view(1, 1, 16, 16)
+            save_file(weights, bundle / 'model.safetensors', metadata={'format': 'pt'})
+            imported.load({'bundleDir': str(bundle), 'task': 'text-generation'})
+            weights['transformer.h.0.attn.bias'] = torch.zeros(1)
+            save_file(weights, bundle / 'model.safetensors', metadata={'format': 'pt'})
+            with self.assertRaisesRegex(ValueError, 'weights do not match'):
+                imported.load({'bundleDir': str(bundle), 'task': 'text-generation'})
+
     def test_allocation_budget_before_loading_weights_or_processing_images(self):
         import imported
         from transformers import GPT2Config
