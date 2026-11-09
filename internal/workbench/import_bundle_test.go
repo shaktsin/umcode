@@ -107,3 +107,35 @@ func TestImportedBundleRejectsTraversalSymlinkAndReplacedModel(t *testing.T) {
 		t.Fatal("replaced model")
 	}
 }
+
+func TestImportedBundleRejectsDifferentModelWithoutReplacingBuild(t *testing.T) {
+	root, id, created, manifest, assets := runtimeBundleFixture(t)
+	b := BundleTarget{root, id, created}
+	graphPath := filepath.Join(root, "models", id, "graph.json")
+	original, err := os.ReadFile(graphPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Valid files with the same sizes, but a different model configuration.
+	assets["config.json"] = []byte(strings.Replace(string(assets["config.json"]), `"n_positions":16`, `"n_positions":32`, 1))
+	upload, err := b.Begin(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Abort(upload)
+	for name, content := range assets {
+		if err := b.Chunk(upload, name, 0, base64.StdEncoding.EncodeToString(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.Finish(upload); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("expected different-model rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "models", id, "pretrained")); !os.IsNotExist(err) {
+		t.Fatalf("mismatched folder was published: %v", err)
+	}
+	saved, err := os.ReadFile(graphPath)
+	if err != nil || string(saved) != string(original) {
+		t.Fatalf("Build architecture changed after rejected folder: %v", err)
+	}
+}

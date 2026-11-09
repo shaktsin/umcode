@@ -12,6 +12,10 @@ from-scratch builder.
 - A supported complete folder is copied into the project locally and validated.
   Text models need their tokenizer files; vision models need their image
   processor configuration. Original files remain unchanged.
+- Attach and validate model files only in Build. Data, Train and Inference use
+  that selected model's attached files, and link back to Build for missing setup.
+  A different configuration or tensor manifest is rejected without replacing
+  the model. Matching metadata does not prove identical learned weight values.
 - Layer settings and connections must still match the original architecture to
   execute its pretrained weights. Display names and positions may change.
 
@@ -68,12 +72,17 @@ UMCODE_IMPORTED_TEST_PYTHON=/path/to/venv/bin/python go test ./internal/workbenc
 /path/to/venv/bin/python -m unittest discover -s internal/workbench/pytorch -p test_imported.py
 ```
 
-Verified locally: 320 frontend tests, Svelte checks/build, focused Go tests,
+Verified locally: 325 frontend tests, Svelte checks/build, focused Go tests,
 real GPT-2 and ResNet import → inference → training → checkpoint reload, BERT
 classification, and generation with Qwen2.5-0.5B-Instruct. The browser confirmed
 the three gated-tab explanations. Automated browser folder upload was blocked
 by the Chrome extension's file-access setting; that click-through remains a
 manual acceptance check.
+
+Build-only folder setup has rendered-component regression coverage for all four
+tabs, plus a backend test proving that a different model folder is rejected
+without changing the saved Build architecture. The browser connection was
+unavailable for this follow-up, so its live visual check remains pending.
 
 The full `go test ./... -timeout=6m` run was **not green** in the restricted
 environment. It reported sandbox_apply/operation-not-permitted failures,
@@ -93,5 +102,5 @@ Chromium automation. Affected tests include:
 - `TestEvaluationToolsConfined`, `TestShellRunAndRisk`,
   `TestShellStreamsOutputBeforeCommandExits`, `TestVisualQABlackBoxSession`
 
-These results do not establish a clean repository-wide regression run. Keep the
-PR draft until CI/manual acceptance and an unrestricted full-suite run are reviewed.
+These results do not establish a clean repository-wide regression run. Review
+CI/manual acceptance and the unrestricted full-suite results before merging.

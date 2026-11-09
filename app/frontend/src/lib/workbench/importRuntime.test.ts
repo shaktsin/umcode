@@ -1,6 +1,21 @@
 import { describe,it,expect } from 'vitest';
 import { importAvailability,modelAssets,uploadModelBundle,readRuntimeSnapshot } from './importRuntime';
 describe('import completeness and local copying',()=>{
+ it('does not report stale upload progress after Build edits invalidate the model',async()=>{
+  let current=true,aborted=false,published=false;
+  const progress:number[]=[];
+  const file={size:5,slice:()=>new Blob(['hello'])} as File;
+  await expect(uploadModelBundle(async(_method,p)=>{
+   if(p.action==='begin')return {uploadId:'u'};
+   if(p.action==='chunk')current=false;
+   if(p.action==='finish')published=true;
+   if(p.action==='abort')aborted=true;
+   return {};
+  },{projectId:'p',modelId:'m',modelCreatedAt:'t'},[{name:'config.json',file}],()=>current,done=>progress.push(done))).rejects.toThrow(/cancelled/);
+  expect(progress).toEqual([]);
+  expect(aborted).toBe(true);
+  expect(published).toBe(false);
+ });
  it('observes the completed job before reading its checkpoint readiness',async()=>{
   let completed=false;
   const snapshot=await readRuntimeSnapshot(async(action:string)=>{

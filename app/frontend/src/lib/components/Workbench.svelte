@@ -119,7 +119,9 @@
       {#if workbench.selected}<span class="task-badge">{describeWorkbenchTask(workbench.selected.model.task)}</span>{/if}
       {#if workbench.selected}<button class="btn-ghost btn-sm delete-model" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={() => void deleteModel(workbench.selected!.model.id)}><Trash2 size={14} />Delete model</button>{/if}
       <div class="model-actions" role="group" aria-label="Add a model">
+        {#if !workbench.selected || workbench.tab === 'Build'}
         <button class="btn-outline btn-sm" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={() => importOpen = true}><FolderOpen size={14} />Import model</button>
+        {/if}
         <button class="btn-primary btn-sm" disabled={!workbench.connected || workbench.busy || workbench.loading} onclick={startCreate}><Plus size={14} />New model</button>
       </div>
     </div>
@@ -180,6 +182,7 @@
       {#if workbench.tab === 'Build'}
         {#key `${workbench.projectId}/${workbench.selected.model.id}/${workbench.selected.model.createdAt}`}
           {#if imported}
+          <ImportedRuntimeTab projectId={workbench.projectId} modelId={workbench.selected.model.id} modelCreatedAt={workbench.selected.model.createdAt} tab="Build" task={workbench.selected.model.task} graphText={workbench.draft} connected={workbench.connected} dirty={workbench.dirty} onBuild={() => workbench.tab = 'Build'} onData={() => workbench.tab = 'Data'} onInference={() => workbench.tab = 'Inference'} />
           <ImportedBuilder text={workbench.draft} onchange={(text) => workbench.draft = text} onSave={() => void workbench.save()} onReload={() => void reload()} onAsk={onOpenChat} disabled={!workbench.connected || workbench.busy} dirty={workbench.dirty} task={workbench.selected.model.task} name={workbench.selected.model.name} />
           {:else}
           <VisualBuilder text={workbench.draft} onchange={(text) => workbench.draft = text} onSave={() => void workbench.save()} onReload={() => void reload()} onAsk={onOpenChat} disabled={!workbench.connected || workbench.busy} dirty={workbench.dirty} task={workbench.selected.model.task} name={workbench.selected.model.name} />

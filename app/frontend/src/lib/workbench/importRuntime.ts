@@ -49,7 +49,9 @@ export async function uploadModelBundle(call:RuntimeCall,context:Record<string,u
   for(const {name,file} of assets)for(let offset=0;offset<file.size;offset+=1048576){
    if(!current())throw Error('Model upload cancelled.');
    const bytes=new Uint8Array(await file.slice(offset,offset+1048576).arrayBuffer());
-   await api('chunk',{uploadId,name,offset,contentBase64:encode(bytes)});done+=bytes.length;progress(done,total);
+   await api('chunk',{uploadId,name,offset,contentBase64:encode(bytes)});
+   if(!current())throw Error('Model upload cancelled.');
+   done+=bytes.length;progress(done,total);
   }
   if(!current())throw Error('Model upload cancelled.');
   await api('finish',{uploadId});uploadId='';
