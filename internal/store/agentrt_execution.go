@@ -62,7 +62,7 @@ func (s *Store) EnsureRuntimeAgentExecution(ctx context.Context, a protocol.Runt
 		a.ID, a.TaskID, runtimeMirrorCallID(a.ID), string(assignment), state, now, now); err != nil {
 		return AgentExecution{}, err
 	}
-	id, err := insertAgentExecution(ctx, tx, a.TaskID, a.ID, parent, string(data))
+	id, err := insertAgentExecution(ctx, tx, a.TaskID, a.ID, parent, string(data), false)
 	if err != nil {
 		if x, rerr := s.AgentExecution(ctx, a.TaskID, a.ID); rerr == nil {
 			return x, nil // lost a concurrent race
