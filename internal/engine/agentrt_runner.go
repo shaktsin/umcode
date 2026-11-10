@@ -111,8 +111,9 @@ type runtimeExecution struct {
 }
 
 // RuntimeWorkspaceResolver gives runtime agents their checkouts: an isolated
-// writable checkout for a write-capable agent, a distinct read-only checkout
-// of the base revision otherwise. FinalizeRuntime runs after the agent stops
+// writable checkout of the base revision for a write-capable agent, a
+// distinct read-only view otherwise (the base revision, or the integrated
+// head once revisions were accepted). FinalizeRuntime runs after the agent stops
 // and must return the final revision (and changed paths for a writer).
 type RuntimeWorkspaceResolver interface {
 	ResolveRuntime(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, writable bool) (ChildWorkspace, error)
@@ -360,13 +361,6 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 	writable := a.Capabilities.Files == protocol.FilesReadWrite
 	ws, err := resolver.ResolveRuntime(ctx, task, a, writable)
 	if err != nil {
-		// Gap G1: once agent work is integrated the project checkout is not
-		// clean, so no checkout can be prepared. Say so instead of the raw
-		// clean-checkout refusal.
-		if taken, takenErr := e.runtimeCheckoutTaken(context.WithoutCancel(ctx), task.ID); takenErr == nil && taken {
-			err = fmt.Errorf("agent %s: workspace not created: %s: %w", a.ID, errRuntimeCheckoutTaken, err)
-			result.Blocker = err.Error()
-		}
 		return result, err
 	}
 	// Every agent works in its own checkout; a writer's confinement relies on it.

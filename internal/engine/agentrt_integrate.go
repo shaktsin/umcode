@@ -15,7 +15,7 @@ import (
 
 // runtimeConflictText is the fixed text agent.integrate returns for a
 // conflicted accept; %s is the conflicting paths.
-const runtimeConflictText = `Conflict in %s. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; or fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}. No new agent can be spawned once work is integrated: to redo the work with the conflict as context, finish this task (drop or resolve, verify, complete) and start a new delegated task.`
+const runtimeConflictText = `Conflict in %s. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; or fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}. A new writer agent works on the task base, not on the integrated state, so it would hit the same conflict: to redo the work on top of the integrated state, finish this task (drop or resolve, verify, complete) and start a new delegated task.`
 
 // runtimeAppliedFinal states the v1 dead end (see the known limitation on
 // delegation.IntegrateRuntime): an applied revision cannot be dropped or
@@ -23,11 +23,11 @@ const runtimeConflictText = `Conflict in %s. Nothing was applied. Options: agent
 // the completion.
 const runtimeAppliedFinal = "applied revisions are final (they cannot be dropped or amended in this version): if the integrated state cannot pass its checks, report that to the user, who can cancel the task; the applied work stays staged in the project checkout for the user to keep or discard"
 
-// errRuntimeCheckoutTaken explains why no agent workspace can be created once
-// a revision was integrated (gap G1): every workspace is a checkout of the
-// task base and needs a clean project checkout, which now holds staged agent
-// work.
-const errRuntimeCheckoutTaken = "agent work is already integrated (staged) in the project checkout, and a new agent workspace needs a clean checkout of the task base; spawn every agent before the first accept"
+// errRuntimeIntegrationApplying refuses a spawn while a revision is being
+// applied to the project checkout (it may be mid-write). Agents can otherwise
+// be spawned at any time, also after accepts: a writer works on the task
+// base, a read-only agent on a view of the integrated head.
+const errRuntimeIntegrationApplying = delegation.IntegrationApplyingText
 
 // runtimeIntegrateResult is agent.integrate's result: the task's
 // RuntimeIntegrationStatus plus the affected revision and what to do next.
@@ -144,10 +144,9 @@ func (e *Engine) withRuntimeStatus(ctx context.Context, taskID string, out runti
 // interrupted agent's revision is never integrable, and one still finishing
 // must be waited for.
 //
-// The first accept also requires every live agent's checkout to be ready
-// (RuntimeWorkspacesPending, which waits for any checkout being prepared):
-// after it the project checkout holds staged changes and no agent checkout can
-// be prepared any more, so such an agent could never start (gap G1).
+// An agent whose checkout is not prepared yet does not block an accept: its
+// preparation and the accept are serialised by the task's integration lock,
+// and a checkout can be prepared after accepts too.
 func (e *Engine) runtimeAcceptAllowed(ctx context.Context, taskID, agentID string) error {
 	svc := e.DelegationWorkspaceService
 	st, err := svc.RuntimeIntegrationStatus(ctx, taskID)
@@ -171,13 +170,9 @@ func (e *Engine) runtimeAcceptAllowed(ctx context.Context, taskID, agentID strin
 	if target == nil || (target.State != store.RevisionSubmitted && target.State != store.RevisionConflict) {
 		return nil // the service reports a missing revision; a replay is not ordered
 	}
-	// Before anything is applied a new agent can still be spawned; after
-	// it no workspace can be created (gap G1), so redoing the work needs a
-	// new delegated task.
-	redo := "or start a new agent"
-	if st.AppliedCount > 0 {
-		redo = "and, to redo its work, complete this task and start a new delegated task (no agent workspace can be created once work is integrated)"
-	}
+	// A new agent can be spawned at any time (its revision is integrated
+	// onto the current state like any other).
+	const redo = "or start a new agent"
 	switch as := state[agentID]; {
 	case as == protocol.AgentStateCompleted:
 	case !agentrt.IsTerminal(as):
@@ -221,16 +216,6 @@ func (e *Engine) runtimeAcceptAllowed(ctx context.Context, taskID, agentID strin
 			return err
 		}
 		return fmt.Errorf("accept refused: the integrated state %s is not verified: %s", st.HeadTree, runtimeCheckSummary(w, st.HeadTree))
-	}
-	if st.AppliedCount == 0 {
-		pending, err := svc.RuntimeWorkspacesPending(ctx, taskID)
-		if err != nil {
-			return err
-		}
-		if len(pending) > 0 {
-			a := pending[0]
-			return fmt.Errorf("accept refused: agent %s (%s) is %s and its workspace is not ready yet; after the first accept the project checkout holds staged changes and no new agent workspace can be created. Wait until its workspace is ready, or cancel it, then accept", a.ID, a.Name, a.State)
-		}
 	}
 	return nil
 }
@@ -385,10 +370,12 @@ func (e *Engine) publishRuntimeTask(ctx context.Context, taskID string) {
 	}
 }
 
-// runtimeSpawnGate refuses new runtime agents once agent work is integrated
-// into the project checkout (gap G1), with an explanation instead of the raw
-// Git error the workspace preparation would end with. A replayed spawn (same
-// call) still returns its stored agent.
+// runtimeSpawnGate refuses new runtime agents while a revision of the task
+// is being applied to the project checkout (the parent may be mid-write).
+// Otherwise spawning stays possible after accepts. A replayed spawn (same
+// call) still returns its stored agent. The agent's workspace preparation
+// re-checks under the task's integration lock (delegation.PrepareRuntime), so
+// an accept starting after this check is waited for, not observed half way.
 type runtimeSpawnGate struct {
 	agentrt.Service
 	e *Engine
@@ -397,27 +384,27 @@ type runtimeSpawnGate struct {
 func (g runtimeSpawnGate) Spawn(ctx context.Context, req agentrt.SpawnRequest) (agentrt.SpawnResult, error) {
 	if req.TaskID != "" && req.CallID != "" {
 		if _, err := g.e.Store.RuntimeAgentForCall(ctx, req.TaskID, req.CallID); errors.Is(err, store.ErrNotFound) {
-			if taken, err := g.e.runtimeCheckoutTaken(ctx, req.TaskID); err != nil {
+			if applying, err := g.e.runtimeIntegrationApplying(ctx, req.TaskID); err != nil {
 				return agentrt.SpawnResult{}, err
-			} else if taken {
-				return agentrt.SpawnResult{}, errors.New("spawn refused: " + errRuntimeCheckoutTaken + ". Integrate, verify and complete this task, then start a new delegated task for further work")
+			} else if applying != "" {
+				return agentrt.SpawnResult{}, fmt.Errorf("spawn refused: %s (agent %s's revision is applying to the project checkout)", errRuntimeIntegrationApplying, applying)
 			}
 		}
 	}
 	return g.Service.Spawn(ctx, req)
 }
 
-// runtimeCheckoutTaken reports whether any revision of the task was applied
-// or is being applied to the project checkout.
-func (e *Engine) runtimeCheckoutTaken(ctx context.Context, taskID string) (bool, error) {
+// runtimeIntegrationApplying returns the agent whose revision is being
+// applied to the project checkout, or "".
+func (e *Engine) runtimeIntegrationApplying(ctx context.Context, taskID string) (string, error) {
 	revs, err := e.Store.AgentRevisions(ctx, taskID)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	for _, r := range revs {
-		if r.State == store.RevisionApplied || r.State == store.RevisionApplying {
-			return true, nil
+		if r.State == store.RevisionApplying {
+			return r.AgentID, nil
 		}
 	}
-	return false, nil
+	return "", nil
 }

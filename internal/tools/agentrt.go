@@ -329,7 +329,7 @@ func (t *runtimeIntegrateTool) Description() string {
 		"the next accept needs those checks passed. A conflict applies nothing and lists the options. " +
 		"drop discards a revision with a reason; resolved records your own staged fix of a conflict as the new state; " +
 		"status reports the integration; complete finishes the task once every agent stopped, every revision is applied or dropped and the final state's checks passed. " +
-		"Spawn every agent before the first accept: afterwards no new agent workspace can be created, so a conflict cannot be handed to a new agent; drop or resolve it, and redo work in a new delegated task. " +
+		"Agents can be spawned at any time, also after accepts, except while an accept is being applied: a new read-only agent sees the integrated state (use it to review the integrated result); a new writer works on the task base and its revision is integrated onto the current state like any other, so it cannot redo changes to lines already integrated: for a conflict, drop or resolve it, and redo that work in a new delegated task. " +
 		"Applied revisions are final: they cannot be dropped or amended, and resolved only records a conflict's fix. If the integrated state cannot pass its checks, no further accept or completion is possible: report it to the user, who can cancel the task; the applied work stays staged in the project checkout for them."
 }
 

@@ -108,13 +108,17 @@ func (s *WorkspaceService) prepare(ctx context.Context, task protocol.AgentTask,
 	}
 	id := "delegation-" + t.ID + "-" + c.ID
 	w := store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: c.ID, Kind: "implementer", Root: s.Manager.Path(id), ParentRoot: t.ParentRoot, BaseRevision: t.BaseRevision}
-	return s.ownedCheckout(ctx, t, w, func(id string) error { return s.attach(ctx, t, c, id) })
+	return s.ownedCheckout(ctx, t, w, func(id string) error { return s.attach(ctx, t, c, id) },
+		func(id string) (worktree.Workspace, error) {
+			return s.Manager.EnsureCommitted(ctx, id, t.ParentRoot, t.BaseRevision)
+		})
 }
 
 // ownedCheckout loads (or first records) the planned workspace w, attaches it
-// to its owner and ensures its private checkout of the task's base revision.
-// The checkout must lie outside the parent and registered project roots.
-func (s *WorkspaceService) ownedCheckout(ctx context.Context, t protocol.AgentTask, planned store.AgentWorkspace, attach func(id string) error) (WorkspaceRef, error) {
+// to its owner and ensures its private checkout of the task's base revision
+// with ensure. The checkout must lie outside the parent and registered
+// project roots.
+func (s *WorkspaceService) ownedCheckout(ctx context.Context, t protocol.AgentTask, planned store.AgentWorkspace, attach func(id string) error, ensure func(id string) (worktree.Workspace, error)) (WorkspaceRef, error) {
 	id := planned.ID
 	if pathutil.Within(t.ParentRoot, planned.Root) || pathutil.Within(planned.Root, t.ParentRoot) || pathutil.Within(t.BaseRoot, planned.Root) || pathutil.Within(planned.Root, t.BaseRoot) {
 		return WorkspaceRef{}, errors.New("owned child checkout must be outside parent and registered project roots")
@@ -134,7 +138,7 @@ func (s *WorkspaceService) ownedCheckout(ctx context.Context, t protocol.AgentTa
 	if err = attach(w.ID); err != nil {
 		return ref(w), err
 	}
-	ws, err := s.Manager.EnsureCommitted(ctx, id, t.ParentRoot, t.BaseRevision)
+	ws, err := ensure(id)
 	if err != nil {
 		return ref(w), err
 	}
@@ -724,16 +728,39 @@ func (s *WorkspaceService) PrepareStandaloneReview(ctx context.Context, task pro
 }
 
 // runtimeBaseSource marks a runtime agent's read-only checkout of the task's
-// base revision.
-const runtimeBaseSource = "runtime_base"
+// base revision (nothing integrated yet); runtimeHeadSource marks one of the
+// integrated head (a view commit on top of the base, see
+// worktree.ApplyRuntimeView).
+const (
+	runtimeBaseSource = "runtime_base"
+	runtimeHeadSource = "runtime_head"
+)
 
-// PrepareRuntime gives a runtime agent its own private checkout of the task's
-// committed base revision. A write-capable agent gets an isolated writable
-// checkout (snapshotted by SnapshotRuntime); any other agent gets a distinct
-// checkout of the base whose tree must stay unchanged. The workspace is
-// recorded on the agent (RuntimeAgent.WorkspaceID). Runtime agents are inert
-// to the legacy delegation paths: their mirror rows are hidden from AgentChild.
+// IntegrationApplyingText refuses a new agent workspace while a revision of
+// the task is applying: the project checkout may be mid-write.
+const IntegrationApplyingText = "an integration is being applied; try again"
+
+// PrepareRuntime gives a runtime agent its own private checkout. A
+// write-capable agent gets an isolated writable checkout of the task's
+// committed base revision (snapshotted by SnapshotRuntime; its revision is
+// integrated onto the current head like any other). Any other agent gets a
+// read-only view (PrepareRuntimeView). The workspace is recorded on the agent
+// (RuntimeAgent.WorkspaceID). Runtime agents are inert to the legacy
+// delegation paths: their mirror rows are hidden from AgentChild.
+//
+// Workspaces can be prepared after revisions were integrated: the project
+// checkout must then be HEAD == base with its index exactly the recorded
+// integration head (worktree.ParentStateForRuntime), and it is only read.
+//
+// Serialisation: preparation holds the task's integration lock (taken before
+// the service lock, the order CleanupRuntime uses), the lock IntegrateRuntime,
+// ResolveRuntimeManually and reconcile hold for their whole run. So the head
+// read here, the parent check and the clone or view never interleave with an
+// accept: a preparation started during an accept waits for it and then sees
+// the new head. A revision still applying under the lock is an interrupted
+// apply; preparation is refused until it is reconciled.
 func (s *WorkspaceService) PrepareRuntime(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, writable bool) (WorkspaceRef, error) {
+	defer s.lockTask(task.ID)()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, err := s.task(ctx, task)
@@ -747,30 +774,94 @@ func (s *WorkspaceService) PrepareRuntime(ctx context.Context, task protocol.Age
 	if agent.TaskID != t.ID || a.Capabilities != agent.Capabilities {
 		return WorkspaceRef{}, errors.New("agent workspace ownership changed")
 	}
-	if err = worktree.ValidateCommitted(ctx, t.ParentRoot, t.BaseRevision); err != nil {
+	return s.prepareRuntimeLocked(ctx, t, a, writable)
+}
+
+// PrepareRuntimeView gives a read-only runtime agent (files read or none) its
+// private view: before any accept a checkout of the base revision; after one,
+// a checkout of the integrated head, built by applying the trusted parent's
+// base→head diff inside the private checkout and verified to be exactly the
+// head tree before the agent starts (worktree.ApplyRuntimeView). Reviewers
+// therefore see the integrated result. Same locking as PrepareRuntime.
+func (s *WorkspaceService) PrepareRuntimeView(ctx context.Context, taskID, agentID string) (WorkspaceRef, error) {
+	defer s.lockTask(taskID)()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, err := s.Store.AgentTask(ctx, taskID)
+	if err != nil {
 		return WorkspaceRef{}, err
 	}
+	t, err := s.task(ctx, stored)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	a, err := s.Store.RuntimeAgent(ctx, t.ID, agentID)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	return s.prepareRuntimeLocked(ctx, t, a, false)
+}
+
+// prepareRuntimeLocked is PrepareRuntime for a caller holding the task lock
+// and the service lock.
+func (s *WorkspaceService) prepareRuntimeLocked(ctx context.Context, t protocol.AgentTask, a protocol.RuntimeAgent, writable bool) (WorkspaceRef, error) {
+	if !writable && a.Capabilities.Files == protocol.FilesReadWrite {
+		return WorkspaceRef{}, fmt.Errorf("agent %s can write files; it gets a writable checkout, not a read-only view", a.ID)
+	}
+	revs, err := s.Store.AgentRevisions(ctx, t.ID)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	for _, r := range revs {
+		if r.State == store.RevisionApplying {
+			return WorkspaceRef{}, fmt.Errorf("%s (agent %s's revision is applying to the project checkout)", IntegrationApplyingText, r.AgentID)
+		}
+	}
+	h, err := s.head(ctx, t, false)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	integrated := h.AppliedCount > 0
 	id := "agent-" + t.ID + "-" + a.ID
 	planned := store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: a.ID, Kind: "implementer", Root: s.Manager.Path(id), ParentRoot: t.ParentRoot, BaseRevision: t.BaseRevision}
+	viewCommit := ""
 	if !writable {
 		id = "agent-view-" + t.ID + "-" + a.ID
 		planned = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: a.ID, Kind: "reviewer", SourceID: runtimeBaseSource, Root: s.Manager.Path(id), ParentRoot: t.ParentRoot, BaseRevision: t.BaseRevision, ResultRevision: t.BaseRevision}
+		if integrated {
+			if viewCommit, err = worktree.RuntimeViewCommit(ctx, t.ParentRoot, t.BaseRevision, h.HeadTree); err != nil {
+				return WorkspaceRef{}, err
+			}
+			planned.SourceID, planned.ResultRevision, planned.ResultTree = runtimeHeadSource, viewCommit, h.HeadTree
+		}
 	}
 	if existing, readErr := s.Store.AgentWorkspace(ctx, id); readErr == nil {
-		if existing.TaskID != t.ID || existing.ChildID != a.ID || existing.Kind != planned.Kind || existing.SourceID != planned.SourceID {
+		if existing.TaskID != t.ID || existing.ChildID != a.ID || existing.Kind != planned.Kind {
 			return ref(existing), errors.New("agent workspace ownership changed")
+		}
+		if existing.SourceID != planned.SourceID || existing.ResultRevision != planned.ResultRevision {
+			return ref(existing), fmt.Errorf("agent %s's view was prepared for an earlier integrated state; cancel it and spawn a new agent", a.ID)
 		}
 	} else if !errors.Is(readErr, store.ErrNotFound) {
 		return WorkspaceRef{}, readErr
 	}
-	r, err := s.ownedCheckout(ctx, t, planned, func(id string) error { return s.attachRuntime(ctx, t, a.ID, id) })
-	if err != nil {
+	r, err := s.ownedCheckout(ctx, t, planned, func(id string) error { return s.attachRuntime(ctx, t, a.ID, id) },
+		func(id string) (worktree.Workspace, error) {
+			return s.Manager.EnsureRuntime(ctx, id, t.ParentRoot, t.BaseRevision, h.HeadTree)
+		})
+	if err != nil || writable {
 		return r, err
 	}
-	if !writable {
-		err = worktree.ValidateCommitted(ctx, r.Root, t.BaseRevision)
+	if !integrated {
+		return r, worktree.ValidateCommitted(ctx, r.Root, t.BaseRevision)
 	}
-	return r, err
+	if err = s.Manager.ApplyRuntimeView(ctx, id, t.ParentRoot, t.BaseRevision, h.HeadTree, viewCommit); err != nil {
+		return r, fmt.Errorf("agent %s: integrated view not usable: %w", a.ID, err)
+	}
+	if err = validatePrivate(ctx, r.Root); err != nil {
+		return r, err
+	}
+	return r, worktree.ValidateCommitted(ctx, r.Root, viewCommit)
 }
 
 // attachRuntime records workspace id on the agent; an agent never changes
@@ -801,7 +892,8 @@ func (s *WorkspaceService) attachRuntime(ctx context.Context, t protocol.AgentTa
 // agent (completed, failed or cancelled). It refuses anything but a runtime
 // view owned by that agent: a write-capable agent's workspace is kept for
 // integration and is never touched. The checkout must still be exactly the
-// base revision and clean (DiscardCommitted), else it is retained.
+// revision it was prepared at (the base, or its integrated view commit) and
+// clean (DiscardCommitted), else it is retained.
 func (s *WorkspaceService) DiscardRuntimeView(ctx context.Context, taskID, agentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -816,7 +908,7 @@ func (s *WorkspaceService) DiscardRuntimeView(ctx context.Context, taskID, agent
 	if err != nil {
 		return err
 	}
-	if w.TaskID != taskID || w.ChildID != agentID || w.Kind != "reviewer" || w.SourceID != runtimeBaseSource {
+	if w.TaskID != taskID || w.ChildID != agentID || w.Kind != "reviewer" || (w.SourceID != runtimeBaseSource && w.SourceID != runtimeHeadSource) {
 		return errors.New("workspace is not a runtime view checkout of this agent")
 	}
 	if w.Cleaned {
@@ -827,7 +919,8 @@ func (s *WorkspaceService) DiscardRuntimeView(ctx context.Context, taskID, agent
 
 // SnapshotRuntime is SnapshotOwned for a stopped runtime agent: a writable
 // checkout is committed privately and reports its changed paths; a read-only
-// checkout must still be exactly the base revision and reports none.
+// checkout must still be exactly the revision it was prepared at (the base
+// or its integrated view commit) and reports none.
 func (s *WorkspaceService) SnapshotRuntime(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, workspace WorkspaceRef) (WorkspaceSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
