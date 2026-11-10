@@ -299,7 +299,7 @@ func TestRevisionTablesAddedToExistingRuntimeDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.DB.Exec(`DROP TABLE agent_revisions; DROP TABLE agent_integration_head; DELETE FROM schema_migrations WHERE version > 34`); err != nil {
+	if _, err = s.DB.Exec(`DROP TABLE agent_revisions; DROP TABLE agent_integration_head; DROP TABLE agent_suggestions; DELETE FROM schema_migrations WHERE version > 34`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Close(); err != nil {
