@@ -39,6 +39,7 @@ func TestStagedTreeNeverRewritesIndex(t *testing.T) {
 		t.Fatalf("StagedTree = %s, want %s (head %s)", tree, want, head)
 	}
 	// The unchanged integrated head is reported as is (the caller decides).
+	git(t, f.parent, "update-index", "-q", "--refresh")
 	git(t, f.parent, "read-tree", "-m", "-u", head)
 	if tree, err = f.m.StagedTree(ctx, f.parent, f.base); err != nil || tree != head {
 		t.Fatalf("StagedTree at head = %s %v", tree, err)

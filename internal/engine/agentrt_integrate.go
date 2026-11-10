@@ -17,11 +17,11 @@ import (
 // conflicted accept; %s is the conflicting paths.
 const runtimeConflictText = `Conflict in %s. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; or fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}. A new writer agent works on the task base, not on the integrated state, so it would hit the same conflict: to redo the work on top of the integrated state, finish this task (drop or resolve, verify, complete) and start a new delegated task.`
 
-// runtimeAppliedFinal states the v1 dead end (see the known limitation on
-// delegation.IntegrateRuntime): an applied revision cannot be dropped or
-// amended, so a head that cannot be verified blocks every further accept and
-// the completion.
-const runtimeAppliedFinal = "applied revisions are final (they cannot be dropped or amended in this version): if the integrated state cannot pass its checks, report that to the user, who can cancel the task; the applied work stays staged in the project checkout for the user to keep or discard"
+// runtimeAmendAdvice is the way out for an integrated head whose checks fail
+// or are blocked (it replaces Plan 3's "applied revisions are final" dead
+// end): applied revisions stay applied, the lead stages a fix and records it
+// with amend (delegation.AmendRuntimeHead); cancelling stays available.
+const runtimeAmendAdvice = `applied revisions cannot be dropped; to fix the integrated state, fix the files in the project checkout, stage them, then agent.integrate {action:"amend"} with a reason (HEAD must stay the task base, with nothing unstaged or untracked); its checks are then planned again. If it cannot be fixed, report that to the user, who can cancel the task; the applied work stays staged in the project checkout for the user to keep or discard`
 
 // errRuntimeIntegrationApplying refuses a spawn while a revision is being
 // applied to the project checkout (it may be mid-write). Agents can otherwise
@@ -100,6 +100,15 @@ func (e *Engine) runtimeIntegrateCall(ctx context.Context, task protocol.AgentTa
 		}
 		out.Revision = &res.Revision
 		e.planRuntimeHead(ctx, task, args.Agent, &out)
+	case "amend":
+		res, err := svc.AmendRuntimeHead(ctx, task.ID, args.Reason)
+		if err != nil {
+			return nil, fmt.Errorf("amend: %w", err)
+		}
+		if res.NeedsVerification {
+			e.planRuntimeAmend(ctx, task, &out)
+		}
+		e.publishRuntimeTask(ctx, task.ID)
 	case "status":
 	case "complete":
 		return e.completeRuntimeTask(ctx, task)
@@ -241,9 +250,27 @@ func (e *Engine) planRuntimeHead(ctx context.Context, task protocol.AgentTask, a
 	out.Checks, out.Verification = w.Checks, runtimePlanText(w)
 }
 
+// planRuntimeAmend plans the checks of an amended head like planRuntimeHead;
+// a failed plan is retried by repeating the amend (a retry of the same staged
+// tree records nothing new and plans again).
+func (e *Engine) planRuntimeAmend(ctx context.Context, task protocol.AgentTask, out *runtimeIntegrateResult) {
+	if h, err := e.Store.AgentIntegrationHead(ctx, task.ID); err == nil {
+		if w, err := store.DecodeRuntimeWorkflow(h.Workflow); err == nil && w.HeadTree == h.HeadTree && len(w.Checks) > 0 {
+			out.Checks, out.Verification = w.Checks, runtimePlanText(w)
+			return
+		}
+	}
+	w, err := e.planRuntimeVerification(ctx, task)
+	if err != nil {
+		out.Verification = fmt.Sprintf(`plan pending: the amended state is recorded but its checks could not be planned (%v); retry planning by repeating agent.integrate {action:"amend"} with the same staged state`, err)
+		return
+	}
+	out.Checks, out.Verification = w.Checks, runtimePlanText(w)
+}
+
 func runtimePlanText(w runtimeWorkflow) string {
 	if len(w.Checks) == 0 {
-		return "no checks planned: the planner found no executable checks for the integrated state, so it can never be verified; no further revision can be accepted and the task cannot complete"
+		return "no checks planned: the planner found no executable checks for the integrated state, so it cannot be verified as it is; no further revision can be accepted and the task cannot complete; " + runtimeAmendAdvice
 	}
 	return fmt.Sprintf("planned: run the %d checks with verification.run (or browser.verify) on the project checkout; every one must pass for this exact state before the next accept or completion", len(w.Checks))
 }
@@ -341,13 +368,13 @@ func (e *Engine) completeRuntimeTask(ctx context.Context, task protocol.AgentTas
 
 // runtimeCheckSummary says why a head's workflow is not verified and what
 // the lead can do: plan (pending plan), run the checks, or, when the head
-// cannot be verified, the v1 dead end (runtimeAppliedFinal).
+// cannot be verified, amend it or cancel (runtimeAmendAdvice).
 func runtimeCheckSummary(w runtimeWorkflow, headTree string) string {
 	if w.HeadTree != headTree {
-		return "plan pending: its checks are not planned yet; retry planning by repeating agent.integrate accept for the agent accepted last"
+		return `plan pending: its checks are not planned yet; retry planning by repeating agent.integrate accept for the agent accepted last, or agent.integrate {action:"amend"} if the state was last amended`
 	}
 	if len(w.Checks) == 0 {
-		return "no checks planned, so it can never be verified; " + runtimeAppliedFinal
+		return "no checks planned, so it cannot be verified as it is; " + runtimeAmendAdvice
 	}
 	var parts []string
 	failed := false
@@ -358,7 +385,7 @@ func runtimeCheckSummary(w runtimeWorkflow, headTree string) string {
 		}
 	}
 	if failed {
-		return strings.Join(parts, "; ") + "; run the checks again with verification.run if they can pass, otherwise " + runtimeAppliedFinal
+		return strings.Join(parts, "; ") + "; run the checks again with verification.run if they can pass, otherwise " + runtimeAmendAdvice
 	}
 	return strings.Join(parts, "; ") + "; run them with verification.run"
 }

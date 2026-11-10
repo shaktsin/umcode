@@ -31,9 +31,12 @@ type RuntimeIntegration struct {
 type RuntimeIntegrationStatus struct {
 	HeadTree     string
 	AppliedCount int
-	Revisions    []store.AgentRevision
-	Verified     bool
-	Settled      bool
+	// Amendments counts the lead's amends of the integrated head
+	// (AmendRuntimeHead).
+	Amendments int
+	Revisions  []store.AgentRevision
+	Verified   bool
+	Settled    bool
 }
 
 // conflictOptions are the lead's choices for a conflicted revision: drop it,
@@ -297,13 +300,12 @@ func (s *WorkspaceService) recordRuntimeRevision(ctx context.Context, task proto
 		ResultRevision: a.Revision, ResultTree: tree, ChangedPaths: changed})
 }
 
-// Known limitation (v1): applied revisions are final. There is no drop or
-// amend of an applied revision and `resolved` only records a conflict's fix,
-// so when the integrated head cannot be verified (a check genuinely fails on
-// the combined result, the plan is empty, or the checkout was changed by
-// hand) no further accept and no completion is possible: the lead reports it
-// and the task is cancelled, leaving the applied work staged for the user.
-// An amend path is deferred to Plan 5.
+// Applied revisions are final: there is no drop of an applied revision and
+// `resolved` only records a conflict's fix. When the integrated head cannot
+// be verified (a check genuinely fails on the combined result), the lead
+// fixes the files in the project checkout, stages them and records that
+// staged tree as the new head with AmendRuntimeHead; cancelling the task
+// remains possible and leaves the applied work staged for the user.
 //
 // IntegrateRuntime applies one agent's submitted revision onto the integrated
 // parent state (lead-owned, one at a time per task). The previous head must be
@@ -671,6 +673,89 @@ func (s *WorkspaceService) ResolveRuntimeManually(ctx context.Context, taskID, a
 	return s.finishApply(context.WithoutCancel(ctx), t, rev, h, tree)
 }
 
+// AmendRuntimeHead records the lead's own staged fix of the integrated state
+// as the new head (agent.integrate amend), for a head whose checks fail or
+// are blocked. After the first accept the lead and the user own the content
+// of the project checkout (ruling R9, as for a manual conflict resolution):
+// amend never merges or applies anything and needs no prediction; it only
+// records the tree the lead already staged.
+//
+// It requires an active task, a non-empty reason, at least one applied
+// revision and no revision applying (interrupted applies are reconciled
+// first, as for every integration operation). The project checkout must have
+// HEAD == base, no unstaged edits, no untracked files, no conflict stages and
+// no staged gitlink (worktree.Manager.StagedTree, which never rewrites the
+// index); the staged tree must differ from the head ("nothing to amend").
+// On success one version-checked write moves the head: HeadTree = the staged
+// tree, AppliedCount unchanged, Amendments+1, the reason and the amended tree
+// recorded, and the workflow cleared, so the head needs fresh planning and
+// verification before the next accept or completion. No revision changes
+// state; reconcile and repairHead are unaffected because they compare applied
+// revisions with AppliedCount, which amend does not change, and a later
+// accept takes the amended head as its TreeBefore.
+//
+// A retry whose staged tree is already the head produced by the last amend
+// (AmendedTree) returns that head without a second write, so it is not
+// counted twice and keeps any results recorded since.
+//
+// Crash safety: the only write is the head. If the process dies between
+// reading the staged tree and that write, nothing was recorded: the head is
+// still the old tree and the checkout holds the user's staged state, which
+// reconcile leaves alone (with no revision applying it only repairs a head
+// missing an applied revision). Verification, status and the next accept
+// report that the checkout differs from the head, and amend run again
+// records it. Nothing ever adopts a checkout tree automatically.
+func (s *WorkspaceService) AmendRuntimeHead(ctx context.Context, taskID, reason string) (RuntimeIntegration, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return RuntimeIntegration{}, errors.New("amending the integrated state requires a reason")
+	}
+	defer s.lockTask(taskID)()
+	t, err := s.loadTask(ctx, taskID, true)
+	if err != nil {
+		return RuntimeIntegration{}, err
+	}
+	if err = s.reconcileLocked(ctx, t, ""); err != nil {
+		return RuntimeIntegration{}, err
+	}
+	revs, err := s.Store.AgentRevisions(ctx, taskID)
+	if err != nil {
+		return RuntimeIntegration{}, err
+	}
+	for _, r := range revs {
+		if r.State == store.RevisionApplying {
+			return RuntimeIntegration{}, fmt.Errorf("amend refused: agent %s's revision is applying to the project checkout; settle it first", r.AgentID)
+		}
+	}
+	h, err := s.head(ctx, t, false)
+	if err != nil {
+		return RuntimeIntegration{}, err
+	}
+	if h.Version == 0 || h.AppliedCount == 0 {
+		return RuntimeIntegration{}, errors.New("amend refused: no revision has been applied yet; amend fixes an integrated state after at least one accept")
+	}
+	if err = s.runtimeTaskAuthority(ctx, t); err != nil {
+		return RuntimeIntegration{}, err
+	}
+	tree, err := s.Manager.StagedTree(ctx, t.ParentRoot, t.BaseRevision)
+	if err != nil {
+		return RuntimeIntegration{}, fmt.Errorf("amend refused: %w", err)
+	}
+	if tree == h.HeadTree {
+		if h.Amendments > 0 && h.AmendedTree == tree {
+			return RuntimeIntegration{HeadTree: tree, NeedsVerification: !headVerified(h)}, nil
+		}
+		return RuntimeIntegration{}, fmt.Errorf("nothing to amend: the staged state is the integrated head %s; fix the files in the project checkout and stage them first", tree)
+	}
+	next := h
+	next.HeadTree, next.Workflow = tree, nil
+	next.Amendments, next.AmendReason, next.AmendedTree = h.Amendments+1, reason, tree
+	if err = s.Store.SetAgentIntegrationHead(context.WithoutCancel(ctx), next, h.Version); err != nil {
+		return RuntimeIntegration{}, err
+	}
+	return RuntimeIntegration{HeadTree: tree, NeedsVerification: true}, nil
+}
+
 // RuntimeIntegrationStatus reports the task's integration head and revisions.
 func (s *WorkspaceService) RuntimeIntegrationStatus(ctx context.Context, taskID string) (RuntimeIntegrationStatus, error) {
 	defer s.lockTask(taskID)()
@@ -694,7 +779,7 @@ func (s *WorkspaceService) RuntimeIntegrationStatus(ctx context.Context, taskID 
 	for _, a := range agents {
 		cancelled[a.ID] = a.State == protocol.AgentStateCancelled
 	}
-	st := RuntimeIntegrationStatus{HeadTree: h.HeadTree, AppliedCount: h.AppliedCount, Revisions: revs, Verified: h.Version > 0 && headVerified(h), Settled: true}
+	st := RuntimeIntegrationStatus{HeadTree: h.HeadTree, AppliedCount: h.AppliedCount, Amendments: h.Amendments, Revisions: revs, Verified: h.Version > 0 && headVerified(h), Settled: true}
 	for _, r := range revs {
 		if !RevisionSettled(r, cancelled[r.AgentID]) {
 			st.Settled = false
