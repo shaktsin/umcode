@@ -9,7 +9,10 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
-// SpawnResult is the outcome of a successful Spawn.
+// SpawnResult is the outcome of a successful Spawn. A replay of an
+// already-spawned (TaskID, CallID) returns the stored agent with its stored
+// granted capabilities and no Rejected list (rejections are not persisted).
+// QueuedReason is set only while the agent waits in the scheduler queue.
 type SpawnResult struct {
 	Agent        protocol.RuntimeAgent
 	Granted      protocol.AgentCapabilities
@@ -64,8 +67,6 @@ type Runtime struct {
 	lifecycle sync.Mutex
 }
 
-var _ Service = (*Runtime)(nil)
-
 // NewRuntime returns a Runtime whose agents run under contexts derived from
 // base (see NewScheduler).
 func NewRuntime(s AgentStore, r Runner, base context.Context, opts ...Option) *Runtime {
@@ -89,10 +90,6 @@ func (r *Runtime) Recover(ctx context.Context) error {
 	return r.store.ReconcileRuntimeAgents(ctx)
 }
 
-func isCtxErr(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
 // Spawn admits and starts (or queues) an agent. It is idempotent by
 // (TaskID, CallID): a repeated call returns the stored agent without
 // scheduling it again.
@@ -100,43 +97,58 @@ func (r *Runtime) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 	if req.TaskID == "" || req.CallID == "" {
 		return SpawnResult{}, errors.New("spawn: task ID and call ID are required")
 	}
+	res, created, err := r.spawnLocked(ctx, req)
+	if err != nil {
+		return SpawnResult{}, err
+	}
+	// Events go out after the lock is released and the agent is submitted.
+	if created {
+		r.emit(res.Agent)
+	}
+	return res, nil
+}
+
+// spawnLocked runs Spawn under the lifecycle lock; created reports whether a
+// new agent was stored and submitted (false for a replay).
+func (r *Runtime) spawnLocked(ctx context.Context, req SpawnRequest) (SpawnResult, bool, error) {
 	r.lifecycle.Lock()
 	defer r.lifecycle.Unlock()
 
-	// AgentStore reports absence as an error it does not type; any non-context
-	// error here means "not yet spawned". CreateRuntimeAgent is itself
-	// idempotent per (task, callID), so a misread cannot create a duplicate.
-	if existing, err := r.store.RuntimeAgentForCall(ctx, req.TaskID, req.CallID); err == nil {
-		return SpawnResult{Agent: existing, Granted: existing.Capabilities}, nil
-	} else if isCtxErr(err) {
-		return SpawnResult{}, err
+	// Only protocol.ErrNotFound means "not spawned yet"; any other store
+	// error is returned rather than risking a second admission.
+	existing, err := r.store.RuntimeAgentForCall(ctx, req.TaskID, req.CallID)
+	if err == nil {
+		return SpawnResult{Agent: existing, Granted: existing.Capabilities}, false, nil
+	}
+	if !errors.Is(err, protocol.ErrNotFound) {
+		return SpawnResult{}, false, fmt.Errorf("spawn: look up call %s: %w", req.CallID, err)
 	}
 
 	plan, err := r.store.ApprovedAgentPlanForTask(ctx, req.TaskID)
+	if errors.Is(err, protocol.ErrNotFound) {
+		return SpawnResult{}, false, &AdmissionError{Field: "plan", Message: "the task has no approved plan; propose a plan and get it approved before spawning agents"}
+	}
 	if err != nil {
-		if isCtxErr(err) {
-			return SpawnResult{}, err
-		}
-		return SpawnResult{}, &AdmissionError{Field: "plan", Message: fmt.Sprintf("the task has no approved plan (%v); propose a plan and get it approved before spawning agents", err)}
+		return SpawnResult{}, false, fmt.Errorf("spawn: load approved plan: %w", err)
 	}
 
 	all, err := r.store.RuntimeAgents(ctx, req.TaskID)
 	if err != nil {
-		return SpawnResult{}, fmt.Errorf("spawn: list agents: %w", err)
+		return SpawnResult{}, false, fmt.Errorf("spawn: list agents: %w", err)
 	}
 	ledger := RebuildLedger(all)
 
 	caller := protocol.RuntimeAgent{Capabilities: RootCapabilities(), Depth: 0, BudgetShare: 1.0}
 	if req.CallerAgentID != "" {
 		caller, err = r.store.RuntimeAgent(ctx, req.TaskID, req.CallerAgentID)
+		if errors.Is(err, protocol.ErrNotFound) {
+			return SpawnResult{}, false, &AdmissionError{Field: "caller", Message: fmt.Sprintf("caller agent %q does not exist in this task", req.CallerAgentID)}
+		}
 		if err != nil {
-			if isCtxErr(err) {
-				return SpawnResult{}, err
-			}
-			return SpawnResult{}, &AdmissionError{Field: "caller", Message: fmt.Sprintf("caller agent %q not found in task: %v", req.CallerAgentID, err)}
+			return SpawnResult{}, false, fmt.Errorf("spawn: load caller %s: %w", req.CallerAgentID, err)
 		}
 		if isTerminal(caller.State) {
-			return SpawnResult{}, &AdmissionError{Field: "caller", Message: fmt.Sprintf("caller agent %q is %s and may not spawn", caller.ID, caller.State)}
+			return SpawnResult{}, false, &AdmissionError{Field: "caller", Message: fmt.Sprintf("caller agent %q is %s and may not spawn", caller.ID, caller.State)}
 		}
 	}
 
@@ -149,7 +161,7 @@ func (r *Runtime) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 		Request:         req,
 	})
 	if err != nil {
-		return SpawnResult{}, err
+		return SpawnResult{}, false, err
 	}
 
 	name := req.Name
@@ -171,29 +183,25 @@ func (r *Runtime) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 		State:          protocol.AgentStateQueued,
 	}, req.CallID)
 	if err != nil {
-		return SpawnResult{}, fmt.Errorf("spawn: create agent: %w", err)
+		return SpawnResult{}, false, fmt.Errorf("spawn: create agent: %w", err)
 	}
-	// The ledger is rebuilt from the store at the next Spawn; reserving here
-	// keeps this call's view consistent.
-	ledger.Reserve(created.ID, created.ParentAgentID, created.BudgetShare)
-	r.emit(created)
 
 	maxConc := plan.Limits.MaxConcurrent
 	if maxConc < 1 {
 		maxConc = 1
 	}
-	r.sched.Submit(ctx, created, maxConc)
+	// The agent is stored; a dying caller ctx must not abandon its scheduling.
+	persist := context.WithoutCancel(ctx)
+	r.sched.Submit(persist, created, maxConc)
 
 	res := SpawnResult{Agent: created, Granted: adm.Granted, Rejected: adm.Rejected}
-	if cur, err := r.store.RuntimeAgent(context.WithoutCancel(ctx), req.TaskID, created.ID); err == nil {
+	if cur, err := r.store.RuntimeAgent(persist, req.TaskID, created.ID); err == nil {
 		res.Agent = cur
 	}
-	if res.Agent.State == protocol.AgentStateQueued {
-		if active := r.sched.Active(req.TaskID); active >= maxConc {
-			res.QueuedReason = fmt.Sprintf("capacity: %d/%d running", active, maxConc)
-		}
+	if r.sched.Queued(req.TaskID, created.ID) {
+		res.QueuedReason = fmt.Sprintf("capacity: %d/%d running", r.sched.Active(req.TaskID), maxConc)
 	}
-	return res, nil
+	return res, true, nil
 }
 
 // List returns the task's agents in creation order.
@@ -212,6 +220,8 @@ func (r *Runtime) Status(ctx context.Context, taskID, id string) (protocol.Runti
 
 // Wait blocks until any (WaitAny) or all (WaitAll) of the listed agents are
 // terminal, or ctx is done, and returns their current states in ids order.
+// Waiters are woken only by scheduler-persisted transitions; writers outside
+// the scheduler (such as Recover's reconciliation) do not wake them.
 func (r *Runtime) Wait(ctx context.Context, taskID string, ids []string, mode WaitMode) ([]protocol.RuntimeAgent, error) {
 	if len(ids) == 0 {
 		return nil, errors.New("wait: no agent ids given")
@@ -227,9 +237,6 @@ func (r *Runtime) Wait(ctx context.Context, taskID string, ids []string, mode Wa
 		for i, id := range ids {
 			a, err := r.store.RuntimeAgent(ctx, taskID, id)
 			if err != nil {
-				if isCtxErr(err) {
-					return nil, err
-				}
 				return nil, fmt.Errorf("wait: agent %s: %w", id, err)
 			}
 			agents[i] = a
