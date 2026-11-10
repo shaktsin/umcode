@@ -282,7 +282,9 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 		}
 		err = e.DelegationCoordinator.Cancel(ctx, task.ID, p.ChildID)
 	} else {
-		err = e.DelegationCoordinator.CancelTask(ctx, task.ID)
+		// Runtime agents first, so they end cancelled rather than failed by
+		// the task closing under them. Without a runtime this is a no-op.
+		err = errors.Join(e.cancelRuntimeAgents(ctx, task.ID), e.DelegationCoordinator.CancelTask(ctx, task.ID))
 	}
 	if err != nil {
 		return result, err
@@ -302,6 +304,9 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 // chat/project ownership. Arguments never select a task or grant admission.
 // Terminal tasks remain readable; the coordinator admits active mutations.
 func (e *Engine) authorizeDelegationTool(ctx context.Context) (protocol.AgentTask, error) {
+	if id, ok := runtimeAgentFrom(ctx); ok {
+		return e.authorizeRuntimeAgentTool(ctx, id)
+	}
 	admitted, ok := DelegationTaskFromContext(ctx)
 	scope := tools.ScopeFrom(ctx)
 	if !ok || scope == nil || scope.ThreadID != admitted.ThreadID || scope.ProjectID != admitted.ProjectID {

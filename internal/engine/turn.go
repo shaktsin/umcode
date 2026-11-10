@@ -420,7 +420,10 @@ func (e *Engine) InterruptTurn(turnID string) error {
 	}
 	at.cancel()
 	if taskID != "" {
-		return e.DelegationCoordinator.CancelTask(context.WithoutCancel(e.baseCtx), taskID)
+		// Runtime agents first: their cancellation is then recorded as the
+		// user's stop, not as a failure caused by the task closing under them.
+		stopCtx := context.WithoutCancel(e.baseCtx)
+		return errors.Join(e.cancelRuntimeAgents(stopCtx, taskID), e.DelegationCoordinator.CancelTask(stopCtx, taskID))
 	}
 	return nil
 }
@@ -465,6 +468,9 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			return
 		}
 		budget.shared = shared
+		if childExecutionFrom(ctx) == nil {
+			e.rememberRuntimeBudget(task.ID, shared)
+		}
 		stop := context.AfterFunc(owned, cancelTurn)
 		defer stop()
 		if owned.Err() != nil {

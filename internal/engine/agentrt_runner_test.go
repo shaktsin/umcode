@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/agentrt"
+	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -77,9 +78,13 @@ type runtimeRunnerEnv struct {
 	p      *runtimeScriptProvider
 }
 
-func runtimeRunnerFixture(t *testing.T) runtimeRunnerEnv {
+func runtimeRunnerFixture(t *testing.T, configure ...func(*config.Config)) runtimeRunnerEnv {
 	t.Helper()
-	e, th, root, _ := delegationFixture(t)
+	e, th, root, _ := delegationFixtureWith(t, func(c *config.Config) {
+		for _, fn := range configure {
+			fn(c)
+		}
+	})
 	task := childExecutionTask(t, e, th)
 	p := &runtimeScriptProvider{}
 	e.LLMs.Register(p)
@@ -283,17 +288,25 @@ func TestRunnerNoCompatibleModelFails(t *testing.T) {
 
 // runtimeFor starts an agent runtime over the real runner with an approved
 // one-entry plan for env's task.
-func (env runtimeRunnerEnv) runtimeFor(t *testing.T, base context.Context, caps protocol.AgentCapabilities) *agentrt.Runtime {
+func (env runtimeRunnerEnv) runtimeFor(t *testing.T, base context.Context, caps protocol.AgentCapabilities, opts ...agentrt.Option) *agentrt.Runtime {
 	t.Helper()
-	plan := protocol.AgentPlan{ID: "plan-" + env.task.ID, ThreadID: env.th.ID, Limits: protocol.DefaultPlanLimits(),
-		Agents: []protocol.PlanAgent{{Name: "worker", Purpose: "investigate", Capabilities: caps}}}
+	env.approvePlan(t, protocol.DefaultPlanLimits(), protocol.PlanAgent{Name: "worker", Purpose: "investigate", Capabilities: caps})
+	rt := agentrt.NewRuntime(env.e.Store, runtimeRunner{engine: env.e}, base, opts...)
+	// Runner-side updates and the engine's stop and shutdown paths use the runtime.
+	env.e.AgentRuntime = rt
+	return rt
+}
+
+// approvePlan stores and approves a plan with the given entries for env's task.
+func (env runtimeRunnerEnv) approvePlan(t *testing.T, limits protocol.PlanLimits, entries ...protocol.PlanAgent) {
+	t.Helper()
+	plan := protocol.AgentPlan{ID: "plan-" + env.task.ID, ThreadID: env.th.ID, Limits: limits, Agents: entries}
 	if err := env.e.Store.SaveAgentPlan(t.Context(), plan); err != nil {
 		t.Fatal(err)
 	}
 	if err := env.e.Store.ApproveAgentPlan(t.Context(), plan.ID, env.task.ID); err != nil {
 		t.Fatal(err)
 	}
-	return agentrt.NewRuntime(env.e.Store, runtimeRunner{engine: env.e}, base)
 }
 
 func waitAgentTerminal(t *testing.T, rt *agentrt.Runtime, taskID, id string) protocol.RuntimeAgent {
@@ -618,5 +631,192 @@ func TestSliceExhaustedOnlyForSliceLimit(t *testing.T) {
 	spend(parent2, 100)
 	if sliceExhausted(slice2, parent2, "shared task request admission: insufficient shared task token allowance") {
 		t.Fatal("exhausted shared task budget labelled slice exhaustion")
+	}
+}
+
+// The task budget comes from the task, not from the coordinator.
+func TestRunnerNeedsNoCoordinator(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	env.p.script = func(int, context.Context, llm.Request) []llm.Event { return textReply("fine") }
+	a := env.newRuntimeAgent(t, "nocoord", readOnlyCaps, "")
+	env.e.DelegationCoordinator = nil
+	res, err := env.run(t, a)
+	if err != nil || res.Summary != "fine" {
+		t.Fatalf("run without a coordinator: %v (%+v)", err, res)
+	}
+}
+
+func TestRunnerWithoutTaskBudgetFailsCleanly(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	a := env.newRuntimeAgent(t, "nobudget", readOnlyCaps, "")
+	env.e.DelegationCoordinator = nil
+	env.e.forgetRuntimeBudget(env.task.ID)
+	_, err := env.run(t, a)
+	if err == nil || !strings.Contains(err.Error(), "task budget unavailable") {
+		t.Fatalf("err = %v, want task budget unavailable", err)
+	}
+	if reqs, _ := env.p.snapshot(); len(reqs) != 0 {
+		t.Fatal("provider called without a task budget")
+	}
+}
+
+func TestRunnerUpdatesReachRuntimeEvents(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	env.p.script = func(int, context.Context, llm.Request) []llm.Event { return textReply("ok") }
+	var mu sync.Mutex
+	var seen []protocol.RuntimeAgent
+	rt := env.runtimeFor(t, t.Context(), readOnlyCaps, agentrt.WithEvents(func(a protocol.RuntimeAgent) { mu.Lock(); seen = append(seen, a); mu.Unlock() }))
+	res, err := rt.Spawn(t.Context(), agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "ev", PlanEntry: "worker", Assignment: protocol.AgentAssignment{Prompt: "look"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitAgentTerminal(t, rt, env.task.ID, res.Agent.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	var model, workspace, usage bool
+	for _, a := range seen {
+		if a.State == protocol.AgentStateRunning && a.ModelActual != "" {
+			model = true
+		}
+		if a.State == protocol.AgentStateRunning && a.WorkspaceID != "" {
+			workspace = true
+		}
+		if a.Usage.InputTokens+a.Usage.OutputTokens > 0 {
+			usage = true
+		}
+	}
+	if !model || !workspace {
+		t.Fatalf("runner-side model/workspace updates did not reach WithEvents (model=%v workspace=%v, %d events)", model, workspace, len(seen))
+	}
+	_ = usage // the deterministic provider may report no usage
+}
+
+func viewDirGone(t *testing.T, env runtimeRunnerEnv, agentID string) (gone bool, root string) {
+	t.Helper()
+	a, err := env.e.Store.RuntimeAgent(t.Context(), env.task.ID, agentID)
+	if err != nil || a.WorkspaceID == "" {
+		t.Fatalf("workspace not recorded: %+v %v", a, err)
+	}
+	w, err := env.e.Store.AgentWorkspace(t.Context(), a.WorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, statErr := os.Stat(w.Root)
+	return os.IsNotExist(statErr), w.Root
+}
+
+func TestRunnerDiscardsReadOnlyViewCheckout(t *testing.T) {
+	t.Run("after completion", func(t *testing.T) {
+		env := runtimeRunnerFixture(t)
+		env.p.script = func(int, context.Context, llm.Request) []llm.Event { return textReply("looked") }
+		a := env.newRuntimeAgent(t, "viewer", readOnlyCaps, "")
+		if _, err := env.run(t, a); err != nil {
+			t.Fatal(err)
+		}
+		if gone, root := viewDirGone(t, env, a.ID); !gone {
+			t.Fatalf("read-only view checkout %s still exists", root)
+		}
+		got, _ := env.e.Store.RuntimeAgent(t.Context(), env.task.ID, a.ID)
+		if !strings.HasPrefix(got.WorkspaceID, "agent-view-") {
+			t.Fatalf("workspace = %q", got.WorkspaceID)
+		}
+	})
+	t.Run("after cancel", func(t *testing.T) {
+		env := runtimeRunnerFixture(t)
+		entered := make(chan struct{}, 1)
+		env.p.script = blockUntilCancelled(entered)
+		rt := env.runtimeFor(t, t.Context(), readOnlyCaps)
+		res, err := rt.Spawn(t.Context(), agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "viewcancel", PlanEntry: "worker", Assignment: protocol.AgentAssignment{Prompt: "look"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitForSignal(t, entered, "provider call")
+		if err = rt.Cancel(t.Context(), env.task.ID, "", res.Agent.ID); err != nil {
+			t.Fatal(err)
+		}
+		if got := waitAgentTerminal(t, rt, env.task.ID, res.Agent.ID); got.State != protocol.AgentStateCancelled {
+			t.Fatalf("state = %q", got.State)
+		}
+		// The runner finishes its cleanup right after the scheduler's write.
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			if gone, root := viewDirGone(t, env, res.Agent.ID); gone {
+				return
+			} else if time.Now().After(deadline) {
+				t.Fatalf("view checkout %s survived cancellation", root)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+	t.Run("a writer's workspace is kept", func(t *testing.T) {
+		env := runtimeRunnerFixture(t)
+		env.p.script = func(n int, _ context.Context, _ llm.Request) []llm.Event {
+			if n == 1 {
+				return toolReply("w1", "file.write", `{"path":"keep.txt","content":"mine"}`)
+			}
+			return textReply("written")
+		}
+		a := env.newRuntimeAgent(t, "keeper", writeCaps, "")
+		if _, err := env.run(t, a); err != nil {
+			t.Fatal(err)
+		}
+		gone, root := viewDirGone(t, env, a.ID)
+		if gone {
+			t.Fatalf("writer workspace %s was removed", root)
+		}
+		if data, err := os.ReadFile(filepath.Join(root, "keep.txt")); err != nil || string(data) != "mine" {
+			t.Fatalf("writer output lost: %q %v", data, err)
+		}
+	})
+}
+
+func TestLeadApprovalModeTimesOut(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	if err := env.e.Store.UpdateThread(t.Context(), env.th.ID, map[string]any{"approval_mode": "auto_all"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.e.leadApprovalMode(env.task)(); got != "auto_all" {
+		t.Fatalf("mode = %q, want auto_all", got)
+	}
+	release := make(chan struct{})
+	defer close(release)
+	env.e.agentThreadLookup = func(ctx context.Context, _ string) (protocol.Thread, error) {
+		select {
+		case <-ctx.Done():
+			return protocol.Thread{}, ctx.Err()
+		case <-release:
+			return protocol.Thread{}, errors.New("released")
+		}
+	}
+	start := time.Now()
+	got := env.e.leadApprovalMode(env.task)()
+	if got != "" {
+		t.Fatalf("blocked lookup gave mode %q, want the strictest (empty)", got)
+	}
+	if d := time.Since(start); d < time.Second || d > 5*time.Second {
+		t.Fatalf("lookup gave up after %v, want about 2s", d)
+	}
+}
+
+func TestChildPromptTextIsPathSpecific(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	a := env.newRuntimeAgent(t, "prompted", readOnlyCaps, "")
+	rtCtx := withChildExecution(t.Context(), &childExecution{runtime: &runtimeExecution{agent: a}, workspace: ChildWorkspace{Root: "/w"}})
+	legacy := withChildExecution(t.Context(), &childExecution{child: protocol.AgentChild{Role: protocol.AgentRoleReviewer}, workspace: ChildWorkspace{Root: "/w", Revision: "rev"}})
+	proj := &protocol.Project{}
+	rtText := joinLayers(env.e.systemPromptLayers(rtCtx, "", proj, "", nil))
+	legacyText := joinLayers(env.e.systemPromptLayers(legacy, "", proj, "", nil))
+	for _, banned := range []string{"Reviewer command, script, hook and plugin execution is blocked", "agent.review_report", "scoped UMCode child agent"} {
+		if strings.Contains(rtText, banned) {
+			t.Fatalf("runtime prompt contains legacy text %q", banned)
+		}
+	}
+	if !strings.Contains(rtText, "You can read files but not change them.") {
+		t.Fatalf("runtime prompt lacks capability text: %q", rtText)
+	}
+	for _, want := range []string{"Reviewer command, script, hook and plugin execution is blocked", "agent.review_report", "scoped UMCode child agent"} {
+		if !strings.Contains(legacyText, want) {
+			t.Fatalf("legacy prompt lost %q", want)
+		}
 	}
 }

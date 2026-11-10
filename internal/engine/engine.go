@@ -107,6 +107,13 @@ type Engine struct {
 	// shell would get (see runtimeConfinement); nil uses the real host checks.
 	agentVMCheck func() error
 	agentSandbox func() sandbox.Sandbox
+	// agentThreadLookup reads the lead thread for leadApprovalMode; nil uses
+	// the store. A test seam for a lookup that never returns.
+	agentThreadLookup func(ctx context.Context, id string) (protocol.Thread, error)
+	// runtimeBudgets maps a task ID to the shared task budget its lead turns
+	// run under, so runtime agents (which the scheduler starts on the engine's
+	// base context) slice the right budget without the legacy coordinator.
+	runtimeBudgets sync.Map
 
 	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens map[string]delegationToken // protected by mu; never persisted
@@ -299,6 +306,16 @@ func (e *Engine) Shutdown(ctx context.Context) {
 	e.shuttingDown = true
 	clear(e.delegationTokens)
 	e.mu.Unlock()
+	if e.AgentRuntime != nil {
+		// Before anything is torn down: stop admitting spawns, cancel every
+		// agent and wait (bounded) for runners to finish their cleanup. The
+		// store is closed by the caller after Shutdown returns.
+		closeCtx, cancelClose := context.WithTimeout(ctx, runtimeCloseTimeout)
+		if err := e.AgentRuntime.Close(closeCtx); err != nil {
+			e.Log.Warn("agent runtime did not stop in time", "err", err)
+		}
+		cancelClose()
+	}
 	e.Previews.Close()
 	e.VisualQA.Close()
 	e.ComputerUse.Close()

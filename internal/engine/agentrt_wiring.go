@@ -4,44 +4,116 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/agentrt"
+	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
-// errExecutionAdapterPending is returned for every runtime agent until the
-// runtime_v2 execution adapter exists.
-var errExecutionAdapterPending = errors.New("agent execution is not available yet (runtime_v2 execution adapter pending)")
-
-// unavailableRunner is the agentrt.Runner used while runtime_v2 is dark: it
-// fails every agent clearly instead of executing it.
-type unavailableRunner struct{}
-
-func (unavailableRunner) Run(context.Context, protocol.RuntimeAgent) (protocol.AgentResult, error) {
-	return protocol.AgentResult{}, errExecutionAdapterPending
-}
+// runtimeCloseTimeout bounds how long Shutdown waits for runtime agents.
+const runtimeCloseTimeout = 10 * time.Second
 
 // registerAgentRuntime builds the agent runtime on base and registers its
 // model-facing tools in place of the legacy delegation agent tools. The lead
 // keeps the default RootCapabilities authority (agentrt.WithLeadCapabilities).
 func (e *Engine) registerAgentRuntime(reg *tools.Registry, base context.Context) {
-	e.AgentRuntime = agentrt.NewRuntime(e.Store, unavailableRunner{}, base)
+	e.AgentRuntime = agentrt.NewRuntime(e.Store, runtimeRunner{engine: e}, base)
 	for _, tool := range tools.NewRuntimeAgentTools(e.AgentRuntime, e.authorizeDelegationTool, runtimeCaller) {
 		reg.Add(tool)
 	}
 }
 
-// runtimeCaller resolves the calling agent for the runtime agent tools. It
-// fails closed: only the lead's own turn (no child execution marker) resolves,
-// as the lead (""). Child contexts do not resolve until runtime agents run
-// their own turns and carry their agent ID (TODO(Plan 2): resolve the runtime
-// agent's ID from its execution context here).
+// runtimeCaller resolves the calling agent for the runtime agent tools: a
+// runtime agent's own turn resolves to its ID (so its capabilities, not the
+// lead's, bound what it spawns), the lead's own turn (no child marker)
+// resolves as the lead (""). Legacy child contexts and anything ambiguous,
+// such as an ID that does not match the context's execution, fail closed.
 func runtimeCaller(ctx context.Context) (string, bool) {
+	if id, ok := runtimeAgentFrom(ctx); ok {
+		if x := childExecutionFrom(ctx); x != nil && (x.runtime == nil || x.runtime.agent.ID != id) {
+			return "", false
+		}
+		return id, true
+	}
 	if delegationChild(ctx) || childExecutionFrom(ctx) != nil {
 		return "", false
 	}
 	return "", true
+}
+
+// authorizeRuntimeAgentTool authorizes an agent.* call made on a runtime
+// agent's own turn. Its context carries the task of its execution instead of
+// an admitted parent scope (its working folder is its own checkout), so the
+// task is re-read from the store and must still match that execution and its
+// chat, and be active. Arguments never select a task.
+func (e *Engine) authorizeRuntimeAgentTool(ctx context.Context, id string) (protocol.AgentTask, error) {
+	x := childExecutionFrom(ctx)
+	if x == nil || x.runtime == nil || x.runtime.agent.ID != id || !delegationChild(ctx) {
+		return protocol.AgentTask{}, errors.New("delegation requires an admitted parent task")
+	}
+	task, err := e.Store.AgentTask(ctx, x.task.ID)
+	if err != nil {
+		return task, err
+	}
+	if task.ThreadID != x.task.ThreadID || task.ProjectID != x.task.ProjectID || task.RootTurnID != x.task.RootTurnID || task.BaseRoot != x.task.BaseRoot || task.ParentRoot != x.task.ParentRoot || task.BaseRevision != x.task.BaseRevision || task.Activation != x.task.Activation {
+		return task, errors.New("delegation task ownership changed")
+	}
+	if !unfinishedDelegation(task.State) {
+		return task, fmt.Errorf("delegation task %s is no longer active", task.ID)
+	}
+	agent, err := e.Store.RuntimeAgent(ctx, task.ID, id)
+	if err != nil {
+		return task, err
+	}
+	if agent.TaskID != task.ID {
+		return task, errors.New("runtime agent belongs to another task")
+	}
+	return task, nil
+}
+
+// cancelRuntimeAgents cancels every runtime agent of the task, with their
+// descendants, as the lead. It is a no-op when the runtime is off.
+func (e *Engine) cancelRuntimeAgents(ctx context.Context, taskID string) error {
+	if e.AgentRuntime == nil {
+		return nil
+	}
+	agents, err := e.AgentRuntime.List(ctx, taskID, "")
+	if err != nil {
+		return fmt.Errorf("list runtime agents: %w", err)
+	}
+	var errs []error
+	for _, a := range agents {
+		if a.ParentAgentID == "" {
+			if err = e.AgentRuntime.Cancel(ctx, taskID, "", a.ID); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// rememberRuntimeBudget records the shared budget the task's lead turns run
+// under; runtime agents slice it.
+func (e *Engine) rememberRuntimeBudget(taskID string, b *delegation.Budget) {
+	if b != nil {
+		e.runtimeBudgets.Store(taskID, b)
+	}
+}
+
+func (e *Engine) forgetRuntimeBudget(taskID string) { e.runtimeBudgets.Delete(taskID) }
+
+// runtimeTaskBudget returns the shared budget a runtime agent of the task
+// slices: the one on ctx if any, else the one its lead turn registered.
+func (e *Engine) runtimeTaskBudget(ctx context.Context, taskID string) *delegation.Budget {
+	if b := delegation.BudgetFromContext(ctx); b != nil {
+		return b
+	}
+	if b, ok := e.runtimeBudgets.Load(taskID); ok {
+		return b.(*delegation.Budget)
+	}
+	return nil
 }
 
 type toolOccurrenceKey struct{}
