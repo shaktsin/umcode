@@ -134,8 +134,11 @@ type Engine struct {
 	// nested agent slices its parent's slice (see agentrt_budget.go).
 	runtimeAgentBudgets agentBudgetRegistry
 
+	// suggestionMu serializes answers to agent.suggest cards: the open check,
+	// the activation token and the decision happen under it as one step.
+	suggestionMu sync.Mutex
 	// suggestionRespondHook is a test seam run by RespondAgentSuggestion after
-	// it read the card as open; set before use.
+	// it read the card as open (under suggestionMu); set before use.
 	suggestionRespondHook func()
 	delegationMu          sync.Mutex                 // serializes prepare/admit without holding the turn mutex
 	delegationTokens      map[string]delegationToken // protected by mu; never persisted

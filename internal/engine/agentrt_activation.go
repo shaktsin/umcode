@@ -85,9 +85,13 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 // enable prepares delegation exactly as delegation/enable does and returns
 // its one-use activation token in the same call; the client then submits the
 // follow-up turn/start carrying it. decline suppresses later suggestions in
-// the chat until the user enables agents themselves. Repeating the decision
-// already recorded returns the suggestion unchanged and never mints a second
-// token. If preparing delegation fails, the suggestion stays pending.
+// the chat until the user enables agents themselves. Answers are serialized
+// (suggestionMu): the open check, the token and the decision are one step, so
+// concurrent answers never both act. Repeating the decision already recorded
+// returns the suggestion unchanged and never mints a second token. If
+// preparing delegation fails, the suggestion stays pending and nothing is
+// cleared. Declines are lifted only after the enabled decision is stored,
+// with its token kept.
 func (e *Engine) RespondAgentSuggestion(ctx context.Context, p protocol.AgentSuggestionRespondParams) (protocol.AgentSuggestionRespondResult, error) {
 	var res protocol.AgentSuggestionRespondResult
 	if delegationChild(ctx) || childExecutionFrom(ctx) != nil {
@@ -105,6 +109,8 @@ func (e *Engine) RespondAgentSuggestion(ctx context.Context, p protocol.AgentSug
 	default:
 		return res, protocol.Errorf(protocol.CodeInvalidParams, "decision must be %q or %q", protocol.SuggestionEnable, protocol.SuggestionDecline)
 	}
+	e.suggestionMu.Lock()
+	defer e.suggestionMu.Unlock()
 	cur, err := e.Store.GetAgentSuggestion(ctx, p.SuggestionID)
 	if errors.Is(err, store.ErrNotFound) {
 		return res, protocol.Errorf(protocol.CodeNotFound, "agent suggestion %s not found", p.SuggestionID)
@@ -124,7 +130,7 @@ func (e *Engine) RespondAgentSuggestion(ctx context.Context, p protocol.AgentSug
 	}
 	var activation protocol.DelegationEnableResult
 	if state == store.SuggestionEnabled {
-		if activation, err = e.PrepareDelegation(ctx, cur.ThreadID); err != nil {
+		if activation, err = e.prepareDelegationToken(ctx, cur.ThreadID); err != nil {
 			return res, err
 		}
 	}
@@ -140,6 +146,13 @@ func (e *Engine) RespondAgentSuggestion(ctx context.Context, p protocol.AgentSug
 			return res, protocol.Errorf(protocol.CodeConflict, "agent suggestion changed while answering it; reload it")
 		}
 		return res, err
+	}
+	if state == store.SuggestionEnabled {
+		// The explicit enabled response opens a decline-free window. A
+		// failure here only keeps suggestions suppressed (fail safe).
+		if err = e.Store.ClearThreadDeclines(ctx, cur.ThreadID); err != nil {
+			e.Log.Warn("could not lift agent suggestion declines after enable", "thread", cur.ThreadID, "err", err)
+		}
 	}
 	res.Suggestion = suggestionView(decided)
 	if activation.ActivationToken != "" {

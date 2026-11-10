@@ -93,7 +93,24 @@ func (e *Engine) delegationOpen() error {
 
 // PrepareDelegation is the app's explicit, pre-submit activation action. It
 // returns a one-use chat/project/root/revision-bound token, not a premature task.
+// The user enabled agents themselves, so an earlier declined agent.suggest no
+// longer suppresses suggestions in this chat; that is lifted only together
+// with an issued token (a refused enable clears nothing).
 func (e *Engine) PrepareDelegation(ctx context.Context, threadID string) (protocol.DelegationEnableResult, error) {
+	res, err := e.prepareDelegationToken(ctx, threadID)
+	if err != nil {
+		return res, err
+	}
+	if err = e.Store.ClearThreadDeclines(ctx, threadID); err != nil {
+		e.revokeDelegationToken(res.ActivationToken)
+		return protocol.DelegationEnableResult{}, err
+	}
+	return res, nil
+}
+
+// prepareDelegationToken issues the activation token without touching
+// suggestion declines; callers decide when declines are lifted.
+func (e *Engine) prepareDelegationToken(ctx context.Context, threadID string) (protocol.DelegationEnableResult, error) {
 	if delegationChild(ctx) {
 		return protocol.DelegationEnableResult{}, protocol.Errorf(protocol.CodeInvalidRequest, "children cannot enable delegation")
 	}
@@ -109,11 +126,6 @@ func (e *Engine) PrepareDelegation(ctx context.Context, threadID string) (protoc
 	if _, err = e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil {
 		return protocol.DelegationEnableResult{}, protocol.Errorf(protocol.CodeConflict, "this chat already has an unfinished delegation task; continue it with its task ID")
 	} else if !errors.Is(err, store.ErrNotFound) {
-		return protocol.DelegationEnableResult{}, err
-	}
-	// The user enabled agents themselves: an earlier declined agent.suggest
-	// no longer suppresses suggestions in this chat.
-	if err = e.Store.ClearThreadDeclines(ctx, base.ThreadID); err != nil {
 		return protocol.DelegationEnableResult{}, err
 	}
 	var bytes [32]byte
