@@ -113,17 +113,6 @@ func TestChildExecutionFinalizationAndHistory(t *testing.T) {
 	}
 }
 
-type childEvent struct {
-	method string
-	params any
-}
-type childSubscriber struct{ events chan childEvent }
-
-func (*childSubscriber) ID() string                         { return "child-execution" }
-func (*childSubscriber) IsAdmin() bool                      { return true }
-func (*childSubscriber) Wants(string) bool                  { return true }
-func (s *childSubscriber) Notify(method string, params any) { s.events <- childEvent{method, params} }
-
 // The OS command boundary is replaced with a probe so this tests the actual
 // engine approval/permission adapter without an unrestricted subprocess.
 type childPermissionProbe struct {
@@ -465,28 +454,6 @@ func TestChildExecutionModelScopeFrozen(t *testing.T) {
 	if len(p.requests) != 0 || got[0].State != protocol.AgentStateFailed {
 		t.Fatalf("new default broadened original pool: %+v requests %d", got, len(p.requests))
 	}
-}
-
-func childExecutionTask(t *testing.T, e *Engine, th protocol.Thread) protocol.AgentTask {
-	t.Helper()
-	token, err := e.PrepareDelegation(t.Context(), th.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	params := protocol.TurnStartParams{ThreadID: th.ID, Text: "parent private unrelated transcript", DelegationActivationToken: token.ActivationToken}
-	var tr protocol.Turn
-	if e.AgentRuntime != nil {
-		// The agent runtime closes a task whose admitted turn ends without a
-		// plan: the test's plan and agents belong to the live admitted turn.
-		tr, _ = liveAdmittedTurn(t, e, params)
-	} else {
-		tr = delegationTurn(t, e, params)
-	}
-	task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, tr.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return task
 }
 
 // Later parent settings cannot replace the original approved execution model.

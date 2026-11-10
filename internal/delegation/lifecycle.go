@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
@@ -105,37 +103,6 @@ func FollowupsFromContext(ctx context.Context) FollowupQueue {
 	return q
 }
 
-// WithChildCancellation registers the actual engine turn cancellation handle.
-// Task5 must call RegisterChildCancellation when startTurn reconstructs context.
-type cancellationKey struct{}
-type childCancellation struct {
-	mu        sync.Mutex
-	cancelled bool
-	handles   []context.CancelFunc
-}
-
-func (h *childCancellation) cancel() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.cancelled = true
-	for _, f := range h.handles {
-		f()
-	}
-}
-func RegisterChildCancellation(ctx context.Context, cancel context.CancelFunc) error {
-	h, _ := ctx.Value(cancellationKey{}).(*childCancellation)
-	if h == nil {
-		return errors.New("missing child cancellation owner")
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.cancelled {
-		cancel()
-		return context.Canceled
-	}
-	h.handles = append(h.handles, cancel)
-	return nil
-}
 func (c *Coordinator) lifecycleStore() (lifecycleStore, error) {
 	s, ok := c.store.(lifecycleStore)
 	if !ok {
@@ -160,21 +127,6 @@ func (c *Coordinator) notifyError(task protocol.AgentTask, child protocol.AgentC
 		}
 		c.events.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, event)
 	}
-}
-
-// NextSequence returns the next delegation/updated sequence number: strictly
-// increasing within the process. Microsecond stamps (safe as JavaScript
-// integers) also order delayed deliveries across engine restarts. Legacy
-// child events and runtime agent and integration events share it.
-func (c *Coordinator) NextSequence() int64 {
-	c.seqMu.Lock()
-	defer c.seqMu.Unlock()
-	next := time.Now().UnixMicro()
-	if next <= c.sequence {
-		next = c.sequence + 1
-	}
-	c.sequence = next
-	return next
 }
 
 func cloneChild(child protocol.AgentChild) protocol.AgentChild {
@@ -419,16 +371,6 @@ func (c *Coordinator) List(ctx context.Context, taskID string) ([]protocol.Agent
 	return children, err
 }
 
-// LiveBudget is a read-only view of an already-admitted owner.
-func (c *Coordinator) LiveBudget(taskID string) (protocol.UsageTotals, string, bool) {
-	c.mu.Lock()
-	rt := c.tasks[taskID]
-	c.mu.Unlock()
-	if rt == nil {
-		return protocol.UsageTotals{}, "", false
-	}
-	return rt.budget.Usage(), rt.budget.StopReason(), true
-}
 func (c *Coordinator) Wait(ctx context.Context, taskID string, childIDs []string) ([]protocol.AgentChild, error) {
 	if len(childIDs) == 0 {
 		return nil, errors.New("at least one child ID is required")
@@ -585,29 +527,6 @@ func (c *Coordinator) Cancel(ctx context.Context, taskID, childID string) error 
 
 var _ Service = (*Coordinator)(nil)
 
-// InheritRunnerContext preserves the durable queue and actual-turn cancellation
-// owner when the engine reconstructs its execution context. It grants no parent
-// delegation authority. Task5 must still apply its child role/policy marker.
-func InheritRunnerContext(ctx, from context.Context) context.Context {
-	for _, key := range []any{queueKey{}, cancellationKey{}} {
-		if value := from.Value(key); value != nil {
-			ctx = context.WithValue(ctx, key, value)
-		}
-	}
-	return ctx
-}
-
 func hasResult(r protocol.AgentResult) bool {
 	return r.Summary != "" || r.Blocker != "" || len(r.Findings) > 0 || len(r.Checks) > 0 || len(r.ChangedPaths) > 0
-}
-
-// WithChildCancellation gives ctx a cancellation owner for the engine turns an
-// execution starts (see RegisterChildCancellation): each registered turn is
-// cancelled when ctx is done. The agent runtime's runner uses it in place of
-// the coordinator's slot. stop releases the watch on ctx.
-func WithChildCancellation(ctx context.Context) (context.Context, func()) {
-	h := &childCancellation{}
-	ctx = context.WithValue(ctx, cancellationKey{}, h)
-	stop := context.AfterFunc(ctx, h.cancel)
-	return ctx, func() { stop() }
 }
