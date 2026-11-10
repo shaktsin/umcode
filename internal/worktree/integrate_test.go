@@ -547,8 +547,13 @@ func TestApplyOnIntegratedRefusesLinksIntoGitMetadata(t *testing.T) {
 			})
 			before := parentSnapshot(t, f.parent)
 			_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
-			if err == nil || !strings.Contains(err.Error(), "repository metadata") {
-				t.Fatalf("symlink to %q must be refused as resolving into metadata, got %v", target, err)
+			// Non-ASCII targets (the ZWNJ variant) are refused earlier by ruling R5.
+			want := "repository metadata"
+			if hasNonASCII(target) {
+				want = "non-ASCII"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("symlink to %q must be refused (%s), got %v", target, want, err)
 			}
 			assertUnchanged(t, f.parent, before)
 		})
@@ -810,30 +815,61 @@ func TestValidateOwnedMetadataExported(t *testing.T) {
 	}
 }
 
-// N1: on case-insensitive or normalizing filesystems (macOS, Windows) `L` is
-// the symlink `l`. A target through a case or Unicode-normalization alias of
-// a symlink must be refused, not resolved as an ordinary missing directory.
+// N1: on case-insensitive filesystems (macOS, Windows) `L` is the symlink
+// `l`. A target through a case alias of a symlink must be refused, not
+// resolved as an ordinary missing directory.
 func TestApplyOnIntegratedSymlinkAliasRefused(t *testing.T) {
-	for name, tc := range map[string]struct{ link, via string }{
-		"case":          {"l", "L"},
-		"nfc vs nfd":    {"é", "é"},
-		"nfd vs nfc":    {"é", "é"},
-		"hfs ignorable": {"l", "l‌"},
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n"})
+	result := f.agent(t, "agent", func(dir string) {
+		if err := os.Symlink(".", filepath.Join(dir, "l")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("L/../outside", filepath.Join(dir, "y")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	before := parentSnapshot(t, f.parent)
+	_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+	if err == nil || !strings.Contains(err.Error(), "alias") {
+		t.Fatalf("symlink through a case alias must be refused, got %v", err)
+	}
+	assertUnchanged(t, f.parent, before)
+}
+
+// Ruling R5: Unicode normalization/folding is not approximated. Any symlink
+// whose path or target contains a non-ASCII byte is refused, so no symlink
+// can alias another entry through NFC/NFD, canonical singletons (U+037E is
+// ';'), HFS-ignorable code points or Unicode case folds.
+func TestApplyOnIntegratedNonASCIISymlinkRefused(t *testing.T) {
+	nfc, nfd := "ñé", "ñé"
+	type link struct{ name, target string }
+	for name, links := range map[string][]link{
+		"non-ASCII name (NFC)":       {{nfc, "a.go"}},
+		"non-ASCII parent dir":       {{"dé/l", "../a.go"}},
+		"NFC link, NFD target":       {{nfc, "."}, {"y", nfd + "/../outside"}},
+		"NFD link, NFC target":       {{nfd, "."}, {"y", nfc + "/../outside"}},
+		"singleton U+037E target":    {{";", "."}, {"y", ";/../outside"}},
+		"HFS ignorable in target":    {{"l", "."}, {"y", "l‌/../outside"}},
+		"Kelvin sign case fold":      {{"k", "."}, {"y", "K/../outside"}},
+		"non-ASCII target, harmless": {{"y", "café.txt"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n"})
+			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "café.txt": "c\n"})
 			result := f.agent(t, "agent", func(dir string) {
-				if err := os.Symlink(".", filepath.Join(dir, tc.link)); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(tc.via+"/../outside", filepath.Join(dir, "y")); err != nil {
-					t.Fatal(err)
+				for _, l := range links {
+					p := filepath.Join(dir, filepath.FromSlash(l.name))
+					if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(l.target, p); err != nil {
+						t.Fatal(err)
+					}
 				}
 			})
 			before := parentSnapshot(t, f.parent)
 			_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
-			if err == nil || !strings.Contains(err.Error(), "alias") {
-				t.Fatalf("symlink through an alias of %q must be refused, got %v", tc.link, err)
+			if err == nil || !strings.Contains(err.Error(), "non-ASCII") {
+				t.Fatalf("non-ASCII symlink must be refused, got %v", err)
 			}
 			assertUnchanged(t, f.parent, before)
 		})
@@ -841,13 +877,12 @@ func TestApplyOnIntegratedSymlinkAliasRefused(t *testing.T) {
 }
 
 // N1: a revision may not add a path that collides with another tracked path
-// under case folding or Unicode normalization.
+// under ASCII case folding.
 func TestApplyOnIntegratedCollidingPathsRefused(t *testing.T) {
 	for name, add := range map[string][]string{
 		"case against parent":  {"A.go"},
 		"case within revision": {"b.go", "B.go"},
 		"directory case":       {"SUB/y.go"},
-		"normalization":        {"café.go", "café.go"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "sub/x.go": "x\n"})
@@ -866,14 +901,41 @@ func TestApplyOnIntegratedCollidingPathsRefused(t *testing.T) {
 	}
 }
 
-// N1: distinct names, inside symlinks and non-ASCII names still apply.
+// Ruling R5: non-ASCII REGULAR files apply, including two names that differ
+// only by Unicode normalization. That pair is deliberately allowed: without
+// symlinks it cannot redirect a write outside the checkout or into metadata
+// (a normalizing filesystem merely stores one file, which the next parent
+// state check reports as a difference).
+func TestApplyOnIntegratedNonASCIIRegularFilesApply(t *testing.T) {
+	for name, add := range map[string][]string{
+		"plain non-ASCII file":         {"café.txt"},
+		"NFC and NFD regular files":    {"café.go", "café.go"},
+		"non-ASCII directory and file": {"dé/ü.go"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n"})
+			result := f.agent(t, "agent", func(dir string) {
+				for _, p := range add {
+					write(t, dir, p, p+"\n")
+				}
+			})
+			applied, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := gitInWorkspace(t, f, "agent", "rev-parse", result+"^{tree}"); applied.TreeAfter != want {
+				t.Fatalf("tree %s, want %s", applied.TreeAfter, want)
+			}
+		})
+	}
+}
+
+// N1: distinct ASCII names and inside symlinks still apply.
 func TestApplyOnIntegratedDistinctNamesApply(t *testing.T) {
 	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "sub/x.go": "x\n", "Docs/readme": "r\n"})
 	result := f.agent(t, "agent", func(dir string) {
 		write(t, dir, "docs2/x", "x\n")
-		write(t, dir, "café.go", "c\n")
 		write(t, dir, "cafe.go", "c\n")
-		write(t, dir, "ü.go", "u\n")
 		if err := os.Symlink("sub", filepath.Join(dir, "l")); err != nil {
 			t.Fatal(err)
 		}
@@ -890,16 +952,18 @@ func TestApplyOnIntegratedDistinctNamesApply(t *testing.T) {
 	}
 }
 
+// Alias keys fold ASCII case only; non-ASCII bytes are kept verbatim (ruling
+// R5: symlinks are ASCII-only, so Unicode aliasing of other entries is
+// harmless and deliberately not modelled).
 func TestAliasKey(t *testing.T) {
-	same := [][2]string{{"l", "L"}, {"café", "café"}, {"Å", "Å"}, {"k", "K"}, {"l‌", "l"}, {"Sub", "sUB"}}
-	for _, p := range same {
+	for _, p := range [][2]string{{"l", "L"}, {"Sub", "sUB"}, {"A.GO", "a.go"}} {
 		if aliasKey(p[0]) != aliasKey(p[1]) {
 			t.Fatalf("%q and %q should alias", p[0], p[1])
 		}
 	}
-	for _, p := range [][2]string{{"cafe", "café"}, {"a.go", "b.go"}, {"e", "é"}, {"docs", "docs2"}} {
+	for _, p := range [][2]string{{"a.go", "b.go"}, {"docs", "docs2"}, {"café", "café"}, {"k", "K"}, {"É", "é"}} {
 		if aliasKey(p[0]) == aliasKey(p[1]) {
-			t.Fatalf("%q and %q should be distinct", p[0], p[1])
+			t.Fatalf("%q and %q should be distinct keys", p[0], p[1])
 		}
 	}
 }

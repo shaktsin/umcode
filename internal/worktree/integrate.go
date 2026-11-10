@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 // ErrParentChanged is wrapped by refusals caused by the parent checkout no
@@ -352,7 +351,7 @@ func checkSymlinks(ctx context.Context, root, objects, tree string, deleted, cha
 		key := pathAliasKey(p)
 		if q, ok := aliases[key]; ok && q != p {
 			if changed == nil || involved[p] || involved[q] {
-				return fmt.Errorf("path %q aliases %q on case-insensitive or normalizing filesystems", p, q)
+				return fmt.Errorf("path %q aliases %q on case-insensitive filesystems", p, q)
 			}
 			return nil
 		}
@@ -415,10 +414,10 @@ func checkSymlinks(ctx context.Context, root, objects, tree string, deleted, cha
 		if dirs[p] || deleted[p] {
 			return false, "", nil
 		}
-		// On case-insensitive or normalizing filesystems this component is
+		// On case-insensitive filesystems this component is
 		// another tracked entry (possibly a symlink): never treat it as missing.
 		if q, ok := aliases[pathAliasKey(p)]; ok {
-			return false, "", fmt.Errorf("path %q aliases %q on case-insensitive or normalizing filesystems", p, q)
+			return false, "", fmt.Errorf("path %q aliases %q on case-insensitive filesystems", p, q)
 		}
 		// Untracked but ignored content is not in the tree; consult the
 		// filesystem so an ignored symlink cannot be used as a stepping stone.
@@ -442,9 +441,15 @@ func checkSymlinks(ctx context.Context, root, objects, tree string, deleted, cha
 		if err = ctx.Err(); err != nil {
 			return err
 		}
+		if hasNonASCII(name) {
+			return fmt.Errorf("symlink %q has a non-ASCII path; non-ASCII symlinks are unsupported by integration", name)
+		}
 		target, err := readTarget(n.id)
 		if err != nil {
 			return fmt.Errorf("symlink %q: %w", name, err)
+		}
+		if hasNonASCII(target) {
+			return fmt.Errorf("symlink %q has a non-ASCII target; non-ASCII symlinks are unsupported by integration", name)
 		}
 		if err = resolveLink(name, target, lookup); err != nil {
 			return err
@@ -563,53 +568,32 @@ func pathAliasKey(p string) string {
 	return strings.Join(parts, "/")
 }
 
-// aliasKey maps a path component to a key shared by every name a
-// case-insensitive or normalizing filesystem (APFS/HFS+ NFC/NFD, NTFS) could
-// treat as the same entry. It is conservative: no Unicode normalization
-// tables are available offline, so each maximal run of non-ASCII runes
-// becomes one placeholder, and a run that starts with a combining mark also
-// absorbs the preceding ASCII rune (its decomposed base letter). Distinct
-// names can therefore share a key (for example "aé" and "é"); that
-// only causes a refusal, never an acceptance. HFS-ignorable code points are
-// dropped and runes whose case-fold orbit contains an ASCII letter (Kelvin
-// sign, long s) fold to that letter.
+// aliasKey maps a path component to the key a case-insensitive filesystem
+// would treat as the same entry: ASCII letters are lowercased and every other
+// byte is kept verbatim. Unicode normalization and folding are deliberately
+// not modelled (ruling R5): checkSymlinks refuses every symlink whose path or
+// target contains a non-ASCII byte, so a symlink can only be named, and a
+// target can only name, ASCII components, and those cannot alias through
+// NFC/NFD, canonical singletons, HFS-ignorable code points or Unicode case
+// folds. Aliasing between non-ASCII regular entries is harmless without such
+// symlinks (a real directory pops the same way on `..`).
 func aliasKey(name string) string {
-	var out []byte
-	runes := make([]rune, 0, len(name))
-	for _, r := range name {
-		if hfsIgnorable(r) {
-			continue
+	b := []byte(name)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
 		}
-		runes = append(runes, asciiFold(r))
 	}
-	for i := 0; i < len(runes); {
-		r := runes[i]
-		if r < 0x80 {
-			out = append(out, byte(r))
-			i++
-			continue
-		}
-		if unicode.In(r, unicode.Mn, unicode.Mc, unicode.Me) && len(out) > 0 && out[len(out)-1] != 0 {
-			out = out[:len(out)-1]
-		}
-		for i < len(runes) && runes[i] >= 0x80 {
-			i++
-		}
-		out = append(out, 0)
-	}
-	return string(out)
+	return string(b)
 }
 
-func asciiFold(r rune) rune {
-	if r < 0x80 {
-		return unicode.ToLower(r)
-	}
-	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
-		if f < 0x80 {
-			return unicode.ToLower(f)
+func hasNonASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return true
 		}
 	}
-	return r
+	return false
 }
 
 // unquoteGitPath undoes Git's C-style quoting of a path ("\303\251", "\t",
