@@ -119,3 +119,7 @@ func TestEvaluationCancellationDrainsTerminal(t *testing.T) {
 		t.Fatal("provider stranded sending terminal event")
 	}
 }
+
+func (*evalStreamFixture) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
+}

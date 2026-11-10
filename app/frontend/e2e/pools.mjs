@@ -71,13 +71,18 @@ await p.screenshot({ path: scheme + '-pool-02-pools.png' });
 await step('the composer offers the pool and routes through it', async () => {
   await p.locator('aside nav').getByRole('button', { name: 'Chat' }).click();
   await p.getByPlaceholder(/Ask about demo/).waitFor({ timeout: 5000 });
-  const picker = p.locator('div[aria-label="Message composer"] select').first();
-  const options = await picker.locator('option').allTextContents();
-  console.log('     picker:', options.join(' | '));
-  if (!options.some((o) => /Everything/.test(o))) throw new Error('pool missing from the picker');
-  const chip = p.locator('div[aria-label="Message composer"] span[title*="Runs on"]').first();
-  await chip.waitFor({ timeout: 8000 });
-  console.log('     chip:', (await chip.textContent())?.trim(), '|', (await chip.getAttribute('title')).replace(/\n/g, ' ~ '));
+  const picker = p.locator('div[aria-label="Message composer"] [data-model-picker] button').first();
+  await picker.click();
+  const menu = p.getByRole('dialog', { name: 'Choose models' });
+  await menu.waitFor({ timeout: 5000 });
+  const pool = menu.getByRole('button', { name: /Everything/ });
+  if (!(await pool.count())) throw new Error('pool missing from the picker');
+  console.log('     picker:', (await menu.textContent())?.replace(/\s+/g, ' ').trim());
+  await pool.click();
+  await menu.waitFor({ state: 'detached', timeout: 5000 });
+  const label = (await picker.textContent())?.trim();
+  console.log('     selected:', label);
+  if (!/Everything/.test(label ?? '')) throw new Error('pool not selected in the picker');
 });
 
 await step('a rate limit walks down the pool', async () => {

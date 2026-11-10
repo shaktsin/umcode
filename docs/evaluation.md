@@ -19,7 +19,7 @@ The example executes a real file write through admitted engine turns for master-
 
 ## Live campaigns
 
-`internal/evaluation/testdata/live.template.json` is intentionally invalid and unconfigured. Supply explicit model/provider, complexity preset (`quick`, `standard`, or `deep`), API-key environment variable reference, context/output limits, frozen USD-per-million pricing, campaign budget, representative tasks, immutable fixture/trusted grader hashes, and declared comparisons. Never put secrets in the manifest. No user credential discovery occurs. Subscription credentials cannot support dollar qualification.
+`internal/evaluation/testdata/live.template.json` is intentionally invalid and unconfigured. Supply explicit model/provider, effort level (`low`, `medium`, or `high`; legacy `quick`, `standard` and `deep` are still accepted), API-key environment variable reference, context/output limits, frozen USD-per-million pricing, campaign budget, representative tasks, immutable fixture/trusted grader hashes, and declared comparisons. Never put secrets in the manifest. No user credential discovery occurs. Subscription credentials cannot support dollar qualification.
 
 ```sh
 go run ./cmd/umcode-eval run --manifest /path/to/configured.json --out /tmp/live-evaluation --live --max-cost-usd 5
@@ -50,7 +50,7 @@ Evaluation shells use an OS runtime read allowlist, with fixture-only writes and
 
 Host web, browser, computer, visual and preview tools retain their catalog schemas but return unavailable in evaluation. They need isolated adapters before specialist campaigns can complete. Existing engine specialist fixtures remain regression diagnostics; they are not live qualification evidence.
 
-Live output admission checks the effective provider wire limit, including Claude thinking expansion. A conservative serialized-request byte bound plus output/overhead must fit the declared context window before reservation. Unsupported complexity presets or explicit fallback routes are rejected. Partial usage is retained as partial evidence, never treated as a complete bill or refunded reservation. Resume requires the same effective spending ceiling; use a new campaign for changed authorization.
+Live output admission checks the effective provider wire limit, including Claude thinking expansion. A conservative serialized-request byte bound plus output/overhead must fit the declared context window before reservation. Unsupported effort levels or explicit fallback routes are rejected. Partial usage is retained as partial evidence, never treated as a complete bill or refunded reservation. Resume requires the same effective spending ceiling; use a new campaign for changed authorization.
 
 Live qualification requires the complete component/removal comparison matrix, the complete declared schedule and matching nonsynthetic provider/model/frozen-price evidence. Smaller diagnostic campaigns remain inconclusive. Unresolved review disputes and superseded favorable scores cannot bypass adjudication through an older selected revision.
 

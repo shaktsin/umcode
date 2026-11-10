@@ -12,6 +12,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 	"github.com/shaktsin/umcode/internal/vault"
 )
 
@@ -24,7 +25,7 @@ type gcEnv struct {
 
 func newGC(t *testing.T) gcEnv {
 	t.Helper()
-	st, err := store.Open(context.Background(), ":memory:")
+	st, err := teststore.Open(context.Background(), filepath.Join(t.TempDir(), "gc.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -96,3 +96,5 @@ func (b *boundedCapture) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
+func IsFileListingSource(t Tool) bool { _, ok := t.(*fileList); return ok }

@@ -77,8 +77,8 @@ func TestShellEditAfterPassKeepsWorkOpen(t *testing.T) {
 			t.Fatalf("unexpected approval for %q: fingerprints and GC must never ask", tool)
 		}
 	}
-	if shell != 1 {
-		t.Fatalf("shell approvals = %d, want exactly 1 (asked %v)", shell, asked)
+	if shell != 0 {
+		t.Fatalf("confined project shell unexpectedly asked for approval: %d (asked %v)", shell, asked)
 	}
 }
 

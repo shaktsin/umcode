@@ -56,7 +56,10 @@ func TestProjectlessToolsPreserveWorkspaceAndNoProjectBoundaries(t *testing.T) {
 							Edges: []protocol.WorkEdgeChange{{From: goal.ID, Relation: "requires", To: "requirement"}}}
 					}))
 				}
-				h.fake.push(toolReply(tc.tool, tc.args), textReply("Inspected."))
+				h.fake.push(toolReply(tc.tool, tc.args))
+				if !tc.noProject {
+					h.fake.push(textReply("Inspected."))
+				}
 				var res protocol.TurnStartResult
 				h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "inspect the available tools",
 					Override: protocol.ModelSelection{Provider: "claude", Model: "claude-sonnet-5", Complexity: "standard"}}, &res)
@@ -71,7 +74,9 @@ func TestProjectlessToolsPreserveWorkspaceAndNoProjectBoundaries(t *testing.T) {
 				if enabled {
 					wantItems = 3
 				}
-				if turn.Status != protocol.TurnCompleted || len(items) != wantItems {
+				wantStatus := protocol.TurnCompleted
+
+				if turn.Status != wantStatus || len(items) != wantItems {
 					t.Fatalf("%s: turn=%+v items=%+v", tc.name, turn, items)
 				}
 				if enabled {

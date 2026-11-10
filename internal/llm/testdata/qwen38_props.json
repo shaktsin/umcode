@@ -1,0 +1,8 @@
+{
+  "model_alias": "qwen3.8",
+  "chat_template": "{%- set enable_thinking = enable_thinking if enable_thinking is defined else true %}{%- set reasoning_effort = reasoning_effort | default('medium') %}{%- set preserve_thinking = preserve_thinking | default(false) %}{%- for m in messages %}<|im_start|>{{ m.role }}\n{{ m.content }}<|im_end|>\n{%- endfor %}",
+  "chat_template_caps": {
+    "supports_reasoning_effort": true,
+    "supports_tools": true
+  }
+}

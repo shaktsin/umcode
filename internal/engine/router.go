@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 
-	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/router"
 )
@@ -26,18 +25,12 @@ func (e *Engine) RoutePreview(ctx context.Context, p protocol.ModelRouteParams) 
 			sel.Complexity = th.Settings.Complexity
 		}
 	}
-	level := p.Complexity
+	e.mu.Lock()
+	def := e.defaultCplx
+	e.mu.Unlock()
+	level := protocol.NormalizeComplexity(firstNonEmpty(string(p.Complexity), string(sel.Complexity), string(def)))
 	if level == "" {
-		level = sel.Complexity
-	}
-	if level == "" {
-		e.mu.Lock()
-		level = e.defaultCplx
-		e.mu.Unlock()
-	}
-	if level == "" || level == protocol.ComplexityAuto {
-		level = models.Classify(p.Text, 0)
-		res.AutoPicked = true
+		level = protocol.ComplexityMedium
 	}
 	if p.Pool != "" {
 		sel.Provider, sel.Model = protocol.PoolProvider, p.Pool
@@ -52,7 +45,7 @@ func (e *Engine) RoutePreview(ctx context.Context, p protocol.ModelRouteParams) 
 	}
 	plan, err := e.Router.Plan(ctx, router.Request{
 		Pinned:     pinned,
-		Level:      level,
+		Tier:       router.TierForStrategy(pick.strategy),
 		Candidates: pick.candidates,
 		Strategy:   pick.strategy,
 		Need:       router.Capabilities{Tools: true},
@@ -60,7 +53,7 @@ func (e *Engine) RoutePreview(ctx context.Context, p protocol.ModelRouteParams) 
 	if err != nil {
 		return res, err
 	}
-	res.Complexity = plan.Level
+	res.Complexity = level
 	res.Reason = plan.Reason
 	res.Alternatives = []protocol.RouteInfo{}
 	for i, rt := range plan.Routes {

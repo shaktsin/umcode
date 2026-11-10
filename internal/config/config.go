@@ -5,12 +5,15 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/goccy/go-yaml"
+
+	"github.com/shaktsin/umcode/internal/protocol"
 )
 
 // Config is the subset of config.yaml the Go engine understands today.
@@ -96,11 +99,22 @@ type ToolsConfig struct {
 	// HostSandbox confines host shell commands (Seatbelt on macOS,
 	// bubblewrap on Linux): "auto" (default) uses it when available, "off"
 	// runs commands unconfined.
-	HostSandbox string            `yaml:"host_sandbox"`
-	Workspaces  []WorkspaceConfig `yaml:"workspaces"`
+	HostSandbox string `yaml:"host_sandbox"`
+	// DefaultNetwork is the sandboxed shell's network access for projects that
+	// do not set their own. Unset means on; set false to default to off.
+	DefaultNetwork *bool             `yaml:"default_network"`
+	Workspaces     []WorkspaceConfig `yaml:"workspaces"`
+}
+
+// NetworkDefault reports whether sandboxed shell commands get network access
+// when a project has no explicit setting. It defaults to true.
+func (t ToolsConfig) NetworkDefault() bool {
+	return t.DefaultNetwork == nil || *t.DefaultNetwork
 }
 
 type PolicyConfig struct {
+	// RequireWorkflowApproval explicitly gates task mutations; inferred depth alone does not.
+	RequireWorkflowApproval bool `yaml:"require_workflow_approval"`
 	// ShellForbidCommands are command prefixes (word by word, per pipeline
 	// segment, e.g. "git push") that are refused without asking.
 	ShellForbidCommands    []string `yaml:"shell_forbid_commands"`
@@ -131,11 +145,23 @@ type RuntimeConfig struct {
 	SocketPath string `yaml:"socket_path"`
 }
 
+// DefaultMaxOutputTokens is the output limit used for a model whose own
+// maximum is unknown, unless models.default_max_output_tokens overrides it.
+const DefaultMaxOutputTokens = 32768
+
 // ModelsConfig holds new model-selection settings.
 type ModelsConfig struct {
-	DefaultComplexity string                      `yaml:"default_complexity"`
-	Complexity        map[string]ComplexityPreset `yaml:"complexity"`
-	ExecutionLimits   ExecutionLimits             `yaml:"execution_limits"`
+	// DefaultComplexity is the default effort level: low | medium | high.
+	// Legacy auto/quick/standard/deep are accepted on load and normalized.
+	DefaultComplexity string `yaml:"default_complexity"`
+	// DefaultMaxOutputTokens is the output limit used when a model's own
+	// maximum is unknown (1024-1000000, default 32768).
+	DefaultMaxOutputTokens int                         `yaml:"default_max_output_tokens"`
+	Complexity             map[string]ComplexityPreset `yaml:"complexity"`
+	ExecutionLimits        ExecutionLimits             `yaml:"execution_limits"`
+	// AgentTaskLimits cap the shared budget of one agent task (all its agents
+	// together). Every field defaults to 0, which means no limit.
+	AgentTaskLimits AgentTaskLimits `yaml:"agent_task_limits"`
 	// Roles overrides the model per role: title, intent, orchestrator, worker.
 	Roles map[string]AgentModelConfig `yaml:"roles"`
 	// Configured is the user-approved model list shown in the app.
@@ -162,6 +188,14 @@ type ExecutionLimits struct {
 	MaxTokens          int64   `yaml:"max_tokens"`
 	MaxCostUSD         float64 `yaml:"max_cost_usd"`
 	MaxToolRounds      int     `yaml:"max_tool_rounds"`
+}
+
+// AgentTaskLimits bound a whole agent task, shared by the lead and all of its
+// agents. A zero field is unlimited (the default); set one to cap the task.
+type AgentTaskLimits struct {
+	MaxDurationMinutes int     `yaml:"max_duration_minutes"`
+	MaxTokens          int64   `yaml:"max_tokens"`
+	MaxCostUSD         float64 `yaml:"max_cost_usd"`
 }
 
 type ConfiguredModel struct {
@@ -280,8 +314,26 @@ func Load(path string) (*Config, error) {
 		break
 	}
 	applyEnv(cfg)
+	warnLegacyComplexity(cfg)
 	cfg.finalize()
 	return cfg, cfg.Validate()
+}
+
+// warnLegacyComplexity logs one deprecation warning when the config still uses
+// the old Auto/Quick/Standard/Deep keys. It never fails the load.
+func warnLegacyComplexity(c *Config) {
+	var keys []string
+	switch strings.ToLower(strings.TrimSpace(c.Models.DefaultComplexity)) {
+	case "auto", "quick", "standard", "deep":
+		keys = append(keys, "models.default_complexity="+c.Models.DefaultComplexity)
+	}
+	if len(c.Models.Complexity) > 0 {
+		keys = append(keys, "models.complexity")
+	}
+	if len(keys) > 0 {
+		slog.Warn("deprecated config keys: effort levels are now low/medium/high; max_output_tokens, max_tool_steps and multi_agent under models.complexity are ignored",
+			"keys", strings.Join(keys, ","))
+	}
 }
 
 // Default returns a config with defaults rooted at home.
@@ -303,7 +355,7 @@ func Default(home string) *Config {
 		},
 		Policy: PolicyConfig{ApprovalTimeoutMinutes: 30},
 		Memory: MemoryConfig{TargetFileBytes: 4096},
-		Models: ModelsConfig{DefaultComplexity: "auto", ExecutionLimits: ExecutionLimits{
+		Models: ModelsConfig{DefaultComplexity: "medium", DefaultMaxOutputTokens: DefaultMaxOutputTokens, ExecutionLimits: ExecutionLimits{
 			MaxDurationMinutes: 120, MaxTokens: 1_000_000, MaxCostUSD: 10, MaxToolRounds: 200,
 		}},
 	}
@@ -330,7 +382,11 @@ func (c *Config) finalize() {
 		c.Policy.ApprovalTimeoutMinutes = 30
 	}
 	if c.Models.DefaultComplexity == "" {
-		c.Models.DefaultComplexity = "auto"
+		c.Models.DefaultComplexity = "medium"
+	}
+	c.Models.DefaultComplexity = string(protocol.NormalizeComplexity(c.Models.DefaultComplexity))
+	if c.Models.DefaultMaxOutputTokens == 0 {
+		c.Models.DefaultMaxOutputTokens = DefaultMaxOutputTokens
 	}
 	if c.Models.ExecutionLimits.MaxDurationMinutes == 0 {
 		c.Models.ExecutionLimits.MaxDurationMinutes = 120
@@ -366,9 +422,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("memory.target_file_bytes must be 1024–32768")
 	}
 	switch c.Models.DefaultComplexity {
-	case "auto", "quick", "standard", "deep":
+	case "low", "medium", "high":
 	default:
 		return fmt.Errorf("models.default_complexity: unknown value %q", c.Models.DefaultComplexity)
+	}
+	if c.Models.DefaultMaxOutputTokens < 1024 || c.Models.DefaultMaxOutputTokens > 1_000_000 {
+		return fmt.Errorf("models.default_max_output_tokens must be 1024–1000000")
 	}
 	limits := c.Models.ExecutionLimits
 	if limits.MaxDurationMinutes < 1 || limits.MaxDurationMinutes > 480 {
@@ -382,6 +441,16 @@ func (c *Config) Validate() error {
 	}
 	if limits.MaxToolRounds < 1 || limits.MaxToolRounds > 1000 {
 		return fmt.Errorf("models.execution_limits.max_tool_rounds must be 1–1000")
+	}
+	task := c.Models.AgentTaskLimits
+	if task.MaxDurationMinutes != 0 && (task.MaxDurationMinutes < 1 || task.MaxDurationMinutes > 10_080) {
+		return fmt.Errorf("models.agent_task_limits.max_duration_minutes must be 0 (no limit) or 1–10080")
+	}
+	if task.MaxTokens != 0 && task.MaxTokens < 10_000 {
+		return fmt.Errorf("models.agent_task_limits.max_tokens must be 0 (no limit) or at least 10000")
+	}
+	if task.MaxCostUSD != 0 && task.MaxCostUSD < 0.01 {
+		return fmt.Errorf("models.agent_task_limits.max_cost_usd must be 0 (no limit) or at least 0.01")
 	}
 	seen := map[string]bool{}
 	modelIDs := map[string]bool{}

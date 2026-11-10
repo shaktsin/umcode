@@ -1,16 +1,18 @@
 <script lang="ts">
-  import { Plus, Star, Trash2, FlaskConical, RefreshCw, LogIn, Copy } from '@lucide/svelte';
+  import { Star, Trash2, FlaskConical, RefreshCw, LogIn, Copy } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
   import { errMsg, fmtUsd, relTime } from '$lib/format';
   import { dialog } from '$lib/stores/dialog.svelte';
+  import { providerTiles } from '$lib/providerTiles';
+  import ProviderTile from './ProviderTile.svelte';
   import type { ChatGPTSignInResult, ChatGPTSignInStart, Credential, CredentialTestResult } from '$lib/types';
 
   const providerNames: Record<string, string> = {
     claude: 'Anthropic Claude', openai: 'OpenAI', gemini: 'Google Gemini', openai_compatible: 'OpenAI-compatible (Ollama, LM Studio, vLLM…)',
   };
-  const providerIds = $derived(app.providers.length ? app.providers.map((p) => p.id) : Object.keys(providerNames));
+  const tiles = $derived(providerTiles(app.providers, app.credentials));
 
-  let adding = $state(false);
+  let openProvider = $state<string | null>(null);
   let provider = $state('claude');
   let label = $state('');
   let secret = $state('');
@@ -26,7 +28,6 @@
     if (!signin || r.sessionId !== signin.sessionId) return;
     signin = null;
     if (r.ok) {
-      adding = false;
       app.toast('info', 'Signed in with ChatGPT.');
       await refresh();
       if (r.credential) await test(r.credential);
@@ -43,6 +44,17 @@
     return Object.entries(g);
   });
 
+  function toggleProvider(id: string) {
+    cancelSignIn();
+    if (openProvider === id) {
+      openProvider = null;
+      return;
+    }
+    openProvider = id;
+    provider = id;
+    authMode = 'key';
+  }
+
   async function refresh() {
     await app.refreshCatalog().catch((e) => app.toast('error', errMsg(e)));
   }
@@ -57,7 +69,6 @@
       secret = '';
       label = '';
       baseUrl = '';
-      adding = false;
       await refresh();
       await test(c);
     } catch (e) {
@@ -145,18 +156,17 @@
     <h2 class="text-sm font-semibold text-ink">Providers</h2>
     <p class="text-xs text-muted mt-1 max-w-2xl">Connect Claude, OpenAI, Gemini or a local model server to power chat. Use an API key for any provider, or, for OpenAI, sign in with your ChatGPT account instead. Keys and sign-ins are stored in the macOS Keychain and never sent to the app.</p>
   </div>
-  <button class="btn-primary ml-auto" onclick={() => (adding = !adding)}><Plus class="w-4 h-4" />Connect</button>
 </div>
 
-{#if adding}
+<div class="tile-grid mb-4">
+  {#each tiles as tile (tile.id)}
+    <ProviderTile {tile} expanded={openProvider === tile.id} onclick={() => toggleProvider(tile.id)} />
+  {/each}
+</div>
+
+{#if openProvider !== null}
   <form class="card p-4 mb-4 space-y-3" onsubmit={(e) => { e.preventDefault(); if (!viaChatGPT) add(); }}>
     <div class="grid grid-cols-2 gap-3">
-      <div>
-        <label class="label" for="k-prov">Provider</label>
-        <select id="k-prov" class="input" bind:value={provider} onchange={() => { if (provider !== 'openai') authMode = 'key'; }}>
-          {#each providerIds as id}<option value={id}>{providerNames[id] ?? id}</option>{/each}
-        </select>
-      </div>
       {#if !viaChatGPT}
         <div><label class="label" for="k-label">Label</label><input id="k-label" class="input" bind:value={label} placeholder="Personal, Work…" /></div>
       {/if}
@@ -195,7 +205,7 @@
     <label class="flex items-center gap-2 text-sm text-ink-soft"><input type="checkbox" bind:checked={isDefault} /> Use as the default key for this provider</label>
     {/if}
     <div class="flex justify-end gap-2">
-      <button type="button" class="btn-ghost" onclick={() => { cancelSignIn(); adding = false; }}>Cancel</button>
+      <button type="button" class="btn-ghost" onclick={() => { cancelSignIn(); openProvider = null; }}>Cancel</button>
       {#if viaChatGPT}
         <button type="button" class="btn-primary" disabled={busy || !!signin} onclick={startSignIn}><LogIn class="w-4 h-4" />{signin ? 'Waiting…' : 'Sign in with ChatGPT'}</button>
       {:else}
@@ -205,13 +215,8 @@
       {/if}
     </div>
   </form>
-{/if}
 
-{#if app.credentials.length === 0 && !adding}
-  <div class="card p-8 text-center text-sm text-muted">Nothing connected yet. Add an API key (or sign in with ChatGPT for OpenAI) to start chatting.</div>
-{/if}
-
-{#each grouped as [prov, list]}
+{#each grouped.filter(([prov]) => prov === openProvider) as [prov, list]}
   <h2 class="text-xs font-semibold uppercase tracking-wider text-muted mt-5 mb-2">{providerNames[prov] ?? prov}</h2>
   <div class="space-y-2">
     {#each list as c (c.id)}
@@ -266,3 +271,12 @@
     {/each}
   </div>
 {/each}
+{/if}
+
+<style>
+  .tile-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+    gap: 10px;
+  }
+</style>

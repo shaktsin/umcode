@@ -82,6 +82,10 @@
           }
         },
         {
+          "tool": "file.read",
+          "args": { "path": "notes.txt" }
+        },
+        {
           "text": "Updated notes.txt."
         }
       ],

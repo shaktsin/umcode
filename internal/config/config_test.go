@@ -1,9 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,7 +87,7 @@ models:
 	if c.Tools.Workspaces[0].Path != filepath.Join(uh, "projects") || !*c.Tools.Workspaces[0].ACL.DeleteFiles {
 		t.Fatalf("workspace = %+v", c.Tools.Workspaces[0])
 	}
-	if c.Storage.DBPath != filepath.Join(uh, ".umcode", "custom.db") || c.Models.DefaultComplexity != "deep" {
+	if c.Storage.DBPath != filepath.Join(uh, ".umcode", "custom.db") || c.Models.DefaultComplexity != "high" {
 		t.Fatalf("storage/models = %+v %+v", c.Storage, c.Models)
 	}
 	if c.Runtime.SocketPath != filepath.Join(home, "run", "engine.sock") || c.Runtime.EngineWSPort != 8766 {
@@ -242,5 +245,54 @@ func TestProgressiveToolsConfigIndependent(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+}
+
+func TestLegacyConfigLoads(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(old)
+	path := filepath.Join(home, "config.yaml")
+	yml := "models:\n  default_complexity: auto\n  complexity:\n    standard:\n      max_output_tokens: 16384\n"
+	if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Models.DefaultComplexity != "medium" || c.Validate() != nil {
+		t.Fatalf("default complexity = %q, validate = %v", c.Models.DefaultComplexity, c.Validate())
+	}
+	if n := strings.Count(buf.String(), "deprecated"); n != 1 {
+		t.Fatalf("want one deprecation warning, got %d: %s", n, buf.String())
+	}
+}
+
+func TestDefaultMaxOutputTokensRange(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("UMCODE_HOME", home)
+	path := filepath.Join(home, "config.yaml")
+	load := func(v int) (*Config, error) {
+		yml := fmt.Sprintf("models:\n  default_max_output_tokens: %d\n", v)
+		if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(path)
+	}
+	c, err := load(0)
+	if err != nil || c.Models.DefaultMaxOutputTokens != 32768 {
+		t.Fatalf("0 -> %v, %v", c, err)
+	}
+	for _, v := range []int{512, 2000000} {
+		if _, err := load(v); err == nil {
+			t.Fatalf("%d should fail validation", v)
+		}
+	}
+	if c, err := load(4096); err != nil || c.Models.DefaultMaxOutputTokens != 4096 {
+		t.Fatalf("4096 -> %v, %v", c, err)
 	}
 }

@@ -35,7 +35,7 @@ func (c *Catalog) Tier(ctx context.Context, provider string, level protocol.Comp
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		switch level {
-		case protocol.ComplexityDeep:
+		case protocol.ComplexityHigh:
 			// Reasoning first, then the more expensive (stronger) model.
 			if a.SupportsReasoning != b.SupportsReasoning {
 				return a.SupportsReasoning
@@ -44,7 +44,7 @@ func (c *Catalog) Tier(ctx context.Context, provider string, level protocol.Comp
 				return unpriced(b)
 			}
 			return price(a) > price(b)
-		case protocol.ComplexityQuick:
+		case protocol.ComplexityLow:
 			// The cheapest model that still takes tools.
 			if a.SupportsTools != b.SupportsTools {
 				return a.SupportsTools

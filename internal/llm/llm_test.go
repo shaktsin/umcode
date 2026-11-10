@@ -228,6 +228,7 @@ func TestProviderErrorAndList(t *testing.T) {
 func TestReasoningStyles(t *testing.T) {
 	req := testRequest()
 	req.ReasoningStyle = "budget"
+	req.MaxTokens = 16384
 	a := buildAnthropicRequest(req)
 	if a.Thinking == nil || a.Thinking.Type != "enabled" || a.Thinking.BudgetTokens != 8192 || a.OutputConfig != nil {
 		t.Fatalf("budget style: %+v %+v", a.Thinking, a.OutputConfig)

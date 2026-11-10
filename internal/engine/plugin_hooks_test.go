@@ -19,6 +19,7 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
@@ -271,7 +272,7 @@ func (t *engineTestTool) Call(ctx context.Context, _ json.RawMessage) (string, e
 
 func pluginHookEngine(t *testing.T) (*Engine, protocol.Thread, protocol.Turn, *store.Store) {
 	t.Helper()
-	st, err := store.Open(t.Context(), ":memory:")
+	st, err := teststore.Open(t.Context(), filepath.Join(t.TempDir(), "plugins.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

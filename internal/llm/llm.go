@@ -108,6 +108,16 @@ type Request struct {
 	//   gemini: "level" (thinkingConfig.thinkingLevel, default) or "budget" (thinkingBudget)
 	//   openai: ignored (reasoning_effort)
 	ReasoningStyle string
+	// TemplateKwargs is sent as chat_template_kwargs to llama.cpp-style servers
+	// whose template thinking controls were detected. When non-empty it replaces
+	// the legacy reasoning_effort field for this request.
+	TemplateKwargs map[string]any
+}
+
+// RequestTokenCounter is an optional exact serving-tokenizer capability.
+// Token counting is metadata work, not a second generation request.
+type RequestTokenCounter interface {
+	CountRequestTokens(context.Context, Credential, Request) (int, error)
 }
 
 // Usage is token usage reported by a provider for one request.
@@ -208,7 +218,10 @@ func readError(provider string, resp *http.Response) error {
 }
 
 // HTTPClient is used by all adapters; tests may replace it.
-var HTTPClient = &http.Client{Timeout: 10 * time.Minute}
+// No overall Timeout: http.Client.Timeout bounds the whole exchange including
+// the streamed body, which cuts off slow local models (long prefill + thinking).
+// Cancellation still flows through the request context.
+var HTTPClient = &http.Client{}
 
 // Registry holds adapters by id.
 type Registry struct {

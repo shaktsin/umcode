@@ -1,0 +1,50 @@
+// Runs inside visual-workbench.mjs's temporary project, never a user's project.
+import assert from 'node:assert/strict';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+export async function verifyModelDeletion({ page, workbench, rpc, projectId, root, artifacts }) {
+  const base = { projectId };
+  const first = await rpc('workbench/model/create', { ...base, name: 'Delete fixture one', task: 'classification' });
+  const second = await rpc('workbench/model/create', { ...base, name: 'Delete fixture two', task: 'custom' });
+  const saved = await readFile(join(root, 'models', first.id, 'graph.json'), 'utf8');
+  await mkdir(join(root, 'models', first.id, 'data'), { recursive: true });
+  await writeFile(join(root, 'models', first.id, 'data/raw.csv'), 'x,label\n1,a\n2,b\n');
+  await writeFile(join(root, 'models', first.id, 'runs/checkpoint.bin'), 'recoverable weights');
+  const hideChat = workbench.getByRole('button', { name: 'Hide workbench chat', exact: true });
+  if (await hideChat.count()) await hideChat.click();
+  await workbench.getByLabel('Workbench project', { exact: true }).selectOption(projectId);
+  await workbench.getByRole('button', { name: 'Refresh project models', exact: true }).click();
+  await workbench.getByRole('button', { name: 'Open ' + first.name, exact: true }).waitFor();
+  await workbench.screenshot({ path: join(artifacts, 'delete-models.png') });
+  await workbench.getByRole('button', { name: 'Open ' + first.name, exact: true }).click();
+  await workbench.getByRole('button', { name: 'Add ReLU layer', exact: true }).click();
+  await workbench.locator('.graph-state.is-dirty').waitFor();
+  await workbench.getByRole('button', { name: 'Delete model', exact: true }).click();
+  const dialog = page.locator('[data-app-dialog]');
+  assert.match(await dialog.textContent(), /Delete fixture one/);
+  assert.match(await dialog.textContent(), /unsaved/);
+  assert.match(await dialog.textContent(), /models\/\.trash/);
+  await dialog.screenshot({ path: join(artifacts, 'delete-confirmation.png') });
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  assert.equal((await rpc('workbench/model/list', base)).models.length, 2);
+  assert.equal(await workbench.locator('.graph-state.is-dirty').count(), 1);
+  await workbench.getByRole('button', { name: 'Delete model', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Delete model', exact: true }).click();
+  await workbench.getByRole('button', { name: 'Open ' + second.name, exact: true }).waitFor();
+  assert.equal(await workbench.getByRole('button', { name: 'Open ' + first.name, exact: true }).count(), 0);
+  const trash = (await readdir(join(root, 'models/.trash'))).find(name => name.startsWith(first.id + '-'));
+  assert.ok(trash);
+  assert.equal(await readFile(join(root, 'models/.trash', trash, 'graph.json'), 'utf8'), saved);
+  assert.equal(await readFile(join(root, 'models/.trash', trash, 'data/raw.csv'), 'utf8'), 'x,label\n1,a\n2,b\n');
+  assert.equal(await readFile(join(root, 'models/.trash', trash, 'runs/checkpoint.bin'), 'utf8'), 'recoverable weights');
+  await page.reload();
+  await workbench.getByRole('button', { name: 'Delete ' + second.name, exact: true }).click();
+  await dialog.getByRole('button', { name: 'Delete model', exact: true }).click();
+  await workbench.getByRole('heading', { name: 'No models in this project yet' }).waitFor();
+  assert.deepEqual((await rpc('workbench/model/list', base)).models, []);
+  assert.equal(await workbench.locator('.new-model-layout').count(), 0);
+  await workbench.screenshot({ path: join(artifacts, 'empty-models.png') });
+  await page.reload();
+  await workbench.getByRole('heading', { name: 'No models in this project yet' }).waitFor();
+}

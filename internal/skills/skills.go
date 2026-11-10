@@ -62,7 +62,10 @@ type Script struct {
 
 // Skill is a loaded skill.
 type Skill struct {
-	Name         string            `json:"name"`
+	Name string `json:"name"`
+	// Registry provenance is assigned by CompileSnapshot, never SKILL.md text.
+	PackageName  string            `json:"packageName,omitempty"`
+	OriginalName string            `json:"originalName,omitempty"`
 	Description  string            `json:"description"`
 	License      string            `json:"license,omitempty"`
 	Version      string            `json:"version,omitempty"`
@@ -161,6 +164,7 @@ type Registry struct {
 // Root contributes one plugin's skill directories and non-secret settings.
 type Root struct {
 	PluginID          string
+	PackageName       string // original installed package name, before namespace disambiguation
 	Paths             []string
 	Config            map[string]any
 	RuntimeValues     map[string]string
@@ -195,6 +199,11 @@ func CompileSnapshot(roots []Root) (*Snapshot, []error) {
 			}
 			copy := *skill
 			copy.Name = name
+			copy.PackageName = root.PackageName
+			if copy.PackageName == "" {
+				copy.PackageName = root.PluginID
+			}
+			copy.OriginalName = skill.Name
 			copy.Runtime.Env = cloneStringMap(skill.Runtime.Env)
 			for key, value := range copy.Runtime.Env {
 				for token, replacement := range root.RuntimeValues {

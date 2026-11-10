@@ -1,19 +1,26 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { ArrowUp, Square, Paperclip, X } from '@lucide/svelte';
+  import { ArrowUp, Paperclip, X } from '@lucide/svelte';
   import { chat, type ThreadView } from '$lib/stores/chat.svelte';
   import { app } from '$lib/stores/app.svelte';
   import { projects } from '$lib/stores/projects.svelte';
   import PopupSurface from './PopupSurface.svelte';
   import ModelPicker from './ModelPicker.svelte';
+  import ApprovalModePill from './ApprovalModePill.svelte';
+  import ApprovalDock from './ApprovalDock.svelte';
+  import { dockFocusTarget, dockState } from '$lib/approvalDock';
   import type { Attachment, SkillInfo } from '$lib/types';
   import { errMsg } from '$lib/format';
+  import { composerPlaceholder } from '$lib/firstRun';
   import { filterSkills, selectSkill, slashQuery } from '$lib/skillPicker';
+  import { workbenchAssistant } from '$lib/workbench/assistantStore.svelte';
 
-  let { view, compact = false }: { view: ThreadView; compact?: boolean } = $props();
+  let { view, compact = false, workbenchMode = false }: { view: ThreadView; compact?: boolean; workbenchMode?: boolean } = $props();
 
   let text = $state('');
   let files = $state<Attachment[]>([]);
+  let preparing = $state(false);
+  let submissionGeneration = 0;
   let input: HTMLTextAreaElement | undefined = $state();
   let fileInput: HTMLInputElement | undefined = $state();
   const pickerId = $props.id();
@@ -27,13 +34,31 @@
   let retry = $state(0);
 
   const MAX_FILE = 15 * 1024 * 1024;
-  const busy = $derived(view.sending || !!view.running);
+  let dockHost: HTMLDivElement | undefined = $state();
+  let lastDock = { viewId: null as string | null, dockId: null as string | null };
+  $effect(() => {
+    const next = { viewId: view.id, dockId: dockState(app.approvals, view.id).current?.id ?? null };
+    const prev = lastDock;
+    lastDock = next;
+    const active = document.activeElement;
+    const focusFree = !active || active === document.body || Boolean(dockHost?.contains(active));
+    const target = dockFocusTarget(prev, next, focusFree);
+    if (target === 'dock') void tick().then(() => dockHost?.querySelector<HTMLElement>('[data-approval-dock] button')?.focus());
+    else if (target === 'input') void tick().then(() => input?.focus());
+  });
+  const docked = $derived(Boolean(dockState(app.approvals, view.id).current));
+  const busy = $derived(preparing || view.sending || !!view.running);
   const offline = $derived(app.conn !== 'open');
   const isMain = $derived(view === chat.main);
+  const localModel = $derived(view.selection.provider === 'workbench_local');
+  const noWorkbenchModel = $derived(workbenchMode && !workbenchAssistant.current);
   const projectId = $derived(view.id ? view.thread?.projectId ?? null : isMain ? projects.activeId : null);
   const query = $derived(slashQuery(text, caret));
-  const pickerOpen = $derived(focused && query !== null && !dismissed && !offline && !busy);
+  const pickerOpen = $derived(!localModel && !workbenchMode && focused && query !== null && !dismissed && !offline && !busy);
   const matches = $derived(filterSkills(skills, query ?? ''));
+  $effect(() => {
+    if (workbenchMode && workbenchAssistant.focusRequest > 0) void tick().then(() => input?.focus());
+  });
 
   $effect(() => {
     void query;
@@ -95,16 +120,24 @@
     return () => window.removeEventListener('umcode:compose', onCompose);
   });
 
-  function submit() {
-    if (busy || offline) return;
+  async function submit() {
+    if (busy || offline || app.needsProvider || view.delegation.pending || noWorkbenchModel) return;
     const t = text;
-    const a = files;
+    const a = localModel ? [] : files;
     if (!t.trim() && a.length === 0) return;
-    text = '';
-    files = [];
-    if (isMain) void chat.send(t, a);
-    else void view.send(t, a);
+    const generation = ++submissionGeneration;
+    preparing = true;
+    try {
+      const context = workbenchMode ? await workbenchAssistant.capture() : undefined;
+      if (generation !== submissionGeneration) return;
+      if (text === t) text = '';
+      if (files === a) files = [];
+      if (isMain) await chat.send(t, a, context);
+      else await view.send(t, a, undefined, context);
+    } catch (error) { if (generation === submissionGeneration) app.toast('error', errMsg(error)); }
+    finally { if (generation === submissionGeneration) preparing = false; }
   }
+  function stop() { submissionGeneration++; preparing = false; void view.interrupt(); }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.isComposing) return;
@@ -153,6 +186,7 @@
   }
 
   async function addFiles(list: FileList | File[] | null) {
+    if (localModel) return;
     if (!list) return;
     for (const f of Array.from(list)) {
       if (f.size > MAX_FILE) {
@@ -181,6 +215,12 @@
   const placeholder = $derived(
     offline
       ? 'Engine offline…'
+      : noWorkbenchModel
+        ? 'Open a model to ask about its layers'
+      : workbenchMode
+        ? 'Ask about this model or layer…'
+      : localModel
+        ? 'Message this local model…'
       : compact
         ? 'Ask about this…'
         : projects.active
@@ -190,8 +230,11 @@
 </script>
 
 <div class="px-4 pb-4 pt-2 shrink-0">
+  <div bind:this={dockHost} class="{compact ? '' : 'max-w-3xl'} mx-auto">
+    <ApprovalDock approvals={app.approvals} threadId={view.id} />
+  </div>
   <div
-    class="relative {compact ? '' : 'max-w-3xl'} mx-auto bg-surface border border-line rounded-2xl focus-within:border-line-strong transition-colors"
+    class="relative {compact ? '' : 'max-w-3xl'} mx-auto {docked ? 'composer-docked' : ''} bg-surface border border-line rounded-2xl focus-within:border-line-strong transition-colors"
     role="region"
     aria-label="Message composer"
     ondragover={(e) => e.preventDefault()}
@@ -221,13 +264,14 @@
                 id={`${pickerId}-${index}`}
                 role="option"
                 aria-selected={index === activeSkill}
+                aria-describedby={`${pickerId}-${index}-description`}
                 tabindex="-1"
                 class="block w-full rounded-lg px-3 py-2 text-left {index === activeSkill ? 'bg-raised' : 'hover:bg-raised'}"
                 onmousedown={(e) => e.preventDefault()}
                 onclick={() => chooseSkill(skill)}
               >
                 <span class="block text-sm font-medium text-ink">/{skill.name}</span>
-                <span class="block truncate text-xs text-muted">{skill.description}</span>
+                <span id={`${pickerId}-${index}-description`} class="block truncate text-xs text-muted" title={skill.description}>{skill.description}</span>
               </button>
             {/each}
           </div>
@@ -245,6 +289,12 @@
             </button>
           </span>
         {/each}
+      </div>
+    {/if}
+    {#if workbenchMode && workbenchAssistant.current}
+      <div class="px-4 pt-2 text-[11px] text-muted" data-workbench-context aria-label="Included model context">
+        <strong>{workbenchAssistant.current.modelName}</strong>{#if workbenchAssistant.selectedLabel}<span> · {workbenchAssistant.selectedLabel}</span>{:else}<span> · Whole model</span>{/if}
+        <span class="block text-[10px]">Current draft included when you send</span>
       </div>
     {/if}
     <textarea
@@ -265,14 +315,15 @@
       aria-activedescendant={pickerOpen && matches[activeSkill] && !skillsLoading && !skillsError ? `${pickerId}-${activeSkill}` : undefined}
       onpaste={onPaste}
       rows="1"
-      placeholder={`${placeholder} · / for skills`}
+      placeholder={app.needsProvider ? composerPlaceholder(placeholder, true) : workbenchMode || localModel ? placeholder : `${placeholder} · / for skills`}
       class="composer-input w-full bg-transparent px-4 pt-3 pb-1 text-sm resize-none focus:outline-none placeholder:text-faint"
       style="field-sizing: content; min-height: 2.75rem"
     ></textarea>
     <div class="composer-toolbar">
-      <button class="btn-ghost btn-sm" title="Attach files" aria-label="Attach files" onclick={() => fileInput?.click()}>
+      {#if !localModel}<button class="btn-ghost btn-sm" title="Attach files" aria-label="Attach files" onclick={() => fileInput?.click()}>
         <Paperclip class="w-4 h-4" />
       </button>
+      {/if}
       <input
         bind:this={fileInput}
         type="file"
@@ -284,30 +335,20 @@
         }}
       />
       <ModelPicker value={view.selection} onchange={(v) => view.setSelection(v)} compact={compact} />
+      {#if !workbenchMode && !localModel}<ApprovalModePill {view} />{/if}
       {#if blockedReason}
         <span class="composer-error" role="status" title={blockedReason}>No model available</span>
       {/if}
       <div class="ml-auto">
-        {#if busy}
-          <button
-            class="icon-button compact rounded-full bg-ink text-paper hover:brightness-110"
-            title="Stop"
-            aria-label="Stop"
-            onclick={() => view.interrupt()}
-          >
-            <Square class="w-3.5 h-3.5 fill-current" />
-          </button>
-        {:else}
-          <button
-            class="icon-button compact rounded-full bg-clay text-white hover:brightness-110 disabled:opacity-30"
-            title="Send (Enter)"
-            aria-label="Send"
-            disabled={offline || (!text.trim() && files.length === 0)}
-            onclick={submit}
-          >
-            <ArrowUp class="w-4 h-4" />
-          </button>
-        {/if}
+        <button
+          class="icon-button compact send-button composer-submit"
+          title={busy ? 'Stop' : 'Send (Enter)'}
+          aria-label={busy ? 'Stop' : 'Send'}
+          disabled={!busy && (offline || app.needsProvider || view.delegation.pending || noWorkbenchModel || (!text.trim() && files.length === 0))}
+          onclick={() => busy ? stop() : submit()}
+        >
+          {#if busy}<span class="stop-glyph" aria-hidden="true"></span>{:else}<ArrowUp class="w-4 h-4" />{/if}
+        </button>
       </div>
     </div>
   </div>

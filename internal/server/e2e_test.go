@@ -25,20 +25,30 @@ import (
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/server"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 )
 
 // fakeProvider replays scripted responses. Each call pops the next script.
 type fakeProvider struct {
-	id      string
-	mu      sync.Mutex
-	scripts []func(req llm.Request, key string) ([]llm.Event, error)
-	calls   []llm.Request
-	keys    []string
+	intentCalls []llm.Request
+	intentKind  string
+	intentPath  string
+	id          string
+	mu          sync.Mutex
+	scripts     []func(req llm.Request, key string) ([]llm.Event, error)
+	calls       []llm.Request
+	keys        []string
 }
 
 func (f *fakeProvider) ID() string { return f.id }
 
 func (f *fakeProvider) Stream(ctx context.Context, cred llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := serverIntentReply(req, f.intentKind, f.intentPath); ok {
+		f.mu.Lock()
+		f.intentCalls = append(f.intentCalls, req)
+		f.mu.Unlock()
+		return reply, nil
+	}
 	f.mu.Lock()
 	f.calls = append(f.calls, req)
 	f.keys = append(f.keys, cred.APIKey)
@@ -132,7 +142,7 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	st, err := store.Open(ctx, filepath.Join(dir, "umcode.db"))
+	st, err := teststore.Open(ctx, filepath.Join(dir, "umcode.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,12 +216,17 @@ func (h *harness) callErr(method string, params any) error {
 // waitTurn consumes notifications until the turn completes. onApproval decides approvals.
 func (h *harness) waitTurn(turnID string, onApproval func(protocol.Approval) bool) (protocol.Turn, string, []protocol.Item) {
 	h.t.Helper()
+	return h.waitTurnWithin(turnID, onApproval, 10*time.Second)
+}
+
+func (h *harness) waitTurnWithin(turnID string, onApproval func(protocol.Approval) bool, timeout time.Duration) (protocol.Turn, string, []protocol.Item) {
+	h.t.Helper()
 	var text strings.Builder
 	var tools []protocol.Item
-	timeout := time.After(10 * time.Second)
+	deadline := time.After(timeout)
 	for {
 		select {
-		case <-timeout:
+		case <-deadline:
 			h.t.Fatal("timed out waiting for turn")
 		case n := <-h.c.Notifications():
 			switch n.Method {
@@ -260,11 +275,11 @@ func TestChatWithApprovedShellTool(t *testing.T) {
 	h.fake.push(toolReply("shell__run", `{"command":"echo hello-from-shell > /dev/stderr; echo hello-from-shell"}`), textReply("The command printed hello."))
 
 	var th protocol.Thread
-	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &th)
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{Channel: "listener", ProjectID: h.proj.ID}, &th)
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "run echo please",
-		Override: protocol.ModelSelection{Model: "claude-sonnet-4-6", Complexity: protocol.ComplexityDeep}}, &res)
-	if res.Turn.Resolved.Provider != "claude" || res.Turn.Resolved.CredentialID != key.ID || res.Turn.Resolved.Complexity != "deep" {
+		Override: protocol.ModelSelection{Model: "claude-sonnet-4-6", Complexity: protocol.ComplexityHigh}}, &res)
+	if res.Turn.Resolved.Provider != "claude" || res.Turn.Resolved.CredentialID != key.ID || res.Turn.Resolved.Complexity != "high" {
 		t.Fatalf("resolved = %+v", res.Turn.Resolved)
 	}
 	var approvals []protocol.Approval
@@ -339,24 +354,24 @@ func TestDeniedToolAndHistory(t *testing.T) {
 	h.addKey("claude", "k", "sk-1")
 	h.fake.push(toolReply("shell__run", `{"command":"rm -rf /tmp/x"}`), textReply("Okay, I will not."))
 	var th protocol.Thread
-	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID, Title: "cleanup"}, &th)
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{Channel: "listener", ProjectID: h.proj.ID, Title: "cleanup"}, &th)
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "delete it"}, &res)
 	turn, _, tools := h.waitTurn(res.Turn.ID, func(protocol.Approval) bool { return false })
 	if turn.Status != protocol.TurnCompleted || len(tools) != 1 || tools[0].Status != protocol.ItemDenied {
 		t.Fatalf("turn=%+v tools=%+v", turn, tools)
 	}
-	// Second turn sends earlier text history and uses quick for a short message (auto).
+	// Second turn sends earlier text history; the level is no longer guessed from the message.
 	h.fake.push(textReply("hi!"))
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "hi"}, &res)
-	if !res.Turn.AutoPicked || res.Turn.Resolved.Complexity != protocol.ComplexityQuick {
-		t.Fatalf("auto: %+v", res.Turn)
+	if res.Turn.AutoPicked || res.Turn.Resolved.Complexity != protocol.ComplexityMedium {
+		t.Fatalf("level: %+v", res.Turn)
 	}
 	h.waitTurn(res.Turn.ID, nil)
 	h.fake.mu.Lock()
 	req := h.fake.calls[len(h.fake.calls)-1]
 	h.fake.mu.Unlock()
-	if req.Messages[0].JoinedText() != "delete it" || req.Reasoning != llm.ReasoningOff {
+	if !strings.HasPrefix(req.Messages[0].JoinedText(), "delete it") || !strings.Contains(req.Messages[0].JoinedText(), "Historical execution records") || req.Reasoning != llm.ReasoningMedium {
 		t.Fatalf("history/reasoning: %+v", req)
 	}
 }
@@ -381,6 +396,10 @@ func TestAgentFixLoop(t *testing.T) {
 	turn, text, items := h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { return true })
 	if turn.Status != protocol.TurnCompleted || !strings.Contains(text, "reran the check successfully") {
 		t.Fatalf("turn=%+v text=%q", turn, text)
+	}
+	snapshot, snapshotErr := h.eng.Store.ActiveExecutionTask(h.ctx, th.ID)
+	if snapshotErr != nil || snapshot.Task.ExecutionPolicy != protocol.ModelDrivenExecutionPolicy || snapshot.Task.Status == "completed" {
+		t.Fatalf("verified correction did not complete task: %+v %v", snapshot.Task, snapshotErr)
 	}
 	var statuses []string
 	for _, item := range items {
@@ -494,10 +513,14 @@ func TestThreadManagementAndModels(t *testing.T) {
 	}
 	var d protocol.ComplexityDefaults
 	h.call(protocol.MethodComplexityGetDefaults, nil, &d)
-	d.Default = protocol.ComplexityStandard
+	d.Default = protocol.ComplexityMedium
 	d.Limits.MaxToolRounds = 50
+	if d.DefaultMaxOutputTokens != 32768 {
+		t.Fatalf("default max output = %d, want 32768", d.DefaultMaxOutputTokens)
+	}
+	d.DefaultMaxOutputTokens = 65536
 	h.call(protocol.MethodComplexitySetDefaults, d, &d)
-	if d.Default != "standard" || d.Limits.MaxToolRounds != 50 || d.Presets[0].MaxToolSteps != 50 {
+	if d.Default != "medium" || d.Limits.MaxToolRounds != 50 || d.DefaultMaxOutputTokens != 65536 {
 		t.Fatalf("complexity = %+v", d)
 	}
 	var creds protocol.CredentialListResult
@@ -523,7 +546,7 @@ func TestProjectContainment(t *testing.T) {
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "read that file for me please"}, &res)
 	_, _, tools := h.waitTurn(res.Turn.ID, nil)
-	if len(tools) != 1 || tools[0].Status != protocol.ItemFailed || !strings.Contains(tools[0].Tool.Error, "outside the project") {
+	if len(tools) != 1 || tools[0].Status != protocol.ItemDenied || !strings.Contains(tools[0].Tool.Error, "outside the project") {
 		t.Fatalf("tools = %+v", tools)
 	}
 }
@@ -773,7 +796,7 @@ func TestWebSocketTransport(t *testing.T) {
 	t.Setenv("UMCODE_HOME", dir)
 	cfg := config.Default(dir)
 	ctx := context.Background()
-	st, err := store.Open(ctx, ":memory:")
+	st, err := teststore.Open(ctx, filepath.Join(dir, "websocket.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -860,7 +883,7 @@ func TestScheduledTasks(t *testing.T) {
 	min := 7
 	h.call(protocol.MethodTaskCreate, protocol.TaskCreateParams{Name: "inbox", Prompt: "summarise my inbox",
 		TaskType: protocol.TaskPeriodic, Schedule: protocol.Schedule{Frequency: "hourly", Minute: &min}, Timezone: "UTC",
-		Settings: protocol.ModelSelection{Complexity: protocol.ComplexityQuick}}, &task)
+		Settings: protocol.ModelSelection{Complexity: protocol.ComplexityLow}}, &task)
 	if task.NextRunAt == nil || task.NextRunAt.Minute() != 7 || task.Status != "active" {
 		t.Fatalf("task = %+v", task)
 	}
@@ -882,7 +905,7 @@ func TestScheduledTasks(t *testing.T) {
 	}
 	var read protocol.ThreadReadResult
 	h.call(protocol.MethodThreadRead, protocol.ThreadIDParams{ThreadID: got.ThreadID}, &read)
-	if read.Thread.Title != "Task: inbox" || read.Thread.Channel != "task" || read.Turns[0].Resolved.Complexity != "quick" {
+	if read.Thread.Title != "Task: inbox" || read.Thread.Channel != "task" || read.Turns[0].Resolved.Complexity != "low" {
 		t.Fatalf("task thread = %+v turns=%+v", read.Thread, read.Turns)
 	}
 
@@ -976,14 +999,14 @@ func TestRoutePreviewAndHealth(t *testing.T) {
 	h.call(protocol.MethodCredentialUpdate, protocol.CredentialUpdateParams{CredentialID: k2.ID, Fallback: &fb}, nil)
 
 	var preview protocol.ModelRouteResult
-	h.call(protocol.MethodModelRoute, protocol.ModelRouteParams{Text: "write me a haiku"}, &preview)
+	h.call(protocol.MethodModelRoute, protocol.ModelRouteParams{}, &preview)
 	if preview.Chosen == nil || preview.Chosen.Provider != "claude" || preview.Chosen.CredentialID == "" {
 		t.Fatalf("preview = %+v", preview)
 	}
 	if len(preview.Alternatives) == 0 {
 		t.Fatalf("no fallbacks offered: %+v", preview)
 	}
-	if preview.Complexity == "" || preview.Complexity == protocol.ComplexityAuto {
+	if preview.Complexity == "" {
 		t.Fatalf("complexity not resolved: %+v", preview)
 	}
 
@@ -1109,4 +1132,8 @@ func TestPoolFailover(t *testing.T) {
 	if turn.Status != protocol.TurnCompleted || text != "default pool fallback" || turn.Resolved.Provider != "openai" {
 		t.Fatalf("default pool budget fallback failed: turn=%+v text=%q", turn, text)
 	}
+}
+
+func (*fakeProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
 }

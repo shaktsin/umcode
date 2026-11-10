@@ -26,7 +26,7 @@ func scanThread(sc interface{ Scan(...any) error }) (protocol.Thread, error) {
 		return t, err
 	}
 	t.Pinned, t.Archived = pinned != 0, archived != 0
-	t.Settings.Complexity = protocol.Complexity(complexity)
+	t.Settings.Complexity = protocol.NormalizeComplexity(complexity)
 	t.CreatedAt, t.UpdatedAt = ParseTime(created), ParseTime(updated)
 	return t, nil
 }
@@ -53,7 +53,7 @@ func (s *Store) CreateThread(ctx context.Context, t protocol.Thread) (protocol.T
 
 // GetThread loads a thread with its usage totals.
 func (s *Store) GetThread(ctx context.Context, id string) (protocol.Thread, error) {
-	t, err := scanThread(s.DB.QueryRowContext(ctx, `SELECT `+threadCols+` FROM threads WHERE id = ?`, id))
+	t, err := scanThread(s.DB.QueryRowContext(ctx, `SELECT `+threadCols+` FROM threads WHERE id = ? AND (internal_child_id = '' OR ?)`, id, internalThreads(ctx)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -70,7 +70,7 @@ func (s *Store) ListThreads(ctx context.Context, p protocol.ThreadListParams) ([
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	var where []string
+	where := []string{"internal_child_id = ''"}
 	var args []any
 	archived := false
 	if p.Archived != nil {
@@ -269,7 +269,7 @@ func (s *Store) ListTurns(ctx context.Context, threadID string) ([]protocol.Turn
 		if trail != "" {
 			_ = json.Unmarshal([]byte(trail), &t.RouteTrail)
 		}
-		t.Selection.Complexity, t.Resolved.Complexity = protocol.Complexity(selC), protocol.Complexity(resC)
+		t.Selection.Complexity, t.Resolved.Complexity = protocol.NormalizeComplexity(selC), protocol.NormalizeComplexity(resC)
 		t.AutoPicked = auto != 0
 		t.StartedAt, t.FinishedAt = ParseTime(started), nullTime(fin)
 		out = append(out, t)
@@ -335,7 +335,11 @@ func (s *Store) SaveItem(ctx context.Context, it protocol.Item) error {
 			return err
 		}
 		text := searchText(it)
-		if text != "" {
+		var hidden string
+		if err := tx.QueryRowContext(ctx, `SELECT internal_child_id FROM threads WHERE id=?`, it.ThreadID).Scan(&hidden); err != nil {
+			return err
+		}
+		if text != "" && hidden == "" {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO items_fts (item_id, thread_id, text) VALUES (?,?,?)`,
 				it.ID, it.ThreadID, text); err != nil {
 				return err
@@ -388,6 +392,26 @@ func scanItem(sc interface{ Scan(...any) error }) (protocol.Item, error) {
 
 // ListItems returns a thread's items in order. If upToSeq > 0 only items with seq <= upToSeq.
 func (s *Store) ListItems(ctx context.Context, threadID string, upToSeq int64) ([]protocol.Item, error) {
+	resolved := map[string]string{}
+	resolutions, err := s.DB.QueryContext(ctx, `SELECT o.id, json_extract(o.data_json, '$.resolvedById')
+		FROM task_operations o JOIN engine_tasks t ON t.id = o.task_id
+		WHERE t.thread_id = ? AND json_extract(o.data_json, '$.resolvedById') <> ''`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	for resolutions.Next() {
+		var id, by string
+		if err := resolutions.Scan(&id, &by); err != nil {
+			resolutions.Close()
+			return nil, err
+		}
+		resolved[id] = by
+	}
+	if err := resolutions.Err(); err != nil {
+		resolutions.Close()
+		return nil, err
+	}
+	resolutions.Close()
 	q := `SELECT ` + itemCols + ` FROM items WHERE thread_id = ?`
 	args := []any{threadID}
 	if upToSeq > 0 {
@@ -404,6 +428,20 @@ func (s *Store) ListItems(ctx context.Context, threadID string, upToSeq int64) (
 		it, err := scanItem(rows)
 		if err != nil {
 			return nil, err
+		}
+		if len(resolved) > 0 && len(it.Data) > 0 {
+			var data map[string]json.RawMessage
+			if json.Unmarshal(it.Data, &data) == nil {
+				var failure struct {
+					OperationID string `json:"operationId"`
+				}
+				if json.Unmarshal(data["actionFailure"], &failure) == nil {
+					if by := resolved[failure.OperationID]; by != "" {
+						data["actionFailureResolvedById"], _ = json.Marshal(by)
+						it.Data, _ = json.Marshal(data)
+					}
+				}
+			}
 		}
 		out = append(out, it)
 	}
@@ -427,7 +465,7 @@ func (s *Store) SearchItems(ctx context.Context, query string, limit int) ([]pro
 	rows, err := s.DB.QueryContext(ctx, `SELECT f.item_id, f.thread_id, t.title,
 			snippet(items_fts, 2, '[', ']', '…', 12)
 		FROM items_fts f JOIN threads t ON t.id = f.thread_id
-		WHERE items_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery(query), limit)
+		WHERE t.internal_child_id = '' AND items_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery(query), limit)
 	if err != nil {
 		return nil, err
 	}

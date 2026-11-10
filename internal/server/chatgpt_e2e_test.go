@@ -3,9 +3,11 @@ package server_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,11 +45,60 @@ func TestOpenAIChatWithChatGPTSignInOrAPIKey(t *testing.T) {
 	var mu sync.Mutex
 	var seen []string // "<path> <authorization> <account>"
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.Copy(io.Discard, r.Body)
+		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		seen = append(seen, r.URL.Path+" "+r.Header.Get("Authorization")+" "+r.Header.Get("chatgpt-account-id"))
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(string(body), "Privately classify") {
+			var input any
+			_ = json.Unmarshal(body, &input)
+			var find func(any) map[string]any
+			find = func(v any) map[string]any {
+				switch value := v.(type) {
+				case string:
+					var parsed map[string]any
+					if json.Unmarshal([]byte(value), &parsed) == nil && parsed["taskId"] != nil && parsed["originItemId"] != nil {
+						return parsed
+					}
+				case []any:
+					for _, child := range value {
+						if got := find(child); got != nil {
+							return got
+						}
+					}
+				case map[string]any:
+					for _, child := range value {
+						if got := find(child); got != nil {
+							return got
+						}
+					}
+				}
+				return nil
+			}
+			descriptor := find(input)
+			if descriptor == nil {
+				t.Error("intent source missing from actual HTTP request")
+				return
+			}
+			request, _ := descriptor["request"].(string)
+			proposal := map[string]any{"taskId": descriptor["taskId"], "expectedRevision": descriptor["expectedRevision"], "originItemId": descriptor["originItemId"], "relation": "continue", "expectations": []any{map[string]any{"source": map[string]any{"itemId": descriptor["originItemId"], "start": 0, "end": len([]rune(request))}, "kind": "explanation", "predicate": "answer", "resource": map[string]any{}}}}
+			raw, _ := json.Marshal(proposal)
+			var event any
+			if r.URL.Path == "/responses" {
+				event = map[string]any{"type": "response.output_text.delta", "delta": string(raw)}
+			} else {
+				event = map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": string(raw)}}}}
+			}
+			data, _ := json.Marshal(event)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			if r.URL.Path == "/responses" {
+				fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n")
+			} else {
+				fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n")
+			}
+			return
+		}
 		switch r.URL.Path {
 		case "/responses": // ChatGPT backend (Responses API)
 			w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"from chatgpt\"}\n\n" +
@@ -107,6 +158,13 @@ wait:
 		t.Fatalf("test = %+v", test)
 	}
 
+	for _, id := range []string{signed.Credential.ID, key.ID} {
+		var profile protocol.ModelCapacityResult
+		h.call(protocol.MethodModelCapacityGet, protocol.ModelCapacityParams{CredentialID: id, Model: "gpt-5.6-terra"}, &profile)
+		window := 200000
+		profile.Profile.ContextWindow = &window
+		h.call(protocol.MethodModelCapacitySet, protocol.ModelCapacityParams{CredentialID: id, Model: profile.Profile.Model, Profile: &profile.Profile}, nil)
+	}
 	ask := func(credID string) (string, protocol.Turn) {
 		var th protocol.Thread
 		h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &th)

@@ -121,3 +121,20 @@ func (e *Engine) TurnDetails(ctx context.Context, p protocol.TurnDetailsParams) 
 	}
 	return out, err
 }
+
+func budgetDiagnostics(d protocol.RequestDiagnostics, r requestBudgetReport) protocol.RequestDiagnostics {
+	if r.Window > 0 {
+		d.CapacityWindow = &r.Window
+		d.CapacitySource = r.CapacitySource
+		d.ReservedOutputTokens = &r.ReservedOutput
+		d.CapacityMargin = &r.Margin
+	}
+	if r.EstimateOrigin != "" {
+		d.InputEstimateTokens = &r.EstimatedInput
+		d.InputEstimateOrigin = r.EstimateOrigin
+		d.CalibrationFactor = &r.CalibrationFactor
+		d.ContextReductions = &r.Reductions
+	}
+	d.RetryCause = r.RetryCause
+	return d
+}

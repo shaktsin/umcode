@@ -131,8 +131,8 @@
   </div>
   <div class="grid gap-3 p-4 md:grid-cols-[minmax(0,1fr)_9rem_auto] md:items-end">
     <div><label class="label" for="plugin-source">Git URL or local folder</label><input id="plugin-source" class="input" bind:value={source} placeholder="https://github.com/team/plugin.git or /path/to/plugin" oninput={() => { inspection = null; updateTarget = null; }} /></div>
-    <div><label class="label" for="plugin-mode">Install mode</label><select id="plugin-mode" class="select h-[38px] w-full" bind:value={mode} onchange={() => { inspection = null; updateTarget = null; }}><option value="managed">Managed copy</option><option value="linked">Linked source</option></select></div>
-    <button class="btn-outline h-[38px]" disabled={!source.trim() || !!busy} onclick={inspectSource}><Search class="h-4 w-4" />{busy === 'inspect' ? 'Inspecting…' : 'Inspect'}</button>
+    <div><label class="label" for="plugin-mode">Install mode</label><select id="plugin-mode" class="select w-full" bind:value={mode} onchange={() => { inspection = null; updateTarget = null; }}><option value="managed">Managed copy</option><option value="linked">Linked source</option></select></div>
+    <button class="btn-outline" disabled={!source.trim() || !!busy} onclick={inspectSource}><Search class="h-4 w-4" />{busy === 'inspect' ? 'Inspecting…' : 'Inspect'}</button>
   </div>
   {#if inspection}
     <div class="border-t border-line bg-raised/45 p-4">

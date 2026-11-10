@@ -321,6 +321,9 @@ func (t *execStart) Assess(args json.RawMessage) (Risk, string) {
 func (t *execStart) Forbidden(args json.RawMessage) (string, bool) { return t.shell.Forbidden(args) }
 
 func (t *execStart) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if scope := ScopeFrom(ctx); scope != nil && (scope.RestrictedChild || scope.ReadOnly) {
+		return "", errors.New("child exec sessions are blocked; use confined shell.run")
+	}
 	a, err := decode[struct {
 		Command      string
 		Workspace    string
@@ -420,6 +423,9 @@ func (*execWrite) Assess(args json.RawMessage) (Risk, string) {
 	return RiskYellow, "Send input to session " + a.SessionID
 }
 func (t *execWrite) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if scope := ScopeFrom(ctx); scope != nil && (scope.RestrictedChild || scope.ReadOnly) {
+		return "", errors.New("child exec sessions are blocked; use confined shell.run")
+	}
 	a, err := decode[struct {
 		SessionID    string `json:"session_id"`
 		Input        string
@@ -472,6 +478,9 @@ func (*execStop) Assess(args json.RawMessage) (Risk, string) {
 	return RiskGreen, "Stop session " + a.SessionID
 }
 func (t *execStop) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if scope := ScopeFrom(ctx); scope != nil && (scope.RestrictedChild || scope.ReadOnly) {
+		return "", errors.New("child exec sessions are blocked; use confined shell.run")
+	}
 	a, err := decode[struct {
 		SessionID string `json:"session_id"`
 	}](args)

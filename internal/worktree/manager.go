@@ -38,6 +38,27 @@ type Manager struct {
 
 // New creates a manager rooted under appDataDir/worktrees.
 func New(appDataDir string) *Manager {
+	// The application data directory may not exist on first launch. Resolve
+	// its existing ancestor as well, so macOS aliases such as /var do not
+	// become a different path once the workspace is created.
+	ancestor := filepath.Clean(appDataDir)
+	var missing []string
+	for {
+		canonical, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				canonical = filepath.Join(canonical, missing[i])
+			}
+			appDataDir = canonical
+			break
+		}
+		parent := filepath.Dir(ancestor)
+		if !errors.Is(err, os.ErrNotExist) || parent == ancestor {
+			break
+		}
+		missing = append(missing, filepath.Base(ancestor))
+		ancestor = parent
+	}
 	return &Manager{root: filepath.Join(appDataDir, "worktrees")}
 }
 
@@ -205,15 +226,19 @@ func (m *Manager) Ensure(ctx context.Context, taskID, projectRoot string) (Works
 }
 
 func (m *Manager) validateExisting(ctx context.Context, path string) error {
-	root, err := gitOutput(ctx, path, "rev-parse", "--show-toplevel")
+	return validateExistingWith(ctx, path, gitOutput)
+}
+
+func validateExistingWith(ctx context.Context, path string, run func(context.Context, string, ...string) (string, error)) error {
+	root, err := run(ctx, path, "rev-parse", "--show-toplevel")
 	if err != nil || !samePath(root, path) {
 		return errors.New("the saved task workspace is not a valid Git worktree; move it aside and retry")
 	}
-	common, err := gitOutput(ctx, path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	common, err := run(ctx, path, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil || !samePath(common, filepath.Join(path, ".git")) {
 		return errors.New("the saved task workspace does not contain self-contained Git metadata; preserve it and inspect it before retrying")
 	}
-	if _, err := gitOutput(ctx, path, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
+	if _, err := run(ctx, path, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
 		return errors.New("the saved task workspace no longer has a valid commit; preserve its work and inspect it before retrying")
 	}
 	return nil
@@ -287,6 +312,12 @@ func (m *Manager) Keep(ctx context.Context, taskID, projectRoot string) (int, er
 // Discard removes a stopped task workspace. Callers should require an explicit
 // user confirmation because uncommitted task changes are permanently removed.
 func (m *Manager) Discard(ctx context.Context, taskID, projectRoot string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.discard(ctx, taskID, projectRoot)
+}
+
+func (m *Manager) discard(ctx context.Context, taskID, projectRoot string) error {
 	if strings.TrimSpace(taskID) == "" {
 		return errors.New("cannot discard a coding workspace without a task id")
 	}
@@ -305,11 +336,27 @@ func (m *Manager) Discard(ctx context.Context, taskID, projectRoot string) error
 	h := sha256.Sum256([]byte(taskID))
 	path := filepath.Join(m.root, hex.EncodeToString(h[:]))
 	marker := path + ".ready"
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		info, markerErr := os.Lstat(marker)
+		if errors.Is(markerErr, os.ErrNotExist) {
+			return nil
+		}
+		if markerErr != nil {
+			return markerErr
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("invalid cleanup ownership marker")
+		}
+		ready, markerErr := os.ReadFile(marker)
+		if markerErr != nil {
+			return markerErr
+		}
+		fields := strings.Split(strings.TrimSpace(string(ready)), "\n")
+		if len(fields) != 3 || !samePath(fields[0], commonDir) {
+			return errors.New("cleanup ownership marker changed")
+		}
+		return os.Remove(marker)
 	}
 	if err != nil {
 		return err

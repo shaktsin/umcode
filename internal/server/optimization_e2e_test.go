@@ -114,8 +114,8 @@ func TestOptimizationBundleAcrossChats(t *testing.T) {
 			t.Fatalf("tool failed %+v", it.Tool)
 		}
 	}
-	if actionApprovals != 1 {
-		t.Fatalf("normal action approval count=%d", actionApprovals)
+	if actionApprovals != 0 {
+		t.Fatalf("confined project action unexpectedly asked for approval: %d", actionApprovals)
 	}
 	if n := workflowNode(t, d, "decision", ""); n.DecisionActor != "agent" {
 		t.Fatalf("decision provenance %+v", n)
@@ -209,6 +209,11 @@ func TestOptimizationTurnAdmissionSnapshot(t *testing.T) {
 
 func TestOptimizationPreservesActionDenial(t *testing.T) {
 	h, th, _ := workflowFixture(t, "write notes and verify", true, false)
+	// Listener-triggered red actions still require a decision even when confined.
+	if _, err := h.eng.Store.DB.ExecContext(h.ctx, "UPDATE threads SET channel=? WHERE id=?", "listener", th.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	var setting protocol.TokenOptimizationResult
 	h.call(protocol.MethodTokenOptimizationSet, protocol.TokenOptimizationParams{Enabled: true}, &setting)
 	h.fake.push(workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest { return solutionBatch(t, d, false, "") }), workflowUpdate(h, th, func(d protocol.WorkDetail) protocol.WorkUpdateRequest {

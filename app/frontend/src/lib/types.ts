@@ -1,6 +1,8 @@
 // Mirrors internal/protocol (Go). Keep field names in sync with the JSON tags there.
+import type { AgentResult, AgentState } from './delegation';
+type AgentAssignment = { prompt: string; acceptanceChecks?: string[]; contextRefs?: string[] };
 
-export type Complexity = '' | 'auto' | 'quick' | 'standard' | 'deep';
+export type Complexity = '' | 'low' | 'medium' | 'high';
 
 // Per-chat auto-approve tier. 'normal' asks for red-risk actions;
 // 'auto_workspace' auto-approves workspace actions; 'auto_all' also includes
@@ -135,7 +137,6 @@ export interface Turn {
   status: TurnStatus;
   selection: ModelSelection;
   resolved: ModelSelection;
-  autoPicked?: boolean;
   error?: string;
   usage: UsageTotals;
   /** Every route the turn tried, in order; more than one means it switched. */
@@ -169,7 +170,6 @@ export interface ModelRouteResult {
   chosen?: RouteInfo;
   alternatives: RouteInfo[];
   complexity: Complexity;
-  autoPicked?: boolean;
   reason?: string;
 }
 
@@ -238,6 +238,18 @@ export interface ToolCallData {
   risk?: string;
 }
 
+export interface ActionFailure {
+  authoritySource?: string;
+  category: string;
+  operationId?: string;
+  blockerId?: string;
+  message: string;
+  retryable: boolean;
+  advisory?: boolean;
+  nextStep?: string;
+  state?: unknown;
+}
+
 export interface Item {
   id: string;
   threadId: string;
@@ -258,6 +270,9 @@ export interface Attachment {
 }
 
 export interface Approval {
+  kind?: string;
+  agentTaskId?: string;
+  agentChildId?: string;
   id: string;
   threadId: string;
   projectId?: string;
@@ -305,6 +320,8 @@ export interface Model {
   supportsTools: boolean;
   supportsImages: boolean;
   supportsReasoning: boolean;
+  /** Levels the model supports; empty or missing means unknown. */
+  reasoningLevels?: string[];
   inputPerMTok: number;
   cachedInputPerMTok: number;
   outputPerMTok: number;
@@ -323,15 +340,14 @@ export interface Provider {
 export interface ComplexityPreset {
   level: Complexity;
   reasoning: string;
-  maxToolSteps: number;
-  multiAgent: string;
-  maxOutputTokens: number;
 }
 
 export interface ComplexityDefaults {
   default: Complexity;
   presets: ComplexityPreset[];
   limits: ExecutionLimits;
+  /** Output limit for models whose own maximum is unknown (1024-1000000). */
+  defaultMaxOutputTokens: number;
 }
 
 export interface ExecutionLimits {
@@ -581,3 +597,63 @@ export interface BudgetWarning {
   budgetUsd: number;
   percent: number;
 }
+
+export interface TurnStartParams {
+  threadId: string;
+  text: string;
+  attachments?: Attachment[];
+  override?: ModelSelection;
+  delegationTaskId?: string;
+}
+
+// Engine-owned execution outcome. Model prose does not create this metadata.
+export interface TaskExecutionOutcome {
+  status: 'satisfied' | 'not_executed' | 'unverified' | 'blocked' | 'clarify';
+  expectationIds?: string[];
+  evidenceIds?: string[];
+  denialIds?: string[];
+}
+
+export interface ModelCapacityProfile {
+ provider: string; endpointId: string; model: string; backend: 'generic' | 'ollama';
+ contextWindow?: number; maxOutputTokens?: number; responseReserveTokens?: number;
+}
+export interface ModelCapacityResult {
+ profile: ModelCapacityProfile; effectiveContextWindow?: number; source: string; observedAt?: string;
+}
+
+export interface CompactionState {
+ id:string;threadId:string;turnId:string;sequence:number;
+ status:string;startedAt:string;updatedAt:string;error?:string;
+}
+
+// Agent runtime (internal/protocol/agentrt.go, delegation.go, methods.go).
+export type FileAccess = 'none' | 'read' | 'read-write';
+export type ShellAccess = 'none' | 'read-only' | 'read-write';
+export type PlanState = 'proposed' | 'approved' | 'superseded';
+export interface AgentCapabilities { files: FileAccess; shell: ShellAccess; network: boolean; spawnMax: number }
+export interface CapabilityRejection { field: string; reason: string }
+export interface PlanAgent { name: string; purpose: string; summary: string; capabilities: AgentCapabilities; model?: string; requested?: AgentCapabilities }
+export interface PlanLimits { maxConcurrent: number; maxDepth: number; maxTotal: number; sliceShare: number; network: boolean }
+export interface AgentPlan { id: string; threadId: string; taskId: string; agents: PlanAgent[]; limits: PlanLimits; state: PlanState; createdAt: string; approvedAt?: string }
+/** Granted is authoritative for display; the embedded capabilities are only the ceiling. */
+export interface PlanCardAgent extends PlanAgent { granted: AgentCapabilities; rejected: CapabilityRejection[] | null }
+export interface PlanCardModel { id?: string; name: string; provider: string; toolsOk: boolean; available: boolean; why?: string }
+export interface PreviousAssignment { planId: string; name: string; model: string }
+export interface PlanCard { planId: string; agents: PlanCardAgent[]; limits: PlanLimits; models: PlanCardModel[] | null; notices: string[] | null; previous: PreviousAssignment[] | null }
+export interface RuntimeAgent {
+  id: string; taskId: string; parentAgentId?: string; name: string; purpose: string; planId?: string; planEntry?: string;
+  assignment: AgentAssignment; capabilities: AgentCapabilities; rejected?: CapabilityRejection[];
+  modelRequested?: string; modelActual?: string; routeTrail?: string[]; budgetShare: number; depth: number;
+  contextMode?: string; workspaceId?: string; revision?: string; state: AgentState; result: AgentResult;
+  usage: UsageTotals; version: number; createdAt: string; updatedAt: string;
+}
+export interface AgentRevisionView { agentId: string; state: string; conflict?: string }
+export interface AgentIntegrationStatus { headTree: string; appliedCount: number; verified: boolean; revisions?: AgentRevisionView[]; amendments?: number; amendReason?: string; blocked?: string }
+export interface AgentIntegrationReport { headTree: string; appliedCount: number; verified: boolean; applied?: string[]; unintegrated?: string[]; blockedAgents?: string[]; blocked?: string; amendments?: number; amendReason?: string; message: string }
+export type PlanDecision = 'approve' | 'decline' | 'revise';
+export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired';
+export interface AgentPlanGetResult { plan: AgentPlan; card?: PlanCard; approvalId?: string; approvalStatus?: ApprovalStatus | ''; continuationNeeded?: boolean }
+export interface AgentPlanRespondParams { planId: string; decision: PlanDecision; models?: Record<string, string>; drop?: string[]; limits?: PlanLimits; feedback?: string }
+export interface AgentPlanRespondResult { plan: AgentPlan; approvalStatus: ApprovalStatus; taskId?: string; continuationNeeded?: boolean }
+export interface AgentPlanUpdated { threadId: string; plan: AgentPlan; approvalStatus?: ApprovalStatus }

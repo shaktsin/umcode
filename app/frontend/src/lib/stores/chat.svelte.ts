@@ -1,8 +1,20 @@
+import { defaultApprovalMode } from '$lib/approvalModes';
+import { applyCompactionUpdate,compactionActive } from '$lib/compaction';
+import type { AgentPlanUpdated, CompactionState } from '$lib/types';
+import { DelegationState } from './delegation.svelte';
+import { AgentCards } from './agentCards.svelte';
+import type { DelegationUpdated } from '$lib/delegation';
 import { app } from './app.svelte';
 import { projects } from './projects.svelte';
 import { errMsg } from '$lib/format';
+import type { WorkbenchContext } from '$lib/workbench/assistant';
 import { inspector } from './inspector.svelte';
 import type { Attachment, BrowserVerificationResult, Item, ModelRouteResult, ModelSelection, RouteChangedEvent, SearchHit, Thread, Turn } from '$lib/types';
+
+function verificationRole(item: Item): string | undefined {
+  const name = item.tool?.name;
+  return name === 'verification.run' || name === 'verification.plan' || name === 'browser.verify' || name?.startsWith('visual.') ? name : undefined;
+}
 
 function sortThreads(list: Thread[]): Thread[] {
   return [...list].sort((a, b) => {
@@ -19,6 +31,15 @@ function isSideChat(t: Thread): boolean {
 
 /** One open conversation: the main chat, or a side chat beside it. */
 export class ThreadView {
+  compaction = $state<CompactionState|null>(null);
+  delegation = new DelegationState();
+  cards = new AgentCards();
+  /** A resolution message waiting for the current turn to finish. */
+  private queued = $state<{ threadId: string | null; text: string; kind?: 'resolve' } | null>(null);
+  /** Resolve messages waiting for the lead's running turn to end. */
+  get queuedResolve(): boolean { return !!this.queued && this.queued.threadId === this.id && this.queued.kind === 'resolve'; }
+  /** Why a queued conflict-resolution follow-up could not be sent. */
+  followUpError = $state('');
   id = $state<string | null>(null);
   thread = $state<Thread | null>(null);
   turns = $state<Turn[]>([]);
@@ -27,12 +48,16 @@ export class ThreadView {
   sending = $state(false);
   selection = $state<ModelSelection>({});
   workspaceMode = $state<'local' | 'worktree'>('local');
+  /** Approval mode picked before the chat exists; sent with thread/start. */
+  approvalMode = $state<'normal' | 'auto_workspace' | 'auto_all'>(defaultApprovalMode());
   /** What this side chat was opened about, shown above the first message. */
   context = $state('');
   highlightItem = $state<string | null>(null);
   /** What the next message would run on, and what it would fall back to. */
   route = $state<ModelRouteResult | null>(null);
   private routeSeq = 0;
+  private compactionVersion=0;
+  private terminalCompactionTurns=new Set<string>();
 
   get running(): Turn | undefined {
     return this.turns.find((t) => t.status === 'running');
@@ -43,9 +68,13 @@ export class ThreadView {
   }
 
   reset() {
+    this.queued = null; this.followUpError = '';
+    void this.delegation.bind(null);
+    this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();
     this.id = null;
     this.thread = null;
     this.workspaceMode = 'local';
+    this.approvalMode = defaultApprovalMode();
     this.turns = [];
     this.items = [];
     this.sending = false;
@@ -54,17 +83,24 @@ export class ThreadView {
   }
 
   async load(id: string) {
+    if (this.id !== id) {this.queued = null; this.followUpError = '';this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();void this.delegation.bind(id);}
     this.id = id;
     this.loading = true;
+    const compactionVersion=this.compactionVersion;
     try {
-      const r = await app.call<{ thread: Thread; turns: Turn[]; items: Item[] }>('thread/read', { threadId: id });
+      const r = await app.call<{ thread: Thread; turns: Turn[]; items: Item[]; compaction?:CompactionState }>('thread/read', { threadId: id });
       if (this.id !== id) return;
+      for(const turn of r.turns??[])if(turn.status!=='running')this.terminalCompactionTurns.add(turn.id);
+      if(r.compaction)this.applyCompaction(r.compaction);
+      else if(this.compactionVersion===compactionVersion)this.compaction=null;
       this.thread = r.thread;
+      void this.delegation.bind(id, r.thread.projectId);
       this.workspaceMode = r.thread.workspaceMode || 'local';
       this.turns = r.turns ?? [];
       this.items = (r.items ?? []).sort((a, b) => a.seq - b.seq);
       this.selection = { ...(r.thread.settings ?? {}) };
       this.sending = this.turns.some((t) => t.status === 'running');
+      this.drainQueue();
       void this.loadRoute();
     } catch (e) {
       app.toast('error', errMsg(e));
@@ -73,12 +109,30 @@ export class ThreadView {
     }
   }
 
+  applyCompaction(state:CompactionState) {
+    if(state.threadId!==this.id)return;
+    const turn=this.turns.find(t=>t.id===state.turnId);
+    if((this.terminalCompactionTurns.has(state.turnId)||turn&&turn.status!=='running')&&compactionActive(state))return;
+    this.compactionVersion++;
+    this.compaction=applyCompactionUpdate(this.compaction,state);
+  }
+
   applyTurn(t: Turn) {
     if (t.threadId !== this.id) return;
+    if(t.status!=='running'){this.terminalCompactionTurns.add(t.id);this.compactionVersion++;if(this.compaction?.turnId===t.id&&compactionActive(this.compaction))this.compaction={...this.compaction,status:'interrupted'};}
     const i = this.turns.findIndex((x) => x.id === t.id);
     if (i >= 0) this.turns[i] = t;
     else this.turns = [...this.turns, t];
     if (t.status !== 'running') this.sending = this.turns.some((x) => x.status === 'running');
+    if (t.status !== 'running') this.drainQueue();
+  }
+
+  /** Submits a follow-up queued by this thread once none of its turns is running (also after a reload that finds the turn done). */
+  private drainQueue() {
+    const q = this.queued;
+    if (!q || q.threadId !== this.id || this.running) return;
+    this.queued = null;
+    void this.submitFollowUp(q.text, q.kind);
   }
 
   applyItem(it: Item) {
@@ -100,7 +154,8 @@ export class ThreadView {
     if (output && it.tool) it.tool.output = (it.tool.output || '') + output;
   }
 
-  async send(text: string, attachments: Attachment[] = [], start?: () => Promise<Thread>) {
+  async send(text: string, attachments: Attachment[] = [], start?: () => Promise<Thread>, workbench?: WorkbenchContext) {
+    if (this.delegation.pending) { app.toast('error', 'Agents are being prepared. Try again in a moment.'); return; }
     text = text.trim();
     if (!text && attachments.length === 0) return;
     this.sending = true;
@@ -113,15 +168,54 @@ export class ThreadView {
         this.turns = [];
         this.items = [];
       }
-      await app.call('turn/start', { threadId: this.id, text, attachments });
+      if (!workbench && (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId)) await this.delegation.bind(this.id, this.thread?.projectId);
+      const submission = workbench ? { workbench } : this.delegation.submission();
+      await app.call('turn/start', { threadId: this.id, text, attachments, ...submission });
+      if (!workbench) void this.delegation.hydrate();
     } catch (e) {
       this.sending = false;
       app.toast('error', errMsg(e));
     }
   }
 
+  /** Starts a conflict-resolution follow-up now, or queues it while a turn runs. */
+  async submitFollowUp(text: string, kind?: 'resolve') {
+    this.followUpError = '';
+    if (this.running) {
+      const q = this.queued;
+      if (q && q.threadId === this.id) {
+        // One slot: Resolve messages join each other; anything else must not be dropped silently.
+        if (q.kind === 'resolve' && kind === 'resolve') { if (!q.text.split('\n').includes(text)) this.queued = { ...q, text: `${q.text}\n${text}` }; return; }
+        this.followUpError = 'Another follow-up is already waiting for the current turn. Try again once it is sent.';
+        return;
+      }
+      this.queued = { threadId: this.id, text, kind };
+      return;
+    }
+    this.queued = null;
+    await this.send(text);
+  }
+
+  /** Recovers an approved plan whose automatic continuation did not start. */
+  async continueApprovedTask(taskId: string) {
+    if (!this.id || this.running || this.sending) return;
+    const entry = this.cards.approvedPlanNeedingContinuation(taskId);
+    if (!entry) return;
+    this.sending = true;
+    try {
+      await app.call('turn/start', { threadId: this.id, text: 'Continue the approved agent plan and original request.', delegationTaskId: taskId });
+      void this.cards.refreshPlan(entry.plan.id);
+      void this.delegation.hydrate();
+    } catch (e) {
+      app.toast('error', errMsg(e));
+    } finally {
+      this.sending = false;
+    }
+  }
+
   async interrupt() {
     const t = this.running;
+    if (this.delegation.active) await this.delegation.cancel(this.delegation.active.task.id);
     if (t) await app.try('turn/interrupt', { turnId: t.id });
   }
 
@@ -162,9 +256,13 @@ class ChatState {
   activeSideId = $state<string | null>(null);
   /** Running turns across chats, including chats not currently open. */
   workingThreads = $state<Record<string, boolean>>({});
+  private mainGeneration = 0;
 
   constructor() {
     const r = app.rpc;
+    r.on('delegation/updated', (p: DelegationUpdated) => this.each(v => v.delegation.apply(p)));
+    r.on('agent/plan/updated', (p: AgentPlanUpdated) => this.each(v => { if (v.id === p.threadId) v.cards.onPlanUpdated(p); }));
+    r.on('thread/compactionUpdated',(state:CompactionState)=>this.each(v=>v.applyCompaction(state)));
     r.on('thread/updated', (p: { thread: Thread }) => this.upsertThread(p.thread));
     r.on('turn/started', (p: { turn: Turn }) => {
       this.workingThreads[p.turn.threadId] = true;
@@ -184,32 +282,37 @@ class ChatState {
     });
     r.on('item/started', (p: { item: Item }) => {
       this.each((v) => v.applyItem(p.item));
-      if (p.item.tool?.name === 'verification.run' || p.item.tool?.name === 'verification.plan') inspector.openOutput(p.item.tool.name === 'verification.plan' ? 'Verification plan' : 'Test output', p.item.tool.output || '', `verification:${p.item.id}`, true);
-      if (p.item.tool?.name === 'browser.verify' || p.item.tool?.name.startsWith('visual.')) inspector.openOutput('Browser verification', p.item.tool.output || '', `browser-output:${p.item.id}`, true);
+      const role = verificationRole(p.item);
+      if (role) inspector.openVerificationOutput(role, p.item.tool?.output || '', p.item.id, p.item.threadId, this.itemProject(p.item));
     });
     r.on('item/completed', (p: { item: Item }) => {
       this.each((v) => v.applyItem(p.item));
-      if (p.item.tool?.name === 'verification.run' || p.item.tool?.name === 'verification.plan') inspector.updateOutput(`verification:${p.item.id}`, p.item.tool.output || p.item.tool.error || '');
-      if (p.item.tool?.name === 'browser.verify' || p.item.tool?.name.startsWith('visual.')) {
-        inspector.updateOutput(`browser-output:${p.item.id}`, p.item.tool.output || p.item.tool.error || '');
-        try {
-          const report = JSON.parse(p.item.tool.output || '') as BrowserVerificationResult;
-          const view = [this.main, ...this.sides].find((candidate) => candidate.id === p.item.threadId);
-          inspector.openBrowserReport(report, p.item.id, p.item.threadId, view?.thread?.projectId, true);
-        } catch { /* Keep the raw output tab when a blocked call has no report. */ }
+      const role = verificationRole(p.item);
+      if (!role) return;
+      let report: BrowserVerificationResult | undefined;
+      if (role === 'browser.verify' || role.startsWith('visual.')) {
+        try { report = JSON.parse(p.item.tool?.output || '') as BrowserVerificationResult; }
+        catch { /* Keep raw output when a blocked call has no report. */ }
       }
+      inspector.updateVerificationOutput(role, p.item.tool?.output || p.item.tool?.error || '', p.item.id, p.item.threadId, this.itemProject(p.item), report);
     });
     r.on('item/delta', (p: { threadId: string; itemId: string; text?: string; output?: string }) => {
       this.each((v) => {
         if (v.id === p.threadId) v.applyDelta(p.itemId, p.text, p.output);
       });
-      const verification = this.main.items.find((item) => item.id === p.itemId) ?? this.sides.flatMap((view) => view.items).find((item) => item.id === p.itemId);
-      if (verification?.tool?.name === 'verification.run' || verification?.tool?.name === 'verification.plan') inspector.updateOutput(`verification:${p.itemId}`, verification.tool.output || '');
-      if (verification?.tool?.name === 'browser.verify' || verification?.tool?.name.startsWith('visual.')) inspector.updateOutput(`browser-output:${p.itemId}`, verification.tool.output || '');
+      const view = [this.main, ...this.sides].find((candidate) => candidate.id === p.threadId);
+      const item = view?.items.find((candidate) => candidate.id === p.itemId);
+      const role = item && verificationRole(item);
+      if (item && role) inspector.updateVerificationOutput(role, item.tool?.output || '', item.id, item.threadId, this.itemProject(item));
     });
     app.onConnected(() => this.reload());
     // The approved models changed under us: re-ask what each chat would use.
     window.addEventListener('umcode:routing', () => this.each((v) => void v.loadRoute()));
+  }
+
+  private itemProject(item: Item): string | undefined {
+    return [this.main, ...this.sides].find((view) => view.id === item.threadId)?.thread?.projectId
+      ?? this.threads.find((thread) => thread.id === item.threadId)?.projectId;
   }
 
   private each(fn: (v: ThreadView) => void) {
@@ -230,6 +333,7 @@ class ChatState {
     await this.loadThreads();
     if (this.main.id) await this.main.load(this.main.id);
     else void this.main.loadRoute();
+    for (const side of this.sides) if(side.id) void side.load(side.id);
   }
 
   /** All chats, grouped by project in the rail. */
@@ -249,8 +353,8 @@ class ChatState {
   private upsertThread(t: Thread) {
     this.threads = sortThreads(this.threads.filter((x) => x.id !== t.id && !x.archived).concat(t.archived ? [] : [t]));
     this.archivedThreads = sortThreads(this.archivedThreads.filter((x) => x.id !== t.id && x.archived).concat(t.archived ? [t] : []));
-    if (this.main.id === t.id) this.main.thread = t;
-    for (const s of this.sides) if (s.id === t.id) s.thread = t;
+    if (this.main.id === t.id) { this.main.thread = t; void this.main.delegation.bind(t.id, t.projectId); }
+    for (const s of this.sides) if (s.id === t.id) { s.thread = t; void s.delegation.bind(t.id, t.projectId); }
   }
 
   get rootThreads(): Thread[] {
@@ -262,6 +366,7 @@ class ChatState {
   }
 
   async open(id: string, highlightItem?: string) {
+    this.mainGeneration++;
     app.view = 'chat';
     const known = this.threads.find((t) => t.id === id);
     const targetProject = known?.projectId ?? null;
@@ -273,6 +378,7 @@ class ChatState {
   }
 
   newChat(projectId: string | null = null) {
+    this.mainGeneration++;
     if (projects.activeId !== projectId) void projects.open(projectId);
     app.view = 'chat';
     this.main.reset();
@@ -283,18 +389,19 @@ class ChatState {
     this.newChat(projectId);
   }
 
-  /** Send in the main chat, creating the thread in the open project on first send. */
-  async send(text: string, attachments: Attachment[] = []) {
-    await this.main.send(text, attachments, async () => {
-      const th = await app.call<Thread>('thread/start', {
-        channel: 'app',
-        projectId: projects.activeId ?? undefined,
-        workspaceMode: this.main.workspaceMode,
-        settings: this.main.selection,
-      });
-      this.upsertThread(th);
-      return th;
+  private async startMainThread(): Promise<Thread> {
+    const th = await app.call<Thread>('thread/start', {
+      channel: 'app', projectId: projects.activeId ?? undefined,
+      workspaceMode: this.main.workspaceMode, settings: this.main.selection,
+      approvalMode: this.main.approvalMode,
     });
+    this.upsertThread(th);
+    return th;
+  }
+
+  /** Send in the main chat, creating the thread in the open project on first send. */
+  async send(text: string, attachments: Attachment[] = [], workbench?: WorkbenchContext) {
+    await this.main.send(text, attachments, () => this.startMainThread(), workbench);
   }
 
   // ---- side chats ----

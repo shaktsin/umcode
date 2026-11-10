@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -60,8 +61,27 @@ func (e *Engine) llmTitle(ctx context.Context, turn protocol.Turn, first, reply 
 	defer cancel()
 	prompt := "Write a 3-6 word title for this chat. Reply with the title only, no quotes or punctuation at the end.\n\nUser: " +
 		clipRunes(first, 1500) + "\n\nAssistant: " + clipRunes(reply, 1500)
+	if shared := delegation.BudgetFromContext(ctx); shared != nil {
+		meta := e.Catalog.Lookup(ctx, provider, model)
+		budget := newTurnBudget(protocol.ExecutionLimits{})
+		budget.shared = shared
+		out, err := e.streamOnce(tctx, context.WithoutCancel(ctx), turn, resolved{sel: protocol.ModelSelection{Provider: provider, Model: model}, meta: meta}, cred, p, llm.Request{Model: model, Messages: []llm.Message{llm.Text(llm.RoleUser, prompt)}, MaxTokens: 60}, "title", budget)
+		if err != nil {
+			return ""
+		}
+		t := strings.TrimSpace(strings.Trim(strings.TrimSpace(out.text), `"'.`))
+		if i := strings.IndexByte(t, '\n'); i >= 0 {
+			t = t[:i]
+		}
+		return clipRunes(t, 80)
+	}
 	start := time.Now()
-	ch, err := p.Stream(tctx, cred.Material, llm.Request{Model: model, Messages: []llm.Message{llm.Text(llm.RoleUser, prompt)}, MaxTokens: 60})
+	res := resolved{sel: protocol.ModelSelection{Provider: provider, Model: model}, cred: cred, meta: e.Catalog.Lookup(ctx, provider, model)}
+	request, report, err := e.prepareModelRequest(tctx, ctx, turn, &res, llm.Request{Model: model, Messages: []llm.Message{llm.Text(llm.RoleUser, prompt)}, MaxTokens: 60}, "title", newTurnBudget(protocol.ExecutionLimits{}))
+	if err != nil {
+		return ""
+	}
+	ch, err := p.Stream(tctx, cred.Material, request)
 	if err != nil {
 		return ""
 	}
@@ -76,6 +96,7 @@ func (e *Engine) llmTitle(ctx context.Context, turn protocol.Turn, first, reply 
 			usage, ok = ev.Usage, true
 		}
 	}
+	e.observeRequestUsage(res, report, usage.InputTokens, usage.Reported)
 	meta := e.Catalog.Lookup(ctx, provider, model)
 	totals := protocol.UsageTotals{InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens,
 		OutputTokens: usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens, Requests: 1,
@@ -92,6 +113,7 @@ func (e *Engine) llmTitle(ctx context.Context, turn protocol.Turn, first, reply 
 		diagnostic.CostState = "known"
 		diagnostic.CostUSD = &totals.CostUSD
 	}
+	diagnostic = budgetDiagnostics(diagnostic, report)
 	recorderFrom(ctx).recordRequest(diagnostic)
 	_ = e.Store.InsertUsage(ctx, store.UsageRecord{CredentialID: cred.Record.ID, Provider: provider, Model: model,
 		ThreadID: turn.ThreadID, TurnID: turn.ID, Role: "title", Usage: totals,

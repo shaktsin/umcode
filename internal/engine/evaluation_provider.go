@@ -166,3 +166,8 @@ func (p *evaluationProvider) drainCancelled(ch <-chan llm.Event, a *evaluation.A
 		}
 	}
 }
+
+// Evaluations already bind a declared per-model physical limit.
+func (p *evaluationProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: int(p.model.Window), MaxOutputTokens: int(p.model.MaxOutput)}, nil
+}

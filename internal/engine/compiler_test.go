@@ -17,8 +17,8 @@ import (
 
 func TestDesignedCompilerRestartReconstructsSQLitePacket(t *testing.T) {
 	e, th, turn, st := compilerEngine(t, true)
-	// The shared engine fixture uses :memory:. Snapshot it into a real SQLite
-	// file before exercising persistence across connection lifetimes.
+	// Snapshot the shared fixture into a separate SQLite file before
+	// exercising persistence across connection lifetimes.
 	path := filepath.Join(t.TempDir(), "restart.db")
 	if _, err := st.DB.ExecContext(t.Context(), `VACUUM INTO ?`, path); err != nil {
 		t.Fatal(err)

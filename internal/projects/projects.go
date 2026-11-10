@@ -94,6 +94,9 @@ func (s *Service) Create(ctx context.Context, p protocol.ProjectCreateParams) (p
 	if name == "" {
 		name = filepath.Base(root)
 	}
+	if err := s.ensureInstructions(protocol.Project{Name: name, Root: root}); err != nil {
+		return protocol.Project{}, err
+	}
 	rec, err := s.st.CreateProject(ctx, protocol.Project{
 		Name: name, Root: root, Settings: p.Settings, Tools: p.Tools,
 	})
@@ -164,6 +167,9 @@ func (s *Service) List(ctx context.Context, includeArchived bool) ([]protocol.Pr
 func (s *Service) Open(ctx context.Context, id string) (protocol.Project, error) {
 	p, err := s.Get(ctx, id)
 	if err != nil {
+		return p, err
+	}
+	if err := s.ensureInstructions(p); err != nil {
 		return p, err
 	}
 	if err := s.st.TouchProject(ctx, id); err != nil {

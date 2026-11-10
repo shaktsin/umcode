@@ -29,7 +29,7 @@ func runChat(args []string) error {
 	project := fs.String("project", "", "project id to work in (see `umcode project list`)")
 	provider := fs.String("p", "", "provider")
 	model := fs.String("m", "", "model")
-	cplx := fs.String("c", "", "complexity: auto|quick|standard|deep")
+	cplx := fs.String("c", "", "complexity: low|medium|high")
 	key := fs.String("k", "", "API key id")
 	fs.Parse(args)
 	override := protocol.ModelSelection{Provider: *provider, Model: *model, Complexity: protocol.Complexity(*cplx), CredentialID: *key}
@@ -83,11 +83,7 @@ func chatTurn(ctx context.Context, c *client.Client, in *bufio.Reader, threadID,
 	}
 	turnID := res.Turn.ID
 	r := res.Turn.Resolved
-	auto := ""
-	if res.Turn.AutoPicked {
-		auto = "auto → "
-	}
-	fmt.Fprintf(os.Stderr, "%s%s · %s · %s%s%s\n", dim, r.Provider, r.Model, auto, r.Complexity, reset)
+	fmt.Fprintf(os.Stderr, "%s%s · %s · %s%s\n", dim, r.Provider, r.Model, r.Complexity, reset)
 
 	kinds := map[string]string{}
 	thinkingShown := false

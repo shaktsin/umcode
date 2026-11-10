@@ -54,6 +54,9 @@ func (*verificationPlan) Assess(json.RawMessage) (Risk, string) {
 }
 func (t *verificationPlan) Call(ctx context.Context, _ json.RawMessage) (string, error) {
 	scope := ScopeFrom(ctx)
+	if scope != nil && (scope.RestrictedChild || scope.ReadOnly) {
+		return "", fmt.Errorf("child verification planning blocked: Git discovery is not sandboxed")
+	}
 	automatic := false
 	designed := t.designedWorkflow
 	if p, ok := optimization.FromContext(ctx); ok {

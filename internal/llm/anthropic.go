@@ -96,9 +96,11 @@ func buildAnthropicRequest(req Request) anthRequest {
 	switch {
 	case req.ReasoningStyle == "budget":
 		if b := thinkingBudget(req.Reasoning); b > 0 {
-			out.Thinking = &anthThinking{Type: "enabled", BudgetTokens: b}
-			if out.MaxTokens <= b {
-				out.MaxTokens = b + 4096
+			// max_tokens is an admitted wire cap, including thinking. Never
+			// increase it behind capacity or shared-budget accounting.
+			b = min(b, out.MaxTokens-1024)
+			if b >= 1024 {
+				out.Thinking = &anthThinking{Type: "enabled", BudgetTokens: b}
 			}
 		}
 	case req.Reasoning == ReasoningLow || req.Reasoning == ReasoningMedium || req.Reasoning == ReasoningHigh:

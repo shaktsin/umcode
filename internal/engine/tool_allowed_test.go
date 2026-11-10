@@ -9,7 +9,7 @@ import (
 	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/secrets"
-	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
@@ -38,7 +38,7 @@ func TestToolAllowedWorkUpdateRegistration(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		cfg := config.Default(t.TempDir())
 		cfg.Models.DesignedWorkflow = enabled
-		st, err := store.Open(t.Context(), ":memory:")
+		st, err := teststore.Open(t.Context(), filepath.Join(t.TempDir(), "tool-allowed.db"))
 		if err != nil {
 			t.Fatal(err)
 		}

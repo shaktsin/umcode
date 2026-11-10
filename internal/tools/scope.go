@@ -14,8 +14,25 @@ import (
 // Scope is the project a turn is working in. It travels on the context, so
 // every tool — built-in, skill or MCP — sees the same boundary.
 type Scope struct {
+	// RestrictedChild requires enforced command confinement, never host fallback.
+	RestrictedChild bool
+	// ReadOnly denies every command and mutation path, even direct tool calls.
+	ReadOnly bool
+	// RuntimeAgent marks a scope built from agent-runtime capabilities (see
+	// engine.runtimeScope). Its authority comes from those capabilities only.
+	RuntimeAgent bool
+	// ShellReadOnly runs the agent's shell with a read-only workspace.
+	ShellReadOnly bool
+	// Confined reports that the agent's shell runs inside a confirmed
+	// confinement (microVM or OS sandbox); the approval gate relies on it.
+	Confined bool
+	// ApprovalModeFn returns the approval mode a runtime agent inherits. It
+	// is evaluated at every gate decision so a mid-run change by the lead
+	// applies on the agent's next tool call.
+	ApprovalModeFn   func() string
 	ThreadID         string
 	ProjectID        string
+	ProjectRoot      string // selected source project, distinct from a managed execution checkout
 	ProjectName      string
 	Root             string
 	AllowNet         bool
@@ -157,4 +174,21 @@ func NeedsNetwork(command string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func RequireWritable(ctx context.Context) error {
+	if scope := ScopeFrom(ctx); scope != nil && scope.ReadOnly {
+		return errors.New("reviewer action blocked: enforceable read-only execution is unavailable")
+	}
+	return nil
+}
+
+// RequireShell is RequireWritable for command tools. A runtime agent's shell
+// is bounded by its confinement (and, for a read-only shell, a read-only
+// workspace), so file read-only scope does not forbid it.
+func RequireShell(ctx context.Context) error {
+	if scope := ScopeFrom(ctx); scope != nil && scope.RuntimeAgent && scope.Confined {
+		return nil
+	}
+	return RequireWritable(ctx)
 }

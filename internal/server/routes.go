@@ -155,6 +155,132 @@ func (s *Server) routes() map[string]handler {
 		protocol.MethodProjectCreate: bind(func(ctx context.Context, c *conn, p protocol.ProjectCreateParams) (any, error) {
 			return e.CreateProject(ctx, p)
 		}),
+
+		// ML Workbench P0: project-scoped model bundle persistence.
+		"workbench/import/runtime": bind(func(ctx context.Context, c *conn, p protocol.ImportRuntimeParams) (any, error) {
+			if !c.IsAdmin() { return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use imported model runtimes") }
+			return e.WorkbenchImportRuntime(ctx,p)
+		}),
+		"workbench/import/inspect": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchImportParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can import model architectures")
+			}
+			return e.InspectWorkbenchImport(ctx, p)
+		}),
+		"workbench/import/create": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchImportParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can import model architectures")
+			}
+			return e.CreateWorkbenchImport(ctx, p)
+		}),
+		"workbench/training/get": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchTrainingParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local training")
+			}
+			return e.WorkbenchTraining(ctx, "get", p)
+		}),
+		"workbench/training/start": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchTrainingParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local training")
+			}
+			return e.WorkbenchTraining(ctx, "start", p)
+		}),
+		"workbench/training/stop": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchTrainingParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local training")
+			}
+			return e.WorkbenchTraining(ctx, "stop", p)
+		}),
+		"workbench/inference/get": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "get", p)
+		}),
+		"workbench/inference/import": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "import", p)
+		}),
+		"workbench/inference/load": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "load", p)
+		}),
+		"workbench/inference/unload": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "unload", p)
+		}),
+		"workbench/inference/predict": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "predict", p)
+		}),
+		"workbench/inference/promote": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "promote", p)
+		}),
+		"workbench/inference/unpromote": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "unpromote", p)
+		}),
+		"workbench/inference/test-architecture": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchInferenceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local inference")
+			}
+			return e.WorkbenchInference(ctx, "test-architecture", p)
+		}),
+		protocol.MethodWorkbenchModelList: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelListParams) (any, error) {
+			return e.ListWorkbenchModels(ctx, p)
+		}),
+		protocol.MethodWorkbenchModelCreate: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelCreateParams) (any, error) {
+			return e.CreateWorkbenchModel(ctx, p)
+		}),
+		protocol.MethodWorkbenchModelOpen: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelOpenParams) (any, error) {
+			return e.OpenWorkbenchModel(ctx, p)
+		}),
+		protocol.MethodWorkbenchModelDelete: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchModelDeleteParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can delete models")
+			}
+			return e.DeleteWorkbenchModel(ctx, p)
+		}),
+		protocol.MethodWorkbenchGraphSave: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchGraphSaveParams) (any, error) {
+			return e.SaveWorkbenchGraph(ctx, p)
+		}),
+		protocol.MethodWorkbenchDataGet: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchDataGetParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can manage workbench data")
+			}
+			return e.GetWorkbenchData(ctx, p)
+		}),
+		protocol.MethodWorkbenchDataImport: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchDataImportParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can manage workbench data")
+			}
+			return e.ImportWorkbenchData(ctx, p)
+		}),
+		protocol.MethodWorkbenchDataPrepare: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchDataPrepareParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can manage workbench data")
+			}
+			return e.PrepareWorkbenchData(ctx, p)
+		}),
+		protocol.MethodWorkbenchDataHuggingFace: bind(func(ctx context.Context, c *conn, p protocol.WorkbenchDataHuggingFaceParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can manage workbench data")
+			}
+			return e.WorkbenchHuggingFace(ctx, p)
+		}),
 		protocol.MethodProjectOpen: bind(func(ctx context.Context, c *conn, p protocol.ProjectIDParams) (any, error) {
 			return e.OpenProject(ctx, p.ProjectID)
 		}),
@@ -193,6 +319,63 @@ func (s *Server) routes() map[string]handler {
 		}),
 		protocol.MethodProjectDiscardTask: bind(func(ctx context.Context, c *conn, p protocol.TaskWorkspaceParams) (any, error) {
 			return e.DiscardTaskWorkspace(ctx, p)
+		}),
+
+		// Explicit app action; no tool or caller-supplied project path grants authority.
+		protocol.MethodDelegationEnable: bind(func(ctx context.Context, c *conn, p protocol.ThreadIDParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can enable delegation")
+			}
+			return e.PrepareDelegation(ctx, p.ThreadID)
+		}),
+		// The user's answer to an agent.suggest card; enable returns the
+		// delegation/enable token in the same call. App clients only.
+		protocol.MethodAgentSuggestionRespond: bind(func(ctx context.Context, c *conn, p protocol.AgentSuggestionRespondParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can answer agent suggestions")
+			}
+			return e.RespondAgentSuggestion(ctx, p)
+		}),
+		// Read-only views of the activation cards' stored state (Plan 5 renders
+		// cards from these after a reload, a restart or another client's
+		// answer). App clients only.
+		protocol.MethodAgentSuggestionGet: bind(func(ctx context.Context, c *conn, p protocol.AgentSuggestionGetParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read agent suggestions")
+			}
+			return e.GetAgentSuggestion(ctx, p)
+		}),
+		protocol.MethodAgentPlanGet: bind(func(ctx context.Context, c *conn, p protocol.AgentPlanGetParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read agent plan cards")
+			}
+			return e.GetAgentPlan(ctx, p)
+		}),
+		// The user's answer to an agent.propose_plan card: approve (with model
+		// choices, dropped agents and limits), decline or revise. App clients only.
+		protocol.MethodAgentPlanRespond: bind(func(ctx context.Context, c *conn, p protocol.AgentPlanRespondParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can answer agent plan cards")
+			}
+			return e.RespondAgentPlanAs(ctx, c.id, p)
+		}),
+		protocol.MethodDelegationList: bind(func(ctx context.Context, c *conn, p protocol.DelegationListParams) (any, error) {
+			if !c.admin.Load() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read delegation")
+			}
+			return e.ListDelegation(ctx, p)
+		}),
+		protocol.MethodDelegationFile: bind(func(ctx context.Context, c *conn, p protocol.DelegationFileParams) (any, error) {
+			if !c.admin.Load() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read delegation")
+			}
+			return e.ReadDelegationFile(ctx, p)
+		}),
+		protocol.MethodDelegationCancel: bind(func(ctx context.Context, c *conn, p protocol.DelegationCancelParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can cancel delegation")
+			}
+			return e.CancelDelegation(ctx, p)
 		}),
 
 		// turns
@@ -267,11 +450,22 @@ func (s *Server) routes() map[string]handler {
 			ps, err := e.Providers(ctx)
 			return protocol.ProviderListResult{Providers: ps}, err
 		}),
+		protocol.MethodModelCapacityGet: bind(func(ctx context.Context, c *conn, p protocol.ModelCapacityParams) (any, error) {
+			return e.ModelCapacity(ctx, p)
+		}),
+		protocol.MethodModelCapacitySet: bind(func(ctx context.Context, c *conn, p protocol.ModelCapacityParams) (any, error) {
+			return e.SetModelCapacity(ctx, p)
+		}),
 		protocol.MethodModelList: bind(func(ctx context.Context, c *conn, p protocol.ModelListParams) (any, error) {
 			ms, err := e.Catalog.List(ctx, p.Provider, p.IncludeHidden)
 			if ms == nil {
 				ms = []protocol.Model{}
 			}
+			if err != nil {
+				return nil, err
+			}
+			local, err := e.LocalWorkbenchModels(ctx, p.Provider)
+			ms = append(ms, local...)
 			return protocol.ModelListResult{Models: ms}, err
 		}),
 		protocol.MethodModelSetHidden: bind(func(ctx context.Context, c *conn, p protocol.ModelSetHiddenParams) (any, error) {

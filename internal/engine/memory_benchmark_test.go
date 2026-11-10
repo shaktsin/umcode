@@ -32,6 +32,9 @@ func (*memoryScriptProvider) ListModels(context.Context, llm.Credential) ([]stri
 	return []string{"deterministic"}, nil
 }
 func (p *memoryScriptProvider) Stream(_ context.Context, _ llm.Credential, req llm.Request) (<-chan llm.Event, error) {
+	if reply, ok := testIntentReply(req, "explanation", "answer", ""); ok {
+		return reply, nil
+	}
 	// Copy the request: later loop appends must not change measured inputs.
 	b, err := json.Marshal(req)
 	if err != nil {
@@ -65,11 +68,17 @@ func installMemoryProvider(t *testing.T, e *Engine) *memoryScriptProvider {
 	e.LLMs.Register(p)
 	e.Router = router.New(e.Store, nil, nil, e.LLMs, e.Cfg, e.Log)
 	e.Cfg.Tools.HostSandbox = "off"
+	e.Tools.Add(&taskContextTool{engine: e})
 	tools.RegisterBuiltins(e.Tools, e.Cfg, tools.NewWorkspaces(e.Cfg), nil)
 	return p
 }
-func runMemoryTurn(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn) {
+func runMemoryTurn(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Turn, wanted ...string) {
+	expected := protocol.TurnCompleted
+	if len(wanted) > 0 {
+		expected = wanted[0]
+	}
 	t.Helper()
+	persistTaskTestUser(t, e, th, turn, "Complete the repository change and verify it.")
 	e.runTurn(t.Context(), th, turn, resolved{
 		sel:    protocol.ModelSelection{Provider: "memory-script", Model: "deterministic"},
 		meta:   models.Meta{ContextWindow: 200000, Tools: true},
@@ -81,7 +90,7 @@ func runMemoryTurn(t *testing.T, e *Engine, th protocol.Thread, turn protocol.Tu
 	}
 	for _, got := range turns {
 		if got.ID == turn.ID {
-			if got.Status != protocol.TurnCompleted {
+			if got.Status != expected {
 				t.Fatalf("turn status=%s error=%s", got.Status, got.Error)
 			}
 			return
@@ -295,4 +304,8 @@ func TestCuratedMemoryReducesRepeatedDiscoveryWithoutQualityLoss(t *testing.T) {
 	t.Logf("baseline: model_calls=%d second_turn_calls=%d discovery_calls=%d tool_rounds=%d second_turn_input_bytes=%d estimated_second_turn_input_tokens=%d", baseline.calls, baseline.secondCalls, baseline.discovery, baseline.rounds, baseline.inputBytes, baseline.inputTokens)
 	t.Logf("treatment: model_calls=%d second_turn_calls=%d discovery_calls=%d tool_rounds=%d second_turn_input_bytes=%d estimated_second_turn_input_tokens=%d", treatment.calls, treatment.secondCalls, treatment.discovery, treatment.rounds, treatment.inputBytes, treatment.inputTokens)
 	t.Logf("quality: completed=2/2 verified=2/2 identical_answer=true identical_artifact=true bytes_saved=%d", baseline.inputBytes-treatment.inputBytes)
+}
+
+func (*memoryScriptProvider) RuntimeCapacity(context.Context, llm.Credential, string) (llm.RuntimeCapacity, error) {
+	return llm.RuntimeCapacity{ContextWindow: 200000}, nil
 }

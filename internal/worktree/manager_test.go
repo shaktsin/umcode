@@ -10,6 +10,27 @@ import (
 	"testing"
 )
 
+func TestLookupWithInitiallyMissingDataDirectoryUnderAlias(t *testing.T) {
+	root := newRepo(t)
+	write(t, root, "tracked.txt", "base\n")
+	git(t, root, "add", "-A")
+	git(t, root, "commit", "-m", "base")
+	parent := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(parent, alias); err != nil {
+		t.Fatal(err)
+	}
+	m := New(filepath.Join(alias, "missing", "UMCode"))
+	ws, err := m.EnsureCommitted(t.Context(), "task", root, git(t, root, "rev-parse", "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.Lookup(t.Context(), "task", root)
+	if err != nil || got.Path != ws.Path {
+		t.Fatalf("owned workspace could not be reopened: %+v %v", got, err)
+	}
+}
+
 func TestEnsureSnapshotsChangesAndKeepsSourceUntouched(t *testing.T) {
 	root := newRepo(t)
 	write(t, root, "tracked.txt", "base\n")

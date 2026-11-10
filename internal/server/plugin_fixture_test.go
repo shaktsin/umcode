@@ -19,6 +19,14 @@ func TestMain(m *testing.M) {
 			Event string `json:"event"`
 		}
 		_ = json.NewDecoder(os.Stdin).Decode(&envelope)
+		if marker := os.Getenv("UMCODE_PLUGIN_TEST_MARKER"); marker != "" {
+			file, err := os.OpenFile(marker, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				os.Exit(2)
+			}
+			_, _ = file.WriteString(envelope.Event + "\n")
+			_ = file.Close()
+		}
 		result := map[string]any{"version": 1, "continue": true}
 		if envelope.Event == "TurnStart" {
 			result["context"] = []string{"FULL_PLUGIN_HOOK_CONTEXT"}

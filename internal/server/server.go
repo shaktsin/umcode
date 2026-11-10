@@ -167,7 +167,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	ws.SetReadLimit(32 << 20)
+	// A 64 MiB checkpoint expands to about 85.4 MiB as base64 in a bounded import.
+	ws.SetReadLimit(96 << 20)
 	ctx := r.Context()
 	c := s.newConn(func(b []byte) error {
 		wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

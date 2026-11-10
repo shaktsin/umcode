@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -22,6 +21,7 @@ import (
 	"github.com/ncruces/go-sqlite3"
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
+	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
@@ -40,8 +40,9 @@ func init() {
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// ErrNotFound is returned when a row does not exist.
-var ErrNotFound = errors.New("not found")
+// ErrNotFound is returned when a row does not exist. It is
+// protocol.ErrNotFound, so consumers can match it without importing store.
+var ErrNotFound = protocol.ErrNotFound
 
 // Store wraps the database.
 type Store struct {
@@ -107,6 +108,14 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// SQLite cannot drop a table CHECK in place. Migration 41 replaces the
+		// parent table while keeping its foreign-key children intact. The pragma
+		// must be changed before beginning the migration transaction.
+		if ver == 41 {
+			if _, err := s.DB.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+				return err
+			}
+		}
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -121,6 +130,24 @@ func (s *Store) migrate(ctx context.Context) error {
 				return fmt.Errorf("retrieval backfill: %w", err)
 			}
 		}
+		if ver == 41 {
+			rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+			if err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %s foreign-key check: %w", name, err)
+			}
+			bad := rows.Next()
+			checkErr := rows.Err()
+			rows.Close()
+			if checkErr != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %s foreign-key check: %w", name, checkErr)
+			}
+			if bad {
+				tx.Rollback()
+				return fmt.Errorf("migration %s broke a foreign key", name)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
 			ver, name, Now()); err != nil {
 			tx.Rollback()
@@ -128,6 +155,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		if err := tx.Commit(); err != nil {
 			return err
+		}
+		if ver == 41 {
+			if _, err := s.DB.ExecContext(ctx, `PRAGMA foreign_keys=ON`); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

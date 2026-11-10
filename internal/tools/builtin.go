@@ -3,6 +3,8 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"github.com/shaktsin/umcode/internal/compute"
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
+	"github.com/shaktsin/umcode/internal/pathutil"
 	"github.com/shaktsin/umcode/internal/preview"
 	"github.com/shaktsin/umcode/internal/procutil"
 	"github.com/shaktsin/umcode/internal/sandbox"
@@ -30,17 +33,28 @@ const maxOutput = 64 << 10
 // SkillEnvFunc returns the environment for running commands as part of a skill.
 type SkillEnvFunc func(ctx context.Context, skill string) ([]string, error)
 
+// SkillReadPathsFunc supplies trusted declared skill/runtime roots, separately
+// from the subprocess environment, which may contain arbitrary PATH values.
+type SkillReadPathsFunc func(ctx context.Context, skill string) ([]string, error)
+
 // RegisterBuiltins adds available first-party tools. Risk and approval are
 // evaluated per chat; project settings only choose the compute environment.
 // skillEnv may be nil.
 type BuiltinServices struct {
-	Previews    *preview.Manager
-	VisualQA    *visualqa.Manager
-	ComputerUse *computeruse.Manager
-	Exec        *ExecManager
+	Previews       *preview.Manager
+	VisualQA       *visualqa.Manager
+	ComputerUse    *computeruse.Manager
+	Exec           *ExecManager
+	AgentTools     []Tool
+	SkillReadPaths SkillReadPathsFunc
 }
 
 func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv SkillEnvFunc, services ...BuiltinServices) {
+	if len(services) > 0 {
+		for _, tool := range services[0].AgentTools {
+			r.Add(tool)
+		}
+	}
 	r.Add(&fileRead{ws})
 	r.Add(&fileList{ws})
 	r.Add(&fileWrite{ws})
@@ -51,6 +65,9 @@ func RegisterBuiltins(r *Registry, cfg *config.Config, ws *Workspaces, skillEnv 
 	// First-party tools are always available. Their assessed risk is handled by
 	// the chat's approval mode before any action runs.
 	shell := &shellRun{ws: ws, forbid: cfg.Policy.ShellForbidCommands, skillEnv: skillEnv, compute: compute.NewBundledRunner()}
+	if len(services) > 0 {
+		shell.skillReadPaths = services[0].SkillReadPaths
+	}
 	if !strings.EqualFold(cfg.Tools.HostSandbox, "off") {
 		shell.sandbox = sandbox.Detect()
 	}
@@ -108,6 +125,9 @@ func (t *verificationRun) Assess(args json.RawMessage) (Risk, string) {
 	return risk, fmt.Sprintf("Run %d verification checks", len(a.Checks))
 }
 func (t *verificationRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := RequireShell(ctx); err != nil {
+		return "", err
+	}
 	type check struct {
 		Label           string `json:"label"`
 		Command         string `json:"command"`
@@ -336,7 +356,13 @@ func resolvePath(ctx context.Context, ws *Workspaces, name, path string, op Oper
 		if name != "" && name != "project" {
 			return "", fmt.Errorf("this chat works in the project %s; %q is not one of its folders", scope.ProjectName, name)
 		}
-		return scope.Resolve(path)
+		abs, err := scope.Resolve(path)
+		if err == nil && op != OpRead && scope.RuntimeAgent {
+			if guardErr := agentWriteTarget(scope, abs); guardErr != nil {
+				return "", guardErr
+			}
+		}
+		return abs, err
 	}
 	if op != OpRead {
 		return "", ErrNoProject
@@ -346,6 +372,60 @@ func resolvePath(ctx context.Context, ws *Workspaces, name, path string, op Oper
 		return "", err
 	}
 	return w.Resolve(path, op)
+}
+
+// agentWriteTarget refuses a runtime agent's write that would land in the
+// root's .git, judged both lexically and at the target a write would actually
+// reach after following every symlink, dangling ones included.
+func agentWriteTarget(scope *Scope, abs string) error {
+	gitErr := errors.New("the repository metadata (.git) is read-only for agents")
+	first, _, _ := strings.Cut(scope.Rel(abs), "/")
+	if strings.EqualFold(first, ".git") {
+		return gitErr
+	}
+	target := writeTarget(abs, 0)
+	rel, err := filepath.Rel(pathutil.Resolved(scope.Root), target)
+	if target == "" || err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s resolves outside the project folder (or through a symlink loop); writes through it to .git or elsewhere are refused", scope.Rel(abs))
+	}
+	if first, _, _ = strings.Cut(filepath.ToSlash(rel), "/"); strings.EqualFold(first, ".git") {
+		return gitErr
+	}
+	return nil
+}
+
+// writeTarget is where a write to abs lands: every existing component is
+// followed if it is a symlink (a dangling link to its would-be target) and
+// the missing remainder is appended. "" means a symlink loop.
+func writeTarget(abs string, depth int) string {
+	if depth > 40 {
+		return ""
+	}
+	abs = filepath.Clean(abs)
+	cur := filepath.VolumeName(abs) + string(filepath.Separator)
+	parts := strings.Split(strings.TrimPrefix(abs[len(filepath.VolumeName(abs)):], string(filepath.Separator)), string(filepath.Separator))
+	for i, part := range parts {
+		next := filepath.Join(cur, part)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return filepath.Join(append([]string{cur}, parts[i:]...)...)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(next)
+			if err != nil {
+				return ""
+			}
+			if !filepath.IsAbs(link) {
+				link = filepath.Join(cur, link)
+			}
+			if cur = writeTarget(link, depth+1); cur == "" {
+				return ""
+			}
+			continue
+		}
+		cur = next
+	}
+	return cur
 }
 
 // ---- file.read ----
@@ -374,11 +454,16 @@ func (t *fileRead) Call(ctx context.Context, args json.RawMessage) (string, erro
 	}
 	b, err := os.ReadFile(p)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			captureFileExistence(ctx, p, false)
+		}
 		return "", err
 	}
+	captureFileExistence(ctx, p, true)
 	if !utf8.Valid(b) {
 		return "", errors.New("file is not UTF-8 text")
 	}
+	captureFileReadEvidence(ctx, p, b)
 	captureFileExcerpt(ctx, p, b, 1, 40)
 	return clip(string(b)), nil
 }
@@ -407,15 +492,31 @@ func (t *fileList) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
-	entries, err := os.ReadDir(p)
+	observation, body, err := ObserveDirectory(p)
 	if err != nil {
 		return "", err
 	}
+	if sink, _ := ctx.Value(rawSinkKey{}).(*RawSink); sink != nil {
+		sink.FileListing = observation
+	}
+	SetRaw(ctx, body)
+	return clip(body), nil
+}
+
+// ObserveDirectory uses the builtin listing format for first-party freshness checks.
+// Callers must authorize and scope path before calling it.
+func ObserveDirectory(path string) (*FileListingEvidence, string, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, "", err
+	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	complete := true
 	var b strings.Builder
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil {
+			complete = false
 			continue
 		}
 		kind := "file"
@@ -427,9 +528,11 @@ func (t *fileList) Call(ctx context.Context, args json.RawMessage) (string, erro
 		fmt.Fprintf(&b, "%s\t%s\t%d\n", kind, e.Name(), info.Size())
 	}
 	if b.Len() == 0 {
-		return "(empty directory)", nil
+		b.WriteString("(empty directory)")
 	}
-	return clip(b.String()), nil
+	body := b.String()
+	hash := sha256.Sum256([]byte(body))
+	return &FileListingEvidence{Path: path, SHA256: hex.EncodeToString(hash[:]), Entries: len(entries), Bytes: len(body), Complete: complete && len(body) <= maxOutput}, body, nil
 }
 
 // ---- file.write ----
@@ -451,6 +554,9 @@ func (*fileWrite) Assess(args json.RawMessage) (Risk, string) {
 	return RiskYellow, fmt.Sprintf("Write %d bytes to %s", len(a.Content), a.Path)
 }
 func (t *fileWrite) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := RequireWritable(ctx); err != nil {
+		return "", err
+	}
 	a, err := decode[struct{ Path, Content, Workspace string }](args)
 	if err != nil {
 		return "", err
@@ -483,10 +589,11 @@ func (t *fileWrite) Call(ctx context.Context, args json.RawMessage) (string, err
 // ---- shell.run ----
 
 type shellRun struct {
-	ws       *Workspaces
-	forbid   []string
-	skillEnv SkillEnvFunc
-	compute  compute.Runner
+	ws             *Workspaces
+	forbid         []string
+	skillEnv       SkillEnvFunc
+	skillReadPaths SkillReadPathsFunc
+	compute        compute.Runner
 	// sandbox confines host commands; nil means they run unconfined.
 	sandbox sandbox.Sandbox
 }
@@ -631,6 +738,9 @@ func discoveredToolPath(path, home string) string {
 }
 
 func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := RequireShell(ctx); err != nil {
+		return "", err
+	}
 	a, err := decode[struct {
 		Command        string
 		Workspace      string
@@ -647,7 +757,18 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	if scope == nil {
 		return "", ErrNoProject
 	}
+	if scope.RuntimeAgent {
+		if err := t.runtimeConfinementError(scope); err != nil {
+			return "", err
+		}
+	}
 	sandboxed := !scope.UseCompute && t.sandbox != nil
+	if scope.RestrictedChild && !scope.UseCompute && !sandboxed {
+		return "", errors.New("child shell blocked: enforceable workspace sandbox unavailable")
+	}
+	if scope.RestrictedChild && a.Skill != "" {
+		return "", errors.New("child shell skill environments are unavailable")
+	}
 	trusted := scope.TrustedAutonomy()
 	if !scope.AllowNet && !scope.UseCompute && !sandboxed && !trusted {
 		return "", errors.New("shell execution is blocked while network access is off unless the project's microVM is enabled, the host sandbox is available, or the chat's approval mode is auto_workspace/auto_all; host shell networking cannot be safely restricted otherwise")
@@ -686,7 +807,8 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		code, runErr := t.compute.Run(cctx, compute.Request{
 			Root: scope.Root, Dir: dir, Command: a.Command,
 			Network: scope.AllowNet, Timeout: int(timeout.Seconds()),
-			VCPUs: scope.ComputeVCPUs, MemoryMiB: scope.ComputeMemoryMiB,
+			RootReadOnly: scope.RuntimeAgent && scope.ShellReadOnly,
+			VCPUs:        scope.ComputeVCPUs, MemoryMiB: scope.ComputeMemoryMiB,
 			DiskLimitBytes: int64(scope.ComputeDiskMiB) << 20, Stdout: stdout, Stderr: stderr,
 		})
 		if runErr != nil {
@@ -698,6 +820,7 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	procutil.Prepare(cmd)
 	cmd.Dir = dir
 	cmd.Env = safeEnv()
+	var skillReadPaths []string
 	if a.Skill != "" {
 		if t.skillEnv == nil {
 			return "", errors.New("skills are not available")
@@ -707,14 +830,40 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 			return "", err
 		}
 		cmd.Env = env
+		if t.skillReadPaths != nil {
+			skillReadPaths, err = t.skillReadPaths(ctx, a.Skill)
+			if err != nil {
+				return "", err
+			}
+		}
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if sandboxed {
-		if err := t.sandbox.Wrap(cmd, sandbox.DefaultPolicy(scope.Root, scope.AllowNet)); err != nil {
+		policy := sandbox.DefaultPolicy(scope.Root, scope.AllowNet, skillReadPaths...)
+		if scope.RestrictedChild {
+			temp, err := os.MkdirTemp("", "umcode-child-command-")
+			if err != nil {
+				return "", err
+			}
+			defer os.RemoveAll(temp)
+			switch {
+			case scope.RuntimeAgent && scope.ShellReadOnly:
+				policy = sandbox.ReadOnlyChildPolicy(scope.Root, scope.AllowNet, temp)
+			case scope.RuntimeAgent:
+				policy = sandbox.AgentWritePolicy(scope.Root, scope.AllowNet, temp)
+			default:
+				policy = sandbox.IsolatedChildPolicy(scope.Root, scope.AllowNet, temp)
+			}
+			cmd.Env = append(cmd.Env, "TMPDIR="+temp, "TMP="+temp, "TEMP="+temp)
+		}
+		if err := t.sandbox.Wrap(cmd, policy); err != nil {
 			return "", fmt.Errorf("could not start the command sandbox: %w", err)
 		}
 	}
 	runErr := cmd.Run()
+	if cctx.Err() != nil {
+		MarkOutcomeUnknown(ctx)
+	}
 	code := 0
 	var ee *exec.ExitError
 	switch {
@@ -734,6 +883,23 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		out += sandboxHint(stdout.String()+stderr.String(), scope.AllowNet)
 	}
 	return out, nil
+}
+
+// runtimeConfinementError refuses a runtime agent's command unless the one
+// per-project confinement resolver confirms a microVM or OS sandbox. There is
+// no host fallback: the message names why the shell is unavailable.
+func (t *shellRun) runtimeConfinementError(scope *Scope) error {
+	if !scope.Confined {
+		return errors.New("shell is not available to this agent: no confirmed confinement")
+	}
+	switch ShellConfinement(scope, t.compute != nil, t.sandbox) {
+	case ConfMicroVM, ConfOSSandbox:
+		return nil
+	}
+	if scope.UseCompute {
+		return errors.New("shell is unavailable to this agent: the project microVM is unavailable (no fallback to the host)")
+	}
+	return errors.New("shell is unavailable to this agent: no sandbox available (no fallback to the host)")
 }
 
 // sandboxHint explains a failure that looks like the sandbox's doing, so the

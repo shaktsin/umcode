@@ -22,11 +22,15 @@ const (
 	MethodThreadSetApproval = "thread/setApprovalMode"
 	MethodThreadCompact     = "thread/compact"
 
-	MethodTurnDetails   = "turn/details"
-	MethodTurnStart     = "turn/start"
-	MethodTurnInterrupt = "turn/interrupt"
-	MethodPreviewList   = "preview/list"
-	MethodPreviewStop   = "preview/stop"
+	MethodTurnDetails      = "turn/details"
+	MethodTurnStart        = "turn/start"
+	MethodDelegationEnable = "delegation/enable"
+	MethodDelegationCancel = "delegation/cancel"
+	MethodDelegationList   = "delegation/list"
+	MethodDelegationFile   = "delegation/file"
+	MethodTurnInterrupt    = "turn/interrupt"
+	MethodPreviewList      = "preview/list"
+	MethodPreviewStop      = "preview/stop"
 
 	MethodApprovalList         = "approval/list"
 	MethodProjectMemoryList    = "project/memory/list"
@@ -179,9 +183,10 @@ type PreviewEvent struct {
 }
 
 type ThreadReadResult struct {
-	Thread Thread `json:"thread"`
-	Turns  []Turn `json:"turns"`
-	Items  []Item `json:"items"`
+	Compaction *CompactionState `json:"compaction,omitempty"`
+	Thread     Thread           `json:"thread"`
+	Turns      []Turn           `json:"turns"`
+	Items      []Item           `json:"items"`
 }
 
 type ThreadRenameParams struct {
@@ -251,11 +256,129 @@ type ComputerUseActParams struct {
 	Delta             int     `json:"delta,omitempty"`
 }
 
+type DelegationEnableResult struct {
+	ActivationToken string    `json:"activationToken"`
+	ExpiresAt       time.Time `json:"expiresAt"`
+}
+
+// MethodAgentSuggestionRespond is the app's answer to an agent.suggest card
+// (admin connections only).
+const MethodAgentSuggestionRespond = "agent/suggestion/respond"
+
+// Decisions for agent/suggestion/respond.
+const (
+	SuggestionEnable  = "enable"
+	SuggestionDecline = "decline"
+)
+
+// AgentSuggestion is a stored agent.suggest card: the model's request that
+// the user enable agents. It grants nothing by itself.
+type AgentSuggestion struct {
+	ID        string     `json:"id"`
+	ThreadID  string     `json:"threadId"`
+	TurnID    string     `json:"turnId"`
+	Reason    string     `json:"reason"`
+	State     string     `json:"state"` // pending | enabled | declined | expired
+	CreatedAt time.Time  `json:"createdAt"`
+	DecidedAt *time.Time `json:"decidedAt,omitempty"`
+}
+
+type AgentSuggestionRespondParams struct {
+	SuggestionID string `json:"suggestionId"`
+	Decision     string `json:"decision"` // enable | decline
+}
+
+// AgentSuggestionRespondResult carries the activation token only for the
+// first enable; the client submits it with the follow-up turn/start.
+type AgentSuggestionRespondResult struct {
+	Suggestion      AgentSuggestion `json:"suggestion"`
+	ActivationToken string          `json:"activationToken,omitempty"`
+	ExpiresAt       *time.Time      `json:"expiresAt,omitempty"`
+}
+
+// MethodAgentSuggestionGet reads one agent.suggest card's stored state
+// (pending, enabled, declined or expired). Read-only; admin connections only.
+const MethodAgentSuggestionGet = "agent/suggestion/get"
+
+type AgentSuggestionGetParams struct {
+	SuggestionID string `json:"suggestionId"`
+}
+
+// MethodAgentPlanGet reads one plan with its card and the card's approval
+// status (pending, approved, denied or expired). Read-only; admin
+// connections only.
+const MethodAgentPlanGet = "agent/plan/get"
+
+type AgentPlanGetParams struct {
+	PlanID string `json:"planId"`
+}
+
+// AgentPlanGetResult is the stored plan, the card as stored on its approval
+// (rebuilt from the plan when it has none) and that approval's ID and status.
+// A superseded plan has State superseded; its card reads expired (or denied
+// when it was answered before the newer proposal).
+type AgentPlanGetResult struct {
+	Plan               AgentPlan `json:"plan"`
+	Card               *PlanCard `json:"card,omitempty"`
+	ApprovalID         string    `json:"approvalId,omitempty"`
+	ApprovalStatus     string    `json:"approvalStatus,omitempty"`
+	ContinuationNeeded bool      `json:"continuationNeeded,omitempty"`
+}
+
+// MethodAgentPlanRespond is the app's answer to an agent.propose_plan card
+// (admin connections only): approve with optional per-agent model choices,
+// dropped agents and limits, decline, or revise with feedback for the lead.
+const MethodAgentPlanRespond = "agent/plan/respond"
+
+// NotifyAgentPlanUpdated is published on the thread after every plan state
+// change (proposed, superseded, decided) so clients refresh the card.
+const NotifyAgentPlanUpdated = "agent/plan/updated"
+
+// Decisions for agent/plan/respond.
+const (
+	PlanDecisionApprove = "approve"
+	PlanDecisionDecline = "decline"
+	PlanDecisionRevise  = "revise"
+)
+
+// AgentPlanRespondParams answers one plan card. Models maps an agent name to
+// a model of the task's pool; Drop removes agents (not all of them); Limits
+// replaces the plan's limits (clamped to the ceilings). Models, Drop and
+// Limits apply only to approve; Feedback is required for revise.
+type AgentPlanRespondParams struct {
+	PlanID   string            `json:"planId"`
+	Decision string            `json:"decision"`
+	Models   map[string]string `json:"models,omitempty"`
+	Drop     []string          `json:"drop,omitempty"`
+	Limits   *PlanLimits       `json:"limits,omitempty"`
+	Feedback string            `json:"feedback,omitempty"`
+}
+
+// AgentPlanRespondResult is the stored plan after the decision and the
+// status of its card's approval (approved, denied, expired or pending).
+type AgentPlanRespondResult struct {
+	Plan               AgentPlan `json:"plan"`
+	ApprovalStatus     string    `json:"approvalStatus"`
+	TaskID             string    `json:"taskId,omitempty"`
+	ContinuationNeeded bool      `json:"continuationNeeded,omitempty"`
+}
+
+// AgentPlanUpdated is the agent/plan/updated payload.
+type AgentPlanUpdated struct {
+	ThreadID       string    `json:"threadId"`
+	Plan           AgentPlan `json:"plan"`
+	ApprovalStatus string    `json:"approvalStatus,omitempty"`
+}
+
 type TurnStartParams struct {
-	ThreadID    string         `json:"threadId"`
-	Text        string         `json:"text"`
-	Attachments []Attachment   `json:"attachments,omitempty"`
-	Override    ModelSelection `json:"override,omitempty"`
+	Workbench                 *WorkbenchTurnContext `json:"workbench,omitempty"`
+	TaskIntent                *TaskIntentProposal   `json:"taskIntent,omitempty"`
+	DelegationActivationToken string                `json:"delegationActivationToken,omitempty"`
+	DelegationTaskID          string                `json:"delegationTaskId,omitempty"`
+	ThreadID                  string                `json:"threadId"`
+	Text                      string                `json:"text"`
+	Attachments               []Attachment          `json:"attachments,omitempty"`
+	Override                  ModelSelection        `json:"override,omitempty"`
 }
 
 type TurnStartResult struct {
@@ -384,6 +507,8 @@ type ComplexityDefaults struct {
 	Default Complexity         `json:"default"`
 	Presets []ComplexityPreset `json:"presets"`
 	Limits  ExecutionLimits    `json:"limits"`
+	// DefaultMaxOutputTokens is the output limit for models whose own maximum is unknown.
+	DefaultMaxOutputTokens int `json:"defaultMaxOutputTokens"`
 }
 
 // ItemDelta is streamed while an item is in progress.

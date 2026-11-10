@@ -16,8 +16,20 @@ llm:
 # Models shown in chat are configuration-led. Pools try enabled entries in
 # order and continue on quota or rate-limit failures.
 models:
-  default_complexity: auto
+  # Effort level: low | medium | high (default medium). The old keys
+  # default_complexity auto/quick/standard/deep and models.complexity.* are
+  # deprecated: they still load (auto/standard -> medium, quick -> low,
+  # deep -> high) with a warning, and max_output_tokens under them is ignored.
+  default_complexity: medium
+  # Output token limit when a model's own maximum is unknown (1024-1000000).
+  default_max_output_tokens: 32768
   default_pool: coding
+  # Optional cap on one agent task (the lead and all its agents together).
+  # 0 or omitted means no limit; set any of these to cap the task.
+  # agent_task_limits:
+  #   max_duration_minutes: 0
+  #   max_tokens: 0
+  #   max_cost_usd: 0
   configured:
     - id: claude-coding
       name: Claude coding
@@ -42,7 +54,8 @@ models:
 tools:
   host_sandbox: auto         # auto | off — confine host shell commands (Seatbelt on macOS, bubblewrap on Linux):
                              # writes only inside the project and temp/cache folders, no credential folders,
-                             # no network unless the project allows it
+                             # network follows default_network unless the project sets its own
+  default_network: true      # true (default) | false — sandboxed shell network when a project has no setting
 
   # Named sandboxed directories agents can operate in.
   # Each workspace has an independent ACL. Relative file paths are resolved

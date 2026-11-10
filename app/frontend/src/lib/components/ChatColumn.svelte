@@ -1,6 +1,8 @@
 <script lang="ts">
+ import CompactionProgress from './CompactionProgress.svelte';
+ import CapacityNotice from './CapacityNotice.svelte';
   import { tick } from 'svelte';
-  import { Sparkles, KeyRound, FolderPlus, Undo2, Check, Circle, LoaderCircle, FileText, ShieldCheck } from '@lucide/svelte';
+  import { Sparkles, KeyRound, FolderPlus, Undo2, Check, Circle, LoaderCircle, FileText, ChevronRight } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
   import { chat, type ThreadView } from '$lib/stores/chat.svelte';
   import { projects } from '$lib/stores/projects.svelte';
@@ -9,15 +11,22 @@
   import { usageLine, fmtUsd } from '$lib/format';
   import ItemView from './ItemView.svelte';
   import ChatError from './ChatError.svelte';
+  import { taskFailurePresentation, executionOutcomePresentation, isProvisionalExecution } from '$lib/taskOutcome';
   import ToolCall from './ToolCall.svelte';
-  import ApprovalCard from './ApprovalCard.svelte';
+  import { recordLine, recordsFor } from '$lib/approvalDock';
   import ComputerUseView from './ComputerUseView.svelte';
   import Composer from './Composer.svelte';
+  import Agents from './Agents.svelte';
   import type { Item, Turn, TaskWorkspaceResult } from '$lib/types';
   import { createProject } from '$lib/createProject';
+  import { completedTurnTime, formatTurnTime, progressPhrase } from '$lib/turnProgress';
+  import { compactionActive } from '$lib/compaction';
+  import { contextFromData, proposalFromData } from '$lib/workbench/assistant';
+  import WorkbenchProposal from './workbench/WorkbenchProposal.svelte';
 
-  let { view, variant = 'main' }: { view: ThreadView; variant?: 'main' | 'side' } = $props();
+  let { view, variant = 'main', workbenchMode = false }: { view: ThreadView; variant?: 'main' | 'side'; workbenchMode?: boolean } = $props();
 
+  const localModel = $derived(view.selection.provider === 'workbench_local');
   let scroller: HTMLDivElement | undefined = $state();
   let stick = true;
 
@@ -41,6 +50,15 @@
     }
     for (const t of view.turns) if (!byId.has(t.id)) out.push({ turnId: t.id, turn: t, items: [] });
     return out;
+  });
+
+  let progressNow = $state(Date.now());
+  const hasRunningTurn = $derived(groups.some((g) => g.turn?.status === 'running'));
+  $effect(() => {
+    if (!hasRunningTurn) return;
+    progressNow = Date.now();
+    const timer = window.setInterval(() => (progressNow = Date.now()), 1000);
+    return () => window.clearInterval(timer);
   });
 
   const hasKeys = $derived(app.credentials.some((c) => c.enabled));
@@ -69,14 +87,6 @@
   });
 
   $effect(() => {
-    const pending = app.approvals.find((approval) => approval.threadId === view.id);
-    if (!pending || view.loading) return;
-    tick().then(() => {
-      document.getElementById(`approval-${pending.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    });
-  });
-
-  $effect(() => {
     void view.id;
     stick = true;
   });
@@ -85,7 +95,7 @@
     const r = t.resolved || {};
     const m = app.models.find((x) => x.provider === r.provider && x.id === r.model);
     const name = m?.displayName || r.model || '';
-    const cx = r.complexity ? `${r.complexity}${t.autoPicked ? ' (auto)' : ''}` : '';
+    const cx = r.complexity ? r.complexity : '';
     return [name, cx].filter(Boolean).join(' · ');
   }
 
@@ -131,7 +141,6 @@
   let reviewedTurnId = $state('');
   let changesKept = $state(false);
   let workspaceDiscarded = $state(false);
-  let compacting = $state(false);
 
   $effect(() => {
     const id = latestTurn?.id ?? '';
@@ -158,23 +167,19 @@
   function workLogItems(g: Group): Item[] {
     const lastToolCall = Math.max(0, ...g.items.filter((i) => i.kind === 'toolCall').map((i) => i.seq));
     return g.items.filter((i) =>
-      i.kind === 'toolCall' || i.kind === 'fileChange' ||
+      i.kind === 'toolCall' || i.kind === 'fileChange' || isProvisionalExecution(i) ||
       (i.kind === 'agentMessage' && i.seq < lastToolCall && Boolean(i.text?.trim())),
     );
   }
 
   function progressText(item: Item): string {
-    const text = (item.text ?? '').trim();
+    const provisional = item.data && typeof item.data === "object" ? (item.data as { provisionalText?: unknown }).provisionalText : undefined;
+    const text = (isProvisionalExecution(item) && typeof provisional === 'string' ? provisional : item.text ?? '').trim();
     return text.length > 480 ? `${text.slice(0, 480).trimEnd()}…` : text;
   }
 
-  function currentActivity(g: Group): string {
-    if (app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId)) return 'Waiting for your approval';
-    const active = [...g.items].reverse().find((i) => i.kind === 'toolCall' && i.status === 'inProgress');
-    return active ? actionLabel(active) : 'Working through the request';
-  }
-
   function isVisibleChatMessage(item: Item): boolean {
+    if (isProvisionalExecution(item)) return false;
     return item.kind === 'userMessage' ||
       item.kind === 'contextCompaction' ||
       (item.kind === 'agentMessage' && Boolean(item.text?.trim()));
@@ -216,35 +221,12 @@
     }
   }
 
-  async function compactChat() {
-    if (!view.id || compacting || view.sending) return;
-    compacting = true;
-    try {
-      await app.try('thread/compact', { threadId: view.id }, 'Chat context compacted. Earlier messages remain visible.');
-    } finally {
-      compacting = false;
-    }
-  }
-
   async function openProject() {
     await createProject();
   }
-
-  const approvalLabel: Record<string, string> = {
-    '': 'Ask every time',
-    normal: 'Ask every time',
-    auto_workspace: 'Auto-approve workspace',
-    auto_all: 'Auto-approve all',
-  };
-
-  async function setApprovalMode(e: Event) {
-    if (!view.id) return;
-    const mode = (e.currentTarget as HTMLSelectElement).value as 'normal' | 'auto_workspace' | 'auto_all';
-    await app.try('thread/setApprovalMode', { threadId: view.id, mode });
-  }
 </script>
 
-<div class="flex-1 min-h-0 flex flex-col">
+<div class="flex-1 min-w-0 min-h-0 flex flex-col">
   {#if variant === 'main'}
     <header class="shrink-0 border-b border-line px-5 py-2.5 bg-paper/90">
       <div class="min-h-9 flex items-center gap-3">
@@ -260,18 +242,6 @@
           {:else}
             <span>No project</span><span>read-only workspace</span>
           {/if}
-          {#if view.thread}
-            <select
-              class="shrink-0 bg-transparent border border-line rounded px-1 py-0.5 text-[10px] text-muted hover:text-ink-soft"
-              title="Approval and auto-approve behavior for this chat"
-              value={view.thread.approvalMode || 'normal'}
-              onchange={setApprovalMode}
-            >
-              <option value="normal">{approvalLabel.normal}</option>
-              <option value="auto_workspace">{approvalLabel.auto_workspace}</option>
-              <option value="auto_all">{approvalLabel.auto_all}</option>
-            </select>
-          {/if}
         </div>
       </div>
       {#if view.thread?.usage?.requests}
@@ -279,11 +249,7 @@
           {fmtUsd(view.thread.usage.costUsd)} / {view.thread.usage.requests} requests
         </span>
       {/if}
-      {#if view.id}
-        <button class="btn-ghost btn-sm shrink-0" disabled={compacting || view.sending} title="Summarize earlier context for future turns; the transcript stays visible" onclick={compactChat}>
-          {compacting ? 'Compacting…' : 'Compact chat'}
-        </button>
-      {/if}
+
       </div>
       {#if latestTurn}
         <div class="mt-2 flex items-center gap-2 text-[10px]" aria-label="Chat lifecycle">
@@ -319,9 +285,11 @@
       <div class="h-full flex flex-col items-center justify-center text-center px-6">
         <Sparkles class="w-8 h-8 text-clay mb-3" />
         <h2 class="text-lg font-semibold">
-          {projects.active ? `What should we do in ${projects.active.name}?` : 'What can I help with?'}
+          {localModel ? 'Chat with your local model' : projects.active ? `What should we do in ${projects.active.name}?` : 'What can I help with?'}
         </h2>
-        {#if app.conn === 'open' && !hasKeys}
+        {#if localModel}
+          <p class="text-sm text-muted mt-2 max-w-md">This chat runs the trained checkpoint you promoted from Inference on your Mac. It supports text messages; response quality depends on its training.</p>
+        {:else if app.conn === 'open' && !hasKeys}
           <p class="text-sm text-muted mt-2 max-w-sm">Add an API key for Claude, OpenAI, Gemini or a local model server, or sign in with ChatGPT for OpenAI, to get started.</p>
           <button class="btn-primary mt-4" onclick={() => (app.view = 'settings')}><KeyRound class="w-4 h-4" />Connect a provider</button>
         {:else if !projects.active}
@@ -341,32 +309,73 @@
     {:else}
       <div class="{variant === 'main' ? 'max-w-3xl' : ''} mx-auto px-4 py-4 space-y-4">
         {#each groups as g (g.turnId)}
+          {@const taskFailure = taskFailurePresentation(g.items, g.turn?.error || '', g.turn?.status || '')}
+          {@const executionOutcome = executionOutcomePresentation(g.items, g.turn?.status || '')}
+          {@const completedTime = g.turn?.status === 'completed' ? completedTurnTime(g.turn.startedAt, g.turn.finishedAt) : null}
+          {@const usageText = usageLine(g.turn?.usage)}
           <section class="space-y-2.5 group/turn">
             {#each g.items as it, index (it.id)}
-              {#if it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim()))}
+              {@const modelContext = contextFromData(it.data)}
+              {@const proposal = it.status === 'completed' && it.kind === 'toolCall' ? proposalFromData(it.data) : null}
+              {#if !isProvisionalExecution(it) && !taskFailure.hiddenItemIds.includes(it.id) && (it.kind === 'userMessage' || it.kind === 'contextCompaction' || it.kind === 'error' || it.kind === 'inboundEvent' || it.kind === 'approval' || (it.kind === 'agentMessage' && Boolean(it.text?.trim())))}
                 {#if isVisibleChatMessage(it) && hasPreviousChatMessage(g, index)}
                   <div class="h-px bg-line/70 my-2" aria-hidden="true"></div>
                 {/if}
+                {#if modelContext}<p class="text-[10px] text-muted" data-submitted-model-context>{modelContext.modelName} · {modelContext.selectedNodeId ? `Layer ${modelContext.selectedNodeId}` : 'Whole model'} · Submitted draft</p>{/if}
                 <ItemView item={it} highlight={view.highlightItem === it.id} {view} />
               {/if}
+              {#if proposal}<WorkbenchProposal {proposal} />{/if}
             {/each}
-            {#each app.approvals.filter((approval) => approval.threadId === view.id && approval.turnId === g.turnId) as approval (approval.id)}
-              <section id={`approval-${approval.id}`} class="rounded-xl border border-amber-warm/40 bg-clay-soft/20 p-3 shadow-sm" aria-live="assertive">
-                <div class="flex items-center gap-2 mb-2">
-                  <ShieldCheck class="w-4 h-4 text-amber-warm" />
-                  <h3 class="text-sm font-semibold text-ink">Waiting for your approval</h3>
-                  <span class="ml-auto text-[10px] uppercase tracking-wide text-amber-warm">{approval.risk} risk</span>
-                </div>
-                <ApprovalCard {approval} chatContext />
-              </section>
-            {/each}
-            {#if g.turn?.status === 'running'}
-              <div class="flex items-center gap-2 text-xs text-muted" aria-live="polite">
-                {#if currentActivity(g) === 'Waiting for your approval'}<ShieldCheck class="w-3.5 h-3.5 text-amber-warm" />{:else}<LoaderCircle class="w-3.5 h-3.5 text-clay animate-spin motion-reduce:animate-none" />{/if}
-                <span>{currentActivity(g)}…</span>
+            {#if taskFailure.failure}
+              <ChatError text={taskFailure.text} details={[taskFailure.details, executionOutcome.details].filter(Boolean).join("\n\n")} />
+            {:else if executionOutcome.show}
+              <p class="text-xs text-muted" role="status">{executionOutcome.text}</p>
+            {/if}
+            {#each recordsFor(app.approvalRecords, view.id ?? '', g.turnId) as record (record.id)}
+              <div class="flex items-center gap-2 text-xs {record.decision === 'denied' ? 'text-rust' : 'text-sage'}">
+                <span aria-hidden="true">{record.decision === 'denied' ? '✕' : '✓'}</span><span>{recordLine(record)}</span>
               </div>
-            {:else if g.turn}
-              {#if g.turn.status === 'failed' && !g.items.some((item) => item.kind === 'error')}
+            {/each}
+            {#if g.turn?.status === 'running' && view.compaction?.turnId === g.turnId && compactionActive(view.compaction)}
+              <CompactionProgress state={view.compaction} now={progressNow} />
+            {:else if g.turn?.status === 'running'}
+              <details class="turn-progress text-sm text-muted">
+                <summary class="block border-b border-line/70 pb-1.5 cursor-pointer select-none hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+                  <span class="inline-flex max-w-full items-center gap-2">
+                    <span class="truncate" aria-live="polite">{progressPhrase(g.items, app.approvals.some((approval) => approval.threadId === view.id && approval.turnId === g.turnId && !approval.agentChildId))}</span>
+                    <ChevronRight class="turn-progress-chevron w-3.5 h-3.5 shrink-0 transition-transform" aria-hidden="true" />
+                    <span class="shrink-0 tabular-nums" title="Time working">{formatTurnTime(g.turn.startedAt, progressNow)}</span>
+                  </span>
+                </summary>
+                <div class="pt-2 text-[11px] text-muted">
+                  {#if workLogItems(g).length > 0}
+                    <ol class="ml-1 pl-4 border-l border-line space-y-2.5">
+                      {#each workLogItems(g) as action (action.id)}
+                        <li class="pl-1">
+                          {#if action.kind === 'agentMessage'}
+                            <div class="text-ink-soft">
+                              <span class="block text-[10px] uppercase tracking-wide text-faint">{isProvisionalExecution(action) ? 'Unverified model narration' : 'Progress update'}</span>
+                              <p class="mt-0.5 whitespace-pre-wrap">{progressText(action)}</p>
+                            </div>
+                          {:else if action.kind === 'toolCall' && action.tool}
+                            <ToolCall item={action} projectId={view.thread?.projectId} />
+                          {:else if action.kind === 'fileChange'}
+                            <button class="text-ink-soft hover:text-accent-strong hover:underline" onclick={() => inspector.openFile((action.data as { path?: string }).path ?? '', view.id ?? undefined, view.thread?.projectId)}>
+                              {actionLabel(action)}
+                            </button>
+                          {/if}
+                        </li>
+                      {/each}
+                    </ol>
+                  {:else}
+                    <p>No activity recorded yet.</p>
+                  {/if}
+                  <p class="mt-2 text-[10px] text-faint">Progress updates show observed actions; private model reasoning isn’t shown.</p>
+                </div>
+              </details>
+            {/if}
+            {#if g.turn && g.turn.status !== 'running'}
+              {#if g.turn.status === 'failed' && taskFailure.showTurnError && !g.items.some((item) => item.kind === 'error' && item.text === g.turn?.error)}
                 <ChatError text={g.turn.error || ''} />
               {/if}
               <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint [overflow-wrap:anywhere]">
@@ -382,8 +391,8 @@
                     <Undo2 class="w-3 h-3" />undo this turn
                   </button>
                 {/if}
-                {#if usageLine(g.turn.usage)}
-                  <span class="ml-auto" title="Tokens and cost for this turn">{usageLine(g.turn.usage)}</span>
+                {#if completedTime || usageText}
+                  <span class="ml-auto tabular-nums" title={completedTime ? 'Time taken, tokens and cost for this turn' : 'Tokens and cost for this turn'}>{[completedTime, usageText].filter(Boolean).join(' · ')}</span>
                 {/if}
               </div>
             {/if}
@@ -409,7 +418,7 @@
             {:else if g.turn && g.turn.id === latestTurn?.id && threadProject && view.thread?.workspaceMode !== 'worktree' && g.items.some((i) => i.kind === 'fileChange')}
               <div class="text-[11px] text-muted">Changes are already in the project folder.</div>
             {/if}
-            {#if g.turn && g.turn.status !== 'running' && workLogItems(g).length > 0}
+            {#if g.turn && g.turn.status !== 'running' && g.turn.status !== 'completed' && workLogItems(g).length > 0}
               <details class="text-[11px] text-muted">
                 <summary class="w-fit cursor-pointer select-none hover:text-ink">Work log · {workLogItems(g).length} updates and actions</summary>
                 <ol class="mt-2 ml-1 pl-4 border-l border-line space-y-2.5">
@@ -417,7 +426,7 @@
                     <li class="pl-1">
                       {#if action.kind === 'agentMessage'}
                         <div class="text-ink-soft">
-                          <span class="block text-[10px] uppercase tracking-wide text-faint">Progress update</span>
+                          <span class="block text-[10px] uppercase tracking-wide text-faint">{isProvisionalExecution(action) ? 'Unverified model narration' : 'Progress update'}</span>
                           <p class="mt-0.5 whitespace-pre-wrap">{progressText(action)}</p>
                         </div>
                       {:else if action.kind === 'toolCall' && action.tool}
@@ -439,5 +448,17 @@
     {/if}
   </div>
 
-  <Composer {view} compact={variant === 'side'} />
+  <div class="shrink-0 px-4">
+    <div class="{variant === 'main' ? 'max-w-3xl' : ''} mx-auto">
+      {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} onsend={(text) => void view.submitFollowUp(text, 'resolve')} resolveQueued={view.queuedResolve} />{/if}
+      <CapacityNotice selection={view.selection} />
+    </div>
+  </div>
+  <Composer {view} compact={workbenchMode || variant === 'side'} {workbenchMode} />
 </div>
+
+<style>
+  .turn-progress > summary { list-style: none; }
+  .turn-progress > summary::-webkit-details-marker { display: none; }
+  .turn-progress[open] :global(.turn-progress-chevron) { transform: rotate(90deg); }
+</style>

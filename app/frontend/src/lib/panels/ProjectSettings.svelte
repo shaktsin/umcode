@@ -3,6 +3,7 @@
   import { projects } from '$lib/stores/projects.svelte';
   import { chat } from '$lib/stores/chat.svelte';
   import { app } from '$lib/stores/app.svelte';
+  import { inspector } from '$lib/stores/inspector.svelte';
   import { dialog } from '$lib/stores/dialog.svelte';
   import ModelPicker from '$lib/components/ModelPicker.svelte';
   import type { ModelSelection } from '$lib/types';
@@ -118,6 +119,11 @@
       <AlertTriangle class="w-4 h-4" />This folder is gone from disk. Chats in it can still be read, but nothing can run.
     </div>
   {/if}
+
+  <div class="card p-4 mb-5 flex flex-wrap items-center gap-3">
+    <div class="flex-1 min-w-0"><div class="text-sm font-medium">Project instructions</div><p class="text-xs text-muted mt-1">UMCODE.md is created automatically when this project opens. Existing instructions are preserved. AGENTS.md and CLAUDE.md are not imported automatically.</p></div>
+    <button class="btn-outline btn-sm" onclick={() => inspector.openFile('UMCODE.md',undefined,p.id)}>Open UMCODE.md</button>
+  </div>
 
   <div class="grid grid-cols-2 gap-3 mb-5">
     <div class="card p-3">

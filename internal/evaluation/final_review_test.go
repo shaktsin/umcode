@@ -113,7 +113,7 @@ func TestFinalModelValidation(t *testing.T) {
 	if err := Validate(m); err != nil {
 		t.Fatal("ordinary provider ID rejected", err)
 	}
-	m.Models[0].Reasoning = "high"
+	m.Models[0].Reasoning = "extreme"
 	if Validate(m) == nil {
 		t.Fatal("unsupported complexity accepted")
 	}

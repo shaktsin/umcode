@@ -21,6 +21,7 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/secrets"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/teststore"
 	"github.com/shaktsin/umcode/internal/tools"
 	"github.com/shaktsin/umcode/internal/work"
 )
@@ -327,7 +328,7 @@ func TestMemoryRecoveryStartupGateAndFailure(t *testing.T) {
 	for _, auto := range []bool{false, true} {
 		for _, designed := range []bool{false, true} {
 			t.Run(strings.Join([]string{map[bool]string{true: "auto", false: "off"}[auto], map[bool]string{true: "designed", false: "legacy"}[designed]}, "_"), func(t *testing.T) {
-				st, err := store.Open(t.Context(), ":memory:")
+				st, err := teststore.Open(t.Context(), filepath.Join(t.TempDir(), "memory-recovery.db"))
 				if err != nil {
 					t.Fatal(err)
 				}

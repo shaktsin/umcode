@@ -7,6 +7,8 @@
   import { inspector } from '$lib/stores/inspector.svelte';
   import ToolCall from './ToolCall.svelte';
   import ChatError from './ChatError.svelte';
+  import AgentPlan from './AgentPlan.svelte';
+  import { parsePlanResult, planIdForItem } from '$lib/agentPlanCard';
 
   let { item, highlight = false, view }: { item: Item; highlight?: boolean; view?: ThreadView } = $props();
   let showThinking = $state(false);
@@ -15,6 +17,13 @@
   let actionsOpen = $state(false);
 
   const html = $derived(item.kind === 'agentMessage' ? renderMarkdown(item.text || '') : '');
+  // agent.propose_plan renders as a card once its result or pending plan card names an id;
+  // a refusal or a failed call stays an ordinary tool row.
+  const agentCard = $derived.by(() => {
+    if (item.kind !== 'toolCall' || !item.tool || !view) return null;
+    if (item.tool.name === 'agent.propose_plan' && (planIdForItem(item, app.approvals) || parsePlanResult(item.tool.output)?.state)) return 'plan';
+    return null;
+  });
   const change = $derived(item.kind === 'fileChange' ? (item.data as FileChangeData) : null);
 
   async function copyMessage() {
@@ -60,7 +69,7 @@
               <button class="p-1 text-faint hover:text-ink opacity-70 sm:opacity-0 group-hover/item:opacity-100 focus:opacity-100" aria-label="Response actions" aria-haspopup="menu" aria-expanded={actionsOpen} onclick={() => (actionsOpen = !actionsOpen)}><MoreHorizontal class="w-3.5 h-3.5" /></button>
               {#if actionsOpen}
                 <div class="absolute right-0 bottom-full z-30 w-40 popover py-1 text-xs" role="menu">
-                  <button class="menu-item" role="menuitem" onclick={() => { actionsOpen = false; void inspector.openTurnDetails(view!.id!, item.turnId); }}>Turn details</button>
+                  <button class="menu-item" role="menuitem" onclick={() => { actionsOpen = false; void inspector.openTurnDetails(view!.id!, item.turnId, view?.thread?.projectId); }}>Turn details</button>
                 </div>
               {/if}
             </div>
@@ -88,8 +97,10 @@
       </button>
       {#if showSummary}<p class="mt-2 whitespace-pre-wrap selectable text-ink-soft">{item.text}</p>{/if}
     </section>
+  {:else if agentCard === 'plan' && view}
+    <AgentPlan {item} {view} />
   {:else if item.kind === 'toolCall' && item.tool}
-    <ToolCall {item} />
+    <ToolCall {item} projectId={view?.thread?.projectId} />
   {:else if change}
     <div class="rounded-lg border border-line bg-surface/60 text-xs overflow-hidden">
       <div class="flex items-center gap-2 px-3 py-1.5 min-w-0">
@@ -105,7 +116,7 @@
         </button>
         <span class="text-sage shrink-0">+{change.additions}</span>
         <span class="text-rust shrink-0">−{change.deletions}</span>
-        <button class="text-faint hover:text-ink shrink-0" onclick={() => inspector.openDiff(change)}>Diff</button>
+        <button class="text-faint hover:text-ink shrink-0" onclick={() => inspector.openDiff(change, item.threadId, view?.thread?.projectId)}>Diff</button>
       </div>
     </div>
   {:else if item.kind === 'inboundEvent'}

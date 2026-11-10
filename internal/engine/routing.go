@@ -180,29 +180,17 @@ func (e *Engine) poolModels(id string) (protocol.ModelPool, []protocol.Configure
 	return protocol.ModelPool{}, nil, fmt.Errorf("model pool %q is not configured", id)
 }
 
-// configuredFrom is the approved list with one model pulled to the front: what
-// a chat pinned to a single model may fall back to if that model fails.
+// configuredFrom pins a direct choice. Other models require an explicit pool.
 func (e *Engine) configuredFrom(provider, model string) []protocol.ConfiguredModel {
-	c := e.RoutingConfig()
 	head := protocol.ConfiguredModel{ID: provider + "/" + model, Provider: provider, Model: model, Enabled: true}
-	out := []protocol.ConfiguredModel{head}
-	for _, m := range c.Models {
-		if !m.Enabled || (m.Provider == provider && m.Model == model) {
-			continue
-		}
-		out = append(out, m)
-	}
-	for _, m := range c.Models {
-		if m.Provider == provider && m.Model == model && m.Name != "" {
-			out[0].Name = m.Name
+	for _, m := range e.RoutingConfig().Models {
+		if m.Provider == provider && m.Model == model {
+			head = m
+			head.Enabled = true
+			break
 		}
 	}
-	// Nothing configured at all: let the catalog decide, as it did before the
-	// registry existed.
-	if len(out) == 1 && len(c.Models) == 0 {
-		return nil
-	}
-	return out
+	return []protocol.ConfiguredModel{head}
 }
 
 // candidateSet is what a selection resolves to before the router sees it: the
@@ -254,9 +242,7 @@ func (e *Engine) pickCandidates(sel protocol.ModelSelection) (candidateSet, erro
 	if model == "" {
 		return out, fmt.Errorf("no model selected for %s; pick one in the chat or set a default in Settings", provider)
 	}
-	// Outside a pool the approved list is still the candidate set, with the
-	// chosen model at its head, so a fallback never reaches for something the
-	// user never approved.
+	// A direct selection remains confined to this model.
 	out.provider, out.model = provider, model
 	out.candidates = e.configuredFrom(provider, model)
 	return out, nil

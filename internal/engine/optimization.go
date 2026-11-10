@@ -60,14 +60,21 @@ func (e *Engine) resolveOptimizationPolicy(ctx context.Context) (optimization.Po
 
 func (e *Engine) resolveOptimizationSnapshot(ctx context.Context) (optimization.Policy, string, error) {
 	if e.evaluationPolicy != nil {
-		return *e.evaluationPolicy, "evaluation", nil
+		return e.constrainOptimization(*e.evaluationPolicy), "evaluation", nil
 	}
 	p, setting, err := e.optimizationSetting(ctx)
-	return p, setting.Source, err
+	return e.constrainOptimization(p), setting.Source, err
 }
 func (e *Engine) optimizationPolicy(ctx context.Context) optimization.Policy {
 	if p, ok := optimization.FromContext(ctx); ok {
-		return p
+		return e.constrainOptimization(p)
 	}
-	return e.legacyOptimizationPolicy()
+	return e.constrainOptimization(e.legacyOptimizationPolicy())
+}
+
+func (e *Engine) constrainOptimization(p optimization.Policy) optimization.Policy {
+	if e.Cfg != nil && e.Cfg.Policy.RequireWorkflowApproval {
+		p.AutomaticWorkflow = false
+	}
+	return p
 }

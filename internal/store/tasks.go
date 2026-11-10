@@ -36,7 +36,7 @@ func scanTask(sc interface{ Scan(...any) error }) (protocol.Task, error) {
 		return t, err
 	}
 	_ = json.Unmarshal([]byte(sched), &t.Schedule)
-	t.Settings.Complexity = protocol.Complexity(cplx)
+	t.Settings.Complexity = protocol.NormalizeComplexity(cplx)
 	t.NextRunAt, t.LastRunAt = nullTime(next), nullTime(last)
 	t.CreatedAt = ParseTime(created)
 	return t, nil

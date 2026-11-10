@@ -177,7 +177,7 @@ func Validate(m Manifest) error {
 	}
 	models := map[string]bool{}
 	for _, model := range m.Models {
-		if !validModelID(model.ID) || models[model.ID] || !supportedProvider(model.Provider) || (model.Reasoning != "quick" && model.Reasoning != "standard" && model.Reasoning != "deep") || model.Window <= 0 || model.Window > 10000000 || model.MaxOutput <= 0 || model.MaxOutput > model.Window || !finite(model.Price.Input) || !finite(model.Price.Cached) || !finite(model.Price.Output) || model.Price.Cached > model.Price.Input || len(model.Routes) > 0 {
+		if !validModelID(model.ID) || models[model.ID] || !supportedProvider(model.Provider) || !validReasoning(model.Reasoning) || model.Window <= 0 || model.Window > 10000000 || model.MaxOutput <= 0 || model.MaxOutput > model.Window || !finite(model.Price.Input) || !finite(model.Price.Cached) || !finite(model.Price.Output) || model.Price.Cached > model.Price.Input || len(model.Routes) > 0 {
 			return fail("model/prices")
 		}
 		models[model.ID] = true
@@ -248,4 +248,14 @@ func validModelID(id string) bool {
 }
 func supportedProvider(id string) bool {
 	return id == "claude" || id == "openai" || id == "openai_compatible" || id == "gemini"
+}
+
+// validReasoning accepts the effort levels and the legacy names older
+// manifests carry.
+func validReasoning(s string) bool {
+	switch s {
+	case "low", "medium", "high", "quick", "standard", "deep":
+		return true
+	}
+	return false
 }
