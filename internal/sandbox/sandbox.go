@@ -8,6 +8,8 @@
 package sandbox
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +30,9 @@ type Policy struct {
 	DenyRead []string
 	// ReadOnlyInRoot are paths inside Root that stay read-only (git hooks).
 	ReadOnlyInRoot []string
+	// RootReadOnly mounts/allows Root read-only. Writable entries stay
+	// writable; nothing under Root can be created, changed or removed.
+	RootReadOnly bool
 }
 
 // Sandbox rewrites a prepared command so it runs confined.
@@ -237,4 +242,71 @@ func IsolatedChildPolicy(root string, network bool, temporary string) Policy {
 	}
 	p.Readable = dedupe(reads)
 	return p
+}
+
+// gitDirReadOnly lists the whole repository metadata directory so an agent
+// cannot commit, rewrite config/hooks or delete refs. Agent policies only; the
+// lead keeps the narrower .git/hooks and .git/config rules.
+func gitDirReadOnly(root string) []string {
+	if d := filepath.Join(root, ".git"); exists(d) {
+		return []string{realPathOrSelf(d)}
+	}
+	return nil
+}
+
+// ReadOnlyChildPolicy is IsolatedChildPolicy with the whole project root
+// read-only (including all of .git). Only the command-private temporary
+// directory is writable.
+func ReadOnlyChildPolicy(root string, network bool, temporary string) Policy {
+	p := IsolatedChildPolicy(root, network, temporary)
+	p.RootReadOnly = true
+	p.ReadOnlyInRoot = gitDirReadOnly(p.Root)
+	return p
+}
+
+// AgentWritePolicy is IsolatedChildPolicy for a write-capable agent: the
+// checkout is writable except for the whole .git directory.
+func AgentWritePolicy(root string, network bool, temporary string) Policy {
+	p := IsolatedChildPolicy(root, network, temporary)
+	p.ReadOnlyInRoot = gitDirReadOnly(p.Root)
+	return p
+}
+
+// SelfCheckReadOnly proves that sb really enforces RootReadOnly on this host:
+// a file in a scratch root can be read, but creating one fails and leaves the
+// root unchanged. It returns an error when sb is nil.
+func SelfCheckReadOnly(sb Sandbox, tmp string) error {
+	if sb == nil {
+		return errors.New("sandbox: no sandbox available for the read-only self-check")
+	}
+	root, err := os.MkdirTemp(tmp, "umcode-ro-root-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(root)
+	scratch, err := os.MkdirTemp(tmp, "umcode-ro-tmp-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(scratch)
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("ok"), 0o644); err != nil {
+		return err
+	}
+	p := ReadOnlyChildPolicy(root, false, scratch)
+	run := func(script string) error {
+		cmd := exec.Command("/bin/sh", "-c", script)
+		cmd.Dir = p.Root
+		if err := sb.Wrap(cmd, p); err != nil {
+			return err
+		}
+		return cmd.Run()
+	}
+	if err := run("cat a.txt"); err != nil {
+		return fmt.Errorf("sandbox read-only self-check: reading a file failed: %w", err)
+	}
+	_ = run("echo x > b.txt")
+	if exists(filepath.Join(root, "b.txt")) {
+		return errors.New("sandbox read-only self-check: a file was created in the read-only root")
+	}
+	return nil
 }

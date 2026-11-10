@@ -28,17 +28,18 @@ type BundledRunner struct {
 func NewBundledRunner() *BundledRunner { return &BundledRunner{} }
 
 type GuestRequest struct {
-	Version   int    `json:"version"`
-	RootFS    string `json:"rootfs"`
-	Root      string `json:"root"`
-	Dir       string `json:"dir"`
-	Command   string `json:"command"`
-	Network   bool   `json:"network"`
-	Timeout   int    `json:"timeoutSeconds,omitempty"`
-	VCPUs     int    `json:"vcpus"`
-	MemoryMiB int    `json:"memoryMiB"`
-	HostPort  int    `json:"hostPort,omitempty"`
-	GuestPort int    `json:"guestPort,omitempty"`
+	Version      int    `json:"version"`
+	RootFS       string `json:"rootfs"`
+	Root         string `json:"root"`
+	Dir          string `json:"dir"`
+	Command      string `json:"command"`
+	Network      bool   `json:"network"`
+	RootReadOnly bool   `json:"rootReadOnly,omitempty"`
+	Timeout      int    `json:"timeoutSeconds,omitempty"`
+	VCPUs        int    `json:"vcpus"`
+	MemoryMiB    int    `json:"memoryMiB"`
+	HostPort     int    `json:"hostPort,omitempty"`
+	GuestPort    int    `json:"guestPort,omitempty"`
 }
 
 func (r GuestRequest) Validate() error {
@@ -79,6 +80,24 @@ func (r GuestRequest) Validate() error {
 		}
 	}
 	return nil
+}
+
+// GuestMount describes one guest-visible filesystem: HostPath is empty for the
+// scratch area, which lives in the per-run copy of the guest root.
+type GuestMount struct {
+	HostPath  string
+	GuestPath string
+	ReadOnly  bool
+}
+
+// Mounts lists what the guest sees: the project root at /workspace (read-only
+// when RootReadOnly) and the always-writable /tmp scratch. A single share
+// cannot make a subdirectory such as .git read-only inside a writable root.
+func (r GuestRequest) Mounts() []GuestMount {
+	return []GuestMount{
+		{HostPath: r.Root, GuestPath: "/workspace", ReadOnly: r.RootReadOnly},
+		{GuestPath: "/tmp"},
+	}
 }
 
 type bundledPreview struct {
@@ -274,7 +293,7 @@ func validateRequest(r Request) (GuestRequest, error) {
 	if err != nil {
 		return GuestRequest{}, err
 	}
-	return GuestRequest{Version: 1, Root: root, Dir: dir, Command: r.Command, Network: r.Network,
+	return GuestRequest{Version: 1, Root: root, Dir: dir, Command: r.Command, Network: r.Network, RootReadOnly: r.RootReadOnly,
 		Timeout: r.Timeout, VCPUs: resources.VCPUs, MemoryMiB: resources.MemoryMiB}, nil
 }
 

@@ -195,3 +195,98 @@ func TestBwrapReadablePolicyResolvesCommandDirectory(t *testing.T) {
 		t.Fatalf("command directory points outside canonical project mount: %v", args[len(args)-2:])
 	}
 }
+
+func TestBwrapArgsReadOnlyRootUsesRoBind(t *testing.T) {
+	root := t.TempDir()
+	tmp := t.TempDir()
+	p := Policy{Root: root, Readable: []string{root, tmp}, Writable: []string{tmp}, RootReadOnly: true}
+	args := strings.Join(bwrapArgs(p, root), " ")
+	if !strings.Contains(args, "--ro-bind "+root+" "+root) {
+		t.Errorf("root must be bound read-only: %s", args)
+	}
+	if strings.Contains(args, "--bind "+root+" "+root) {
+		t.Errorf("root must not be bound writable: %s", args)
+	}
+	if !strings.Contains(args, "--bind "+tmp+" "+tmp) {
+		t.Errorf("writable temporary must stay writable: %s", args)
+	}
+	p.RootReadOnly = false
+	if args := strings.Join(bwrapArgs(p, root), " "); !strings.Contains(args, "--bind "+root+" "+root) {
+		t.Errorf("default policy must keep the root writable: %s", args)
+	}
+}
+
+func TestSeatbeltProfileReadOnlyRootOmitsRootWrite(t *testing.T) {
+	p := Policy{Root: "/work/proj", Writable: []string{"/private/tmp/x"}, RootReadOnly: true}
+	prof, err := seatbeltProfile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := strings.Index(prof, "(allow file-write*")
+	if i < 0 {
+		t.Fatalf("no write allow rule:\n%s", prof)
+	}
+	rules := prof[i:]
+	if strings.Contains(rules, `(subpath "/work/proj")`) {
+		t.Errorf("root must not be writable:\n%s", prof)
+	}
+	if !strings.Contains(rules, `(subpath "/private/tmp/x")`) {
+		t.Errorf("temporary must stay writable:\n%s", prof)
+	}
+}
+
+func TestReadOnlyChildPolicyKeepsReadableAndTemporaryWritable(t *testing.T) {
+	root := t.TempDir()
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git", "refs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := ReadOnlyChildPolicy(root, false, tmp)
+	iso := IsolatedChildPolicy(root, false, tmp)
+	if !p.RootReadOnly || iso.RootReadOnly {
+		t.Fatalf("RootReadOnly: readonly=%v isolated=%v", p.RootReadOnly, iso.RootReadOnly)
+	}
+	if len(p.Writable) != 1 || p.Writable[0] != realPath(tmp) {
+		t.Errorf("only the temporary may be writable: %v", p.Writable)
+	}
+	if strings.Join(p.Readable, "\n") != strings.Join(iso.Readable, "\n") {
+		t.Errorf("readable set must match the isolated policy:\n%v\n%v", p.Readable, iso.Readable)
+	}
+	var gitRO bool
+	for _, ro := range p.ReadOnlyInRoot {
+		if ro == filepath.Join(realPath(root), ".git") {
+			gitRO = true
+		}
+	}
+	if !gitRO {
+		t.Errorf("whole .git must be read-only: %v", p.ReadOnlyInRoot)
+	}
+}
+
+func TestAgentWritePolicyProtectsWholeDotGit(t *testing.T) {
+	root := t.TempDir()
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := AgentWritePolicy(root, false, tmp)
+	if p.RootReadOnly {
+		t.Error("write-capable agent keeps a writable root")
+	}
+	if len(p.ReadOnlyInRoot) != 1 || p.ReadOnlyInRoot[0] != filepath.Join(realPath(root), ".git") {
+		t.Errorf("ReadOnlyInRoot = %v", p.ReadOnlyInRoot)
+	}
+	// The lead's policies keep their existing behaviour.
+	if d := DefaultPolicy(root, false); len(d.ReadOnlyInRoot) != 0 && strings.HasSuffix(d.ReadOnlyInRoot[0], ".git") {
+		t.Errorf("DefaultPolicy must not protect all of .git: %v", d.ReadOnlyInRoot)
+	}
+	if iso := IsolatedChildPolicy(root, false, tmp); len(iso.ReadOnlyInRoot) != 0 && strings.HasSuffix(iso.ReadOnlyInRoot[0], ".git") {
+		t.Errorf("IsolatedChildPolicy must not protect all of .git: %v", iso.ReadOnlyInRoot)
+	}
+}
+
+func TestSelfCheckReadOnlyRequiresSandbox(t *testing.T) {
+	if err := SelfCheckReadOnly(nil, t.TempDir()); err == nil {
+		t.Fatal("nil sandbox must fail the self-check")
+	}
+}

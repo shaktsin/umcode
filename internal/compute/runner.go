@@ -8,10 +8,13 @@ import (
 )
 
 type Request struct {
-	Root           string
-	Dir            string
-	Command        string
-	Network        bool
+	Root    string
+	Dir     string
+	Command string
+	Network bool
+	// RootReadOnly shares the project root with the guest read-only; the
+	// guest's own /tmp scratch stays writable.
+	RootReadOnly   bool
 	Timeout        int
 	VCPUs          int
 	MemoryMiB      int
