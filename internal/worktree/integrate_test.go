@@ -359,9 +359,9 @@ func TestIntegrationScanRefusesForbiddenEntries(t *testing.T) {
 	for name, entry := range cases {
 		t.Run(name, func(t *testing.T) {
 			result := commitWith(entry)
-			entries, err := scanRevision(context.Background(), ws.Path, f.base, result)
+			_, err := scanRevision(context.Background(), ws.Path, f.base, result)
 			if err == nil {
-				err = checkSymlinks(context.Background(), f.parent, ws.Path, f.baseTree(t), entries)
+				err = checkSymlinks(context.Background(), f.parent, ws.Path, result+"^{tree}", nil)
 			}
 			if name == "inside is legal" {
 				if err != nil {
@@ -532,4 +532,262 @@ func gitStdin(t *testing.T, dir, stdin string, args ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, data)
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// I1: symlinks resolving into repository metadata are as dangerous as ones
+// escaping the checkout: writing through them rewrites config or hooks.
+func TestApplyOnIntegratedRefusesLinksIntoGitMetadata(t *testing.T) {
+	for _, target := range []string{".git/config", ".git", "sub/../.git", "sub/../.git/hooks", ".GIT", ".Git/config", ".git./config", "git~1/config", ".g\u200cit/config"} {
+		t.Run(target, func(t *testing.T) {
+			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "sub/x.go": "x\n"})
+			result := f.agent(t, "agent", func(dir string) {
+				if err := os.Symlink(target, filepath.Join(dir, "cfg")); err != nil {
+					t.Fatal(err)
+				}
+			})
+			before := parentSnapshot(t, f.parent)
+			_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+			if err == nil || !strings.Contains(err.Error(), "repository metadata") {
+				t.Fatalf("symlink to %q must be refused as resolving into metadata, got %v", target, err)
+			}
+			assertUnchanged(t, f.parent, before)
+		})
+	}
+}
+
+// I1: plain paths with metadata-equivalent names (case, NTFS/HFS variants) are
+// refused even though ordinary Git cannot check them out. The agent checkout's
+// HEAD is moved to a plumbing-built commit, which hardened validation accepts.
+func TestApplyOnIntegratedRefusesDotGitVariantPaths(t *testing.T) {
+	for _, dir := range []string{".GIT", ".Git", ".git", "git~1", ".git. ", ".gi\u200ct"} {
+		t.Run(dir, func(t *testing.T) {
+			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n"})
+			f.agent(t, "agent", func(string) {})
+			ws, err := f.m.Lookup(context.Background(), "agent", f.parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blob := gitStdin(t, ws.Path, "[core]\n", "hash-object", "-w", "--stdin")
+			inner := gitStdin(t, ws.Path, "100644 blob "+blob+"\tconfig\n", "mktree")
+			listing := git(t, ws.Path, "ls-tree", f.base+"^{tree}")
+			tree := gitStdin(t, ws.Path, listing+"\n040000 tree "+inner+"\t"+dir+"\n", "mktree")
+			result := git(t, ws.Path, "-c", "user.name=A", "-c", "user.email=a@b", "commit-tree", "-p", f.base, "-m", "x", tree)
+			git(t, ws.Path, "update-ref", "HEAD", result)
+			before := parentSnapshot(t, f.parent)
+			_, err = f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+			if err == nil || !strings.Contains(err.Error(), "forbidden path") {
+				t.Fatalf("path under %q should be refused as forbidden, got %v", dir, err)
+			}
+			assertUnchanged(t, f.parent, before)
+		})
+	}
+}
+
+func TestIsDotGitName(t *testing.T) {
+	for name, want := range map[string]bool{
+		".git": true, ".GIT": true, ".Git": true, ".git.": true, ".git ": true, ".git. .": true, "git~1": true, "GIT~1": true,
+		".g\u200cit": true, "\ufeff.git": true, ".git::$INDEX_ALLOCATION": true, "sub\\.git": true, "sub\\x": false,
+		".gitignore": false, ".github": false, "git": false, "x.git": false, ".gitmodules": false,
+	} {
+		if got := isDotGit(name); got != want {
+			t.Fatalf("isDotGit(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// I2: agent configuration that appears after the metadata check must never
+// be executed by any later Git call, and the late change must be refused.
+func TestApplyOnIntegratedConfigSwappedAfterValidation(t *testing.T) {
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", ".gitattributes": "*.go filter=evil diff=evil\n"})
+	result := f.agent(t, "agent", func(dir string) {
+		write(t, dir, "a.go", "a2\n")
+		if err := os.Symlink("a.go", filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	ws, err := f.m.Lookup(context.Background(), "agent", f.parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "pwned")
+	cmd := "touch " + marker
+	integrateHook = func(stage string) {
+		if stage != "validated" {
+			return
+		}
+		cfg, err := os.OpenFile(filepath.Join(ws.Path, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(cfg, "[core]\n\tfsmonitor = %s\n\tpager = %s\n\thooksPath = %s\n[diff]\n\texternal = %s\n[diff \"evil\"]\n\tcommand = %s\n\ttextconv = %s\n[filter \"evil\"]\n\tclean = %s\n\tsmudge = %s\n",
+			cmd, cmd, t.TempDir(), cmd, cmd, cmd, cmd, cmd)
+		if err := cfg.Close(); err != nil {
+			t.Fatal(err)
+		}
+		// Make the dirty-check path tempting too: an unstaged edit would make
+		// `git status` run fsmonitor and the clean filter.
+		write(t, ws.Path, "a.go", "dirty\n")
+	}
+	defer func() { integrateHook = nil }()
+	before := parentSnapshot(t, f.parent)
+	_, err = f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+	if err == nil || !strings.Contains(err.Error(), "unsupported private Git configuration") {
+		t.Fatalf("configuration changed after validation must be refused by the final metadata check, got %v", err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("agent configuration written after validation executed a command")
+	}
+	assertUnchanged(t, f.parent, before)
+}
+
+// M2: only genuine content conflicts are ConflictErrors; a held index lock is
+// an ordinary (retryable) error and leaves the parent unchanged.
+func TestApplyOnIntegratedIndexLockIsNotConflict(t *testing.T) {
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n"})
+	result := f.agent(t, "agent", func(dir string) { write(t, dir, "a.go", "a2\n") })
+	before := parentSnapshot(t, f.parent)
+	lock := filepath.Join(f.parent, ".git", "index.lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+	var conflict *ConflictError
+	if err == nil || errors.As(err, &conflict) {
+		t.Fatalf("held index lock should be a plain error, got %v", err)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	assertUnchanged(t, f.parent, before)
+	if _, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result); err != nil {
+		t.Fatalf("retry after the lock is released should apply: %v", err)
+	}
+}
+
+// M2: binary preimage mismatches and add/add collisions are genuine content
+// conflicts and must still be reported as ConflictError with their paths.
+func TestApplyOnIntegratedBinaryAndAddConflicts(t *testing.T) {
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "img.bin": "\x00\x01\x02base"})
+	resultA := f.agent(t, "agent-a", func(dir string) {
+		write(t, dir, "img.bin", "\x00\x01\x02from-a")
+		write(t, dir, "new.go", "a\n")
+	})
+	resultB := f.agent(t, "agent-b", func(dir string) {
+		write(t, dir, "img.bin", "\x00\x01\x02from-b")
+		write(t, dir, "new.go", "b\n")
+	})
+	ctx := context.Background()
+	applied, err := f.m.ApplyOnIntegrated(ctx, "agent-a", f.parent, f.base, f.baseTree(t), resultA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := parentSnapshot(t, f.parent)
+	_, err = f.m.ApplyOnIntegrated(ctx, "agent-b", f.parent, f.base, applied.TreeAfter, resultB)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || strings.Join(conflict.Paths, ",") != "img.bin,new.go" {
+		t.Fatalf("want conflict on img.bin and new.go, got %v", err)
+	}
+	assertUnchanged(t, f.parent, before)
+}
+
+// The agent can rewrite its objects under the same ids between two reads
+// (Git does not re-hash loose objects on read). Whatever the patch bytes
+// finally contain is validated on the parent side before anything is applied.
+func TestApplyOnIntegratedObjectSwapAfterScanIsRefused(t *testing.T) {
+	outside := t.TempDir()
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n"})
+	result := f.agent(t, "agent", func(dir string) { write(t, dir, "a.go", "a2\n") })
+	ws, err := f.m.Lookup(context.Background(), "agent", f.parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second commit with an escaping symlink, stored loose in the agent.
+	blob := gitStdin(t, ws.Path, outside, "hash-object", "-w", "--stdin")
+	listing := git(t, ws.Path, "ls-tree", result+"^{tree}")
+	tree := gitStdin(t, ws.Path, listing+"\n120000 blob "+blob+"\tescape\n", "mktree")
+	evil := git(t, ws.Path, "-c", "user.name=A", "-c", "user.email=a@b", "commit-tree", "-p", f.base, "-m", "x", tree)
+	object := func(id string) string { return filepath.Join(ws.Path, ".git", "objects", id[:2], id[2:]) }
+	evilBytes, err := os.ReadFile(object(evil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrateHook = func(stage string) {
+		if stage != "scanned" {
+			return
+		}
+		if err := os.Chmod(object(result), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(object(result), evilBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { integrateHook = nil }()
+	before := parentSnapshot(t, f.parent)
+	_, err = f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+	if err == nil || !strings.Contains(err.Error(), "unscanned path") {
+		t.Fatalf("revision swapped after the scan must be refused by the parent-side check, got %v", err)
+	}
+	assertUnchanged(t, f.parent, before)
+}
+
+func TestClassifyApplyCheckFailure(t *testing.T) {
+	paths := []string{"a.go", "b.go", "c.go"}
+	cause := errors.New("exit status 1")
+	for _, tc := range []struct {
+		stderr   string
+		conflict []string
+	}{
+		{"error: patch failed: a.go:1\nerror: a.go: patch does not apply\n", []string{"a.go"}},
+		{"error: b.go: does not match index\n", nil},
+		{"error: c.go: already exists in index\nerror: a.go: does not exist in index\n", []string{"a.go", "c.go"}},
+		{"error: c.go: already exists in working directory\n", nil},
+		{"error: affected file 'd/x' is beyond a symbolic link\n", nil},
+		{"fatal: Unable to create '/p/.git/index.lock': File exists.\n", nil},
+		{"error: patch failed: a.go:1\nerror: a.go: patch does not apply\nerror: b.go: Permission denied\n", nil},
+		{"error: the patch applies to 'b.go' (1ff8), which does not match the current contents.\nerror: b.go: patch does not apply\n", []string{"b.go"}},
+		{"error: a.go: wrong type\n", []string{"a.go"}},
+		{"error: patch failed: a.go:1\nerror: a.go: patch does not apply\nerror: d.go: patch does not apply\n", nil}, // unknown path
+		{"", nil},
+	} {
+		err := classifyApplyCheck(tc.stderr, paths, cause)
+		if strings.Contains(tc.stderr, "does not match index") && !errors.Is(err, ErrParentChanged) {
+			t.Fatalf("%q: want ErrParentChanged, got %v", tc.stderr, err)
+		}
+		var conflict *ConflictError
+		if tc.conflict == nil {
+			if errors.As(err, &conflict) || err == nil {
+				t.Fatalf("%q: want plain error, got %v", tc.stderr, err)
+			}
+			continue
+		}
+		if !errors.As(err, &conflict) || strings.Join(conflict.Paths, ",") != strings.Join(tc.conflict, ",") {
+			t.Fatalf("%q: want conflict on %v, got %v", tc.stderr, tc.conflict, err)
+		}
+	}
+}
+
+// I3: the single shared metadata validator is exported for delegation.
+func TestValidateOwnedMetadataExported(t *testing.T) {
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n"})
+	f.agent(t, "agent", func(string) {})
+	ws, err := f.m.Lookup(context.Background(), "agent", f.parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateOwnedMetadata(context.Background(), ws.Path); err != nil {
+		t.Fatal(err)
+	}
+	gitfile := filepath.Join(t.TempDir(), "w")
+	if err := os.MkdirAll(gitfile, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, gitfile, ".git", "gitdir: "+filepath.Join(ws.Path, ".git")+"\n")
+	if err := ValidateOwnedMetadata(context.Background(), gitfile); err == nil {
+		t.Fatal("a .git file redirecting elsewhere was accepted")
+	}
+	git(t, ws.Path, "config", "core.sshCommand", "touch x")
+	if err := ValidateOwnedMetadata(context.Background(), ws.Path); err == nil || !strings.Contains(err.Error(), "core.sshcommand") {
+		t.Fatalf("unsupported key accepted: %v", err)
+	}
 }

@@ -56,6 +56,8 @@ func parentTree(ctx context.Context, parent string) (string, error) {
 // CheckParentState verifies the parent is exactly the integrated state:
 // HEAD == base, index tree == expectedTree, no unstaged differences, no
 // untracked non-ignored files and only contained symlinks/regular files.
+// Note: eol/text .gitattributes can make freshly applied files read as
+// unstaged edits (phantom diffs); such a parent is refused, not normalised.
 func (m *Manager) CheckParentState(ctx context.Context, parent, base, expectedTree string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,48 +136,68 @@ func (m *Manager) ApplyOnIntegrated(ctx context.Context, workspaceID, parent, ba
 			return ApplyResult{}, err
 		}
 	}
-	ws, err := m.lookup(ctx, workspaceID, parent)
+	// The agent may still be able to write its checkout, including .git. Every
+	// Git call inside it uses the hardened runner, whose command-line overrides
+	// disable hooks, fsmonitor, pagers and transports whatever the agent's
+	// config says, and only plumbing that never runs filters or diff drivers.
+	ws, err := m.lookupWith(ctx, workspaceID, parent, hardenedOutput)
 	if err != nil {
 		return fail(err)
 	}
 	if ws.SourceCommit != base {
 		return ApplyResult{}, errors.New("owned checkout base revision changed")
 	}
-	// The agent controls its own .git: validate metadata with hardened Git
-	// before any command that might consult agent configuration.
-	if err = validateOwnedMetadata(ctx, ws.Path); err != nil {
+	if err = ValidateOwnedMetadata(ctx, ws.Path); err != nil {
 		return fail(err)
 	}
-	if err = ValidateCommitted(ctx, ws.Path, result); err != nil {
+	if integrateHook != nil {
+		integrateHook("validated")
+	}
+	if err = validateAgentHead(ctx, ws.Path, result); err != nil {
 		return fail(err)
 	}
+	// Early rejection with precise messages; the authoritative checks below
+	// run on the parent-side result of applying the exact patch bytes, because
+	// agent objects can be swapped under the same ids between two reads.
 	entries, err := scanRevision(ctx, ws.Path, base, result)
 	if err != nil {
 		return fail(err)
+	}
+	if integrateHook != nil {
+		integrateHook("scanned")
 	}
 	patch, err := hardenedBytes(ctx, ws.Path, nil, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv",
 		"--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, result, "--")
 	if err != nil {
 		return fail(err)
 	}
-	if err = checkParentState(ctx, parent, base, expectedTree); err != nil {
-		return fail(err)
-	}
-	if err = checkSymlinks(ctx, parent, ws.Path, expectedTree, entries); err != nil {
+	// Re-check after the last Git call in the agent checkout: a configuration
+	// change during the calls above was inert, but it must not be accepted.
+	if err = ValidateOwnedMetadata(ctx, ws.Path); err != nil {
 		return fail(err)
 	}
 	paths := entryPaths(entries)
+	if err = checkParentState(ctx, parent, base, expectedTree); err != nil {
+		return fail(err)
+	}
 	if len(patch) == 0 {
+		if len(entries) != 0 {
+			return ApplyResult{}, errors.New("agent revision changed during integration")
+		}
 		return ApplyResult{Paths: paths, TreeAfter: expectedTree}, nil
 	}
 	if err = ctx.Err(); err != nil {
 		return ApplyResult{}, err
 	}
-	if _, stderr, err := hardenedRun(ctx, parent, patch, "apply", "--check", "--index", "--binary", "--whitespace=nowarn", "-"); err != nil {
+	predicted, err := predictTree(ctx, parent, expectedTree, patch, paths)
+	if err != nil {
+		return fail(err)
+	}
+	if _, stderr, err := HardenedGit(ctx, parent, patch, "apply", "--check", "--index", "--binary", "--whitespace=nowarn", "-"); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ApplyResult{}, ctxErr
 		}
-		return ApplyResult{}, &ConflictError{Paths: conflictPaths(stderr, paths), Detail: commandError(err, stderr)}
+		return ApplyResult{}, classifyApplyCheck(stderr, paths, err)
 	}
 	if err = checkParentState(ctx, parent, base, expectedTree); err != nil {
 		return fail(err)
@@ -191,14 +213,66 @@ func (m *Manager) ApplyOnIntegrated(ctx context.Context, workspaceID, parent, ba
 	// Once Git starts writing, finish the bounded operation: cancellation must
 	// not kill it halfway through.
 	done := context.WithoutCancel(ctx)
-	if _, stderr, err := hardenedRun(done, parent, patch, "apply", "--index", "--binary", "--whitespace=nowarn", "-"); err != nil {
+	if _, stderr, err := HardenedGit(done, parent, patch, "apply", "--index", "--binary", "--whitespace=nowarn", "-"); err != nil {
 		return ApplyResult{}, fmt.Errorf("integration could not apply after a successful check; inspect the parent: %s", commandError(err, stderr))
 	}
 	tree, err := parentTree(done, parent)
 	if err != nil {
 		return ApplyResult{Paths: paths}, fmt.Errorf("revision applied but the parent tree could not be read: %w", err)
 	}
+	if tree != predicted {
+		return ApplyResult{Paths: paths, TreeAfter: tree}, fmt.Errorf("revision applied but the parent tree %s differs from the verified prediction %s; inspect the parent", tree, predicted)
+	}
 	return ApplyResult{Paths: paths, TreeAfter: tree}, nil
+}
+
+// predictTree applies the exact patch bytes to a private temporary index
+// holding expectedTree, inside the parent repository, and validates the
+// resulting tree: path rules, the same path set the agent revision reported,
+// and containment of every symlink. The parent index, worktree and HEAD are
+// never touched; only unreachable objects may be added to its object store.
+func predictTree(ctx context.Context, parent, expectedTree string, patch []byte, paths []string) (string, error) {
+	dir, err := os.MkdirTemp("", "umcode-integrate-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
+	env := []string{"GIT_INDEX_FILE=" + filepath.Join(dir, "index")}
+	if _, stderr, err := hardenedRunEnv(ctx, parent, env, nil, "read-tree", expectedTree); err != nil {
+		return "", fmt.Errorf("integration could not prepare a private index: %s", commandError(err, stderr))
+	}
+	if _, stderr, err := hardenedRunEnv(ctx, parent, env, patch, "apply", "--cached", "--binary", "--whitespace=nowarn", "-"); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", classifyApplyCheck(stderr, paths, err)
+	}
+	out, stderr, err := hardenedRunEnv(ctx, parent, env, nil, "write-tree")
+	if err != nil {
+		return "", fmt.Errorf("integration could not write the predicted tree: %s", commandError(err, stderr))
+	}
+	predicted := strings.TrimSpace(string(out))
+	entries, err := scanRevision(ctx, parent, expectedTree, predicted)
+	if err != nil {
+		return "", err
+	}
+	scanned := map[string]bool{}
+	for _, p := range paths {
+		scanned[p] = true
+	}
+	deleted := map[string]bool{}
+	for _, e := range entries {
+		if !scanned[e.path] {
+			return "", fmt.Errorf("agent revision changed during integration: the patch touches unscanned path %q", e.path)
+		}
+		if e.status == "D" {
+			deleted[e.path] = true
+		}
+	}
+	if err = checkSymlinks(ctx, parent, parent, predicted, deleted); err != nil {
+		return "", err
+	}
+	return predicted, nil
 }
 
 // rawEntry is one `git diff --raw` record of the agent revision.
@@ -227,11 +301,16 @@ func scanRevision(ctx context.Context, agent, base, result string) ([]rawEntry, 
 		if e.oldMode == "160000" || e.newMode == "160000" {
 			return nil, fmt.Errorf("revision changes submodule %q; submodules are unsupported", e.path)
 		}
+		switch e.newMode {
+		case "000000", "100644", "100755", "120000":
+		default:
+			return nil, fmt.Errorf("revision uses unsupported mode %s for %q", e.newMode, e.path)
+		}
 		if err = validateRel(e.path); err != nil {
 			return nil, err
 		}
 		for _, component := range strings.Split(e.path, "/") {
-			if strings.EqualFold(component, ".git") || component == ".." || component == "." || component == "" {
+			if isDotGit(component) || component == ".." || component == "." || component == "" {
 				return nil, fmt.Errorf("revision touches forbidden path %q", e.path)
 			}
 		}
@@ -249,20 +328,16 @@ func entryPaths(entries []rawEntry) []string {
 	return paths
 }
 
-// treeLink is one path of the predicted post-apply tree.
-type treeLink struct {
-	mode, id string
-	agent    bool // object lives in the agent checkout, not the parent
-	deleted  bool
-}
-
-// checkSymlinks predicts the post-apply tree (expectedTree overlaid with the
-// revision) and resolves every symlink in it, following chains through other
-// symlinks, so no symlink can escape the parent checkout after the apply.
-func checkSymlinks(ctx context.Context, parent, agent, expectedTree string, entries []rawEntry) error {
-	tree := map[string]treeLink{}
+// checkSymlinks resolves every symlink of tree (read from the object store of
+// objects) as it would exist in the checkout root, following chains through
+// other symlinks, including ignored on-disk symlinks that are not tracked, so
+// no symlink can escape the checkout or reach repository metadata. Paths in
+// deleted are removed by the pending apply and are not followed.
+func checkSymlinks(ctx context.Context, root, objects, tree string, deleted map[string]bool) error {
+	type node struct{ mode, id string }
+	files := map[string]node{}
 	dirs := map[string]bool{}
-	listing, err := hardenedNULList(ctx, parent, "ls-tree", "-r", "-z", "--full-tree", expectedTree)
+	listing, err := hardenedNULList(ctx, objects, "ls-tree", "-r", "-z", "--full-tree", tree)
 	if err != nil {
 		return err
 	}
@@ -270,38 +345,22 @@ func checkSymlinks(ctx context.Context, parent, agent, expectedTree string, entr
 		meta, name, ok := strings.Cut(line, "\t")
 		f := strings.Fields(meta)
 		if !ok || len(f) != 3 {
-			return errors.New("invalid parent tree listing")
+			return errors.New("invalid tree listing")
 		}
-		tree[name] = treeLink{mode: f[0], id: f[2]}
-	}
-	for _, e := range entries {
-		if e.status == "D" {
-			tree[e.path] = treeLink{deleted: true}
-			continue
-		}
-		tree[e.path] = treeLink{mode: e.newMode, id: e.newID, agent: true}
-	}
-	for name, l := range tree {
-		if l.deleted {
-			continue
-		}
+		files[name] = node{mode: f[0], id: f[2]}
 		for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
 			dirs[dir] = true
 		}
 	}
-	readTarget := func(l treeLink) (string, error) {
-		dir := parent
-		if l.agent {
-			dir = agent
-		}
-		size, err := hardenedOutput(ctx, dir, "cat-file", "-s", l.id)
+	readTarget := func(id string) (string, error) {
+		size, err := hardenedOutput(ctx, objects, "cat-file", "-s", id)
 		if err != nil {
 			return "", err
 		}
 		if n, err := strconv.Atoi(size); err != nil || n > maxSymlinkTarget {
 			return "", errors.New("symlink target is too long")
 		}
-		b, err := hardenedBytes(ctx, dir, nil, "cat-file", "blob", l.id)
+		b, err := hardenedBytes(ctx, objects, nil, "cat-file", "blob", id)
 		if err != nil {
 			return "", err
 		}
@@ -311,42 +370,39 @@ func checkSymlinks(ctx context.Context, parent, agent, expectedTree string, entr
 		return string(b), nil
 	}
 	lookup := func(p string) (bool, string, error) {
-		if l, ok := tree[p]; ok && !l.deleted {
-			if l.mode != "120000" {
+		if n, ok := files[p]; ok {
+			if n.mode != "120000" {
 				return false, "", nil
 			}
-			target, err := readTarget(l)
+			target, err := readTarget(n.id)
 			return true, target, err
 		}
-		if dirs[p] {
+		if dirs[p] || deleted[p] {
 			return false, "", nil
 		}
-		if _, ok := tree[p]; ok {
-			return false, "", nil // deleted by the revision
-		}
-		// Untracked but ignored parent content is not in the tree; consult the
+		// Untracked but ignored content is not in the tree; consult the
 		// filesystem so an ignored symlink cannot be used as a stepping stone.
-		info, err := os.Lstat(filepath.Join(parent, filepath.FromSlash(p)))
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
 			return false, "", nil
 		}
-		target, err := os.Readlink(filepath.Join(parent, filepath.FromSlash(p)))
+		target, err := os.Readlink(filepath.Join(root, filepath.FromSlash(p)))
 		return true, target, err
 	}
-	names := make([]string, 0, len(tree))
-	for name := range tree {
+	names := make([]string, 0, len(files))
+	for name := range files {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		l := tree[name]
-		if l.deleted || l.mode != "120000" {
+		n := files[name]
+		if n.mode != "120000" {
 			continue
 		}
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		target, err := readTarget(l)
+		target, err := readTarget(n.id)
 		if err != nil {
 			return fmt.Errorf("symlink %q: %w", name, err)
 		}
@@ -379,6 +435,9 @@ func resolveLink(link, target string, lookup func(string) (bool, string, error))
 				out = out[:len(out)-1]
 				continue
 			}
+			if isDotGit(c) {
+				return nil, fmt.Errorf("symlink %q resolves into repository metadata", link)
+			}
 			out = append(out, c)
 			isLink, next, err := lookup(strings.Join(out, "/"))
 			if err != nil {
@@ -400,31 +459,143 @@ func resolveLink(link, target string, lookup func(string) (bool, string, error))
 	return err
 }
 
-// conflictPaths extracts the revision paths named by `git apply` errors and
-// falls back to every revision path when none can be recognised.
-func conflictPaths(stderr string, paths []string) []string {
-	var out []string
-	for _, p := range paths {
-		if strings.Contains(stderr, "error: "+p+": ") || strings.Contains(stderr, "error: patch failed: "+p+":") {
-			out = append(out, p)
-		}
+// integrateHook lets tests act between integration steps (for example to
+// change the agent's configuration after it was validated). Nil in production.
+var integrateHook func(stage string)
+
+// validateAgentHead is the hardened replacement of ValidateCommitted for the
+// untrusted agent checkout: plumbing only, so no index refresh, fsmonitor or
+// clean filter runs. The agent's working tree is irrelevant because only the
+// committed base→result diff is used.
+func validateAgentHead(ctx context.Context, root, result string) error {
+	top, err := hardenedOutput(ctx, root, "rev-parse", "--show-toplevel")
+	if err != nil || !samePath(top, root) {
+		return errors.New("owned checkout is not its own Git repository root")
 	}
-	if len(out) == 0 {
-		return append([]string(nil), paths...)
+	head, err := hardenedOutput(ctx, root, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return err
 	}
-	return out
+	if head != result {
+		return errors.New("owned checkout HEAD differs from the submitted revision")
+	}
+	return nil
 }
 
-// validateOwnedMetadata rejects agent-controlled Git metadata that could run
-// commands or redirect object/ref lookups outside the owned checkout.
-func validateOwnedMetadata(ctx context.Context, root string) error {
+// isDotGit reports whether a path component names repository metadata on
+// some filesystem: ".git" in any case, with trailing dots/spaces or an NTFS
+// stream suffix (Windows), with HFS+ ignorable code points (macOS), or the
+// NTFS 8.3 short name "git~1". It mirrors Git's own verify_path rules.
+func isDotGit(name string) bool {
+	// A backslash separates components on Windows.
+	if strings.Contains(name, "\\") {
+		for _, part := range strings.Split(name, "\\") {
+			if isDotGit(part) {
+				return true
+			}
+		}
+		return false
+	}
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r == 0x200c || r == 0x200d || r == 0x200e || r == 0x200f,
+			r >= 0x202a && r <= 0x202e, r >= 0x206a && r <= 0x206f, r == 0xfeff:
+			return -1
+		}
+		return r
+	}, name)
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		name = name[:i]
+	}
+	name = strings.TrimRight(name, ". ")
+	return strings.EqualFold(name, ".git") || strings.EqualFold(name, "git~1")
+}
+
+// classifyApplyCheck turns a failed `git apply` check into a ConflictError
+// only when every reported error is a genuine content conflict with the
+// integrated state (the patch preimage does not match, a path to add already
+// exists in the index, a path to change no longer exists or changed type).
+// A worktree that no longer matches the index means the parent changed
+// (ErrParentChanged). Locks, permissions, files in the way, symlink traversal,
+// I/O and anything unrecognised are ordinary errors the caller may retry.
+func classifyApplyCheck(stderr string, paths []string, cause error) error {
+	plain := func() error { return fmt.Errorf("integration check failed: %s", commandError(cause, stderr)) }
+	known := map[string]bool{}
+	for _, p := range paths {
+		known[p] = true
+	}
+	conflictSuffixes := []string{": patch does not apply", ": already exists in index", ": does not exist in index", ": wrong type"}
+	// Detail lines git prints next to a per-path conflict line.
+	detailPrefixes := []string{"patch failed: ", "the patch applies to ", "removal patch leaves file contents", "binary patch does not apply to ",
+		"binary patch to ", "deleted file "}
+	var conflicts []string
+	seen := map[string]bool{}
+	changed := ""
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "warning: ") {
+			continue
+		}
+		rest, ok := strings.CutPrefix(line, "error: ")
+		if !ok {
+			return plain()
+		}
+		if p, ok := strings.CutSuffix(rest, ": does not match index"); ok && known[p] {
+			changed = p
+			continue
+		}
+		detail := false
+		for _, prefix := range detailPrefixes {
+			if strings.HasPrefix(rest, prefix) {
+				detail = true
+				break
+			}
+		}
+		if detail {
+			continue
+		}
+		p := ""
+		for _, suffix := range conflictSuffixes {
+			if trimmed, ok := strings.CutSuffix(rest, suffix); ok {
+				p = trimmed
+				break
+			}
+		}
+		if p == "" || !known[p] {
+			return plain()
+		}
+		if !seen[p] {
+			seen[p] = true
+			conflicts = append(conflicts, p)
+		}
+	}
+	if changed != "" {
+		return fmt.Errorf("%w: worktree differs from the index at %s", ErrParentChanged, changed)
+	}
+	if len(conflicts) == 0 {
+		return plain()
+	}
+	sort.Strings(conflicts)
+	return &ConflictError{Paths: conflicts, Detail: strings.TrimSpace(stderr)}
+}
+
+// ValidateOwnedMetadata rejects owned-checkout Git metadata that could run
+// commands or redirect object/ref lookups outside the checkout: symlinks in
+// .git, alternates, commondir, grafts, replace refs and any local
+// configuration key outside a fixed allow list. Shared by delegation.
+func ValidateOwnedMetadata(ctx context.Context, root string) error {
 	metadata := filepath.Join(root, ".git")
+	if info, err := os.Lstat(metadata); err != nil {
+		return err
+	} else if !info.IsDir() {
+		return errors.New("private Git metadata is not a directory")
+	}
 	if err := filepath.WalkDir(metadata, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.Type()&os.ModeSymlink != 0 {
-			return errors.New("owned Git metadata contains a symlink")
+			return errors.New("private Git metadata contains a symlink")
 		}
 		return ctx.Err()
 	}); err != nil {
@@ -432,7 +603,7 @@ func validateOwnedMetadata(ctx context.Context, root string) error {
 	}
 	for _, p := range []string{"objects/info/alternates", "objects/info/http-alternates", "commondir", "info/grafts", "refs/replace"} {
 		if _, err := os.Lstat(filepath.Join(metadata, p)); err == nil {
-			return errors.New("owned Git metadata redirects outside its checkout")
+			return errors.New("private Git metadata redirects outside its owned snapshot")
 		}
 	}
 	config, err := hardenedOutput(ctx, root, "config", "--local", "--no-includes", "--list")
@@ -447,17 +618,26 @@ func validateOwnedMetadata(ctx context.Context, root string) error {
 		switch key {
 		case "core.repositoryformatversion", "core.filemode", "core.bare", "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode", "extensions.objectformat", "user.name", "user.email":
 		default:
-			return fmt.Errorf("unsupported owned checkout Git configuration %q; workspace retained for inspection", key)
+			return fmt.Errorf("unsupported private Git configuration %q; retain workspace for inspection", key)
 		}
 	}
 	return nil
 }
 
-// hardenedRun runs Git with hooks and fsmonitor disabled, no system/global
-// configuration, no inherited GIT_* environment and no optional index writes.
-// Stdout and stderr are kept separate so diagnostics never enter a patch.
-func hardenedRun(ctx context.Context, dir string, stdin []byte, args ...string) ([]byte, string, error) {
-	prefix := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null", "-C", dir}
+// HardenedGit runs Git with hooks, fsmonitor, pagers and every transport
+// disabled by command-line overrides (which win over repository config), no
+// system/global configuration, no inherited GIT_* environment and no optional
+// index writes. Stdout and stderr are returned separately so diagnostics never
+// enter parsed output or a patch.
+func HardenedGit(ctx context.Context, dir string, stdin []byte, args ...string) ([]byte, string, error) {
+	return hardenedRunEnv(ctx, dir, nil, stdin, args...)
+}
+
+// hardenedRunEnv is HardenedGit with extra GIT_* variables (for example a
+// private GIT_INDEX_FILE) added after the inherited ones are removed.
+func hardenedRunEnv(ctx context.Context, dir string, env []string, stdin []byte, args ...string) ([]byte, string, error) {
+	prefix := []string{"--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null",
+		"-c", "protocol.allow=never", "-C", dir}
 	cmd := exec.CommandContext(ctx, "git", append(prefix, args...)...)
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(e, "GIT_") {
@@ -465,6 +645,7 @@ func hardenedRun(ctx context.Context, dir string, stdin []byte, args ...string) 
 		}
 	}
 	cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(cmd.Env, env...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
@@ -475,7 +656,7 @@ func hardenedRun(ctx context.Context, dir string, stdin []byte, args ...string) 
 }
 
 func hardenedBytes(ctx context.Context, dir string, stdin []byte, args ...string) ([]byte, error) {
-	out, stderr, err := hardenedRun(ctx, dir, stdin, args...)
+	out, stderr, err := HardenedGit(ctx, dir, stdin, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), commandError(err, stderr))
 	}

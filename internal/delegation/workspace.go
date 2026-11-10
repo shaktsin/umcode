@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -612,52 +610,17 @@ func (s *WorkspaceService) discardVerified(ctx context.Context, w store.AgentWor
 	return s.Store.SaveAgentWorkspace(ctx, w)
 }
 
+// privateGit and validatePrivate delegate to the single hardened runner and
+// metadata validator in internal/worktree.
 func privateGit(ctx context.Context, root string, args ...string) (string, error) {
-	prefix := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null", "-C", root}
-	cmd := exec.CommandContext(ctx, "git", append(prefix, args...)...)
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "GIT_") {
-			cmd.Env = append(cmd.Env, e)
-		}
-	}
-	cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
-	b, err := cmd.CombinedOutput()
+	out, stderr, err := worktree.HardenedGit(ctx, root, nil, args...)
 	if err != nil {
-		return "", fmt.Errorf("workspace git %s: %w: %s", strings.Join(args, " "), err, b)
+		return "", fmt.Errorf("workspace git %s: %w: %s%s", strings.Join(args, " "), err, out, stderr)
 	}
-	return string(b), nil
+	return string(out), nil
 }
 func validatePrivate(ctx context.Context, root string) error {
-	metadata := filepath.Join(root, ".git")
-	if err := filepath.WalkDir(metadata, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return errors.New("private Git metadata contains a symlink")
-		}
-		return ctx.Err()
-	}); err != nil {
-		return err
-	}
-	for _, p := range []string{"objects/info/alternates", "objects/info/http-alternates", "commondir", "info/grafts", "refs/replace"} {
-		if _, err := os.Lstat(filepath.Join(metadata, p)); err == nil {
-			return errors.New("private Git metadata redirects outside its owned snapshot")
-		}
-	}
-	config, err := privateGit(ctx, root, "config", "--local", "--no-includes", "--list")
-	if err != nil {
-		return err
-	}
-	for _, line := range strings.Split(strings.TrimSpace(config), "\n") {
-		key, _, _ := strings.Cut(line, "=")
-		switch key {
-		case "core.repositoryformatversion", "core.filemode", "core.bare", "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode", "extensions.objectformat", "user.name", "user.email":
-		default:
-			return fmt.Errorf("unsupported private Git configuration %q; retain workspace for inspection", key)
-		}
-	}
-	return nil
+	return worktree.ValidateOwnedMetadata(ctx, root)
 }
 
 // ValidateIntegrated brackets actual lead tool execution and completion. It

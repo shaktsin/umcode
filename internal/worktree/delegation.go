@@ -28,6 +28,12 @@ func (m *Manager) Lookup(ctx context.Context, id, source string) (Workspace, err
 	return m.lookup(ctx, id, source)
 }
 func (m *Manager) lookup(ctx context.Context, id, source string) (Workspace, error) {
+	return m.lookupWith(ctx, id, source, gitOutput)
+}
+
+// lookupWith runs every Git query through run so integration can use the
+// hardened runner inside an untrusted agent checkout.
+func (m *Manager) lookupWith(ctx context.Context, id, source string, run func(context.Context, string, ...string) (string, error)) (Workspace, error) {
 	if id == "" {
 		return Workspace{}, errors.New("workspace identity required")
 	}
@@ -45,10 +51,10 @@ func (m *Manager) lookup(ctx context.Context, id, source string) (Workspace, err
 	if err != nil || filepath.Clean(actual) != filepath.Clean(path) {
 		return Workspace{}, errors.New("owned workspace path escaped its canonical root")
 	}
-	if err = m.validateExisting(ctx, path); err != nil {
+	if err = validateExistingWith(ctx, path, run); err != nil {
 		return Workspace{}, err
 	}
-	common, err := gitOutput(ctx, source, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	common, err := run(ctx, source, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return Workspace{}, err
 	}
