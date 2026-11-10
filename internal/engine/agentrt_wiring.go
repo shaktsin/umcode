@@ -31,7 +31,8 @@ func runtimeCloseBudget(ctx context.Context) time.Duration {
 // model-facing tools in place of the legacy delegation agent tools. The lead
 // keeps the default RootCapabilities authority (agentrt.WithLeadCapabilities).
 func (e *Engine) registerAgentRuntime(reg *tools.Registry, base context.Context) {
-	e.AgentRuntime = agentrt.NewRuntime(e.Store, runtimeRunner{engine: e}, base)
+	e.AgentRuntime = agentrt.NewRuntime(e.Store, runtimeRunner{engine: e}, base,
+		agentrt.WithResolveOptionsFunc(e.runtimeResolveOptions))
 	for _, tool := range tools.NewRuntimeAgentTools(e.AgentRuntime, e.authorizeDelegationTool, runtimeCaller) {
 		reg.Add(tool)
 	}

@@ -13,6 +13,13 @@ type ResolveOptions struct {
 	// ShellReadOnlySupported reports whether a read-only shell can be enforced.
 	// When false, a read-only shell grant is downgraded to none.
 	ShellReadOnlySupported bool
+	// ShellReadOnlyReason says why a read-only shell is unsupported; it
+	// replaces the generic reason in the rejection.
+	ShellReadOnlyReason string
+	// ShellUnavailable, when non-empty, means no confined shell exists for the
+	// project at all (confinement none): every shell grant becomes none and the
+	// rejection carries this reason.
+	ShellUnavailable string
 }
 
 // filesRank ranks file access; unknown or empty values rank as none.
@@ -106,6 +113,9 @@ func Resolve(parent, entry, requested protocol.AgentCapabilities, opt ResolveOpt
 	if granted.Shell == protocol.ShellReadOnly && !opt.ShellReadOnlySupported {
 		granted.Shell = protocol.ShellNone
 	}
+	if opt.ShellUnavailable != "" {
+		granted.Shell = protocol.ShellNone
+	}
 
 	switch {
 	case !filesKnown(requested.Files):
@@ -123,6 +133,12 @@ func Resolve(parent, entry, requested protocol.AgentCapabilities, opt ResolveOpt
 		}
 		if requested.Shell == protocol.ShellReadOnly && !opt.ShellReadOnlySupported {
 			reason = "read-only shell is not supported on this platform"
+			if opt.ShellReadOnlyReason != "" {
+				reason = "read-only shell is not available: " + opt.ShellReadOnlyReason
+			}
+		}
+		if opt.ShellUnavailable != "" {
+			reason = "shell is not available: " + opt.ShellUnavailable
 		}
 		add("capabilities.shell", reason)
 	}

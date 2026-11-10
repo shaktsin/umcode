@@ -42,9 +42,14 @@ type taskSched struct {
 	queue   []protocol.RuntimeAgent // queued agents, oldest first
 	running map[string]*runningAgent
 	// cancelled remembers every agent a Cancel targeted (terminal ones
-	// included) so later-submitted descendants are cancelled, never run.
+	// included) so later-submitted descendants are cancelled, never run. It
+	// lives only while the task has live agents (see pruneLocked); Submit
+	// also reads cancellations from the store, which outlive the task entry.
 	cancelled map[string]bool
 	changed   chan struct{}
+	// waiters counts watch holders and cancelling the Cancel calls still
+	// persisting; either keeps the entry from being pruned.
+	waiters, cancelling int
 }
 
 const (
@@ -87,6 +92,31 @@ func (s *Scheduler) task(taskID string) *taskSched {
 	return t
 }
 
+// existing returns the task's scheduling state without creating it; s.mu
+// must be held. Read paths use it so they never resurrect a pruned task.
+func (s *Scheduler) existing(taskID string) *taskSched {
+	return s.tasks[taskID]
+}
+
+// pruneLocked drops the task's entry once it has nothing live: no queued or
+// running agent, no watcher and no Cancel mid-flight. Everything the entry
+// remembered is recoverable from the store: Submit cancels any agent whose
+// stored ancestor is `cancelled` (descendants of a cancelled agent are
+// cancelled with it, and only a live caller can spawn, so a later descendant
+// always has a stored `cancelled` ancestor or none), a replayed spawn returns
+// the stored agent without touching the scheduler, and a re-submitted
+// terminal agent is skipped by run's state check. The entry's channel is
+// closed so a holder of Changed is woken rather than left waiting on a
+// channel nobody will close. s.mu must be held.
+func (s *Scheduler) pruneLocked(taskID string) {
+	t := s.tasks[taskID]
+	if t == nil || len(t.running) > 0 || len(t.queue) > 0 || t.waiters > 0 || t.cancelling > 0 {
+		return
+	}
+	close(t.changed)
+	delete(s.tasks, taskID)
+}
+
 func cancelToState(cur *protocol.RuntimeAgent) bool {
 	if isTerminal(cur.State) {
 		return false
@@ -107,6 +137,7 @@ func (s *Scheduler) Submit(ctx context.Context, a protocol.RuntimeAgent, maxConc
 	// cancelled-set check below is atomic with Cancel's queue sweep.
 	lineage := []string{a.ID}
 	seen := map[string]bool{a.ID: true}
+	storedCancelled := false
 	for parent := a.ParentAgentID; parent != "" && !seen[parent] && len(lineage) < maxAncestorWalk; {
 		seen[parent] = true
 		lineage = append(lineage, parent)
@@ -114,13 +145,16 @@ func (s *Scheduler) Submit(ctx context.Context, a protocol.RuntimeAgent, maxConc
 		if err != nil {
 			break
 		}
+		// A persisted cancellation outlives the in-memory memory (pruned
+		// with an idle task) and covers descendants spawned after it.
+		storedCancelled = storedCancelled || p.State == protocol.AgentStateCancelled
 		parent = p.ParentAgentID
 	}
 
 	s.mu.Lock()
 	t := s.task(a.TaskID)
 	t.max = maxConcurrent
-	cancelled := false
+	cancelled := storedCancelled
 	for _, id := range lineage {
 		if t.cancelled[id] {
 			cancelled = true
@@ -129,8 +163,13 @@ func (s *Scheduler) Submit(ctx context.Context, a protocol.RuntimeAgent, maxConc
 	}
 	if cancelled {
 		t.cancelled[a.ID] = true
+		t.cancelling++ // keeps the entry while the cancellation is persisted
 		s.mu.Unlock()
 		s.transition(context.WithoutCancel(ctx), a.TaskID, a.ID, cancelToState, nil)
+		s.mu.Lock()
+		t.cancelling--
+		s.pruneLocked(a.TaskID)
+		s.mu.Unlock()
 		return
 	}
 	defer s.mu.Unlock()
@@ -179,7 +218,10 @@ func (s *Scheduler) run(ctx context.Context, ra *runningAgent) {
 	defer ra.cancel()
 	defer func() { // no-op if the terminal write already released the slot
 		s.mu.Lock()
-		s.releaseLocked(s.task(a.TaskID), ra)
+		if t := s.existing(a.TaskID); t != nil {
+			s.releaseLocked(t, ra)
+		}
+		s.pruneLocked(a.TaskID)
 		s.mu.Unlock()
 	}()
 	persist := context.WithoutCancel(s.base)
@@ -234,7 +276,8 @@ func (s *Scheduler) run(ctx context.Context, ra *runningAgent) {
 func (s *Scheduler) isCancelled(taskID, id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.task(taskID).cancelled[id]
+	t := s.existing(taskID)
+	return t != nil && t.cancelled[id]
 }
 
 func (s *Scheduler) cancelRequested(taskID string, ra *runningAgent) bool {
@@ -285,6 +328,7 @@ func (s *Scheduler) changed(a protocol.RuntimeAgent, onPersist func(*taskSched))
 	}
 	close(t.changed)
 	t.changed = make(chan struct{})
+	s.pruneLocked(a.TaskID)
 	s.mu.Unlock()
 	if s.onChange != nil {
 		s.onChange(a)
@@ -308,6 +352,7 @@ func (s *Scheduler) Cancel(ctx context.Context, taskID, agentID string) error {
 
 	s.mu.Lock()
 	t := s.task(taskID)
+	t.cancelling++
 	children := map[string][]string{}
 	addEdge := func(a protocol.RuntimeAgent) {
 		if a.ParentAgentID != "" {
@@ -354,6 +399,12 @@ func (s *Scheduler) Cancel(ctx context.Context, taskID, agentID string) error {
 
 	// A dying caller ctx must not leave a queue-removed agent queued in the store.
 	persist := context.WithoutCancel(ctx)
+	defer func() {
+		s.mu.Lock()
+		t.cancelling--
+		s.pruneLocked(taskID)
+		s.mu.Unlock()
+	}()
 	var firstErr error
 	for _, id := range targets {
 		s.transition(persist, taskID, id, cancelToState, nil)
@@ -374,6 +425,27 @@ func (s *Scheduler) Changed(taskID string) <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.task(taskID).changed
+}
+
+// watch is Changed for a waiter that lets go: the task's entry (and the
+// returned channel) is kept until release is called, so pruning never orphans
+// the waiter, and release lets an idle task's state be dropped again.
+// release is idempotent.
+func (s *Scheduler) watch(taskID string) (<-chan struct{}, func()) {
+	s.mu.Lock()
+	t := s.task(taskID)
+	t.waiters++
+	ch := t.changed
+	s.mu.Unlock()
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			s.mu.Lock()
+			t.waiters--
+			s.pruneLocked(taskID)
+			s.mu.Unlock()
+		})
+	}
 }
 
 // Active reports how many of the task's agents hold a running slot.

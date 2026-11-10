@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shaktsin/umcode/internal/compute"
 	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/pathutil"
@@ -166,21 +165,8 @@ var detectHostSandbox = sync.OnceValue(sandbox.Detect)
 // host availability probe (failing closed to none, never to the OS sandbox),
 // else the detected host sandbox.
 func (e *Engine) runtimeConfinement(scope *tools.Scope) tools.Confinement {
-	vmCheck := e.agentVMCheck
-	if vmCheck == nil {
-		vmCheck = compute.CheckHostAvailability
-	}
-	hostSandbox := e.agentSandbox
-	if hostSandbox == nil {
-		hostSandbox = func() sandbox.Sandbox {
-			if e.Cfg != nil && strings.EqualFold(e.Cfg.Tools.HostSandbox, "off") {
-				return nil
-			}
-			return detectHostSandbox()
-		}
-	}
-	vmAvailable := scope != nil && scope.UseCompute && vmCheck() == nil
-	return tools.ShellConfinement(scope, vmAvailable, hostSandbox())
+	conf, _ := e.runtimeConfinementWhy(scope)
+	return conf
 }
 
 // runtimeAgentScope shapes a runtime agent's turn scope from its capabilities
