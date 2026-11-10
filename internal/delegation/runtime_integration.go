@@ -46,6 +46,16 @@ const manualResolution = "resolved manually by the lead"
 // production.
 var runtimeIntegrateHook func(stage string)
 
+// SetRuntimeIntegrateHookForTest installs f as the integration step hook
+// (stages "intent", "guardN", "passedN"; "passed2" is the last step before git
+// writes the parent) and returns a function restoring the previous hook. Only
+// tests of other packages call it; production never does.
+func SetRuntimeIntegrateHookForTest(f func(stage string)) (restore func()) {
+	prev := runtimeIntegrateHook
+	runtimeIntegrateHook = f
+	return func() { runtimeIntegrateHook = prev }
+}
+
 type taskLock struct {
 	mu   sync.Mutex
 	refs int

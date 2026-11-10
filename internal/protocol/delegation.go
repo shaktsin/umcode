@@ -132,6 +132,28 @@ type DelegationCancelParams struct {
 type DelegationCancelResult struct {
 	Task     AgentTask    `json:"task"`
 	Children []AgentChild `json:"children"`
+	// Integration is set for a task with runtime agent revisions: what the
+	// cancel left in the project checkout.
+	Integration *AgentIntegrationReport `json:"integration,omitempty"`
+}
+
+// AgentIntegrationReport describes a cancelled task's runtime integration.
+// Applied agent work stays staged in the project checkout and is never
+// reverted; agent workspaces are retained.
+type AgentIntegrationReport struct {
+	HeadTree     string `json:"headTree"`
+	AppliedCount int    `json:"appliedCount"`
+	// Verified is true only when the lead's checks all passed for HeadTree.
+	Verified bool `json:"verified"`
+	// Applied lists the agents whose revisions are applied (staged).
+	Applied []string `json:"applied,omitempty"`
+	// Unintegrated lists the agents whose revisions were not applied
+	// (submitted, conflict or still applying); their work stays in their
+	// workspaces.
+	Unintegrated []string `json:"unintegrated,omitempty"`
+	// Blocked explains an interrupted apply that could not be settled.
+	Blocked string `json:"blocked,omitempty"`
+	Message string `json:"message"`
 }
 
 type AgentWorkflowCheck struct {
