@@ -135,7 +135,8 @@ func (e *Engine) reconcileRuntimeIntegrations(ctx context.Context) error {
 }
 
 // cancelledIntegrationReport describes what a cancelled task leaves in the
-// project checkout, or nil when the task has no runtime agent revision. It
+// project checkout, or nil when the task has no runtime agent revision. The
+// caller calls it only for a task the cancel left cancelled. It
 // waits for an accept in flight (the service's per-task integration lock):
 // the cancel is already recorded, so the accept either stops at its next
 // guard, before git writes anything, or, once git is writing, finishes and is
@@ -170,6 +171,9 @@ func (e *Engine) cancelledIntegrationReport(ctx context.Context, taskID string) 
 		switch r.State {
 		case store.RevisionApplied:
 			report.Applied = append(report.Applied, r.AgentID)
+		case store.RevisionApplying:
+			// Not settled by the reconcile: the checkout may hold part of it.
+			report.BlockedAgents = append(report.BlockedAgents, r.AgentID)
 		case store.RevisionDropped:
 		default:
 			report.Unintegrated = append(report.Unintegrated, r.AgentID)
@@ -182,8 +186,10 @@ func (e *Engine) cancelledIntegrationReport(ctx context.Context, taskID string) 
 func integrationReportMessage(r *protocol.AgentIntegrationReport) string {
 	var b strings.Builder
 	switch {
-	case r.AppliedCount == 0:
+	case r.AppliedCount == 0 && len(r.BlockedAgents) == 0:
 		b.WriteString("No agent work was integrated; agents did not change the project checkout.")
+	case r.AppliedCount == 0:
+		b.WriteString("No agent revision was recorded as applied; nothing was reverted.")
 	case r.Verified:
 		fmt.Fprintf(&b, "%d agent revision(s) (%s) stay applied (staged) in the project checkout; nothing was reverted. Their integrated result %s passed its checks.",
 			r.AppliedCount, strings.Join(r.Applied, ", "), r.HeadTree)
@@ -191,11 +197,15 @@ func integrationReportMessage(r *protocol.AgentIntegrationReport) string {
 		fmt.Fprintf(&b, "%d agent revision(s) (%s) stay applied (staged) in the project checkout; nothing was reverted. Their integrated result %s is not verified: its checks have not all passed, so review the staged changes before committing them.",
 			r.AppliedCount, strings.Join(r.Applied, ", "), r.HeadTree)
 	}
+	if len(r.BlockedAgents) > 0 {
+		fmt.Fprintf(&b, " The project checkout may hold partly integrated, unverified work of %s, mixed with other edits: the apply was interrupted and could not be settled, and the cancelled task will not integrate it. Inspect the staged changes and restore or keep them yourself before committing.",
+			strings.Join(r.BlockedAgents, ", "))
+	}
 	if len(r.Unintegrated) > 0 {
-		fmt.Fprintf(&b, " Not integrated: %s.", strings.Join(r.Unintegrated, ", "))
+		fmt.Fprintf(&b, " Not integrated (never applied): %s.", strings.Join(r.Unintegrated, ", "))
 	}
 	if r.Blocked != "" {
-		fmt.Fprintf(&b, " The integration could not be reconciled: %s.", r.Blocked)
+		fmt.Fprintf(&b, " Details: %s.", r.Blocked)
 	}
 	b.WriteString(" Agent workspaces are retained.")
 	return b.String()

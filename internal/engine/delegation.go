@@ -285,11 +285,6 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 		// Runtime agents first, so they end cancelled rather than failed by
 		// the task closing under them. Without a runtime this is a no-op.
 		err = errors.Join(e.cancelRuntimeAgents(ctx, task.ID), e.DelegationCoordinator.CancelTask(ctx, task.ID))
-		// After the task is cancelled, so an accept in flight stops at its
-		// next guard or finishes before this reports; it never reverts.
-		var reportErr error
-		result.Integration, reportErr = e.cancelledIntegrationReport(ctx, task.ID)
-		err = errors.Join(err, reportErr)
 	}
 	// Whatever part of the cancel failed (for example the runtime cancel
 	// after the legacy task cancel succeeded), clients still hear the task's
@@ -298,6 +293,14 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 	result.Task, err = e.Store.AgentTask(ctx, task.ID)
 	if err != nil {
 		return result, errors.Join(cancelErr, err)
+	}
+	// Only for a task the cancel left cancelled, so an accept in flight stops
+	// at its next guard or finishes before this reports; it never reverts. A
+	// task still active (the cancel failed) or already completed gets none.
+	if p.ChildID == "" && result.Task.State == protocol.AgentStateCancelled {
+		var reportErr error
+		result.Integration, reportErr = e.cancelledIntegrationReport(ctx, task.ID)
+		cancelErr = errors.Join(cancelErr, reportErr)
 	}
 	result.Children, err = e.DelegationCoordinator.List(ctx, task.ID)
 	if err == nil {

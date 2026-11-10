@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
@@ -42,18 +43,39 @@ func conflictOptions() []string { return []string{"drop", "resolved", "new_agent
 // manualResolution marks a revision the lead resolved by hand in the parent.
 const manualResolution = "resolved manually by the lead"
 
-// runtimeIntegrateHook lets tests act between integration steps. Nil in
-// production.
-var runtimeIntegrateHook func(stage string)
+// runtimeIntegrateHook lets tests act between integration steps. Unset in
+// production. Atomic, so a test may install it while integrations run.
+var runtimeIntegrateHook atomic.Pointer[func(stage string)]
+
+// setRuntimeIntegrateHook installs f (nil removes the hook) and returns the
+// previous hook.
+func setRuntimeIntegrateHook(f func(stage string)) func(stage string) {
+	var prev *func(stage string)
+	if f == nil {
+		prev = runtimeIntegrateHook.Swap(nil)
+	} else {
+		prev = runtimeIntegrateHook.Swap(&f)
+	}
+	if prev == nil {
+		return nil
+	}
+	return *prev
+}
+
+// integrateStep calls the test hook, if any, for stage.
+func integrateStep(stage string) {
+	if f := runtimeIntegrateHook.Load(); f != nil {
+		(*f)(stage)
+	}
+}
 
 // SetRuntimeIntegrateHookForTest installs f as the integration step hook
 // (stages "intent", "guardN", "passedN"; "passed2" is the last step before git
 // writes the parent) and returns a function restoring the previous hook. Only
 // tests of other packages call it; production never does.
 func SetRuntimeIntegrateHookForTest(f func(stage string)) (restore func()) {
-	prev := runtimeIntegrateHook
-	runtimeIntegrateHook = f
-	return func() { runtimeIntegrateHook = prev }
+	prev := setRuntimeIntegrateHook(f)
+	return func() { setRuntimeIntegrateHook(prev) }
 }
 
 type taskLock struct {
@@ -335,17 +357,13 @@ func (s *WorkspaceService) IntegrateRuntime(ctx context.Context, taskID, agentID
 	if rev, err = s.updateRevision(ctx, rev); err != nil {
 		return RuntimeIntegration{}, err
 	}
-	if runtimeIntegrateHook != nil {
-		runtimeIntegrateHook("intent")
-	}
+	integrateStep("intent")
 	// ApplyOnIntegrated runs the guards once before any check and once right
 	// before git starts writing the parent. Fewer than two passes therefore
 	// means the parent was never mutated by this attempt.
 	passes := 0
 	guard := func() error {
-		if runtimeIntegrateHook != nil {
-			runtimeIntegrateHook(fmt.Sprintf("guard%d", passes+1))
-		}
+		integrateStep(fmt.Sprintf("guard%d", passes+1))
 		if err := s.runtimeAuthority(ctx, t, rev); err != nil {
 			return err
 		}
@@ -364,9 +382,7 @@ func (s *WorkspaceService) IntegrateRuntime(ctx context.Context, taskID, agentID
 			return errors.New("integration revision changed")
 		}
 		passes++
-		if runtimeIntegrateHook != nil {
-			runtimeIntegrateHook(fmt.Sprintf("passed%d", passes))
-		}
+		integrateStep(fmt.Sprintf("passed%d", passes))
 		return nil
 	}
 	res, applyErr := s.Manager.ApplyOnIntegrated(ctx, rev.WorkspaceID, t.ParentRoot, t.BaseRevision, h.HeadTree, rev.ResultRevision, guard)
@@ -497,6 +513,9 @@ func (s *WorkspaceService) reconcileRevision(ctx context.Context, t protocol.Age
 		return err
 	}
 	if manual {
+		if !active(t.State) {
+			return fmt.Errorf("agent %s manual resolution was interrupted and the task is %s: the parent tree %s is not the head %s it was resolving onto; inspect the staged changes in the project checkout yourself", rev.AgentID, t.State, tree, rev.TreeBefore)
+		}
 		return fmt.Errorf("agent %s manual resolution was interrupted; call resolved again to record the parent tree %s (head was %s)", rev.AgentID, tree, rev.TreeBefore)
 	}
 	predicted, err := s.predictRevision(ctx, t, rev)
@@ -508,9 +527,14 @@ func (s *WorkspaceService) reconcileRevision(ctx context.Context, t protocol.Age
 		if diff, diffErr := privateGit(ctx, t.ParentRoot, "diff-tree", "-r", "-z", "--name-only", "--no-renames", predicted, tree, "--"); diffErr == nil {
 			where = " (it differs from the applied tree at " + strings.Join(nulPaths(diff), ", ") + ")"
 		}
+		next := "then retry"
+		if !active(t.State) {
+			// Nothing integrates for a task that is no longer active.
+			next = fmt.Sprintf("or keep the staged changes after inspecting them yourself; the task is %s and will not integrate it", t.State)
+		}
 		return fmt.Errorf("agent %s revision is blocked in applying: the parent tree %s is neither the tree before %s nor the tree after %s%s; "+
 			"restore the project checkout so HEAD is the task base and its staged state is the integrated head tree %s "+
-			"(for a checkout with only staged changes: git read-tree -m -u %s), then retry", rev.AgentID, tree, rev.TreeBefore, predicted, where, rev.TreeBefore, rev.TreeBefore)
+			"(for a checkout with only staged changes: git read-tree -m -u %s), %s", rev.AgentID, tree, rev.TreeBefore, predicted, where, rev.TreeBefore, rev.TreeBefore, next)
 	}
 	h, err := s.head(ctx, t, true)
 	if err != nil {
