@@ -664,6 +664,24 @@ func TestApplyOnIntegratedIndexLockIsNotConflict(t *testing.T) {
 	}
 }
 
+// M2: an ignored parent file where the revision adds a path is not a content
+// conflict with the integrated state; it is a plain error and nothing changes.
+func TestApplyOnIntegratedIgnoredFileInTheWayIsNotConflict(t *testing.T) {
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", ".gitignore": "*.log\n"})
+	result := f.agent(t, "agent", func(dir string) {
+		write(t, dir, "out.log", "agent\n")
+		git(t, dir, "add", "-f", "out.log")
+	})
+	write(t, f.parent, "out.log", "local build output\n")
+	before := parentSnapshot(t, f.parent)
+	_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+	var conflict *ConflictError
+	if err == nil || errors.As(err, &conflict) || !strings.Contains(err.Error(), "already exists in working directory") {
+		t.Fatalf("ignored file in the way should be a plain error, got %v", err)
+	}
+	assertUnchanged(t, f.parent, before)
+}
+
 // M2: binary preimage mismatches and add/add collisions are genuine content
 // conflicts and must still be reported as ConflictError with their paths.
 func TestApplyOnIntegratedBinaryAndAddConflicts(t *testing.T) {
