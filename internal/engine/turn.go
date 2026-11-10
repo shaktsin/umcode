@@ -657,10 +657,14 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 
 	var selection *turnSelection
 	var specs []llm.ToolSpec
+	// A runtime agent whose capabilities grant nothing tool-backed is sent no
+	// tools at all, not even the always-allowed context tools: its model was
+	// not required to support tools (agentNeedsFor).
+	offerTools := res.meta.Tools && childNeedsTools(ctx)
 	if p.Workbench != nil && res.meta.Tools {
 		tool := &workbenchProposalTool{}
 		specs = []llm.ToolSpec{{Name: tools.ToWire(tool.Name()), Description: tool.Description(), Schema: tool.Schema()}}
-	} else if res.meta.Tools && e.optimizationPolicy(ctx).ProgressiveTools {
+	} else if offerTools && e.optimizationPolicy(ctx).ProgressiveTools {
 		selection = e.startToolSelection(ctx, th, snapshot, proj, p.Text)
 		if selection.fatal {
 			finish(errors.New("tool catalog unavailable"))
@@ -670,7 +674,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		sctx = context.WithValue(sctx, selectionContextKey{}, selection)
 		specs = selection.specs()
 	} else {
-		if res.meta.Tools {
+		if offerTools {
 			for _, candidate := range e.turnTools(snapshot) {
 				if !e.permittedToolFor(ctx, candidate, proj) {
 					continue

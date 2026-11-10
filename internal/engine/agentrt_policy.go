@@ -45,13 +45,15 @@ func runtimeScope(base *tools.Scope, caps protocol.AgentCapabilities, conf tools
 }
 
 // confinedShellTool names the tools whose damage a confined shell bounds.
+// exec.* sessions are not among them: restricted children are refused those
+// tools, so they are never pre-approved here.
 func confinedShellTool(name string) bool {
 	switch name {
-	case "shell.run", "verification.run", "exec.start", "exec.write", "exec.stop":
+	case "shell.run", "verification.run":
 		return true
 	}
 	switch tools.FromWire(name) {
-	case "shell.run", "verification.run", "exec.start", "exec.write", "exec.stop":
+	case "shell.run", "verification.run":
 		return true
 	}
 	return false

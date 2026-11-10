@@ -66,6 +66,27 @@ func TestAgentShellInConfinementNeedsNoApproval(t *testing.T) {
 	}
 }
 
+// exec.* sessions are refused to restricted children outright, so a confined
+// agent's exec call must never be pre-approved as if the confinement covered it.
+func TestConfinedAgentExecSessionsAreNotAutoAllowed(t *testing.T) {
+	e := testEngine()
+	caps := protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadWrite}
+	ctx := agentCtx(tools.ConfOSSandbox, caps, normalMode)
+	for _, name := range []string{"exec.start", "exec.write", "exec.stop", tools.ToWire("exec.start")} {
+		if d, _ := e.gateDecision(ctx, name, tools.RiskRed, false, ""); d == policy.Allow {
+			t.Errorf("%s auto-allowed for a confined agent", name)
+		}
+		if confinedShellTool(name) {
+			t.Errorf("%s counted as a confined shell tool", name)
+		}
+	}
+	for _, name := range []string{"shell.run", "verification.run"} {
+		if d, _ := e.gateDecision(ctx, name, tools.RiskRed, false, ""); d != policy.Allow {
+			t.Errorf("%s = %v, want allowed in confinement", name, d)
+		}
+	}
+}
+
 func TestAgentShellAsksWhenUnconfinedOrLead(t *testing.T) {
 	e := testEngine()
 	lead := tools.WithScope(context.Background(), &tools.Scope{Root: "/w"})
