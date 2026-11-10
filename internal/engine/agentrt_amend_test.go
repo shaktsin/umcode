@@ -140,3 +140,35 @@ func TestDeadEndTextPointsToAmend(t *testing.T) {
 		t.Fatalf("schema lacks amend: %s", tool.Schema())
 	}
 }
+
+// The cancel report of an amended task says the integrated result also holds
+// the lead's own amendments (count and latest reason), not only agent work.
+func TestCancelReportMentionsAmendments(t *testing.T) {
+	env, _, _ := twoAppliedFailing(t)
+	env.stageFix(t, "a.txt", "first fix\n")
+	env.mustIntegrate(t, `{"action":"amend","reason":"first attempt"}`)
+	env.stageFix(t, "a.txt", "second fix\n")
+	env.mustIntegrate(t, `{"action":"amend","reason":"lint still fails"}`)
+	res := env.cancel(t)
+	r := res.Integration
+	if r == nil {
+		t.Fatal("cancel result has no integration report")
+	}
+	if r.Amendments != 2 || r.AmendReason != "lint still fails" {
+		t.Fatalf("report = %+v, want 2 amendments with the latest reason", r)
+	}
+	for _, want := range []string{"amended 2 time(s) by the lead", "lint still fails", "nothing was reverted"} {
+		if !strings.Contains(r.Message, want) {
+			t.Fatalf("report message %q lacks %q", r.Message, want)
+		}
+	}
+}
+
+// Without an amendment the report says nothing about amendments.
+func TestCancelReportWithoutAmendments(t *testing.T) {
+	env, _, _ := twoAppliedFailing(t)
+	r := env.cancel(t).Integration
+	if r == nil || r.Amendments != 0 || strings.Contains(r.Message, "amended") {
+		t.Fatalf("report = %+v", r)
+	}
+}

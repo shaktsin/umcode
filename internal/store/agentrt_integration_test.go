@@ -6,7 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	"github.com/shaktsin/umcode/internal/protocol"
 )
 
 func rev(task, agent, result string) AgentRevision {
@@ -341,5 +344,57 @@ func TestHeadAmendmentsRoundTrip(t *testing.T) {
 	}
 	if len(got.AmendReason) > maxAmendReason || !strings.HasPrefix(got.AmendReason, "éé") || !utf8.ValidString(got.AmendReason) {
 		t.Fatalf("reason not bounded on a rune boundary: %d bytes", len(got.AmendReason))
+	}
+}
+
+// A database at 0036 that already has an integration head upgrades to 0037
+// keeping the row; the new amendment columns take their defaults.
+func TestHeadRowSurvivesAmendmentsMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := s.CreateThread(t.Context(), protocol.Thread{Title: "runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := protocol.Turn{ID: "root", ThreadID: th.ID, Status: protocol.TurnRunning, StartedAt: time.Now()}
+	if err = s.CreateTurn(t.Context(), tr); err != nil {
+		t.Fatal(err)
+	}
+	task := protocol.AgentTask{ID: "task", ThreadID: th.ID, RootTurnID: tr.ID, Activation: protocol.AgentActivationExplicitUser, State: protocol.AgentStateRunning, BaseRevision: "base"}
+	if err = s.CreateAgentTask(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	// Back to 0036: the head table without the 0037 columns, holding a row.
+	if _, err = s.DB.Exec(`ALTER TABLE agent_integration_head DROP COLUMN amendments;
+ALTER TABLE agent_integration_head DROP COLUMN amend_reason;
+ALTER TABLE agent_integration_head DROP COLUMN amended_tree;
+DELETE FROM schema_migrations WHERE version > 36;
+INSERT INTO agent_integration_head(task_id, head_tree, applied_count, workflow_json, version, updated_at) VALUES ('task', 'tree-1', 2, '{"headTree":"tree-1"}', 5, '2026-10-30T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(t.Context(), path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h, err := s.AgentIntegrationHead(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.HeadTree != "tree-1" || h.AppliedCount != 2 || h.Version != 5 || string(h.Workflow) != `{"headTree":"tree-1"}` {
+		t.Fatalf("head after upgrade = %+v", h)
+	}
+	if h.Amendments != 0 || h.AmendReason != "" || h.AmendedTree != "" {
+		t.Fatalf("amendment columns after upgrade = %d %q %q, want defaults", h.Amendments, h.AmendReason, h.AmendedTree)
+	}
+	// The upgraded row takes versioned writes with the new fields.
+	h.Amendments, h.AmendReason, h.AmendedTree, h.HeadTree = 1, "fix", "tree-2", "tree-2"
+	if err = s.SetAgentIntegrationHead(t.Context(), h, 5); err != nil {
+		t.Fatal(err)
 	}
 }
