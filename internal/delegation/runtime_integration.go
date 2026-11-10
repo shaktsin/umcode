@@ -25,7 +25,8 @@ type RuntimeIntegration struct {
 // RuntimeIntegrationStatus summarises a task's integration: the integrated
 // head tree (the base tree before any apply), how many revisions moved it,
 // every revision, whether the head's workflow checks all passed, and whether
-// every revision is applied or dropped.
+// every revision is settled (RevisionSettled: applied, dropped, or submitted
+// by a cancelled agent).
 type RuntimeIntegrationStatus struct {
 	HeadTree     string
 	AppliedCount int
@@ -640,13 +641,76 @@ func (s *WorkspaceService) RuntimeIntegrationStatus(ctx context.Context, taskID 
 	if err != nil {
 		return RuntimeIntegrationStatus{}, err
 	}
+	agents, err := s.Store.RuntimeAgents(ctx, taskID)
+	if err != nil {
+		return RuntimeIntegrationStatus{}, err
+	}
+	cancelled := map[string]bool{}
+	for _, a := range agents {
+		cancelled[a.ID] = a.State == protocol.AgentStateCancelled
+	}
 	st := RuntimeIntegrationStatus{HeadTree: h.HeadTree, AppliedCount: h.AppliedCount, Revisions: revs, Verified: h.Version > 0 && headVerified(h), Settled: true}
 	for _, r := range revs {
-		if r.State != store.RevisionApplied && r.State != store.RevisionDropped {
+		if !RevisionSettled(r, cancelled[r.AgentID]) {
 			st.Settled = false
 		}
 	}
 	return st, nil
+}
+
+// RevisionSettled reports whether a revision no longer needs a lead decision:
+// it is applied or dropped, or it is submitted by an agent that was cancelled
+// (spec 4.7: only non-cancelled revisions must be merged or dropped; a
+// cancelled agent's revision is never integrable). A submitted revision of an
+// agent that failed or was interrupted after recording still needs an
+// explicit drop.
+func RevisionSettled(r store.AgentRevision, agentCancelled bool) bool {
+	switch r.State {
+	case store.RevisionApplied, store.RevisionDropped:
+		return true
+	case store.RevisionSubmitted:
+		return agentCancelled
+	}
+	return false
+}
+
+// RuntimeWorkspacesPending returns the live (queued, running or waiting)
+// agents of the task whose own checkout is not ready yet: no workspace
+// attached, or its clone not finished (Manager.Lookup fails). It holds the
+// service lock that PrepareRuntime holds for its whole run, so a checkout
+// being prepared is waited for rather than reported ready early. After the
+// first accept the project checkout holds staged changes and no checkout can
+// be prepared any more, so the lead's first accept requires none pending.
+func (s *WorkspaceService) RuntimeWorkspacesPending(ctx context.Context, taskID string) ([]protocol.RuntimeAgent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.Store.AgentTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	agents, err := s.Store.RuntimeAgents(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	var pending []protocol.RuntimeAgent
+	for _, a := range agents {
+		if !active(a.State) {
+			continue
+		}
+		if a.WorkspaceID == "" {
+			pending = append(pending, a)
+			continue
+		}
+		w, err := s.Store.AgentWorkspace(ctx, a.WorkspaceID)
+		if err != nil || w.TaskID != t.ID || w.ChildID != a.ID || w.Cleaned {
+			pending = append(pending, a)
+			continue
+		}
+		if _, err = s.Manager.Lookup(ctx, w.ID, t.ParentRoot); err != nil {
+			pending = append(pending, a)
+		}
+	}
+	return pending, nil
 }
 
 // ValidateRuntimeHead checks that headTree is the recorded integration head
