@@ -552,6 +552,20 @@ func (s *Store) GetApproval(ctx context.Context, id string) (protocol.Approval, 
 	return a, err
 }
 
+// LatestApprovalForNode returns the newest approval of a kind for a node ID
+// (an agent_plan card's plan ID), whatever its status.
+func (s *Store) LatestApprovalForNode(ctx context.Context, kind, nodeID string) (protocol.Approval, error) {
+	var id string
+	err := s.DB.QueryRowContext(ctx, `SELECT id FROM approvals WHERE kind=? AND node_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1`, kind, nodeID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return protocol.Approval{}, ErrNotFound
+	}
+	if err != nil {
+		return protocol.Approval{}, err
+	}
+	return s.GetApproval(ctx, id)
+}
+
 // PendingWorkflowApproval finds a pending transport for one exact gate; stale
 // revisions and unrelated approvals cannot suppress a recovery request.
 func (s *Store) PendingWorkflowApproval(ctx context.Context, workID, nodeID string, revision int) (protocol.Approval, bool, error) {

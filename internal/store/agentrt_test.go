@@ -555,3 +555,23 @@ func TestSupersedeProposedAgentPlans(t *testing.T) {
 		t.Fatalf("missing plan: %v", err)
 	}
 }
+
+func TestLatestApprovalForNode(t *testing.T) {
+	s, task := runtimeFixture(t)
+	if _, err := s.LatestApprovalForNode(t.Context(), "agent_plan", "plan-x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no approval: %v", err)
+	}
+	now := time.Now().UTC()
+	for i, id := range []string{"apr-1", "apr-2"} {
+		a := protocol.Approval{ID: id, Kind: "agent_plan", NodeID: "plan-x", ThreadID: task.ThreadID, Tool: "agent.propose_plan", Status: "pending", CreatedAt: now.Add(time.Duration(i) * time.Second), ExpiresAt: now.Add(time.Hour)}
+		if err := s.CreateApproval(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CreateApproval(t.Context(), protocol.Approval{ID: "apr-tool", Kind: "tool", NodeID: "plan-x", ThreadID: task.ThreadID, Status: "pending", CreatedAt: now.Add(time.Hour), ExpiresAt: now.Add(2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := s.LatestApprovalForNode(t.Context(), "agent_plan", "plan-x"); err != nil || a.ID != "apr-2" {
+		t.Fatalf("latest = %+v %v", a, err)
+	}
+}

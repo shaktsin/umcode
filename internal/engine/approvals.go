@@ -148,7 +148,25 @@ func (e *Engine) persistedApprovalOutcome(ctx context.Context, id string) (bool,
 
 // RespondApproval records a decision. The first answer wins; later answers
 // get a conflict error.
+//
+// A plan card (kind agent_plan) is answered through the same path as
+// agent/plan/respond without edits: approve runs every approve-time check
+// (models against the current pool, tool compatibility and availability,
+// limits, the capability clamp) and deny declines the plan.
 func (e *Engine) RespondApproval(ctx context.Context, id string, approve, remember bool, clientID string) (protocol.Approval, error) {
+	if a, err := e.Store.GetApproval(ctx, id); err == nil && a.Kind == "agent_plan" {
+		decision := protocol.PlanDecisionDecline
+		if approve {
+			decision = protocol.PlanDecisionApprove
+		}
+		_, decided, err := e.respondAgentPlan(ctx, protocol.AgentPlanRespondParams{PlanID: a.NodeID, Decision: decision}, clientID)
+		return decided, err
+	}
+	return e.respondApproval(ctx, id, approve, remember, clientID)
+}
+
+// respondApproval resolves a pending approval and wakes its waiter.
+func (e *Engine) respondApproval(ctx context.Context, id string, approve, remember bool, clientID string) (protocol.Approval, error) {
 	status := "denied"
 	if approve {
 		status = "approved"

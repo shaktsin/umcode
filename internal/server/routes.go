@@ -230,6 +230,14 @@ func (s *Server) routes() map[string]handler {
 			}
 			return e.RespondAgentSuggestion(ctx, p)
 		}),
+		// The user's answer to an agent.propose_plan card: approve (with model
+		// choices, dropped agents and limits), decline or revise. App clients only.
+		protocol.MethodAgentPlanRespond: bind(func(ctx context.Context, c *conn, p protocol.AgentPlanRespondParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can answer agent plan cards")
+			}
+			return e.RespondAgentPlan(ctx, p)
+		}),
 		protocol.MethodDelegationList: bind(func(ctx context.Context, c *conn, p protocol.DelegationListParams) (any, error) {
 			if !c.admin.Load() {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read delegation")
