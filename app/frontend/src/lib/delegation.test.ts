@@ -190,3 +190,14 @@ it('agent/plan/updated refreshes the card state of the matching thread only', as
   expect(chat.main.cards.plan('p1')?.approvalStatus).toBe('expired'); expect(chat.main.cards.plan('p1')?.plan.state).toBe('superseded');
   expect(other.cards.plan('p1')).toBeUndefined(); chat.sides = [];
 });
+it('hydrate takes a forward plan state but never regresses the same plan', async () => {
+  const s = new DelegationState();
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p', state: 'approved' } }] }); await s.bind('parent', 'project');
+  expect(s.tasks[0].plan?.state).toBe('approved');
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p', state: 'proposed' } }] }); await s.hydrate();
+  expect(s.tasks[0].plan?.state).toBe('approved');
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p', state: 'superseded' } }] }); await s.hydrate();
+  expect(s.tasks[0].plan?.state).toBe('superseded');
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p2', state: 'proposed' } }] }); await s.hydrate();
+  expect(s.tasks[0].plan?.id).toBe('p2');
+});

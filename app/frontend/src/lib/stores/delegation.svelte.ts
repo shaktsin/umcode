@@ -2,6 +2,7 @@ import { app } from './app.svelte';
 import { errMsg } from '$lib/format';
 import { agentActive, type AgentSnapshot, type DelegationUpdated } from '$lib/delegation';
 
+const PLAN_RANK = { proposed: 0, approved: 1, superseded: 2 } as const;
 type Snapshot = AgentSnapshot & { childErrors: Record<string, string>; childSequences: Record<string, number>; agentSequences: Record<string, number>; integrationSequence?: number };
 // Go emits RFC3339 timestamps with variable fractional precision. Compare exact
 // instants, keeping nanoseconds that Date.parse would truncate to milliseconds.
@@ -52,7 +53,8 @@ export class DelegationState {
         const current = this.tasks.find(t => t.task.id === s.task.id);
         if (!current) continue;
         current.usage = s.usage; current.budgetAvailable = s.budgetAvailable; current.stopReason = s.stopReason;
-        if (s.plan) current.plan = s.plan;
+        // Plans have no version: a listed plan never moves the same plan back in its lifecycle.
+        if (s.plan && !(current.plan?.id === s.plan.id && PLAN_RANK[s.plan.state] < PLAN_RANK[current.plan.state])) current.plan = s.plan;
         for (const agent of s.agents ?? []) this.merge({ threadId: id, taskId: s.task.id, agent }, true);
         if (s.integration) this.merge({ threadId: id, taskId: s.task.id, integration: s.integration }, true);
         for (const child of s.children ?? []) this.merge({ threadId: id, taskId: s.task.id, child, sequence: s.childSequences?.[child.id], error: s.childErrors?.[child.id] }, true);
