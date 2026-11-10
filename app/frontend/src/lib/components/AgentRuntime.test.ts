@@ -39,14 +39,14 @@ it('inspector shows requested vs actual model, route trail, rejected capabilitie
   expect(b).toContain('p/m1'); expect(b).toContain('p/m2'); expect(b).toContain('fell back to p/m2'); expect(b).toContain('shell'); expect(b).toContain('no sandbox'); expect(b).toContain('25%'); expect(b).toContain('&lt;script>x'); expect(b).not.toContain('<script>x');
   expect(b).toContain('Implement &lt;b>it'); expect(b).toContain('go test');
 });
-it('Agents renders the runtime tree to depth 3 with a summary bar, keeps legacy cards for legacy tasks, and keeps task Cancel visible while collapsed', () => {
+it('Agents renders the runtime tree to depth 3 and labels historical runs separately', () => {
   const agents = [ag('a'), ag('bb', { parentAgentId: 'a', modelRequested: 'p/m2' }), ag('ccc', { parentAgentId: 'bb' }), ag('dddd', { parentAgentId: 'ccc', name: 'Deep' })];
-  const legacy = { id: 'child', taskId: 'old', role: 'reviewer', model: { model: 'legacy-model' }, state: 'completed', assignment: { prompt: 'Legacy work' }, result: { summary: '' }, usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 }, correctionRounds: 0 };
+  const legacy = { id: 'child', taskId: 'old', model: { model: 'legacy-model' }, state: 'completed', assignment: { prompt: 'Legacy work' }, result: { summary: '' }, usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 } };
   const state = { tasks: [
     { task: { id: 'task', threadId: 't', state: 'running' }, children: [], childErrors: {}, agents, integration: { headTree: 'h', appliedCount: 0, verified: true } },
     { task: { id: 'old', threadId: 't', state: 'completed' }, children: [legacy], childErrors: {} }], reports: {}, pending: false, error: '', cancel() {} } as any;
   const b = html(Agents, { state, threadId: 't', projectId: 'p', onsend() {} });
-  expect(b).toContain('Agents · 5'); expect(b).toContain('Deep'); expect(b).toContain('Cancel task'); expect(b).toContain('Legacy work'); expect(b).toContain('legacy-model'); expect(b).toContain('p/m1 ×3, p/m2');
+  expect(b).toContain('Agents · 4'); expect(b).toContain('Earlier runs · 1'); expect(b).toContain('Deep'); expect(b).toContain('Cancel task'); expect(b).toContain('Legacy work'); expect(b).toContain('legacy-model'); expect(b).toContain('p/m1 ×3, p/m2');
 });
 it('amend note without a reason has no duplicated label; queued Resolve is shown and disables the button', () => {
   const b = html(IntegrationStrip, { integration: { headTree: 'h', appliedCount: 1, verified: true, amendments: 1, revisions: [{ agentId: 'a', state: 'conflict' }] }, agents: [ag('a')], canResolve: true, resolveQueued: true, onresolve() {} });

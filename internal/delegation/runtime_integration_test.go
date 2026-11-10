@@ -62,7 +62,7 @@ func rtFixtureFiles(t *testing.T, files map[string]string) (*WorkspaceService, *
 	if err = s.CreateAgentTask(t.Context(), task); err != nil {
 		t.Fatal(err)
 	}
-	return NewWorkspaceService(s, worktree.New(t.TempDir()), nil, nil), s, task
+	return NewWorkspaceService(s, worktree.New(t.TempDir()), nil), s, task
 }
 
 // rtRun creates a runtime agent, gives it its checkout, lets edit change it,

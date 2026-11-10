@@ -47,8 +47,8 @@ func scanAgentTask(row interface{ Scan(...any) error }) (protocol.AgentTask, err
 
 func scanAgentChild(row interface{ Scan(...any) error }) (protocol.AgentChild, error) {
 	var child protocol.AgentChild
-	var assignment, result, usage, created, updated, model string
-	err := row.Scan(&child.ID, &child.TaskID, &child.Role, &assignment, &child.State, &child.Revision, &child.WorkspaceID, &result, &usage, &child.CorrectionRounds, &child.Version, &created, &updated, &model)
+	var assignment, result, usage, created, updated, model, role string
+	err := row.Scan(&child.ID, &child.TaskID, &role, &assignment, &child.State, &child.Revision, &child.WorkspaceID, &result, &usage, &child.CorrectionRounds, &child.Version, &created, &updated, &model)
 	if errors.Is(err, sql.ErrNoRows) {
 		return child, ErrNotFound
 	}
@@ -146,67 +146,6 @@ func (s *Store) UpdateAgentTaskState(ctx context.Context, taskID, threadID, proj
 	return tx.Commit()
 }
 
-// CreateAgentChild returns the original record for duplicate (task, call) IDs,
-// regardless of a redelivered payload. New children always start queued at v1.
-func (s *Store) CreateAgentChild(ctx context.Context, child protocol.AgentChild, callID string) (protocol.AgentChild, error) {
-	if child.TaskID == "" || strings.TrimSpace(callID) == "" {
-		return protocol.AgentChild{}, fmt.Errorf("%w: task and call IDs required", ErrAgentTransition)
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return protocol.AgentChild{}, err
-	}
-	defer tx.Rollback()
-	existing, err := scanAgentChild(tx.QueryRowContext(ctx, `SELECT `+agentChildCols+` FROM agent_children WHERE task_id=? AND call_id=?`, child.TaskID, callID))
-	if err == nil {
-		return existing, tx.Commit()
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return protocol.AgentChild{}, err
-	}
-	task, err := scanAgentTask(tx.QueryRowContext(ctx, `SELECT `+agentTaskCols+` FROM agent_tasks WHERE id=?`, child.TaskID))
-	if err != nil {
-		return protocol.AgentChild{}, err
-	}
-	if task.State == protocol.AgentStateCompleted || task.State == protocol.AgentStateCancelled || task.State == protocol.AgentStateFailed || task.State == protocol.AgentStateInterrupted {
-		return protocol.AgentChild{}, fmt.Errorf("%w: task is terminal", ErrAgentTransition)
-	}
-	if child.State == "" {
-		child.State = protocol.AgentStateQueued
-	}
-	if child.State != protocol.AgentStateQueued || (child.Role != protocol.AgentRoleImplementer && child.Role != protocol.AgentRoleReviewer) || strings.TrimSpace(child.Assignment.Prompt) == "" || child.CorrectionRounds != 0 {
-		return protocol.AgentChild{}, fmt.Errorf("%w: invalid new child", ErrAgentTransition)
-	}
-	if child.ID == "" {
-		child.ID = NewID("agt")
-	}
-	child.Version = 1
-	child.CreatedAt = time.Now().UTC()
-	child.UpdatedAt = child.CreatedAt
-	assignment, err := json.Marshal(child.Assignment)
-	if err != nil {
-		return protocol.AgentChild{}, err
-	}
-	result, err := json.Marshal(child.Result)
-	if err != nil {
-		return protocol.AgentChild{}, err
-	}
-	usage, err := json.Marshal(child.Usage)
-	if err != nil {
-		return protocol.AgentChild{}, err
-	}
-	model, err := json.Marshal(child.Model)
-	if err != nil {
-		return protocol.AgentChild{}, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO agent_children (`+agentChildCols+`,call_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		child.ID, child.TaskID, child.Role, string(assignment), child.State, child.Revision, child.WorkspaceID, string(result), string(usage), child.CorrectionRounds, child.Version, FormatTime(child.CreatedAt), FormatTime(child.UpdatedAt), string(model), callID)
-	if err != nil {
-		return protocol.AgentChild{}, err
-	}
-	return child, tx.Commit()
-}
-
 // AgentChild deliberately requires both identities; foreign children are absent.
 func (s *Store) AgentChild(ctx context.Context, taskID, childID string) (protocol.AgentChild, error) {
 	return scanAgentChild(s.DB.QueryRowContext(ctx, `SELECT `+agentChildCols+` FROM agent_children WHERE task_id=? AND id=?`+legacyChildOnly, taskID, childID))
@@ -259,83 +198,20 @@ func validAgentTransition(from, to protocol.AgentState) bool {
 	return false
 }
 
-// UpdateAgentChild updates mutable execution fields using persisted ownership,
-// role, state and version. Version/timestamps in child are ignored; reload to get
-// the incremented version. Assignment and role remain fixed for this identity.
-func (s *Store) UpdateAgentChild(ctx context.Context, child protocol.AgentChild, expectedVersion int64) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	old, err := scanAgentChild(tx.QueryRowContext(ctx, `SELECT `+agentChildCols+` FROM agent_children WHERE task_id=? AND id=?`, child.TaskID, child.ID))
-	if err != nil {
-		return err
-	}
-	if old.Version != expectedVersion {
-		return ErrAgentConflict
-	}
-	if old.Role != child.Role || !validAgentTransition(old.State, child.State) || child.CorrectionRounds < old.CorrectionRounds || child.CorrectionRounds > old.CorrectionRounds+1 || child.CorrectionRounds > 2 {
-		return ErrAgentTransition
-	}
-	if child.State == protocol.AgentStateQueued && (old.State == protocol.AgentStateCompleted || old.State == protocol.AgentStateFailed) {
-		if child.CorrectionRounds != old.CorrectionRounds+1 {
-			return fmt.Errorf("%w: correction must consume a round", ErrAgentTransition)
-		}
-	} else if child.CorrectionRounds != old.CorrectionRounds {
-		return fmt.Errorf("%w: correction rounds only change on requeue", ErrAgentTransition)
-	}
-	assignment, err := json.Marshal(child.Assignment)
-	if err != nil {
-		return err
-	}
-	oldAssignment, err := json.Marshal(old.Assignment)
-	if err != nil {
-		return err
-	}
-	if string(assignment) != string(oldAssignment) {
-		return fmt.Errorf("%w: assignment is immutable", ErrAgentTransition)
-	}
-	result, err := json.Marshal(child.Result)
-	if err != nil {
-		return err
-	}
-	usage, err := json.Marshal(child.Usage)
-	if err != nil {
-		return err
-	}
-	model, err := json.Marshal(child.Model)
-	if err != nil {
-		return err
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE agent_children SET state=?,revision=?,workspace_id=?,result_json=?,usage_json=?,model_json=?,correction_rounds=?,version=version+1,updated_at=? WHERE task_id=? AND id=? AND version=?`,
-		child.State, child.Revision, child.WorkspaceID, string(result), string(usage), string(model), child.CorrectionRounds, Now(), child.TaskID, child.ID, expectedVersion)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return ErrAgentConflict
-	}
-	return tx.Commit()
-}
-
 // ReconcileAgentChildren interrupts active children after restart without
 // modifying results, workspace references, verification evidence or usage.
 // Repeating reconciliation leaves already interrupted children untouched.
+// Runtime agents and their mirror rows are reconciled by ReconcileRuntimeAgents.
 func (s *Store) ReconcileAgentChildren(ctx context.Context) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `UPDATE agent_children SET state='interrupted',version=version+1,updated_at=? WHERE state IN ('queued','running','waiting_approval')`, Now()); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE agent_children SET state='interrupted',version=version+1,updated_at=? WHERE state IN ('queued','running','waiting_approval') AND NOT EXISTS (SELECT 1 FROM agents WHERE agents.id=agent_children.id)`, Now()); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE agent_tasks SET state='interrupted',updated_at=? WHERE state IN ('queued','running','waiting_approval')`, Now()); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE agent_tasks SET state='interrupted',updated_at=? WHERE state IN ('queued','running','waiting_approval') AND NOT EXISTS (SELECT 1 FROM agents WHERE agents.task_id=agent_tasks.id)`, Now()); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -1,67 +1,37 @@
 # Subagent development
 
-Delegation is an explicit, bounded workflow inside one parent chat. Use **Enable
-agents for next message**, then submit the assignment. The action can create an
-empty chat in the selected project; enabling alone does not send a message. A
-submitted canonical installed `superpowers:subagent-driven-development` skill
-also enables the workflow. Selecting a skill, ordinary prose, Deep mode and
-model pools do not enable it.
+Agents are an explicit, bounded workflow inside one parent chat. Use **Enable
+agents for next message**, then submit the assignment. Enabling can create an
+empty chat in the selected project; it does not send a message. A submitted
+canonical installed `superpowers:subagent-driven-development` skill can also
+enable agents. Selecting a skill, ordinary prose, Deep mode and model pools do
+not grant agent authority.
 
-A committed Git project with clean inputs is required. Each implementer works in
-an owned isolated checkout. One worker runs at a time, followed by an independent
-reviewer of that exact committed revision. Findings return to the same
-implementer, with at most two correction rounds. A corrected revision needs a
-fresh independent review. Children inherit the parent's permissions and approved
-models; they cannot delegate further.
+A committed Git project with clean inputs is required. The lead proposes a plan
+and waits for the user's approval. Each approved plan entry bounds an agent's
+files, shell, network, model and ability to spawn agents. Write-capable agents
+work in isolated checkouts; read-only agents can inspect the integrated state.
+Several agents can work under the shared task budget. The lead decides which
+submitted revisions to accept, resolves conflicts, runs the planned checks on
+each integrated head and completes through `agent.integrate`. Agent summaries
+and claimed checks do not count as lead verification.
 
-The lead integrates approved changes only while the parent's files still match
-the admitted baseline. Parent edits or conflicts block integration and preserve
-both versions. Completion requires the lead's actual successful check receipts
-for the exact integrated revision. Worker summaries or reported check strings
-cannot satisfy lead verification. Failed, blocked and unrun checks stay visible.
+The collapsed **Agents** section shows the runtime tree, model choices,
+capabilities, usage, results and integration status. Agent approvals appear in
+the parent chat with their requesting agent. Cancel an agent or the task from
+that section; the parent's Stop action also cancels the task. Cancellation
+releases approval waits and keeps recoverable work. On restart, unfinished
+agents become interrupted and do not resume automatically; submitted revisions
+remain available for the lead to inspect. An earlier task created by the
+retired worker flow is interrupted during upgrade if unfinished. Its records
+remain in a read-only **Earlier agent run** list.
 
-The compact **Agents** section starts collapsed. Expand it for assignments,
-models, usage, corrections, results, structured findings, review verdicts and
-checks. Pending approvals identify the requesting agent and use the existing
-approval controls. **Cancel task** or the child Cancel action stops execution;
-the parent Stop action also cancels the delegated task. Cancellation releases
-approval waits and retains recoverable work. After engine restart, unfinished
-work appears interrupted and never resumes provider execution automatically.
+The lead and all agents share the task's usage and limits. Manual context
+compaction of an unfinished lead task shares its budget, deadline and
+cancellation owner. Actual usage and budget stops appear in Agents. A request
+already underway can exceed an estimated billing reservation.
 
-The parent and all children share the task's usage and limits. Manual context
-compaction of an unfinished task shares its budget, deadline and cancellation
-owner; exhausted or unavailable task accounting blocks provider execution. Reservations are
-estimates, so a request already underway can exceed an estimated billing limit.
-Actual usage and budget stops appear in Agents. Unavailable models or credentials
-fail before provider execution.
-
-File links open the owned committed child snapshot in the inspector. Repeated
-links reuse the same tab for a parent/task/child/revision/path. Historical links
-become unavailable after a correction supersedes the retained revision or cleanup
-removes the snapshot; an already-open tab keeps its previously read content.
-
-## Current v1 limits
-
-- Reviewers can inspect scoped files and submit structured review reports.
-  Shell, script and command verification are blocked because v1 does not offer
-  an enforceable read-only command sandbox. The implementer and lead perform
-  executable checks.
-- Required interactive visual QA blocks automatic completion when no trusted
-  visual receipt is available. A passed browser command does not manufacture
-  that receipt. Agents shows the criterion as blocked.
-- Cleanup conservatively retains workspaces containing ignored build outputs or
-  new edits. A completed verified task can therefore show a cleanup warning;
-  retained files are not silently deleted.
-- Delegation requires Git and committed clean inputs. General projectless or
-  non-Git delegation is unavailable.
-
-## Agent runtime (experimental, `agents.runtime_v2`)
-
-With `agents.runtime_v2: true` the legacy `agent.*` worker/reviewer tools are
-replaced by plan-bound runtime agents. Nothing above about one worker at a time
-or role strings applies there; the parent chat's lead spawns several agents
-whose authority comes only from an approved plan. With the flag off (the
-default) the legacy flow is unchanged and none of the tools or RPCs below exist.
+## Agent workflow
 
 ### Two-step activation
 
@@ -71,7 +41,7 @@ Agents are never enabled by the model. Admission is still decided at
 1. **Suggest.** In an ordinary (not admitted) turn the lead may call
    `agent.suggest {reason}`. It has no authority: it stores a suggestion card
    and tells the lead to stop. Rules, each refusal naming its rule: lead only
-   (never a runtime agent or legacy child); at most one per user message; only
+   (never an agent); at most one per user message; only
    in a committed, clean Git project; none while a delegation task is active;
    none after the user declined in the same chat until the user enables agents
    themselves (`delegation/enable`) or answers a later card with enable.
@@ -170,8 +140,8 @@ requires passing receipts for the final integrated state.
 
 Pending cards do not survive an engine restart: the plan card's approval
 expires and the plan stays `proposed`, a pending suggestion becomes `expired`,
-and the unfinished delegation task is interrupted, as for every task. Nothing
-starts and the stale card cannot be approved. The user enables agents again
+and running agents become interrupted. Nothing starts and the stale card
+cannot be approved. The user enables agents again
 and the lead proposes a new plan; an interrupted suggestion or plan call does
 not block later actions in the chat.
 
@@ -184,16 +154,14 @@ not block later actions in the chat.
 - Pending suggestion and plan decisions are kept in memory; after a restart
   repeated answers are judged conservatively.
 - Not yet: budget-slice reservation display, `context` full/summary semantics,
-  resource-aware promotion, context-window compatibility of models, and the UI
-  cards (the cards are tool results plus the RPCs above).
+  resource-aware promotion and context-window compatibility of models.
 
 ## Local validation
 
 The server acceptance tests use the real Unix RPC server, engine, Git workspaces
 and verification tools with a deterministic fake provider; they make no paid API
-calls. Run `go test ./internal/server -run Delegation -count=1`. Existing engine,
-coordinator and workspace tests cover restart recovery, cancellation, exact review
-and integration guards. On hosts with restricted local sockets, these tests need
+calls. Run `go test ./internal/server -run Delegation -count=1`. Engine, store and workspace tests cover restart recovery, cancellation,
+plan-bound authority and integration guards. On hosts with restricted local sockets, these tests need
 the normal approved host test environment.
 
 `node app/frontend/e2e/delegation.mjs` renders the real Svelte app against a

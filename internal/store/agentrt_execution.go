@@ -18,9 +18,9 @@ func runtimeMirrorCallID(agentID string) string { return "rt:" + agentID }
 // reusing the legacy execution tables. It inserts an inert mirror row into
 // agent_children (id = agent ID, role implementer, state following the agent;
 // UpdateRuntimeAgent keeps it in step) plus the internal thread and
-// agent_executions row, exactly as EnsureAgentExecution does. Legacy delegation
-// reads (AgentChild, AgentChildren) hide mirror rows, so no legacy path treats
-// them as work. It is idempotent: repeating it returns the stored execution.
+// agent_executions row. Historical delegation reads (AgentChild,
+// AgentChildren) hide mirror rows. It is idempotent: repeating it returns the
+// stored execution.
 func (s *Store) EnsureRuntimeAgentExecution(ctx context.Context, a protocol.RuntimeAgent) (AgentExecution, error) {
 	if x, err := s.AgentExecution(ctx, a.TaskID, a.ID); err == nil {
 		return x, nil

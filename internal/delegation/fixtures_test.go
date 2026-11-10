@@ -54,10 +54,6 @@ func workspaceFixture(t *testing.T) (*WorkspaceService, *store.Store, protocol.A
 	if err = s.CreateAgentTask(t.Context(), task); err != nil {
 		t.Fatal(err)
 	}
-	child, err := s.CreateAgentChild(t.Context(), protocol.AgentChild{ID: "implementer", TaskID: task.ID, Role: protocol.AgentRoleImplementer, Assignment: protocol.AgentAssignment{Prompt: "edit"}}, "call")
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc := NewWorkspaceService(s, worktree.New(t.TempDir()), nil, nil)
-	return svc, s, task, child
+	svc := NewWorkspaceService(s, worktree.New(t.TempDir()), nil)
+	return svc, s, task, protocol.AgentChild{}
 }

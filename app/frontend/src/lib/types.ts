@@ -1,6 +1,6 @@
 // Mirrors internal/protocol (Go). Keep field names in sync with the JSON tags there.
-import type { AgentChild, AgentResult, AgentState } from './delegation';
-type AgentAssignment = AgentChild['assignment'];
+import type { AgentResult, AgentState } from './delegation';
+type AgentAssignment = { prompt: string; acceptanceChecks?: string[]; contextRefs?: string[] };
 
 export type Complexity = '' | 'low' | 'medium' | 'high';
 

@@ -22,7 +22,7 @@ import (
 // agentToolNames returns the registered agent.* tool names, excluding the
 // lead-only agent.integrate.
 func agentToolNames(e *Engine) []string {
-	workflow := map[string]bool{"agent.integrate": true, "agent.complete": true, "agent.review_report": true}
+	workflow := map[string]bool{"agent.integrate": true}
 	var names []string
 	for _, tool := range e.Tools.All() {
 		if n := tool.Name(); strings.HasPrefix(n, "agent.") && !workflow[n] {
@@ -33,7 +33,7 @@ func agentToolNames(e *Engine) []string {
 	return names
 }
 
-func TestRuntimeToolsRegistered(t *testing.T) {
+func TestDelegationRuntimeIsOnlyPath(t *testing.T) {
 	e, _, _, _ := delegationFixture(t)
 	want := []string{"agent.cancel", "agent.list", "agent.message", "agent.propose_plan", "agent.spawn", "agent.status", "agent.suggest", "agent.wait"}
 	if got := agentToolNames(e); !slices.Equal(got, want) {
@@ -45,9 +45,12 @@ func TestRuntimeToolsRegistered(t *testing.T) {
 	if e.AgentRuntime == nil {
 		t.Fatal("agent runtime not constructed")
 	}
-	for _, n := range []string{"agent.integrate", "agent.complete", "agent.review_report"} {
-		if _, ok := e.Tools.Get(n); !ok {
-			t.Fatalf("workflow tool %s missing", n)
+	if _, ok := e.Tools.Get("agent.integrate"); !ok {
+		t.Fatal("runtime integration tool missing")
+	}
+	for _, n := range []string{"agent.complete", "agent.review_report"} {
+		if _, ok := e.Tools.Get(n); ok {
+			t.Fatalf("legacy tool %s is still registered", n)
 		}
 	}
 }

@@ -886,13 +886,20 @@ func TestApplyOnIntegratedCollidingPathsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "sub/x.go": "x\n"})
+			lower, err := os.Stat(filepath.Join(f.parent, "a.go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if upper, err := os.Stat(filepath.Join(f.parent, "A.go")); err == nil && os.SameFile(lower, upper) {
+				t.Skip("fixture filesystem folds ASCII case, so it cannot create distinct colliding paths")
+			}
 			result := f.agent(t, "agent", func(dir string) {
 				for _, p := range add {
 					write(t, dir, p, p+"\n")
 				}
 			})
 			before := parentSnapshot(t, f.parent)
-			_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+			_, err = f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
 			if err == nil || !strings.Contains(err.Error(), "alias") {
 				t.Fatalf("colliding paths %v must be refused, got %v", add, err)
 			}
