@@ -290,10 +290,6 @@ func (e *Engine) selectionFailure(ctx context.Context, turn protocol.Turn, call 
 		_ = e.saveAndPublish(ctx, it, protocol.NotifyItemCompleted)
 	}
 	failure := protocol.ActionFailure{Category: "policy_denied", Message: reason, NextStep: "Respect the current tool permission or availability constraint; clarify it rather than claiming execution.", OperationID: it.ID}
-	if rule, ok := agentRuleFailure(name, cause); ok {
-		rule.OperationID = it.ID
-		failure = rule
-	}
 	if saved, lookupErr := e.Store.ActiveExecutionTask(ctx, turn.ThreadID); workbenchContextFrom(ctx) == nil && lookupErr == nil && it.ID != "" {
 		operation, createErr := e.Store.CreateTaskOperation(ctx, protocol.TaskOperation{TaskID: saved.Task.ID, TurnID: turn.ID, ItemID: it.ID, Tool: name, Args: call.Args, ImplementationID: name})
 		if createErr == nil {
