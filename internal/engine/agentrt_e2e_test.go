@@ -48,9 +48,19 @@ const e2eBase = "package x\n\nfunc F() int { return 1 }\n"
 // signals so shells are offered, and the scripted model.
 func newRuntimeE2E(t *testing.T, script ...fakeStep) *runtimeE2E {
 	t.Helper()
+	return newRuntimeE2EWith(t, nil, script...)
+}
+
+// newRuntimeE2EWith is newRuntimeE2E with base, when set, adding more files
+// to the project root before the base commit.
+func newRuntimeE2EWith(t *testing.T, base func(root string), script ...fakeStep) *runtimeE2E {
+	t.Helper()
 	e, th, root, _ := delegationFixtureWith(t, runtimeV2On)
 	if err := os.WriteFile(filepath.Join(root, "x.go"), []byte(e2eBase), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if base != nil {
+		base(root)
 	}
 	delegationGit(t, root, "add", ".")
 	delegationGit(t, root, "commit", "-m", "x.go")

@@ -293,11 +293,22 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 	if task.ThreadID != parent.ID {
 		return result, protocol.Errorf(protocol.CodeInvalidParams, "delegation task belongs to another chat")
 	}
+	runtimeAgent := false
 	if p.ChildID != "" {
-		if _, err = e.Store.AgentChild(ctx, task.ID, p.ChildID); err != nil {
+		if _, err = e.Store.AgentChild(ctx, task.ID, p.ChildID); err == nil {
+			err = e.DelegationCoordinator.Cancel(ctx, task.ID, p.ChildID)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return result, err
+		} else if _, rtErr := e.Store.RuntimeAgent(ctx, task.ID, p.ChildID); e.AgentRuntime != nil && rtErr == nil {
+			// A runtime agent of this task (legacy rows never name one).
+			runtimeAgent = true
+			result.Integration, err = e.cancelRuntimeAgent(ctx, task.ID, p.ChildID)
+		} else if rtErr != nil && !errors.Is(rtErr, store.ErrNotFound) {
+			return result, rtErr
+		} else {
+			// Neither: the legacy not-found error.
 			return result, err
 		}
-		err = e.DelegationCoordinator.Cancel(ctx, task.ID, p.ChildID)
 	} else {
 		// Runtime agents first, so they end cancelled rather than failed by
 		// the task closing under them. Without a runtime this is a no-op.
@@ -319,7 +330,13 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 		result.Integration, reportErr = e.cancelledIntegrationReport(ctx, task.ID)
 		cancelErr = errors.Join(cancelErr, reportErr)
 	}
-	result.Children, err = e.DelegationCoordinator.List(ctx, task.ID)
+	if runtimeAgent {
+		// Runtime agents are not legacy children; their changes reach clients
+		// through the runtime's own agent events.
+		result.Children = []protocol.AgentChild{}
+	} else {
+		result.Children, err = e.DelegationCoordinator.List(ctx, task.ID)
+	}
 	if err == nil {
 		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &result.Task})
 	}
