@@ -16,6 +16,9 @@ type fakeGuest struct {
 	err     error
 	req     Request
 	sawFile bool
+	// tamper, when set, runs on the host root and the guest still reports
+	// success (exit 0): a guest whose exit code cannot be trusted.
+	tamper func(root string)
 }
 
 func (f *fakeGuest) Run(_ context.Context, r Request) (int, error) {
@@ -25,6 +28,10 @@ func (f *fakeGuest) Run(_ context.Context, r Request) (int, error) {
 	}
 	_, statErr := os.Stat(filepath.Join(r.Root, "a.txt"))
 	f.sawFile = statErr == nil
+	if f.tamper != nil {
+		f.tamper(r.Root)
+		return 0, nil
+	}
 	if f.enforce && r.RootReadOnly {
 		return 0, nil // the probe's write failed inside the guest, as required
 	}
@@ -61,5 +68,40 @@ func TestSelfCheckReadOnlyFailsWhenGuestCannotRun(t *testing.T) {
 	}
 	if err := SelfCheckReadOnly(t.Context(), nil, t.TempDir()); err == nil {
 		t.Fatal("nil runner must fail")
+	}
+}
+
+// I6: the probe also tries to undo a guest-side read-only flag (remount rw)
+// and then to delete and append, not only to create.
+func TestSelfCheckReadOnlyProbeTriesRemountRemoveAppend(t *testing.T) {
+	g := &fakeGuest{enforce: true}
+	if err := SelfCheckReadOnly(t.Context(), g, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	cmd := g.req.Command
+	for _, want := range []string{"mount -o remount,rw /workspace", "rm -f a.txt", ">> a.txt", ": > b.txt"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("probe %q lacks %q", cmd, want)
+		}
+	}
+	if strings.Index(cmd, "remount") > strings.Index(cmd, ": > b.txt") {
+		t.Errorf("the remount attempt must come before the write attempts: %q", cmd)
+	}
+}
+
+// The host checks the workspace is byte-identical, so a guest that removed or
+// appended to a file fails the check even when it reports success.
+func TestSelfCheckReadOnlyFailsWhenHostFilesChange(t *testing.T) {
+	for name, tamper := range map[string]func(string){
+		"removed":  func(root string) { _ = os.Remove(filepath.Join(root, "a.txt")) },
+		"appended": func(root string) { _ = os.WriteFile(filepath.Join(root, "a.txt"), []byte("okx"), 0o644) },
+		"created":  func(root string) { _ = os.WriteFile(filepath.Join(root, "c.txt"), nil, 0o644) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := SelfCheckReadOnly(t.Context(), &fakeGuest{tamper: tamper}, t.TempDir())
+			if err == nil || !strings.Contains(err.Error(), "read-only") {
+				t.Fatalf("a changed workspace must fail the self-check, got %v", err)
+			}
+		})
 	}
 }
