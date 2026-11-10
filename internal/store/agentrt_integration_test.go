@@ -243,3 +243,42 @@ func TestRuntimeWorkflowDecode(t *testing.T) {
 		t.Fatal("want error on malformed json")
 	}
 }
+
+func TestRuntimeIntegrationsToReconcile(t *testing.T) {
+	s, task := runtimeFixture(t)
+	ctx := t.Context()
+	want := func(ids ...string) {
+		t.Helper()
+		got, err := s.RuntimeIntegrationsToReconcile(ctx)
+		if err != nil || strings.Join(got, ",") != strings.Join(ids, ",") {
+			t.Fatalf("got %v %v, want %v", got, err, ids)
+		}
+	}
+	want()
+	r, err := s.SubmitAgentRevision(ctx, rev(task.ID, "ag", "r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetAgentIntegrationHead(ctx, AgentIntegrationHead{TaskID: task.ID, HeadTree: "t0"}, 0); err != nil {
+		t.Fatal(err)
+	}
+	want()
+	r.State, r.TreeBefore = RevisionApplying, "t0"
+	if err = s.UpdateAgentRevision(ctx, r, r.Version); err != nil {
+		t.Fatal(err)
+	}
+	want(task.ID)
+	// Applied, but the head missed its move.
+	if r, err = s.AgentRevision(ctx, task.ID, "ag"); err != nil {
+		t.Fatal(err)
+	}
+	r.State, r.TreeAfter = RevisionApplied, "t1"
+	if err = s.UpdateAgentRevision(ctx, r, r.Version); err != nil {
+		t.Fatal(err)
+	}
+	want(task.ID)
+	if err = s.SetAgentIntegrationHead(ctx, AgentIntegrationHead{TaskID: task.ID, HeadTree: "t1", AppliedCount: 1}, 1); err != nil {
+		t.Fatal(err)
+	}
+	want()
+}
