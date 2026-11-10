@@ -124,7 +124,7 @@ func (t *verificationRun) Assess(args json.RawMessage) (Risk, string) {
 	return risk, fmt.Sprintf("Run %d verification checks", len(a.Checks))
 }
 func (t *verificationRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
-	if err := RequireWritable(ctx); err != nil {
+	if err := RequireShell(ctx); err != nil {
 		return "", err
 	}
 	type check struct {
@@ -677,7 +677,7 @@ func discoveredToolPath(path, home string) string {
 }
 
 func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
-	if err := RequireWritable(ctx); err != nil {
+	if err := RequireShell(ctx); err != nil {
 		return "", err
 	}
 	a, err := decode[struct {
@@ -695,6 +695,11 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	scope := ScopeFrom(ctx)
 	if scope == nil {
 		return "", ErrNoProject
+	}
+	if scope.RuntimeAgent {
+		if err := t.runtimeConfinementError(scope); err != nil {
+			return "", err
+		}
 	}
 	sandboxed := !scope.UseCompute && t.sandbox != nil
 	if scope.RestrictedChild && !scope.UseCompute && !sandboxed {
@@ -741,7 +746,8 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		code, runErr := t.compute.Run(cctx, compute.Request{
 			Root: scope.Root, Dir: dir, Command: a.Command,
 			Network: scope.AllowNet, Timeout: int(timeout.Seconds()),
-			VCPUs: scope.ComputeVCPUs, MemoryMiB: scope.ComputeMemoryMiB,
+			RootReadOnly: scope.RuntimeAgent && scope.ShellReadOnly,
+			VCPUs:        scope.ComputeVCPUs, MemoryMiB: scope.ComputeMemoryMiB,
 			DiskLimitBytes: int64(scope.ComputeDiskMiB) << 20, Stdout: stdout, Stderr: stderr,
 		})
 		if runErr != nil {
@@ -779,7 +785,14 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 				return "", err
 			}
 			defer os.RemoveAll(temp)
-			policy = sandbox.IsolatedChildPolicy(scope.Root, scope.AllowNet, temp)
+			switch {
+			case scope.RuntimeAgent && scope.ShellReadOnly:
+				policy = sandbox.ReadOnlyChildPolicy(scope.Root, scope.AllowNet, temp)
+			case scope.RuntimeAgent:
+				policy = sandbox.AgentWritePolicy(scope.Root, scope.AllowNet, temp)
+			default:
+				policy = sandbox.IsolatedChildPolicy(scope.Root, scope.AllowNet, temp)
+			}
 			cmd.Env = append(cmd.Env, "TMPDIR="+temp, "TMP="+temp, "TEMP="+temp)
 		}
 		if err := t.sandbox.Wrap(cmd, policy); err != nil {
@@ -809,6 +822,23 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		out += sandboxHint(stdout.String()+stderr.String(), scope.AllowNet)
 	}
 	return out, nil
+}
+
+// runtimeConfinementError refuses a runtime agent's command unless the one
+// per-project confinement resolver confirms a microVM or OS sandbox. There is
+// no host fallback: the message names why the shell is unavailable.
+func (t *shellRun) runtimeConfinementError(scope *Scope) error {
+	if !scope.Confined {
+		return errors.New("shell is not available to this agent: no confirmed confinement")
+	}
+	switch ShellConfinement(scope, t.compute != nil, t.sandbox) {
+	case ConfMicroVM, ConfOSSandbox:
+		return nil
+	}
+	if scope.UseCompute {
+		return errors.New("shell is unavailable to this agent: the project microVM is unavailable (no fallback to the host)")
+	}
+	return errors.New("shell is unavailable to this agent: no sandbox available (no fallback to the host)")
 }
 
 // sandboxHint explains a failure that looks like the sandbox's doing, so the
