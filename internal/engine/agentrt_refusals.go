@@ -60,6 +60,8 @@ func agentRuleFailure(tool, msg string) (protocol.ActionFailure, bool) {
 		f.NextStep = "Agents need a committed Git project: tell the user what this refusal says is missing, then agents can be enabled again."
 	case strings.Contains(text, "a plan has 1 to"):
 		f.NextStep = fmt.Sprintf("Propose a plan with 1 to %d agents.", tools.MaxPlanAgents)
+	case strings.Contains(msg, suggestAdmittedRefusal):
+		f.NextStep = "Agents are already enabled for this message: call agent.propose_plan instead."
 	case strings.Contains(text, "agent.suggest refused:"):
 		f.NextStep = "Follow the rule this refusal names; do not call agent.suggest again in this message."
 	default:

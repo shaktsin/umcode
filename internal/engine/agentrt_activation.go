@@ -20,6 +20,10 @@ const delegationLeadPrompt = `Agents are enabled for this task. You decide wheth
 // turn ends, and the user's answer arrives as a new turn.
 const suggestStopMessage = "Stop now: the user decides whether to enable agents. Do not call agent.* tools or continue the task in this turn."
 
+// suggestAdmittedRefusal is agent.suggest's refusal in a turn admitted for
+// delegation.
+const suggestAdmittedRefusal = "agent.suggest refused: this turn is already admitted for delegation; agents are enabled, so do not suggest them; use agent.propose_plan"
+
 // suggestOnlyTool reports agent.suggest. Unlike the other agent.* tools it is
 // offered only in turns that are NOT admitted for delegation, so it is exempt
 // from the "admitted task required" gate (and gated the other way round in
@@ -41,7 +45,7 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 		return "", errors.New("agent.suggest refused: the agent runtime is unavailable")
 	}
 	if _, admitted := DelegationTaskFromContext(ctx); admitted {
-		return "", errors.New("agent.suggest refused: this turn is already admitted for delegation; agents are enabled, so do not suggest them")
+		return "", errors.New(suggestAdmittedRefusal)
 	}
 	turn, ok := ctx.Value(executionTurnKey{}).(protocol.Turn)
 	if !ok || turn.ID == "" || turn.ThreadID == "" {

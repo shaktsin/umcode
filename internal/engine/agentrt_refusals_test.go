@@ -99,3 +99,20 @@ func TestAgentToolRuleRefusalsNotRetryable(t *testing.T) {
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
+
+func TestSuggestInAdmittedTurnNamesItsRule(t *testing.T) {
+	x := newActivationE2E(t, nil)
+	token := x.enable(t, x.suggestTurn(t))
+	x.setLead("admitted suggest", e2eLeadStep{"agent.suggest", `{"reason":"again"}`})
+	x.turn(t, protocol.TurnStartParams{Text: "admitted suggest", DelegationActivationToken: token,
+		Override: protocol.ModelSelection{Provider: protocol.PoolProvider, Model: "e2e-pool", Complexity: protocol.ComplexityHigh}})
+	res := x.leadResults(t, "agent.suggest")
+	last := res[len(res)-1]
+	if !last.IsError || !strings.Contains(last.Result, "use agent.propose_plan") {
+		t.Fatalf("lead told %+v, want the admitted-turn rule", last)
+	}
+	f := itemFailure(t, x.lastToolItem(t, "agent.suggest"))
+	if f.Retryable || !strings.Contains(f.NextStep, "agent.propose_plan") {
+		t.Fatalf("failure %+v, want not retryable naming agent.propose_plan", f)
+	}
+}

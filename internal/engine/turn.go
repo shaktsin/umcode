@@ -1598,6 +1598,12 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		if _, err := e.authorizeDelegationTool(ctx); err != nil {
 			return e.selectionFailure(sctx, turn, call, name, err.Error())
 		}
+	} else if e.suggestOnlyTool(name) {
+		// Not offered in admitted turns; name the rule instead of a bare
+		// "not permitted".
+		if _, admitted := DelegationTaskFromContext(ctx); admitted {
+			return e.selectionFailure(sctx, turn, call, name, suggestAdmittedRefusal)
+		}
 	}
 	agentCallID := call.ID
 	if e.AgentRuntime != nil && isDelegationTool(name) {
