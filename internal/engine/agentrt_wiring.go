@@ -120,18 +120,22 @@ func (e *Engine) cancelRuntimeAgents(ctx context.Context, taskID string) error {
 // applying, blocked with its reason. It never applies or resumes anything
 // (the apply is predicted read-only, never run). A task that cannot be
 // settled, for example because its project folder is gone, is logged and
-// does not stop the engine; the next accept or completion reports it.
-func (e *Engine) reconcileRuntimeIntegrations(ctx context.Context) error {
+// does not stop the engine, nor does failing to list them; the next accept or
+// completion reports it.
+func (e *Engine) reconcileRuntimeIntegrations(ctx context.Context) {
 	ids, err := e.Store.RuntimeIntegrationsToReconcile(ctx)
 	if err != nil {
-		return fmt.Errorf("list runtime integrations to reconcile: %w", err)
+		// Never fatal: the engine must start whatever runtime_v2 says; an
+		// unsettled revision is still reconciled by the next accept or
+		// completion.
+		e.Log.Warn("could not list runtime integrations to reconcile", "err", fmt.Errorf("list runtime integrations to reconcile: %w", err))
+		return
 	}
 	for _, id := range ids {
 		if err = e.DelegationWorkspaceService.ReconcileRuntimeIntegration(ctx, id); err != nil {
 			e.Log.Warn("agent integration left unsettled after restart", "task", id, "err", err)
 		}
 	}
-	return nil
 }
 
 // cancelledIntegrationReport describes what a cancelled task leaves in the

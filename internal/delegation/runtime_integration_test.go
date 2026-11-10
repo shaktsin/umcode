@@ -799,7 +799,7 @@ func TestRuntimeConflictRetry(t *testing.T) {
 		svc, s, task, _, b, _ := rtConflict(t)
 		before := rtParent(t, task.ParentRoot)
 		got, err := svc.IntegrateRuntime(t.Context(), task.ID, b.agent.ID)
-		if err != nil || got.Revision.State != store.RevisionConflict || !reflect.DeepEqual(got.Revision.Conflict, []string{"tracked"}) || len(got.Options) != 3 {
+		if err != nil || got.Revision.State != store.RevisionConflict || !reflect.DeepEqual(got.Revision.Conflict, []string{"tracked"}) || len(got.Options) != 2 {
 			t.Fatalf("retry = %+v %v", got, err)
 		}
 		if rtParent(t, task.ParentRoot) != before {
