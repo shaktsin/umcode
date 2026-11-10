@@ -97,3 +97,35 @@ it('send returns visibly, not silently, while delegation is pending and the toke
  expect(toast).toHaveBeenCalledWith('error',expect.stringMatching(/Agents are being prepared/));
  expect(call.mock.calls.some(c=>c[0]==='turn/start')).toBe(false);expect(v.delegation.token?.activationToken).toBe('tok');
 });
+
+const fresh=()=>{const v=new ThreadView();v.id='main';v.thread={id:'main',settings:{}} as any;return v;};
+const started=()=>call.mock.calls.some(c=>c[0]==='turn/start');
+it('a follow-up queued in one thread is neither shown nor submitted in another',async()=>{
+ call.mockClear();call.mockImplementation(enableReply);
+ const v=fresh();v.applyTurn({id:'t1',threadId:'main',status:'running'} as any);
+ await v.answerSuggestion('s1','enable');expect(v.queuedFollowUp).toBeTruthy();
+ v.reset();v.id='other';v.thread={id:'other',settings:{}} as any;
+ expect(v.queuedFollowUp).toBeNull();
+ v.applyTurn({id:'t2',threadId:'other',status:'completed'} as any);
+ await new Promise(r=>setTimeout(r));expect(started()).toBe(false);
+ // load() of another thread also drops it
+ const w=fresh();w.applyTurn({id:'t1',threadId:'main',status:'running'} as any);await w.answerSuggestion('s1','enable');
+ call.mockImplementation(async(m:string)=>m==='thread/read'?{thread:{id:'x',settings:{}},turns:[{id:'t9',threadId:'x',status:'completed'}],items:[]}:{tasks:[]});
+ await w.load('x');expect(w.queuedFollowUp).toBeNull();expect(started()).toBe(false);
+});
+it('an expired activation while queued is shown on the card and clears the queue',async()=>{
+ call.mockClear();call.mockImplementation(async(m:string)=>m==='agent/suggestion/respond'?{suggestion:{id:'s1',state:'enabled'},activationToken:'tok',expiresAt:'2000-01-01T00:00:00Z'}:{tasks:[]});
+ const v=fresh();v.applyTurn({id:'t1',threadId:'main',status:'running'} as any);
+ await v.answerSuggestion('s1','enable');
+ v.applyTurn({id:'t1',threadId:'main',status:'completed'} as any);
+ await vi.waitFor(()=>expect(v.followUpError).toMatch(/Activation expired/));
+ expect(started()).toBe(false);expect(v.queuedFollowUp).toBeNull();
+});
+it('a reload that finds the turn already completed drains the queue',async()=>{
+ call.mockClear();call.mockImplementation(enableReply);
+ const v=fresh();v.applyTurn({id:'t1',threadId:'main',status:'running'} as any);
+ await v.answerSuggestion('s1','enable');expect(v.queuedFollowUp).toBeTruthy();
+ call.mockImplementation(async(m:string)=>m==='thread/read'?{thread:{id:'main',settings:{}},turns:[{id:'t1',threadId:'main',status:'completed'}],items:[]}:{tasks:[]});
+ await v.load('main');
+ await vi.waitFor(()=>expect(started()).toBe(true));expect(v.queuedFollowUp).toBeNull();
+});
