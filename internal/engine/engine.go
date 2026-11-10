@@ -140,23 +140,31 @@ type Engine struct {
 	// suggestionRespondHook is a test seam run by RespondAgentSuggestion after
 	// it read the card as open (under suggestionMu); set before use.
 	suggestionRespondHook func()
-	delegationMu          sync.Mutex                 // serializes prepare/admit without holding the turn mutex
-	delegationTokens      map[string]delegationToken // protected by mu; never persisted
-	shuttingDown          bool                       // protected by mu
-	mu                    sync.Mutex
-	workbenchMu           sync.Mutex             // serializes short bundle mutations, never network downloads
-	activeTurns           map[string]*activeTurn // by turn id
-	threadTurns           map[string]string      // thread id -> running turn id
-	approvals             map[string]chan bool   // pending approval id -> decision
-	budgetWarned          map[string]string      // credential id -> month already warned
-	pausedTurns           map[string]bool        // turn id -> ended on a budget pause
-	routing               protocol.RoutingConfig // the models the user has approved
-	presets               map[protocol.Complexity]protocol.ComplexityPreset
-	defaultCplx           protocol.Complexity
-	turnLimits            protocol.ExecutionLimits
-	defaultMaxOut         atomic.Int64                  // output limit for models with unknown max output
-	turnWaiters           map[string]chan protocol.Turn // turn id -> completion (task runs)
-	wg                    sync.WaitGroup
+	// agentPlanMu guards agentPlanWaits and serializes saving a proposed plan
+	// with superseding the task's earlier proposals (agent.propose_plan).
+	agentPlanMu sync.Mutex
+	// agentPlanWaits holds the decision wait of each plan card still blocking
+	// agent.propose_plan, by plan ID; in memory only (a restart expires every
+	// pending approval).
+	agentPlanWaits map[string]*agentPlanWait
+
+	delegationMu     sync.Mutex                 // serializes prepare/admit without holding the turn mutex
+	delegationTokens map[string]delegationToken // protected by mu; never persisted
+	shuttingDown     bool                       // protected by mu
+	mu               sync.Mutex
+	workbenchMu      sync.Mutex             // serializes short bundle mutations, never network downloads
+	activeTurns      map[string]*activeTurn // by turn id
+	threadTurns      map[string]string      // thread id -> running turn id
+	approvals        map[string]chan bool   // pending approval id -> decision
+	budgetWarned     map[string]string      // credential id -> month already warned
+	pausedTurns      map[string]bool        // turn id -> ended on a budget pause
+	routing          protocol.RoutingConfig // the models the user has approved
+	presets          map[protocol.Complexity]protocol.ComplexityPreset
+	defaultCplx      protocol.Complexity
+	turnLimits       protocol.ExecutionLimits
+	defaultMaxOut    atomic.Int64                  // output limit for models with unknown max output
+	turnWaiters      map[string]chan protocol.Turn // turn id -> completion (task runs)
+	wg               sync.WaitGroup
 }
 
 type activeTurn struct {

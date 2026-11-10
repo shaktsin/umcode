@@ -354,8 +354,8 @@ func TestProposePlanClampsAndNotices(t *testing.T) {
 		if !hasNotice(card, "scout", "read-only shell", "read-only probe failed") {
 			t.Fatalf("scout notice missing: %q", card.Notices)
 		}
-		if !hasNotice(card, "blind", "files \"none\" allows no shell") {
-			t.Fatalf("blind notice missing: %q", card.Notices)
+		if !hasNotice(card, "half", "read-write shell requires files") || !hasNotice(card, "blind", "shell not granted") {
+			t.Fatalf("half/blind notices missing: %q", card.Notices)
 		}
 		if !hasNotice(card, "net", "network") {
 			t.Fatalf("network notice missing: %q", card.Notices)
@@ -378,6 +378,28 @@ func TestProposePlanClampsAndNotices(t *testing.T) {
 		}
 		recv(t, ch)
 	})
+}
+
+func TestProposePlanClampsWithReadOnlyShell(t *testing.T) {
+	env := planFixture(t)
+	ch := env.proposeAsync(t, env.lead, `{"agents":[`+
+		`{"name":"half","purpose":"build","summary":"s","capabilities":{"files":"read","shell":"read-write","network":false,"spawnMax":0}},`+
+		`{"name":"blind","purpose":"run","summary":"s","capabilities":{"files":"none","shell":"read-only","network":false,"spawnMax":0}}]}`)
+	a := env.pendingPlanApproval(t)
+	card := planCardOf(t, a)
+	if g := cardAgent(t, card, "half").Granted; g.Shell != protocol.ShellReadOnly || g.Files != protocol.FilesRead {
+		t.Fatalf("half granted %+v, want a read-only shell", g)
+	}
+	if g := cardAgent(t, card, "blind").Granted; g.Shell != protocol.ShellNone {
+		t.Fatalf("blind granted %+v", g)
+	}
+	if !hasNotice(card, "half", "read-write shell requires files") || !hasNotice(card, "blind", "files \"none\" allows no shell") {
+		t.Fatalf("notices %q", card.Notices)
+	}
+	if _, err := env.e.RespondApproval(t.Context(), a.ID, false, false, "test"); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, ch)
 }
 
 func TestProposePlanModelsFromPoolOnly(t *testing.T) {

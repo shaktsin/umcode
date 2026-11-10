@@ -125,8 +125,11 @@ func (e *Engine) runtimeConfinementWhy(scope *tools.Scope) (tools.Confinement, s
 	case scope.UseCompute:
 		return conf, fmt.Sprintf("the project's microVM is unavailable (%v); commands never fall back to the host sandbox", vmErr)
 	}
-	return conf, "no command sandbox (bwrap or sandbox-exec) is available on this host"
+	return conf, noHostSandboxReason
 }
+
+// noHostSandboxReason is why a project without a microVM gets no shell.
+const noHostSandboxReason = "no command sandbox (bwrap or sandbox-exec) is available on this host"
 
 // shellOfferFor resolves the confinement a project would use and runs its
 // read-only self-check on first need (a pass is kept for the process, a

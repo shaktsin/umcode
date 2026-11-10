@@ -35,6 +35,11 @@ type PlanAgent struct {
 	Summary      string            `json:"summary"`
 	Capabilities AgentCapabilities `json:"capabilities"`
 	Model        string            `json:"model,omitempty"`
+	// Requested is what the lead asked for when Capabilities (the grant shown
+	// on the plan card) was clamped by agent.propose_plan; it lets the card's
+	// rejections be rebuilt from the stored plan. Nil means Capabilities is
+	// the request.
+	Requested *AgentCapabilities `json:"requested,omitempty"`
 }
 
 // PlanLimits bounds a plan's agent tree.
@@ -90,6 +95,45 @@ type AgentPlan struct {
 	State      PlanState   `json:"state"`
 	CreatedAt  time.Time   `json:"createdAt"`
 	ApprovedAt *time.Time  `json:"approvedAt,omitempty"`
+}
+
+// PlanCard is the payload of an agent_plan approval (agent.propose_plan): the
+// stored proposed plan with each entry's clamped grant, the task's model pool
+// and every notice to show. It is rebuilt from the stored plan and the pool.
+type PlanCard struct {
+	PlanID   string               `json:"planId"`
+	Agents   []PlanCardAgent      `json:"agents"`
+	Limits   PlanLimits           `json:"limits"`
+	Models   []PlanCardModel      `json:"models"`
+	Notices  []string             `json:"notices"`
+	Previous []PreviousAssignment `json:"previous"`
+}
+
+// PlanCardAgent is one plan entry on the card: the proposal, what it is
+// granted after the capability clamp and what was rejected.
+type PlanCardAgent struct {
+	PlanAgent
+	Granted  AgentCapabilities     `json:"granted"`
+	Rejected []CapabilityRejection `json:"rejected"`
+}
+
+// PlanCardModel is one model of the task's approved pool offered on the card.
+// Name is the model reference entries use (provider/model).
+type PlanCardModel struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Provider  string `json:"provider"`
+	ToolsOK   bool   `json:"toolsOk"`
+	Available bool   `json:"available"`
+	Why       string `json:"why,omitempty"`
+}
+
+// PreviousAssignment is a model assignment of the thread's latest approved
+// plan, used to prefill entries of the same name.
+type PreviousAssignment struct {
+	PlanID string `json:"planId"`
+	Name   string `json:"name"`
+	Model  string `json:"model"`
 }
 
 // RuntimeAgent is a persisted agent of the agent runtime.

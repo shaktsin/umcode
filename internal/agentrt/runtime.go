@@ -147,6 +147,10 @@ type Runtime struct {
 	closed    bool // guarded by lifecycle
 }
 
+// LeadCapabilities returns the lead's authority (WithLeadCapabilities, else
+// RootCapabilities), the parent every plan entry is clamped against.
+func (r *Runtime) LeadCapabilities() protocol.AgentCapabilities { return r.lead }
+
 // NewRuntime returns a Runtime whose agents run under contexts derived from
 // base (see NewScheduler).
 func NewRuntime(s AgentStore, r Runner, base context.Context, opts ...Option) *Runtime {

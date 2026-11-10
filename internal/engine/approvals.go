@@ -157,6 +157,10 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 	if err != nil {
 		return protocol.Approval{}, protocol.Errorf(protocol.CodeConflict, "approval %s does not exist", id)
 	}
+	if a.Kind == "agent_plan" {
+		// A plan card is one decision; it is never remembered for the chat.
+		remember = false
+	}
 	if a.Kind == "workflow" {
 		_, err = e.Store.DecideWorkflowApproval(ctx, id, status, clientID)
 		remember = false

@@ -401,7 +401,11 @@ func (t *runtimeIntegrateTool) Call(ctx context.Context, args json.RawMessage) (
 // ("", true), the lead, may use these tools.
 type RuntimeActivation struct {
 	Suggest func(ctx context.Context, reason string) (string, error)
-	Caller  func(context.Context) (string, bool)
+	// ProposePlan stores a validated agent.propose_plan proposal, shows the
+	// user its plan card and blocks until the user decides; it returns the
+	// result to show the model.
+	ProposePlan func(ctx context.Context, p PlanProposal) (string, error)
+	Caller      func(context.Context) (string, bool)
 }
 
 // maxSuggestReason bounds agent.suggest's reason, in characters.
@@ -413,7 +417,7 @@ const maxSuggestReason = 280
 // agent/suggestion/respond) before a new turn starts. They are never granted
 // through capabilities (agentrt.AllowedTools).
 func NewRuntimeActivationTools(a RuntimeActivation) []Tool {
-	return []Tool{&agentSuggestTool{a: a}}
+	return []Tool{&agentSuggestTool{a: a}, &agentProposePlanTool{a: a}}
 }
 
 type agentSuggestTool struct{ a RuntimeActivation }
@@ -463,4 +467,175 @@ func (t *agentSuggestTool) Call(ctx context.Context, args json.RawMessage) (stri
 		return "", fmt.Errorf("reason is %d characters; at most %d", n, maxSuggestReason)
 	}
 	return t.a.Suggest(ctx, reason)
+}
+
+// PlanProposal is a validated agent.propose_plan request. Limits left zero
+// take protocol.DefaultPlanLimits. Capability strings are passed through as
+// given: the engine's capability clamp turns an unknown one into none.
+type PlanProposal struct {
+	Agents []protocol.PlanAgent
+	Limits protocol.PlanLimits
+}
+
+// Plan proposal ceilings (agent.propose_plan).
+const (
+	MaxPlanAgents        = 12
+	MaxPlanAgentName     = 40
+	MaxPlanConcurrent    = 8
+	MaxPlanDepth         = 3
+	MaxPlanTotal         = 40
+	MaxPlanSliceShare    = 0.5
+	maxPlanPurposeRunes  = 500
+	maxPlanSummaryRunes  = 2000
+	maxPlanModelRefRunes = 200
+)
+
+type agentProposePlanTool struct{ a RuntimeActivation }
+
+func (t *agentProposePlanTool) SelectionMetadata() (string, string) { return "core", "engine" }
+func (t *agentProposePlanTool) Name() string                        { return "agent.propose_plan" }
+func (t *agentProposePlanTool) Description() string {
+	return "Lead only, in a turn where agents are enabled. Propose the agents for this task and wait for the user's decision: each agent has a name, purpose, short summary, capabilities (files, shell, network, spawnMax) and optionally a model from this task's model pool (omitted: the previous assignment of the same name, else this chat's model). " +
+		"The user sees a plan card with what each agent is actually granted and can change models, drop agents, edit limits or decline. " +
+		"Results: approved (spawn agents from the approved entries with agent.spawn), declined (continue without agents) or revise (read the feedback and call agent.propose_plan again; the new plan replaces the old card). " +
+		"No agent can be spawned until a plan is approved."
+}
+
+func (t *agentProposePlanTool) Schema() json.RawMessage {
+	return schema(`{"type":"object","additionalProperties":false,"required":["agents"],"properties":{` +
+		`"agents":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["name","purpose","capabilities"],"properties":{` +
+		`"name":{"type":"string","minLength":1,"maxLength":40,"description":"Unique name of the agent in this plan."},` +
+		`"purpose":{"type":"string","minLength":1},` +
+		`"summary":{"type":"string","description":"One line shown on the plan card."},` +
+		`"capabilities":{"type":"object","additionalProperties":false,"required":["files","shell","network","spawnMax"],"properties":{"files":{"type":"string","enum":["none","read","read-write"]},"shell":{"type":"string","enum":["none","read-only","read-write"]},"network":{"type":"boolean"},"spawnMax":{"type":"integer","minimum":0}}},` +
+		`"model":{"type":"string","description":"A model of this task's pool (provider/model or its ID)."}}}},` +
+		`"limits":{"type":"object","additionalProperties":false,"properties":{"maxConcurrent":{"type":"integer","minimum":0,"maximum":8},"maxDepth":{"type":"integer","minimum":0,"maximum":3},"maxTotal":{"type":"integer","minimum":0,"maximum":40},"sliceShare":{"type":"number","minimum":0,"maximum":0.5},"network":{"type":"boolean"}}}}}`)
+}
+
+func (t *agentProposePlanTool) Assess(json.RawMessage) (Risk, string) {
+	// The plan card itself is the user's approval.
+	return RiskGreen, "Propose agents for this task"
+}
+
+type planAgentArgs struct {
+	Name         *string `json:"name"`
+	Purpose      *string `json:"purpose"`
+	Summary      string  `json:"summary"`
+	Capabilities *struct {
+		Files    *string `json:"files"`
+		Shell    *string `json:"shell"`
+		Network  *bool   `json:"network"`
+		SpawnMax *int    `json:"spawnMax"`
+	} `json:"capabilities"`
+	Model string `json:"model"`
+}
+
+type planArgs struct {
+	Agents []planAgentArgs `json:"agents"`
+	Limits *struct {
+		MaxConcurrent int     `json:"maxConcurrent"`
+		MaxDepth      int     `json:"maxDepth"`
+		MaxTotal      int     `json:"maxTotal"`
+		SliceShare    float64 `json:"sliceShare"`
+		Network       bool    `json:"network"`
+	} `json:"limits"`
+}
+
+// ParsePlanProposal strictly decodes and validates agent.propose_plan
+// arguments: 1–12 agents with unique (case-insensitive) names of 1–40
+// characters, a purpose, all four capability fields, and limits within their
+// ceilings (maxConcurrent ≤ 8, maxDepth ≤ 3, maxTotal ≤ 40, sliceShare in
+// (0, 0.5]; zero means the default). Unknown fields are refused.
+func ParsePlanProposal(args json.RawMessage) (PlanProposal, error) {
+	var a planArgs
+	if err := decodeStrict(args, &a); err != nil {
+		return PlanProposal{}, err
+	}
+	if len(a.Agents) < 1 || len(a.Agents) > MaxPlanAgents {
+		return PlanProposal{}, fmt.Errorf("a plan has 1 to %d agents, got %d", MaxPlanAgents, len(a.Agents))
+	}
+	var p PlanProposal
+	seen := map[string]bool{}
+	for i, ag := range a.Agents {
+		field := fmt.Sprintf("agents[%d]", i)
+		if ag.Name == nil || strings.TrimSpace(*ag.Name) == "" {
+			return PlanProposal{}, fmt.Errorf("%s.name required", field)
+		}
+		name := strings.TrimSpace(*ag.Name)
+		if n := utf8.RuneCountInString(name); n > MaxPlanAgentName {
+			return PlanProposal{}, fmt.Errorf("%s.name %q is %d characters; at most %d", field, name, n, MaxPlanAgentName)
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			return PlanProposal{}, fmt.Errorf("%s.name %q: agent names must be unique (case-insensitive)", field, name)
+		}
+		seen[key] = true
+		if ag.Purpose == nil || strings.TrimSpace(*ag.Purpose) == "" {
+			return PlanProposal{}, fmt.Errorf("%s.purpose required", field)
+		}
+		purpose, summary, model := strings.TrimSpace(*ag.Purpose), strings.TrimSpace(ag.Summary), strings.TrimSpace(ag.Model)
+		if utf8.RuneCountInString(purpose) > maxPlanPurposeRunes {
+			return PlanProposal{}, fmt.Errorf("%s.purpose is longer than %d characters", field, maxPlanPurposeRunes)
+		}
+		if utf8.RuneCountInString(summary) > maxPlanSummaryRunes {
+			return PlanProposal{}, fmt.Errorf("%s.summary is longer than %d characters", field, maxPlanSummaryRunes)
+		}
+		if utf8.RuneCountInString(model) > maxPlanModelRefRunes {
+			return PlanProposal{}, fmt.Errorf("%s.model is longer than %d characters", field, maxPlanModelRefRunes)
+		}
+		c := ag.Capabilities
+		switch {
+		case c == nil:
+			return PlanProposal{}, fmt.Errorf("%s.capabilities required (files, shell, network, spawnMax)", field)
+		case c.Files == nil:
+			return PlanProposal{}, fmt.Errorf("%s.capabilities.files required", field)
+		case c.Shell == nil:
+			return PlanProposal{}, fmt.Errorf("%s.capabilities.shell required", field)
+		case c.Network == nil:
+			return PlanProposal{}, fmt.Errorf("%s.capabilities.network required", field)
+		case c.SpawnMax == nil:
+			return PlanProposal{}, fmt.Errorf("%s.capabilities.spawnMax required", field)
+		case *c.SpawnMax < 0:
+			return PlanProposal{}, fmt.Errorf("%s.capabilities.spawnMax must be >= 0", field)
+		}
+		p.Agents = append(p.Agents, protocol.PlanAgent{
+			Name: name, Purpose: purpose, Summary: summary, Model: model,
+			Capabilities: protocol.AgentCapabilities{Files: protocol.FileAccess(*c.Files), Shell: protocol.ShellAccess(*c.Shell), Network: *c.Network, SpawnMax: *c.SpawnMax},
+		})
+	}
+	if l := a.Limits; l != nil {
+		switch {
+		case l.MaxConcurrent < 0 || l.MaxConcurrent > MaxPlanConcurrent:
+			return PlanProposal{}, fmt.Errorf("limits.maxConcurrent must be between 1 and %d (0 for the default)", MaxPlanConcurrent)
+		case l.MaxDepth < 0 || l.MaxDepth > MaxPlanDepth:
+			return PlanProposal{}, fmt.Errorf("limits.maxDepth must be between 1 and %d (0 for the default)", MaxPlanDepth)
+		case l.MaxTotal < 0 || l.MaxTotal > MaxPlanTotal:
+			return PlanProposal{}, fmt.Errorf("limits.maxTotal must be between 1 and %d (0 for the default)", MaxPlanTotal)
+		case math.IsNaN(l.SliceShare) || l.SliceShare < 0 || l.SliceShare > MaxPlanSliceShare:
+			return PlanProposal{}, fmt.Errorf("limits.sliceShare must be in (0, %g] (0 for the default)", MaxPlanSliceShare)
+		}
+		p.Limits = protocol.PlanLimits{MaxConcurrent: l.MaxConcurrent, MaxDepth: l.MaxDepth, MaxTotal: l.MaxTotal, SliceShare: l.SliceShare, Network: l.Network}
+	}
+	p.Limits = p.Limits.Normalized()
+	return p, nil
+}
+
+func (t *agentProposePlanTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if t.a.Caller == nil {
+		return "", errors.New("agent.propose_plan is lead-only: the caller could not be resolved")
+	}
+	if id, ok := t.a.Caller(ctx); !ok || id != "" {
+		return "", errors.New("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities")
+	}
+	if err := RequireWritable(ctx); err != nil {
+		return "", fmt.Errorf("agent.propose_plan needs writable tools (not available in read-only or plan mode): %w", err)
+	}
+	if t.a.ProposePlan == nil {
+		return "", errors.New("agent runtime unavailable")
+	}
+	p, err := ParsePlanProposal(args)
+	if err != nil {
+		return "", err
+	}
+	return t.a.ProposePlan(ctx, p)
 }
