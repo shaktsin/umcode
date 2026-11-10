@@ -144,6 +144,9 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 	if e.Cfg != nil && e.Cfg.Policy.ApprovalTimeoutMinutes > 0 {
 		timeout = time.Duration(e.Cfg.Policy.ApprovalTimeoutMinutes) * time.Minute
 	}
+	if e.planCardTimeout > 0 {
+		timeout = e.planCardTimeout
+	}
 	now := time.Now().UTC()
 	item, _ := ctx.Value(executionItemKey{}).(protocol.Item)
 	names := make([]string, len(agents))
@@ -172,7 +175,13 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 		return "", fmt.Errorf("agent.propose_plan: %w; answer the newer plan card", errPlanSuperseded)
 	}
 	if errors.Is(err, ErrApprovalExpired) {
-		return "", errors.New("agent.propose_plan: the plan card expired without a decision; the plan stays unapproved and no agent can be spawned")
+		e.forgetPlanWait(plan.ID, wait)
+		closed := e.closeEmptyRuntimeTask(sctx, task.ID)
+		msg := "agent.propose_plan: the plan card expired without a decision; the plan stays unapproved and no agent can be spawned"
+		if closed {
+			msg += "; the delegation task had no agents and was closed, so continue without agents"
+		}
+		return "", errors.New(msg)
 	}
 	if err != nil {
 		return "", err
@@ -187,6 +196,10 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 				Feedback string `json:"feedback"`
 			}{planRevise, feedback})
 		}
+		// A declined card of a task with no approved plan and no agents ends
+		// that empty task, so agents can be enabled again later in the chat.
+		e.forgetPlanWait(plan.ID, wait)
+		e.closeEmptyRuntimeTask(sctx, task.ID)
 		return marshalString(struct {
 			State   string `json:"state"`
 			Message string `json:"message"`
@@ -223,6 +236,43 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 	}{stored.ID, planApproved, out})
 }
 
+// closeEmptyRuntimeTask completes an active runtime task that has no
+// approved plan, no agents, no revisions and no plan card still waiting for
+// a decision: nothing was delegated, so the task only blocks enabling agents
+// again in the chat. It reports whether the task was closed; a failure is
+// logged and leaves the task as it was (the user can still cancel it).
+func (e *Engine) closeEmptyRuntimeTask(ctx context.Context, taskID string) bool {
+	e.delegationWorkflowMu.Lock()
+	defer e.delegationWorkflowMu.Unlock()
+	// Held across the completion: no new card can be registered meanwhile
+	// (saveProposedPlan re-checks the task under this lock).
+	e.agentPlanMu.Lock()
+	defer e.agentPlanMu.Unlock()
+	for _, w := range e.agentPlanWaits {
+		if w.taskID == taskID {
+			return false
+		}
+	}
+	task, err := e.Store.AgentTask(ctx, taskID)
+	if err != nil || !unfinishedDelegation(task.State) {
+		return false
+	}
+	if _, err = e.Store.ApprovedAgentPlanForTask(ctx, taskID); !errors.Is(err, store.ErrNotFound) {
+		return false
+	}
+	if agents, err := e.Store.RuntimeAgents(ctx, taskID); err != nil || len(agents) > 0 {
+		return false
+	}
+	if revs, err := e.Store.AgentRevisions(ctx, taskID); err != nil || len(revs) > 0 {
+		return false
+	}
+	if _, err = e.completeRuntimeTask(ctx, task); err != nil {
+		e.Log.Warn("could not close the empty delegation task", "task", taskID, "err", err)
+		return false
+	}
+	return true
+}
+
 func marshalString(v any) (string, error) {
 	b, err := json.Marshal(v)
 	return string(b), err
@@ -235,6 +285,12 @@ func marshalString(v any) (string, error) {
 func (e *Engine) saveProposedPlan(ctx context.Context, plan protocol.AgentPlan, wait *agentPlanWait) error {
 	e.agentPlanMu.Lock()
 	defer e.agentPlanMu.Unlock()
+	// An empty task may have been closed after its card was declined.
+	if task, err := e.Store.AgentTask(ctx, plan.TaskID); err != nil {
+		return err
+	} else if !unfinishedDelegation(task.State) {
+		return fmt.Errorf("agent.propose_plan refused: delegation task %s is no longer active (%s)", task.ID, task.State)
+	}
 	if err := e.Store.SaveAgentPlan(ctx, plan); err != nil {
 		return err
 	}
