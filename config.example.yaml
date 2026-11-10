@@ -153,6 +153,9 @@ agents:
   max_agent_iterations: 15        # tool-call cycles per spawned agent
   max_orchestrator_iterations: 20 # planning cycles for the orchestrator
   tokens_per_minute: 0            # 0 = unlimited; set to your API tier limit
+  # Experimental agent runtime v2: replaces the legacy agent.* delegation tools
+  # with plan-bound runtime agents. Leave off; agent execution is not wired yet.
+  runtime_v2: false
 
 # ---------------------------------------------------------------------------
 # Policy
