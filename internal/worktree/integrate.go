@@ -226,6 +226,53 @@ func (m *Manager) ApplyOnIntegrated(ctx context.Context, workspaceID, parent, ba
 	return ApplyResult{Paths: changedPaths, TreeAfter: tree}, nil
 }
 
+// PredictIntegration returns the tree ApplyOnIntegrated would produce by
+// applying the owned checkout's base→result revision onto expectedTree. It is
+// read-only: the same agent-side validation and patch as ApplyOnIntegrated,
+// applied to a private temporary index (predictTree), so the parent's HEAD,
+// index and worktree are never read for state or touched (only unreachable
+// objects may be added to its object store, ruling R4). The parent's current
+// state is irrelevant, so it can be used to recognise an apply that finished
+// before a crash. A revision that does not apply onto expectedTree yields a
+// *ConflictError.
+func (m *Manager) PredictIntegration(ctx context.Context, workspaceID, parent, base, expectedTree, result string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ws, err := m.lookupWith(ctx, workspaceID, parent, hardenedOutput)
+	if err != nil {
+		return "", err
+	}
+	if ws.SourceCommit != base {
+		return "", errors.New("owned checkout base revision changed")
+	}
+	if err = ValidateOwnedMetadata(ctx, ws.Path); err != nil {
+		return "", err
+	}
+	if err = validateAgentHead(ctx, ws.Path, result); err != nil {
+		return "", err
+	}
+	entries, err := scanRevision(ctx, ws.Path, base, result)
+	if err != nil {
+		return "", err
+	}
+	patch, err := hardenedBytes(ctx, ws.Path, nil, "diff", "--binary", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv",
+		"--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, result, "--")
+	if err != nil {
+		return "", err
+	}
+	if err = ValidateOwnedMetadata(ctx, ws.Path); err != nil {
+		return "", err
+	}
+	if len(patch) == 0 {
+		if len(entries) != 0 {
+			return "", errors.New("agent revision changed during prediction")
+		}
+		return expectedTree, nil
+	}
+	predicted, _, err := predictTree(ctx, parent, expectedTree, patch, entryPaths(entries))
+	return predicted, err
+}
+
 // predictTree applies the exact patch bytes to a private temporary index
 // holding expectedTree, inside the parent repository, and validates the
 // resulting tree: path rules, the same path set the agent revision reported,
