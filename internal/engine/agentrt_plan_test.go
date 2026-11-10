@@ -198,12 +198,10 @@ func TestProposePlanLeadOnly(t *testing.T) {
 	ro := tools.WithScope(env.lead, &tools.Scope{ThreadID: env.th.ID, ProjectID: env.th.ProjectID, Root: env.root, ReadOnly: true})
 	_, err := tool.Call(ro, json.RawMessage(onePlan))
 	requireRefused(t, err, "writable")
-	// A turn that is not admitted for delegation is refused.
+	// An ordinary lead may offer an inert plan for the user's approval.
 	plain := tools.WithScope(context.WithValue(t.Context(), executionTurnKey{}, env.turn), &tools.Scope{ThreadID: env.th.ID, ProjectID: env.th.ProjectID, Root: env.root})
-	_, err = tool.Call(plain, json.RawMessage(onePlan))
-	requireRefused(t, err, "approves an agent plan")
-	if p := env.e.permittedToolFor(plain, turnTool{tool: tool}, nil); p {
-		t.Fatal("agent.propose_plan offered without admission")
+	if p := env.e.permittedToolFor(plain, turnTool{tool: tool}, nil); !p {
+		t.Fatal("agent.propose_plan not offered to an ordinary lead")
 	}
 	if !env.e.permittedToolFor(env.lead, turnTool{tool: tool}, nil) {
 		t.Fatal("agent.propose_plan not offered in the admitted lead turn")

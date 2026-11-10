@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -596,23 +597,26 @@ func TestPlanApprovalAdmissionAtomicAndReplay(t *testing.T) {
 	}
 	task := protocol.AgentTask{ID: "approved-task", ThreadID: th.ID, RootTurnID: turn.ID, Activation: protocol.AgentActivationPlanApproval, State: protocol.AgentStateRunning, BaseRevision: "snapshot", BaseRoot: "/source", ParentRoot: "/private", CreatedAt: time.Now()}
 	workspace := AgentTaskWorkspace{TaskID: task.ID, SourceRoot: "/source", ExecutionRoot: "/private", SourceHead: "source-head", SnapshotCommit: "snapshot", Manifest: []byte(`{"head":"source-head"}`), State: "active"}
-	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{Provider: "claude", Model: "test"}, approvalID, "app"); err != nil {
+	edited := plan
+	edited.Agents = []protocol.PlanAgent{{Name: "reviewer", Purpose: "review"}}
+	card := json.RawMessage(`{"planId":"unbound","agents":[{"name":"reviewer"}]}`)
+	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{Provider: "claude", Model: "test"}, approvalID, "app", edited, card); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := s.AgentPlan(t.Context(), plan.ID)
-	if err != nil || stored.State != protocol.PlanApproved || stored.TaskID != task.ID {
+	if err != nil || stored.State != protocol.PlanApproved || stored.TaskID != task.ID || len(stored.Agents) != 1 || stored.Agents[0].Name != "reviewer" {
 		t.Fatalf("plan = %+v, %v", stored, err)
 	}
 	if got, err := s.AgentTaskWorkspace(t.Context(), task.ID); err != nil || got.ExecutionRoot != workspace.ExecutionRoot {
 		t.Fatalf("workspace = %+v, %v", got, err)
 	}
-	if a, err := s.GetApproval(t.Context(), approvalID); err != nil || a.Status != "approved" || a.AgentTaskID != task.ID {
+	if a, err := s.GetApproval(t.Context(), approvalID); err != nil || a.Status != "approved" || a.AgentTaskID != task.ID || string(a.Args) != string(card) {
 		t.Fatalf("approval = %+v, %v", a, err)
 	}
 	if scope, err := s.AgentModelScope(t.Context(), task.ID); err != nil || scope.Model != "test" {
 		t.Fatalf("model scope = %+v, %v", scope, err)
 	}
-	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{Provider: "claude", Model: "test"}, approvalID, "app"); err != nil {
+	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{Provider: "claude", Model: "test"}, approvalID, "app", edited, card); err != nil {
 		t.Fatalf("replay: %v", err)
 	}
 	var n int
@@ -644,13 +648,13 @@ func TestPlanApprovalAdmissionRollsBackOnWorkspaceFailure(t *testing.T) {
 	if _, err := s.DB.Exec(`CREATE TRIGGER refuse_workspace BEFORE INSERT ON agent_task_workspaces BEGIN SELECT RAISE(ABORT, 'workspace failed'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{}, approvalID, "app"); err == nil {
+	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{}, approvalID, "app", plan, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("approval succeeded despite failed workspace insert")
 	}
 	if _, err := s.AgentTask(t.Context(), task.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("task persisted: %v", err)
 	}
-	if got, err := s.AgentPlan(t.Context(), plan.ID); err != nil || got.State != protocol.PlanProposed || got.TaskID != "" {
+	if got, err := s.AgentPlan(t.Context(), plan.ID); err != nil || got.State != protocol.PlanProposed || got.TaskID != "" || len(got.Agents) != 1 || got.Agents[0].Name != "worker" {
 		t.Fatalf("plan = %+v, %v", got, err)
 	}
 }

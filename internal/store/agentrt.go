@@ -313,12 +313,17 @@ func (s *Store) ApproveAgentPlan(ctx context.Context, planID, taskID string) err
 // ApproveAgentPlanWithTask is the admission boundary for a plan proposed by an
 // ordinary turn. The task, its private workspace identity and the plan grant
 // become visible together. A repeated approval of the same plan/task is safe.
-func (s *Store) ApproveAgentPlanWithTask(ctx context.Context, planID string, task protocol.AgentTask, workspace AgentTaskWorkspace, modelScope AgentModelScope, approvalID, decidedBy string) error {
+func (s *Store) ApproveAgentPlanWithTask(ctx context.Context, planID string, task protocol.AgentTask, workspace AgentTaskWorkspace, modelScope AgentModelScope, approvalID, decidedBy string, edited protocol.AgentPlan, card json.RawMessage) error {
 	if planID == "" || approvalID == "" || decidedBy == "" || task.ID == "" || task.ThreadID == "" || task.RootTurnID == "" || task.Activation != protocol.AgentActivationPlanApproval ||
 		task.State != protocol.AgentStateRunning || task.BaseRevision == "" || task.BaseRoot == "" || task.ParentRoot == "" ||
 		workspace.TaskID != task.ID || workspace.SourceRoot == "" || workspace.ExecutionRoot != task.ParentRoot ||
-		workspace.SnapshotCommit != task.BaseRevision || workspace.SourceHead == "" {
+		workspace.SnapshotCommit != task.BaseRevision ||
+		edited.ID != planID || edited.ThreadID != task.ThreadID || edited.TaskID != "" || edited.State != protocol.PlanProposed || !json.Valid(card) {
 		return fmt.Errorf("%w: invalid plan-approved task workspace", ErrAgentTransition)
+	}
+	planJSON, err := marshalAll(edited.Agents, edited.Limits)
+	if err != nil {
+		return err
 	}
 	if task.CreatedAt.IsZero() {
 		task.CreatedAt = time.Now().UTC()
@@ -381,7 +386,7 @@ func (s *Store) ApproveAgentPlanWithTask(ctx context.Context, planID string, tas
 	if _, err := tx.ExecContext(ctx, `UPDATE agent_plans SET state=? WHERE thread_id=? AND id<>? AND state=?`, protocol.PlanSuperseded, threadID, planID, protocol.PlanApproved); err != nil {
 		return err
 	}
-	res, err = tx.ExecContext(ctx, `UPDATE agent_plans SET state=?,task_id=?,approved_at=? WHERE id=? AND state=? AND task_id=''`, protocol.PlanApproved, task.ID, Now(), planID, protocol.PlanProposed)
+	res, err = tx.ExecContext(ctx, `UPDATE agent_plans SET state=?,task_id=?,agents_json=?,limits_json=?,approved_at=? WHERE id=? AND state=? AND task_id=''`, protocol.PlanApproved, task.ID, planJSON[0], planJSON[1], Now(), planID, protocol.PlanProposed)
 	if err != nil {
 		return err
 	}
@@ -391,7 +396,7 @@ func (s *Store) ApproveAgentPlanWithTask(ctx context.Context, planID string, tas
 		}
 		return fmt.Errorf("%w: plan changed while approving", ErrAgentConflict)
 	}
-	res, err = tx.ExecContext(ctx, `UPDATE approvals SET status='approved',decided_by=?,decided_at=?,agent_task_id=? WHERE id=? AND status='pending'`, decidedBy, Now(), task.ID, approvalID)
+	res, err = tx.ExecContext(ctx, `UPDATE approvals SET status='approved',args_json=?,decided_by=?,decided_at=?,agent_task_id=? WHERE id=? AND status='pending'`, string(card), decidedBy, Now(), task.ID, approvalID)
 	if err != nil {
 		return err
 	}

@@ -16,22 +16,6 @@ export function itemActionFailure(item: Item): ActionFailure | null {
   if (resolvedFailure(item)) return null;
   return asFailure(data?.actionFailure) || (item.kind === 'error' ? parseActionFailure(item.text || '') : null);
 }
-/** agent.* tools, by registered (agent.spawn) or wire (agent__spawn) name. */
-export function isAgentTool(name: string | undefined): boolean {
-  return typeof name === 'string' && /^agent(\.|__)/.test(name);
-}
-/**
- * A failed or denied agent.* tool call: the engine's short refusal (the
- * failure message, else the tool error) and its audit record for a
- * collapsed "Technical details" disclosure. Null for any other item.
- */
-export function agentToolFailure(item: Item): { message: string; details: string } | null {
-  if (item.kind !== 'toolCall' || !isAgentTool(item.tool?.name) || (item.status !== 'failed' && item.status !== 'denied')) return null;
-  const failure = asFailure((item.data as { actionFailure?: unknown } | undefined)?.actionFailure);
-  const message = failure?.message || item.tool?.error || '';
-  if (!message) return null;
-  return { message, details: JSON.stringify(failure ?? { error: item.tool?.error }, null, 2) };
-}
 function resolvedFailure(item: Item): boolean {
   const data = item.data as { actionFailureResolvedById?: unknown } | undefined;
   return typeof data?.actionFailureResolvedById === 'string' && data.actionFailureResolvedById.length > 0;
@@ -74,13 +58,10 @@ export function taskFailurePresentation(items: Item[], turnError: string, turnSt
   // Without an identity we cannot safely hide historical messages.
   const matching = items.filter(item => correlated(itemActionFailure(item), failure));
   const summary = [...matching].reverse().find(item => item.kind === 'agentMessage');
-  // An agent tool refusal is shown by its short message; its next step is
-  // advice for the model, and its audit record is only the failure.
-  const agent = summary ? null : matching.map(agentToolFailure).find(Boolean) ?? null;
-  const text = summary?.text || agent?.message || (failure ? [failure.message, failure.nextStep].filter(Boolean).join(' ') : '');
+  const text = summary?.text || (failure ? [failure.message, failure.nextStep].filter(Boolean).join(' ') : '');
   return {
     failure, text,
-    details: agent ? agent.details : [...items.filter(item => matching.includes(item) || isProvisionalExecution(item)).map(item => JSON.stringify(item, null, 2)), turnError].filter(Boolean).join('\n\n'),
+    details: [...items.filter(item => matching.includes(item) || isProvisionalExecution(item)).map(item => JSON.stringify(item, null, 2)), turnError].filter(Boolean).join('\n\n'),
     hiddenItemIds: items.filter(item => (item.kind === 'agentMessage' || item.kind === 'error')
       && (matching.includes(item) || resolvedFailure(item) || turnStatus === 'completed' && item.kind === 'error' && itemActionFailure(item)?.advisory)).map(item => item.id),
     showTurnError: Boolean(turnError) && !resolvedTurnFailure(items, parseActionFailure(turnError))

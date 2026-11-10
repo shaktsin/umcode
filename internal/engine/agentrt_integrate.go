@@ -349,6 +349,9 @@ func (e *Engine) completeRuntimeTask(ctx context.Context, task protocol.AgentTas
 	// The final verified check and the state change run under the task's
 	// integration lock, so no check result is recorded in between.
 	if err = svc.FinishRuntime(ctx, task.ID, st.HeadTree, st.AppliedCount, func() error {
+		if err := e.mergeRuntimeTaskResult(ctx, cur.ID, st.HeadTree); err != nil {
+			return err
+		}
 		return e.Store.UpdateAgentTaskState(ctx, cur.ID, cur.ThreadID, cur.ProjectID, cur.State, protocol.AgentStateCompleted)
 	}); err != nil {
 		return out, fmt.Errorf("completion refused: %w", err)

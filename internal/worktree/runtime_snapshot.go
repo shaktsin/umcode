@@ -50,11 +50,11 @@ func CaptureSourceManifest(ctx context.Context, source string) (SnapshotManifest
 	}
 	top, err := hardenedOutput(ctx, root, "rev-parse", "--show-toplevel")
 	if err != nil || !samePath(top, root) {
-		return SnapshotManifest{}, errors.New("task snapshot requires a Git repository root")
+		return capturePlainManifest(root)
 	}
 	head, err := hardenedOutput(ctx, root, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
-		return SnapshotManifest{}, errors.New("task snapshot requires an initial commit")
+		return capturePlainManifest(root)
 	}
 	if err := ValidateIndexFlags(ctx, root); err != nil {
 		return SnapshotManifest{}, err
@@ -71,7 +71,7 @@ func CaptureSourceManifest(ctx context.Context, source string) (SnapshotManifest
 	if err != nil {
 		return SnapshotManifest{}, err
 	}
-	untracked, err := hardenedNULList(ctx, root, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := hardenedNULList(ctx, root, append(userExcludesArgs(ctx), "ls-files", "--others", "--exclude-standard", "-z")...)
 	if err != nil {
 		return SnapshotManifest{}, err
 	}
@@ -178,13 +178,16 @@ func CaptureTaskSnapshot(ctx context.Context, source, destination string) (TaskS
 	if err != nil {
 		return TaskSnapshot{}, err
 	}
-	common, err := hardenedOutput(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return TaskSnapshot{}, err
-	}
-	common, err = filepath.EvalSymlinks(common)
-	if err != nil {
-		return TaskSnapshot{}, err
+	common := root
+	if manifest.Head != "" {
+		common, err = hardenedOutput(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			return TaskSnapshot{}, err
+		}
+		common, err = filepath.EvalSymlinks(common)
+		if err != nil {
+			return TaskSnapshot{}, err
+		}
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
@@ -195,9 +198,12 @@ func CaptureTaskSnapshot(ctx context.Context, source, destination string) (TaskS
 	if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
 		return TaskSnapshot{}, err
 	}
-	format, err := hardenedOutput(ctx, root, "rev-parse", "--show-object-format")
-	if err != nil || (format != "sha1" && format != "sha256") {
-		return TaskSnapshot{}, fmt.Errorf("unsupported Git object format %q", format)
+	format := "sha1"
+	if manifest.Head != "" {
+		format, err = hardenedOutput(ctx, root, "rev-parse", "--show-object-format")
+		if err != nil || (format != "sha1" && format != "sha256") {
+			return TaskSnapshot{}, fmt.Errorf("unsupported Git object format %q", format)
+		}
 	}
 	if _, err := cloneGit(ctx, "", "init", "--quiet", "--template=", "--object-format="+format, destination); err != nil {
 		return TaskSnapshot{}, err
@@ -207,11 +213,13 @@ func CaptureTaskSnapshot(ctx context.Context, source, destination string) (TaskS
 		_ = os.Remove(destination + ".ready")
 		return TaskSnapshot{}, err
 	}
-	if _, err := cloneGit(ctx, destination, "fetch", "--no-tags", root, manifest.Head); err != nil {
-		return cleanup(err)
-	}
-	if _, err := cloneGit(ctx, destination, "read-tree", manifest.Head); err != nil {
-		return cleanup(err)
+	if manifest.Head != "" {
+		if _, err := cloneGit(ctx, destination, "fetch", "--no-tags", root, manifest.Head); err != nil {
+			return cleanup(err)
+		}
+		if _, err := cloneGit(ctx, destination, "read-tree", manifest.Head); err != nil {
+			return cleanup(err)
+		}
 	}
 	paths := make([]string, 0, len(manifest.Paths))
 	for rel := range manifest.Paths {
@@ -261,7 +269,11 @@ func CaptureTaskSnapshot(ctx context.Context, source, destination string) (TaskS
 	if err != nil {
 		return cleanup(err)
 	}
-	commit, err := snapshotGitStdin(ctx, destination, []byte("UMCode task snapshot\n"), "-c", "user.name=UMCode", "-c", "user.email=umcode@localhost", "commit-tree", tree, "-p", manifest.Head)
+	commitArgs := []string{"-c", "user.name=UMCode", "-c", "user.email=umcode@localhost", "commit-tree", tree}
+	if manifest.Head != "" {
+		commitArgs = append(commitArgs, "-p", manifest.Head)
+	}
+	commit, err := snapshotGitStdin(ctx, destination, []byte("UMCode task snapshot\n"), commitArgs...)
 	if err != nil {
 		return cleanup(err)
 	}
@@ -275,7 +287,11 @@ func CaptureTaskSnapshot(ctx context.Context, source, destination string) (TaskS
 	if status != "" {
 		return cleanup(fmt.Errorf("task snapshot is not clean: %s", status))
 	}
-	if err := os.WriteFile(destination+".ready", []byte(common+"\n"+manifest.Head+"\n"+commit+"\n"), 0600); err != nil {
+	sourceHeadMarker := manifest.Head
+	if sourceHeadMarker == "" {
+		sourceHeadMarker = "none"
+	}
+	if err := os.WriteFile(destination+".ready", []byte(common+"\n"+sourceHeadMarker+"\n"+commit+"\n"), 0600); err != nil {
 		return cleanup(err)
 	}
 	return TaskSnapshot{SourceRoot: root, Destination: destination, SourceHead: manifest.Head, BaseCommit: commit, Manifest: manifest, UntrackedPaths: manifest.Untracked}, nil

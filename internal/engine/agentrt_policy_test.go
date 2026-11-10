@@ -66,6 +66,33 @@ func TestAgentShellInConfinementNeedsNoApproval(t *testing.T) {
 	}
 }
 
+func TestProjectLocalActionsNeedNoApproval(t *testing.T) {
+	e := testEngine()
+	ctx := tools.WithScope(context.Background(), &tools.Scope{ProjectID: "project", Root: "/project", Confined: true})
+	for _, name := range []string{"file.write", "file.edit", "shell.run", "verification.run"} {
+		if decision, _ := e.gateDecision(ctx, name, tools.RiskRed, false, "normal"); decision != policy.Allow {
+			t.Errorf("%s = %s", name, decision)
+		}
+	}
+	for _, name := range []string{"computer.act", "external.send"} {
+		if decision, _ := e.gateDecision(ctx, name, tools.RiskRed, false, "normal"); decision != policy.Ask {
+			t.Errorf("external %s = %s", name, decision)
+		}
+	}
+	unconfined := tools.WithScope(context.Background(), &tools.Scope{ProjectID: "project", Root: "/project"})
+	if decision, _ := e.gateDecision(unconfined, "shell.run", tools.RiskRed, false, "normal"); decision != policy.Ask {
+		t.Errorf("unconfined shell = %s", decision)
+	}
+}
+
+func TestProjectLocalWriteSkipsImplicitWorkflowGate(t *testing.T) {
+	e := testEngine()
+	ctx := tools.WithScope(context.Background(), &tools.Scope{ProjectID: "project", Root: "/project"})
+	if err := e.checkWorkflowGate(ctx, "chat", "file.write"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // exec.* sessions are refused to restricted children outright, so a confined
 // agent's exec call must never be pre-approved as if the confinement covered it.
 func TestConfinedAgentExecSessionsAreNotAutoAllowed(t *testing.T) {

@@ -283,13 +283,6 @@ func (e *Engine) selectionToolAvailable(c turnTool) bool {
 	return ok && sameTool(c.tool, current)
 }
 func (e *Engine) selectionFailure(ctx context.Context, turn protocol.Turn, call llm.ToolCall, name, reason string) toolRunResult {
-	return e.selectionRefusal(ctx, turn, call, name, errors.New(reason))
-}
-
-// selectionRefusal is selectionFailure for an error: a typed agent tool rule
-// refusal keeps its own NextStep (agentRuleFailure).
-func (e *Engine) selectionRefusal(ctx context.Context, turn protocol.Turn, call llm.ToolCall, name string, cause error) toolRunResult {
-	reason := cause.Error()
 	it, err := e.newItem(ctx, turn, protocol.ItemToolCall)
 	if err == nil {
 		it.Tool = &protocol.ToolCallData{CallID: call.ID, Name: name, Args: call.Args, Error: reason}
@@ -352,10 +345,13 @@ func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.P
 		return false
 	}
 	if e.suggestOnlyTool(c.tool.Name()) {
-		// Offered to the lead only, and only when the turn is not admitted.
-		if _, admitted := DelegationTaskFromContext(ctx); admitted {
-			return false
-		}
+		// Kept for reading older suggestion records and compatibility tests,
+		// but no new model turn offers the removed enable step.
+		return false
+	}
+	if e.AgentRuntime != nil && c.tool.Name() == "agent.propose_plan" {
+		// Proposal is available to the ordinary lead and to an admitted
+		// lead revising an approved task; neither grants agent authority.
 		if id, ok := runtimeCaller(ctx); !ok || id != "" {
 			return false
 		}

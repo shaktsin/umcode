@@ -9,6 +9,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/tools"
 	"github.com/shaktsin/umcode/internal/work"
 )
 
@@ -50,6 +51,10 @@ func (e *Engine) escalateProspectiveWorkflow(ctx context.Context, threadID strin
 }
 
 func (e *Engine) workflowDetail(ctx context.Context, threadID, tool string) (*protocol.WorkDetail, error) {
+	if scope := tools.ScopeFrom(ctx); scope != nil && scope.ProjectID != "" && scope.Root != "" &&
+		projectLocalActionTool(tool) && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
+		return nil, nil
+	}
 	if _, err := e.Store.ActiveExecutionTask(ctx, threadID); err == nil && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
 		return nil, nil
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {

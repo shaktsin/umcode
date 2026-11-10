@@ -137,7 +137,13 @@ func (x *activationE2E) script(_ int, ctx context.Context, req llm.Request) []ll
 }
 
 func (x *activationE2E) agentReply(ctx context.Context, id string) []llm.Event {
-	a, err := x.e.Store.RuntimeAgent(context.WithoutCancel(ctx), x.task.ID, id)
+	taskID := x.task.ID
+	if taskID == "" {
+		if task, err := x.e.Store.ActiveAgentTask(context.WithoutCancel(ctx), x.th.ID, x.th.ProjectID); err == nil {
+			taskID = task.ID
+		}
+	}
+	a, err := x.e.Store.RuntimeAgent(context.WithoutCancel(ctx), taskID, id)
 	if err != nil {
 		return []llm.Event{{Type: llm.EventError, Err: err}}
 	}
@@ -237,18 +243,18 @@ func (x *activationE2E) suggestionCount(t *testing.T) int {
 	return n
 }
 
-// suggestTurn runs an ordinary user turn in which the lead calls
-// agent.suggest, and returns the stored suggestion's ID.
+// suggestTurn creates a legacy suggestion directly for compatibility tests.
+// New model turns never offer agent.suggest.
 func (x *activationE2E) suggestTurn(t *testing.T) string {
 	t.Helper()
-	x.setLead(e2eSuggest, e2eLeadStep{"agent.suggest", `{"reason":"the parser and the printer can be built in parallel"}`})
-	x.turn(t, protocol.TurnStartParams{Text: e2eSuggest})
-	res := x.leadResults(t, "agent.suggest")
-	last := res[len(res)-1]
-	if last.IsError {
-		t.Fatalf("agent.suggest refused: %s", last.Result)
+	turn, wait := x.startTurn(t, protocol.TurnStartParams{Text: "legacy suggestion setup"})
+	waitTurnDone(t, wait, protocol.TurnCompleted)
+	ctx := tools.WithScope(context.WithValue(t.Context(), executionTurnKey{}, turn), &tools.Scope{ThreadID: x.th.ID, ProjectID: x.th.ProjectID, Root: x.root})
+	out, err := x.e.suggestAgents(ctx, "the parser and the printer can be built in parallel")
+	if err != nil {
+		t.Fatalf("legacy suggestion setup: %v", err)
 	}
-	return suggestionID(t, last.Result)
+	return suggestionID(t, out)
 }
 
 // enable answers the suggestion card with enable and returns the token.
@@ -617,11 +623,12 @@ func TestE2EDeclineThenNoRepeatSuggestion(t *testing.T) {
 	if err != nil || res.Suggestion.State != store.SuggestionDeclined || res.ActivationToken != "" {
 		t.Fatalf("decline: %+v %v", res, err)
 	}
-	// The next user message: the lead suggests again and is refused, naming
-	// the rule; no second card is stored and nothing starts.
+	// A stale model call to the removed tool is refused; no second card is
+	// stored and nothing starts.
+	x.setLead(e2eSuggest, e2eLeadStep{"agent.suggest", `{"reason":"parallel work"}`})
 	x.turn(t, protocol.TurnStartParams{Text: e2eSuggest})
 	results := x.leadResults(t, "agent.suggest")
-	if len(results) != 2 || !results[1].IsError || !strings.Contains(results[1].Result, "declined") {
+	if len(results) != 1 || !results[0].IsError || !strings.Contains(results[0].Result, "no longer permitted") {
 		t.Fatalf("second suggestion = %+v", results)
 	}
 	if n := x.suggestionCount(t); n != 1 {

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 
 	"github.com/shaktsin/umcode/internal/agentrt"
 	"github.com/shaktsin/umcode/internal/policy"
@@ -61,6 +62,14 @@ func confinedShellTool(name string) bool {
 	return false
 }
 
+func projectLocalActionTool(name string) bool {
+	switch tools.FromWire(name) {
+	case "file.write", "file.edit", "shell.run", "verification.run", "exec.start", "exec.write", "exec.stop":
+		return true
+	}
+	return false
+}
+
 // gateDecision is the approval gate for one tool call. Lead chats and legacy
 // children use their thread's mode. A runtime agent uses the lead's mode read
 // at call time (the agent's internal thread has none; nil means strictest),
@@ -68,6 +77,10 @@ func confinedShellTool(name string) bool {
 func (e *Engine) gateDecision(ctx context.Context, name string, risk tools.Risk, fromListener bool, threadMode string) (policy.Decision, string) {
 	scope := tools.ScopeFrom(ctx)
 	if scope == nil || !scope.RuntimeAgent {
+		if scope != nil && scope.ProjectID != "" && scope.Root != "" && !fromListener && projectLocalActionTool(name) &&
+			(strings.HasPrefix(tools.FromWire(name), "file.") || scope.Confined) {
+			return policy.Allow, "project-local action requested in this chat"
+		}
 		return e.gate.Check(name, risk, fromListener, normalizedApprovalMode(threadMode))
 	}
 	// The listener-channel rule outranks the confinement: a red action

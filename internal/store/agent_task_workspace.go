@@ -51,7 +51,7 @@ func (s *Store) SaveAgentTaskWorkspace(ctx context.Context, w AgentTaskWorkspace
 // SaveAgentTaskWorkspaceTx is used by plan approval after inserting the task
 // in the same transaction. A replay with identical ownership is idempotent.
 func (s *Store) SaveAgentTaskWorkspaceTx(ctx context.Context, tx *sql.Tx, w AgentTaskWorkspace) error {
-	if w.TaskID == "" || w.SourceRoot == "" || w.ExecutionRoot == "" || w.SourceHead == "" || w.SnapshotCommit == "" || !json.Valid(w.Manifest) ||
+	if w.TaskID == "" || w.SourceRoot == "" || w.ExecutionRoot == "" || w.SnapshotCommit == "" || !json.Valid(w.Manifest) ||
 		(w.State != "prepared" && w.State != "active" && w.State != "merged" && w.State != "conflict") {
 		return fmt.Errorf("%w: invalid task workspace", ErrAgentTransition)
 	}

@@ -21,6 +21,49 @@ func (s *Store) AgentPlanContinuation(ctx context.Context, taskID string) (strin
 	return turnID, err
 }
 
+// AgentPlanContinuationNeedsRetry reports whether no continuation exists or
+// its admission failed. A running or completed turn is never replayed.
+func (s *Store) AgentPlanContinuationNeedsRetry(ctx context.Context, taskID string) (bool, error) {
+	var status string
+	err := s.DB.QueryRowContext(ctx, `SELECT tr.status FROM agent_plan_continuations c JOIN turns tr ON tr.id=c.turn_id WHERE c.task_id=?`, taskID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == protocol.TurnFailed || status == protocol.TurnInterrupted, nil
+}
+
+type PlanContinuationCandidate struct {
+	TaskID   string
+	ThreadID string
+}
+
+// RetryablePlanContinuations finds approved active tasks whose continuation
+// was never admitted or whose previous turn was interrupted or failed.
+func (s *Store) RetryablePlanContinuations(ctx context.Context) ([]PlanContinuationCandidate, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT t.id,t.thread_id FROM agent_tasks t
+		JOIN agent_plans p ON p.task_id=t.id AND p.state='approved'
+		LEFT JOIN agent_plan_continuations c ON c.task_id=t.id
+		LEFT JOIN turns tr ON tr.id=c.turn_id
+		WHERE t.activation='plan_approval' AND t.state IN ('queued','running','waiting_approval')
+		AND (c.task_id IS NULL OR tr.status IN ('failed','interrupted'))`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var candidates []PlanContinuationCandidate
+	for rows.Next() {
+		var candidate PlanContinuationCandidate
+		if err := rows.Scan(&candidate.TaskID, &candidate.ThreadID); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, rows.Err()
+}
+
 // CreatePlanContinuationTurn atomically reserves and creates the one turn
 // that can continue a prompt-first approved task. Replays cannot create a
 // second turn, even when they supply a different turn ID.
@@ -48,12 +91,14 @@ func (s *Store) CreatePlanContinuationTurn(ctx context.Context, taskID string, t
 		(state != string(protocol.AgentStateRunning) && state != string(protocol.AgentStateQueued) && state != string(protocol.AgentStateWaitingApproval)) {
 		return fmt.Errorf("%w: task does not admit a plan continuation", ErrAgentTransition)
 	}
-	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT turn_id FROM agent_plan_continuations WHERE task_id=?`, taskID).Scan(&existing)
+	var existing, priorStatus string
+	err = tx.QueryRowContext(ctx, `SELECT c.turn_id,tr.status FROM agent_plan_continuations c JOIN turns tr ON tr.id=c.turn_id WHERE c.task_id=?`, taskID).Scan(&existing, &priorStatus)
 	if err == nil {
-		return fmt.Errorf("%w: task already continued in turn %s", ErrAgentConflict, existing)
+		if priorStatus != protocol.TurnFailed && priorStatus != protocol.TurnInterrupted {
+			return fmt.Errorf("%w: task already continued in turn %s", ErrAgentConflict, existing)
+		}
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO turns (id,thread_id,status,sel_provider,sel_model,sel_complexity,sel_credential,res_provider,res_model,res_complexity,res_credential,auto_picked,error,started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -64,7 +109,11 @@ func (s *Store) CreatePlanContinuationTurn(ctx context.Context, taskID string, t
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO agent_plan_continuations(task_id,turn_id,created_at) VALUES(?,?,?)`, taskID, turn.ID, Now())
+	if existing == "" {
+		_, err = tx.ExecContext(ctx, `INSERT INTO agent_plan_continuations(task_id,turn_id,created_at) VALUES(?,?,?)`, taskID, turn.ID, Now())
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE agent_plan_continuations SET turn_id=?,created_at=? WHERE task_id=? AND turn_id=?`, turn.ID, Now(), taskID, existing)
+	}
 	if err != nil {
 		return err
 	}

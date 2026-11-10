@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/pathutil"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 )
@@ -26,9 +28,9 @@ func TestPlanApprovalAdmissionUsesPrivateParent(t *testing.T) {
 	if err := e.Store.CreateApproval(t.Context(), protocol.Approval{ID: approvalID, Kind: "agent_plan", NodeID: plan.ID, ThreadID: th.ID, TurnID: rootTurn.ID, Status: "pending", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	task := protocol.AgentTask{ID: "private-task", ThreadID: th.ID, RootTurnID: rootTurn.ID, Activation: protocol.AgentActivationPlanApproval, State: protocol.AgentStateRunning, BaseRevision: base, BaseRoot: source, ParentRoot: private, ProjectID: th.ProjectID, CreatedAt: time.Now()}
-	workspace := store.AgentTaskWorkspace{TaskID: task.ID, SourceRoot: source, ExecutionRoot: private, SourceHead: base, SnapshotCommit: base, Manifest: []byte(`{"head":"base"}`), State: "active"}
-	if err := e.Store.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, store.AgentModelScope{Provider: "claude", Model: "deterministic"}, approvalID, "app"); err != nil {
+	task := protocol.AgentTask{ID: "private-task", ThreadID: th.ID, RootTurnID: rootTurn.ID, Activation: protocol.AgentActivationPlanApproval, State: protocol.AgentStateRunning, BaseRevision: base, BaseRoot: pathutil.Resolved(source), ParentRoot: private, ProjectID: th.ProjectID, CreatedAt: time.Now()}
+	workspace := store.AgentTaskWorkspace{TaskID: task.ID, SourceRoot: pathutil.Resolved(source), ExecutionRoot: private, SourceHead: base, SnapshotCommit: base, Manifest: []byte(`{"head":"base"}`), State: "active"}
+	if err := e.Store.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, store.AgentModelScope{Provider: "claude", Model: "deterministic"}, approvalID, "app", plan, json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(source, "untracked.txt"), []byte("user edit\n"), 0600); err != nil {

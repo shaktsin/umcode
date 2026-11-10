@@ -4,9 +4,34 @@ import (
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/models"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"io"
 	"strings"
 	"testing"
 )
+
+func TestUnexpectedEOFStreamRetriesWithoutExecutingPartialCall(t *testing.T) {
+	e, turn := liveFixture(t)
+	p := &budgetProvider{eventsFor: func(n int) []llm.Event {
+		if n == 1 {
+			return []llm.Event{
+				{Type: llm.EventTextDelta, Text: "incomplete"},
+				{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{Name: "file.write", Args: []byte(`{"path":"unsafe.txt"}`)}},
+				{Type: llm.EventError, Err: io.ErrUnexpectedEOF},
+			}
+		}
+		return []llm.Event{{Type: llm.EventTextDelta, Text: "recovered"}, {Type: llm.EventDone, StopReason: "stop", Usage: llm.Usage{Reported: true, InputTokens: 100, OutputTokens: 20}}}
+	}}
+	e.LLMs.Register(p)
+	cred, err := e.Creds.Resolve(t.Context(), "claude", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := resolved{sel: protocol.ModelSelection{Provider: "claude", Model: "deterministic"}, cred: cred, meta: models.Meta{ContextWindow: 200000}}
+	out, err := e.callModel(t.Context(), t.Context(), turn, &res, llm.Request{MaxTokens: 1024}, "chat", newTurnBudget(protocol.ExecutionLimits{MaxDurationMinutes: 5, MaxTokens: 100000, MaxCostUSD: 10, MaxToolRounds: 10}))
+	if err != nil || out.text != "recovered" || len(out.calls) != 0 || len(p.requests) != 2 {
+		t.Fatalf("EOF recovery: requests=%d output=%+v err=%v", len(p.requests), out, err)
+	}
+}
 
 func TestLengthStopDoesNotInventContextCause(t *testing.T) {
 	r := requestBudgetReport{Window: 32768, ReservedOutput: 4096}

@@ -6,14 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/shaktsin/umcode/internal/agentrt"
+	"github.com/shaktsin/umcode/internal/pathutil"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
+	"github.com/shaktsin/umcode/internal/worktree"
 )
 
 // Outcomes of a plan card decision. A declined or revised card resolves its
@@ -52,7 +55,7 @@ type agentPlanWait struct {
 // are the clamped grant, so approving never grants more than the card shows.
 func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (string, error) {
 	if id, ok := runtimeCaller(ctx); !ok || id != "" {
-		return "", tools.Refuse("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities", tools.LeadOnlyNextStep)
+		return "", errors.New("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities")
 	}
 	if e.AgentRuntime == nil {
 		return "", errors.New("agent.propose_plan refused: the agent runtime is unavailable")
@@ -60,10 +63,10 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 	if err := tools.RequireWritable(ctx); err != nil {
 		return "", fmt.Errorf("agent.propose_plan needs writable tools (not available in read-only or plan mode): %w", err)
 	}
-	task, err := e.authorizeDelegationTool(ctx)
-	if errors.Is(err, errAgentsNotEnabled) {
-		return "", err
+	if _, admitted := DelegationTaskFromContext(ctx); !admitted {
+		return e.proposeUnadmittedAgentPlan(ctx, p)
 	}
+	task, err := e.authorizeDelegationTool(ctx)
 	if err != nil {
 		return "", fmt.Errorf("agent.propose_plan needs a turn admitted for delegation: %w", err)
 	}
@@ -75,7 +78,7 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 		return "", errors.New("agent.propose_plan refused: it needs a running turn of the task's chat")
 	}
 	if len(p.Agents) < 1 || len(p.Agents) > tools.MaxPlanAgents {
-		return "", tools.Refuse(fmt.Sprintf("a plan has 1 to %d agents, got %d", tools.MaxPlanAgents, len(p.Agents)), fmt.Sprintf("Propose a plan with 1 to %d agents.", tools.MaxPlanAgents))
+		return "", fmt.Errorf("a plan has 1 to %d agents, got %d", tools.MaxPlanAgents, len(p.Agents))
 	}
 	p.Limits = p.Limits.Normalized()
 	if p.Limits.Network {
@@ -243,6 +246,185 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 	}{stored.ID, planApproved, out})
 }
 
+// proposeUnadmittedAgentPlan captures the selected project and admits the
+// requested plan automatically. The lead resumes in a task-bound turn.
+func (e *Engine) proposeUnadmittedAgentPlan(ctx context.Context, p tools.PlanProposal) (string, error) {
+	turn, ok := ctx.Value(executionTurnKey{}).(protocol.Turn)
+	if !ok || turn.ID == "" || turn.ThreadID == "" {
+		return "", errors.New("agent.propose_plan refused: it needs a running user turn")
+	}
+	requested, err := e.userRequestedAgents(ctx, turn)
+	if err != nil {
+		return "", err
+	}
+	if !requested {
+		return "", errors.New("agent.propose_plan refused: the submitted user message did not request agents")
+	}
+	th, err := e.Store.GetThread(ctx, turn.ThreadID)
+	if err != nil {
+		return "", err
+	}
+	if th.ProjectID == "" {
+		return "", errors.New("agent.propose_plan needs a selected project")
+	}
+	if scope := tools.ScopeFrom(ctx); scope == nil || scope.ThreadID != th.ID || scope.ProjectID != th.ProjectID {
+		return "", errors.New("agent.propose_plan refused: the turn does not belong to this project")
+	}
+	project, err := e.Projects.Get(ctx, th.ProjectID)
+	if err != nil || project.Missing {
+		return "", errors.New("agent.propose_plan needs an available project")
+	}
+	sourceRoot, err := e.activeDelegationParent(ctx, th, project.Root)
+	if err != nil {
+		return "", err
+	}
+	sourceManifest, err := worktree.CaptureSourceManifest(ctx, sourceRoot)
+	if err != nil {
+		return "", fmt.Errorf("agent.propose_plan cannot inspect selected checkout: %w", err)
+	}
+	manifestJSON, err := json.Marshal(sourceManifest)
+	if err != nil {
+		return "", err
+	}
+	if len(p.Agents) < 1 || len(p.Agents) > tools.MaxPlanAgents {
+		return "", fmt.Errorf("a plan has 1 to %d agents, got %d", tools.MaxPlanAgents, len(p.Agents))
+	}
+	p.Limits = p.Limits.Normalized()
+	shellScope, err := e.projectShellScope(ctx, th.ProjectID)
+	if err != nil {
+		return "", err
+	}
+	if p.Limits.Network && !shellScope.AllowNet {
+		return "", errors.New("limits.network refused: " + noNetworkReason)
+	}
+	if task, err := e.Store.ActiveAgentTask(ctx, th.ID, th.ProjectID); err == nil {
+		return "", fmt.Errorf("agent.propose_plan refused: this chat already has an active delegation task (%s)", task.ID)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return "", err
+	}
+
+	// Admission freezes the current model pool for the private task.
+	modelScope := store.AgentModelScope{Provider: turn.Resolved.Provider, Model: turn.Resolved.Model}
+	if modelScope.Model == "" {
+		modelScope.Provider, modelScope.Model = th.Settings.Provider, th.Settings.Model
+	}
+	pool := e.runtimeModelPool(ctx, modelScope, agentNeeds{})
+	if e.planModelPoolHook != nil {
+		pool = e.planModelPoolHook(pool)
+	}
+	defaultModel := poolModelRef(pool, modelScope.Provider+"/"+modelScope.Model, modelScope.Model)
+	lead := e.AgentRuntime.LeadCapabilities()
+	offer := e.shellOfferFor(ctx, shellScope)
+	opts := agentrt.ResolveOptions{ShellReadOnlySupported: offer.ReadOnly}
+	if !shellScope.AllowNet {
+		opts.NetworkUnavailable = noNetworkReason
+	}
+	if offer.Confinement == tools.ConfNone {
+		opts.ShellUnavailable = offer.Reason
+	} else if !offer.ReadOnly {
+		opts.ShellReadOnlyReason = offer.Reason
+	}
+	prev, err := e.Store.LatestApprovedAgentPlan(ctx, th.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return "", err
+	}
+	agents := make([]protocol.PlanAgent, 0, len(p.Agents))
+	for _, a := range p.Agents {
+		if a.Model != "" {
+			ref := poolModelRef(pool, a.Model)
+			if ref == "" {
+				return "", fmt.Errorf("agent.propose_plan refused: agent %q: model %q is not offered", a.Name, a.Model)
+			}
+			a.Model = ref
+		} else {
+			for _, pa := range prev.Agents {
+				if strings.EqualFold(pa.Name, a.Name) {
+					a.Model = poolModelRef(pool, pa.Model)
+					break
+				}
+			}
+			if a.Model == "" {
+				a.Model = defaultModel
+			}
+		}
+		requested := a.Capabilities
+		a.Capabilities, _ = clampPlanCapabilities(lead, requested, p.Limits, opts)
+		if a.Capabilities != requested {
+			a.Requested = &requested
+		}
+		agents = append(agents, a)
+	}
+	plan := protocol.AgentPlan{ID: store.NewID("plan"), ThreadID: th.ID, Agents: agents, Limits: p.Limits, State: protocol.PlanProposed, CreatedAt: time.Now().UTC()}
+	var previous *protocol.AgentPlan
+	if prev.ID != "" {
+		previous = &prev
+	}
+	card := planCardFor(plan, pool, lead, opts, previous)
+	card.Notices = append(card.Notices, "Agents work in a private copy of this project. The plan starts automatically.")
+	if sourceManifest.Head != "" {
+		card.Notices = append(card.Notices, "Git-ignored files are excluded from the private copy.")
+	}
+	if len(sourceManifest.Untracked) > 0 {
+		card.Notices = append(card.Notices, "Untracked inputs included: "+strings.Join(sourceManifest.Untracked, ", "))
+	}
+	payload, err := json.Marshal(card)
+	if err != nil {
+		return "", err
+	}
+	item, _ := ctx.Value(executionItemKey{}).(protocol.Item)
+	names := make([]string, len(agents))
+	for i, a := range agents {
+		names[i] = a.Name
+	}
+	timeout := 10 * time.Minute
+	if e.Cfg != nil && e.Cfg.Policy.ApprovalTimeoutMinutes > 0 {
+		timeout = time.Duration(e.Cfg.Policy.ApprovalTimeoutMinutes) * time.Minute
+	}
+	if e.planCardTimeout > 0 {
+		timeout = e.planCardTimeout
+	}
+	now := time.Now().UTC()
+	approval := protocol.Approval{ID: store.NewID("apr"), Kind: "agent_plan", NodeID: plan.ID, ThreadID: th.ID, ProjectID: th.ProjectID,
+		TurnID: turn.ID, ItemID: item.ID, Tool: "agent.propose_plan", Args: payload, Risk: "workflow",
+		Reason: "Automatically started from the user's request", ActionSummary: fmt.Sprintf("Start %d agent(s): %s", len(agents), strings.Join(names, ", ")),
+		Status: "pending", CreatedAt: now, ExpiresAt: now.Add(timeout)}
+
+	create := func() error {
+		e.agentPlanMu.Lock()
+		defer e.agentPlanMu.Unlock()
+		var priorCount int
+		if err := e.Store.DB.QueryRowContext(ctx, `SELECT count(*) FROM approvals WHERE kind='agent_plan' AND turn_id=? AND status IN ('pending','approved')`, turn.ID).Scan(&priorCount); err != nil {
+			return err
+		}
+		if priorCount != 0 {
+			return errors.New("agent.propose_plan refused: only one plan per user message")
+		}
+		if err := e.Store.SaveAgentPlan(ctx, plan); err != nil {
+			return err
+		}
+		if err := e.Store.SaveAgentPlanSource(ctx, store.AgentPlanSource{PlanID: plan.ID, SourceRoot: sourceRoot, Manifest: manifestJSON}); err != nil {
+			return err
+		}
+		return e.Store.CreateApproval(ctx, approval)
+	}
+	if err := create(); err != nil {
+		return "", err
+	}
+	started, err := e.RespondAgentPlanAs(ctx, "automatic_project", protocol.AgentPlanRespondParams{PlanID: plan.ID, Decision: protocol.PlanDecisionApprove})
+	if err != nil {
+		if saved, readErr := e.Store.AgentPlan(ctx, plan.ID); readErr == nil && saved.State != protocol.PlanApproved {
+			_ = e.expireApproval(ctx, approval, "automatic_project_validation_failed")
+		}
+		return "", err
+	}
+	_ = e.Store.Audit(ctx, "agent.plan.auto_start", map[string]any{"plan": plan.ID, "task": started.TaskID, "thread": th.ID})
+	return marshalString(struct {
+		PlanID  string `json:"planId"`
+		State   string `json:"state"`
+		Message string `json:"message"`
+	}{plan.ID, "started", "The agent plan started automatically. Continue the original request in the admitted task turn."})
+}
+
 // closeEmptyRuntimeTask completes an active runtime task that has no
 // approved plan, no agents, no revisions and no plan card still waiting for
 // a decision: nothing was delegated, so the task only blocks enabling agents
@@ -262,56 +444,34 @@ func (e *Engine) closeEmptyRuntimeTaskIf(ctx context.Context, taskID string, kee
 	// (saveProposedPlan re-checks the task under this lock).
 	e.agentPlanMu.Lock()
 	defer e.agentPlanMu.Unlock()
-	task, ok := e.emptyRuntimeTaskLocked(ctx, taskID, keepProposed)
-	if !ok {
-		return false
-	}
-	if _, err := e.completeRuntimeTask(ctx, task); err != nil {
-		e.Log.Warn("could not close the empty delegation task", "task", taskID, "err", err)
-		return false
-	}
-	return true
-}
-
-// isEmptyRuntimeTask reports, without changing anything, whether
-// closeEmptyRuntimeTaskIf would find the task empty now.
-func (e *Engine) isEmptyRuntimeTask(ctx context.Context, taskID string, keepProposed bool) bool {
-	e.delegationWorkflowMu.Lock()
-	defer e.delegationWorkflowMu.Unlock()
-	e.agentPlanMu.Lock()
-	defer e.agentPlanMu.Unlock()
-	_, ok := e.emptyRuntimeTaskLocked(ctx, taskID, keepProposed)
-	return ok
-}
-
-// emptyRuntimeTaskLocked is the emptiness check (no plan card waiting, active,
-// no approved plan, with keepProposed no proposed plan, no agents, no
-// revisions). Callers hold delegationWorkflowMu and agentPlanMu.
-func (e *Engine) emptyRuntimeTaskLocked(ctx context.Context, taskID string, keepProposed bool) (protocol.AgentTask, bool) {
 	for _, w := range e.agentPlanWaits {
 		if w.taskID == taskID {
-			return protocol.AgentTask{}, false
+			return false
 		}
 	}
 	task, err := e.Store.AgentTask(ctx, taskID)
 	if err != nil || !unfinishedDelegation(task.State) {
-		return protocol.AgentTask{}, false
+		return false
 	}
 	if _, err = e.Store.ApprovedAgentPlanForTask(ctx, taskID); !errors.Is(err, store.ErrNotFound) {
-		return protocol.AgentTask{}, false
+		return false
 	}
 	if keepProposed {
 		if proposed, err := e.Store.HasProposedAgentPlan(ctx, taskID); err != nil || proposed {
-			return protocol.AgentTask{}, false
+			return false
 		}
 	}
 	if agents, err := e.Store.RuntimeAgents(ctx, taskID); err != nil || len(agents) > 0 {
-		return protocol.AgentTask{}, false
+		return false
 	}
 	if revs, err := e.Store.AgentRevisions(ctx, taskID); err != nil || len(revs) > 0 {
-		return protocol.AgentTask{}, false
+		return false
 	}
-	return task, true
+	if _, err = e.completeRuntimeTask(ctx, task); err != nil {
+		e.Log.Warn("could not close the empty delegation task", "task", taskID, "err", err)
+		return false
+	}
+	return true
 }
 
 func marshalString(v any) (string, error) {
@@ -419,6 +579,15 @@ func (e *Engine) GetAgentPlan(ctx context.Context, p protocol.AgentPlanGetParams
 			res.Card = &card
 		}
 	}
+	if plan.TaskID != "" && plan.State == protocol.PlanApproved && res.ApprovalStatus == "approved" {
+		if task, err := e.Store.AgentTask(ctx, plan.TaskID); err == nil && task.Activation == protocol.AgentActivationPlanApproval && unfinishedDelegation(task.State) {
+			needed, err := e.Store.AgentPlanContinuationNeedsRetry(ctx, plan.TaskID)
+			if err != nil {
+				return res, err
+			}
+			res.ContinuationNeeded = needed
+		}
+	}
 	return res, nil
 }
 
@@ -427,6 +596,35 @@ func (e *Engine) GetAgentPlan(ctx context.Context, p protocol.AgentPlanGetParams
 func (e *Engine) agentPlanCard(ctx context.Context, plan protocol.AgentPlan) (protocol.PlanCard, error) {
 	if e.AgentRuntime == nil {
 		return protocol.PlanCard{}, errors.New("agent runtime unavailable")
+	}
+	if plan.TaskID == "" {
+		scope, err := e.unadmittedPlanModelScope(ctx, plan)
+		if err != nil {
+			return protocol.PlanCard{}, err
+		}
+		pool := e.runtimeModelPool(ctx, scope, agentNeeds{})
+		if e.planModelPoolHook != nil {
+			pool = e.planModelPoolHook(pool)
+		}
+		th, err := e.Store.GetThread(ctx, plan.ThreadID)
+		if err != nil {
+			return protocol.PlanCard{}, err
+		}
+		shellScope, err := e.projectShellScope(ctx, th.ProjectID)
+		if err != nil {
+			return protocol.PlanCard{}, err
+		}
+		offer := e.shellOfferFor(ctx, shellScope)
+		opts := agentrt.ResolveOptions{ShellReadOnlySupported: offer.ReadOnly}
+		if !shellScope.AllowNet {
+			opts.NetworkUnavailable = noNetworkReason
+		}
+		if offer.Confinement == tools.ConfNone {
+			opts.ShellUnavailable = offer.Reason
+		} else if !offer.ReadOnly {
+			opts.ShellReadOnlyReason = offer.Reason
+		}
+		return planCardFor(plan, pool, e.AgentRuntime.LeadCapabilities(), opts, nil), nil
 	}
 	pool, _, err := e.planModelPool(ctx, plan.TaskID)
 	if err != nil {
@@ -456,6 +654,29 @@ func (e *Engine) planModelPool(ctx context.Context, taskID string) ([]modelRoute
 		pool = e.planModelPoolHook(pool)
 	}
 	return pool, scope, nil
+}
+
+func (e *Engine) unadmittedPlanModelScope(ctx context.Context, plan protocol.AgentPlan) (store.AgentModelScope, error) {
+	th, err := e.Store.GetThread(ctx, plan.ThreadID)
+	if err != nil {
+		return store.AgentModelScope{}, err
+	}
+	scope := store.AgentModelScope{Provider: th.Settings.Provider, Model: th.Settings.Model}
+	approval, err := e.Store.LatestApprovalForNode(ctx, "agent_plan", plan.ID)
+	if err != nil {
+		return scope, err
+	}
+	turns, err := e.Store.ListTurns(ctx, plan.ThreadID)
+	if err != nil {
+		return scope, err
+	}
+	for _, turn := range turns {
+		if turn.ID == approval.TurnID && turn.Resolved.Model != "" {
+			scope.Provider, scope.Model = turn.Resolved.Provider, turn.Resolved.Model
+			break
+		}
+	}
+	return scope, nil
 }
 
 // poolModelRef returns the pool's reference (provider/model) for the first
@@ -642,12 +863,20 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 		return res, none, aerr
 	}
 	done := func(pl protocol.AgentPlan, a protocol.Approval) (protocol.AgentPlanRespondResult, protocol.Approval, error) {
-		return protocol.AgentPlanRespondResult{Plan: pl, ApprovalStatus: a.Status}, a, nil
+		return protocol.AgentPlanRespondResult{Plan: pl, ApprovalStatus: a.Status, TaskID: pl.TaskID}, a, nil
 	}
 	rec, recorded := e.agentPlanDecided[plan.ID]
 	// sameApprove reports whether a repeat approve carries the same edits as
 	// the recorded one (without a record only an edit-free repeat is).
 	sameApprove := func() error {
+		if plan.State == protocol.PlanApproved && plan.TaskID != "" {
+			if task, err := e.Store.AgentTask(ctx, plan.TaskID); err == nil && task.Activation == protocol.AgentActivationPlanApproval {
+				if approvedPlanEditsMatch(plan, p) {
+					return nil
+				}
+				return protocol.Errorf(protocol.CodeConflict, "plan %s: %s with different edits; the approved plan is unchanged", plan.ID, planDecidedText)
+			}
+		}
 		if recorded && rec.outcome == planApproved {
 			pool, _, err := e.planModelPool(ctx, plan.TaskID)
 			if err != nil {
@@ -728,6 +957,9 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 		return res, none, protocol.Errorf(protocol.CodeConflict, "plan %s: %s (%s)", plan.ID, planDecidedText, approval.Status)
 	}
 	// Pending: the card must still be blocking agent.propose_plan.
+	if plan.TaskID == "" {
+		return e.respondUnadmittedAgentPlan(sctx, plan, approval, outcome, feedback, p, by)
+	}
 	e.mu.Lock()
 	_, waiting := e.approvals[approval.ID]
 	e.mu.Unlock()
@@ -818,6 +1050,248 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 	}
 	// bindApprovedPlan made the one approved announcement.
 	return done(stored, decided)
+}
+
+func approvedPlanEditsMatch(plan protocol.AgentPlan, p protocol.AgentPlanRespondParams) bool {
+	for name, model := range p.Models {
+		i := planEntryIndex(plan.Agents, name)
+		if i < 0 || !strings.EqualFold(plan.Agents[i].Model, model) && !strings.HasSuffix(plan.Agents[i].Model, "/"+model) {
+			return false
+		}
+	}
+	for _, name := range p.Drop {
+		if planEntryIndex(plan.Agents, name) >= 0 {
+			return false
+		}
+	}
+	if p.Limits != nil {
+		limits, err := clampPlanLimits(*p.Limits)
+		if err != nil || limits != plan.Limits {
+			return false
+		}
+	}
+	return true
+}
+
+// respondUnadmittedAgentPlan is called with agentPlanMu held. Admission creates
+// the task, private checkout, model scope and resolved card as one durable
+// boundary; legacy explicit plan decisions also use this path.
+func (e *Engine) respondUnadmittedAgentPlan(ctx context.Context, plan protocol.AgentPlan, approval protocol.Approval, outcome, feedback string, p protocol.AgentPlanRespondParams, by string) (protocol.AgentPlanRespondResult, protocol.Approval, error) {
+	var none protocol.Approval
+	if err := e.delegationOpen(); err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	if time.Now().After(approval.ExpiresAt) {
+		_ = e.expireApproval(ctx, approval, "timeout")
+		return protocol.AgentPlanRespondResult{}, none, protocol.Errorf(protocol.CodeConflict, "plan %s: %s", plan.ID, planExpiredText)
+	}
+	if outcome != planApproved {
+		decided, _, err := e.respondApprovalCommitted(ctx, approval.ID, false, false, by)
+		if err != nil {
+			return protocol.AgentPlanRespondResult{}, none, err
+		}
+		e.recordPlanDecision(plan.ID, planDecision{outcome: outcome})
+		e.publishAgentPlan(plan, decided.Status)
+		if outcome == planRevise {
+			go e.startPlanFeedbackTurn(plan.ThreadID, feedback)
+		}
+		return protocol.AgentPlanRespondResult{Plan: plan, ApprovalStatus: decided.Status}, decided, nil
+	}
+	th, err := e.Store.GetThread(ctx, plan.ThreadID)
+	if err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	project, err := e.Projects.Get(ctx, th.ProjectID)
+	if err != nil || project.Missing {
+		return protocol.AgentPlanRespondResult{}, none, protocol.Errorf(protocol.CodeConflict, "plan %s: selected project is unavailable", plan.ID)
+	}
+	source, err := e.activeDelegationParent(ctx, th, project.Root)
+	if err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	proposedSource, err := e.Store.AgentPlanSource(ctx, plan.ID)
+	if err != nil || proposedSource.SourceRoot != source {
+		return protocol.AgentPlanRespondResult{}, none, protocol.Errorf(protocol.CodeConflict, "selected checkout for agent plan changed; propose a new plan")
+	}
+	var proposedManifest worktree.SnapshotManifest
+	if err := json.Unmarshal(proposedSource.Manifest, &proposedManifest); err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	before, err := worktree.CaptureSourceManifest(ctx, source)
+	if err != nil || !worktree.EqualTaskManifest(proposedManifest, before) {
+		return protocol.AgentPlanRespondResult{}, none, protocol.Errorf(protocol.CodeConflict, "selected checkout changed since the agent plan was proposed; propose a new plan")
+	}
+	if e.Worktrees == nil {
+		return protocol.AgentPlanRespondResult{}, none, errors.New("private task workspaces unavailable")
+	}
+	if active, err := e.Store.ActiveAgentTask(ctx, th.ID, th.ProjectID); err == nil {
+		return protocol.AgentPlanRespondResult{}, none, protocol.Errorf(protocol.CodeConflict, "chat already has an active agent task %s", active.ID)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	prepared := protocol.AgentTask{ThreadID: th.ID, RootTurnID: approval.TurnID,
+		Activation: protocol.AgentActivationPlanApproval, State: protocol.AgentStateRunning,
+		BaseRoot: pathutil.Resolved(project.Root), ProjectID: th.ProjectID, CreatedAt: time.Now().UTC()}
+	edited, err := e.validatePlanApproval(ctx, plan, prepared, p)
+	if err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	prepared.ID = store.NewID("agt")
+	destination := e.Worktrees.Path(prepared.ID)
+	if err := e.markPreparedTaskSnapshot(prepared.ID, destination); err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(destination)
+		_ = os.Remove(destination + ".ready")
+		clearPreparedTaskSnapshot(destination)
+	}
+	snapshot, err := worktree.CaptureTaskSnapshot(ctx, source, destination)
+	if err != nil {
+		cleanup()
+		return protocol.AgentPlanRespondResult{}, none, fmt.Errorf("capture agent task workspace: %w", err)
+	}
+	current, err := worktree.CaptureSourceManifest(ctx, source)
+	if err != nil || !worktree.EqualTaskManifest(proposedManifest, snapshot.Manifest) || !worktree.EqualTaskManifest(snapshot.Manifest, current) {
+		cleanup()
+		return protocol.AgentPlanRespondResult{}, none, protocol.Errorf(protocol.CodeConflict, "selected checkout changed during agent plan approval")
+	}
+	prepared.ParentRoot, prepared.BaseRevision = snapshot.Destination, snapshot.BaseCommit
+	manifest, err := json.Marshal(snapshot.Manifest)
+	if err != nil {
+		cleanup()
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	workspace := store.AgentTaskWorkspace{TaskID: prepared.ID, SourceRoot: snapshot.SourceRoot, ExecutionRoot: snapshot.Destination,
+		SourceHead: snapshot.SourceHead, SnapshotCommit: snapshot.BaseCommit, Manifest: manifest, State: "active"}
+	modelScope, err := e.unadmittedPlanModelScope(ctx, plan)
+	if err != nil {
+		cleanup()
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	card, err := e.agentPlanCard(ctx, edited)
+	if err != nil {
+		cleanup()
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	card.Notices = append(card.Notices, "Agents work in a private copy of this project.")
+	if proposedManifest.Head != "" {
+		card.Notices = append(card.Notices, "Git-ignored files are excluded from the private copy.")
+	}
+	if len(proposedManifest.Untracked) > 0 {
+		card.Notices = append(card.Notices, "Untracked inputs included: "+strings.Join(proposedManifest.Untracked, ", "))
+	}
+	cardJSON, err := json.Marshal(card)
+	if err != nil {
+		cleanup()
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	if err := e.Store.ApproveAgentPlanWithTask(ctx, plan.ID, prepared, workspace, modelScope, approval.ID, by, edited, cardJSON); err != nil {
+		// A commit error may be ambiguous. Keep the private result if the
+		// transaction actually committed, so recovery can inspect it.
+		if persisted, readErr := e.Store.AgentPlan(ctx, plan.ID); readErr != nil || persisted.State != protocol.PlanApproved || persisted.TaskID != prepared.ID {
+			cleanup()
+			return protocol.AgentPlanRespondResult{}, none, err
+		}
+	}
+	clearPreparedTaskSnapshot(destination)
+	stored, err := e.Store.AgentPlan(ctx, plan.ID)
+	if err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	decided, err := e.Store.GetApproval(ctx, approval.ID)
+	if err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	pool, _, err := e.planModelPool(ctx, prepared.ID)
+	if err != nil {
+		return protocol.AgentPlanRespondResult{}, none, err
+	}
+	e.recordPlanDecision(plan.ID, planDecision{outcome: planApproved, edits: planEditsKey(pool, p)})
+	e.publishAgentPlan(stored, decided.Status)
+	e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: decided})
+	go e.startPlanContinuation(th.ID, prepared.ID)
+	return protocol.AgentPlanRespondResult{Plan: stored, ApprovalStatus: decided.Status, TaskID: prepared.ID}, decided, nil
+}
+
+func (e *Engine) startPlanFeedbackTurn(threadID, feedback string) {
+	ctx, cancel := context.WithTimeout(e.baseCtx, 15*time.Second)
+	defer cancel()
+	for ctx.Err() == nil {
+		if _, err := e.StartTurn(ctx, protocol.TurnStartParams{ThreadID: threadID, Text: "Revise the agent plan using this user feedback: " + feedback}); err == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (e *Engine) startPlanContinuation(threadID, taskID string) {
+	ctx := e.baseCtx
+	backoff := 100 * time.Millisecond
+	for ctx.Err() == nil {
+		task, err := e.Store.AgentTask(ctx, taskID)
+		if errors.Is(err, store.ErrNotFound) || err == nil && !unfinishedDelegation(task.State) {
+			return
+		}
+		if err == nil {
+			needed, retryErr := e.Store.AgentPlanContinuationNeedsRetry(ctx, taskID)
+			if retryErr == nil && !needed {
+				return
+			}
+			if retryErr == nil {
+				if spawnErr := e.startFirstApprovedAgent(ctx, taskID); spawnErr != nil {
+					e.Log.Warn("could not start first approved agent", "task", taskID, "err", spawnErr)
+				}
+				if _, startErr := e.startTurn(ctx, turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: threadID, DelegationTaskID: taskID,
+					Text: "Continue the agent plan and the original request. Inspect running agents, coordinate remaining entries, and use the private task workspace."}, planContinuation: true}); startErr == nil {
+					return
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+		}
+		if backoff < 5*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+func (e *Engine) startFirstApprovedAgent(ctx context.Context, taskID string) error {
+	if e.AgentRuntime == nil {
+		return errors.New("agent runtime unavailable")
+	}
+	agents, err := e.Store.RuntimeAgents(ctx, taskID)
+	if err != nil || len(agents) != 0 {
+		return err
+	}
+	plan, err := e.Store.ApprovedAgentPlanForTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if len(plan.Agents) == 0 {
+		return errors.New("approved agent plan has no entries")
+	}
+	first := plan.Agents[0]
+	for _, entry := range plan.Agents {
+		if entry.Capabilities.Files == protocol.FilesReadWrite || entry.Capabilities.Shell == protocol.ShellReadWrite {
+			first = entry
+			break
+		}
+	}
+	assignment := protocol.AgentAssignment{Prompt: strings.TrimSpace(first.Purpose)}
+	if assignment.Prompt == "" {
+		assignment.Prompt = strings.TrimSpace(first.Summary)
+	}
+	_, err = (runtimeSpawnGate{Service: e.AgentRuntime, e: e}).Spawn(ctx, agentrt.SpawnRequest{
+		TaskID: taskID, CallID: "automatic-plan-" + plan.ID, PlanEntry: first.Name,
+		Name: first.Name, Assignment: assignment, ContextMode: "summary",
+	})
+	return err
 }
 
 // planDecision is the recorded answer to a plan card: the outcome and, for
@@ -936,9 +1410,38 @@ func (e *Engine) validatePlanApproval(ctx context.Context, plan protocol.AgentPl
 			return plan, protocol.Errorf(protocol.CodeConflict, "limits.network refused: %s, so no agent can have network; turn limits.network off or decline", noNetworkReason)
 		}
 	}
-	pool, _, err := e.planModelPool(ctx, task.ID)
-	if err != nil {
-		return plan, err
+	var pool []modelRoute
+	var opts agentrt.ResolveOptions
+	if task.ID == "" {
+		modelScope, err := e.unadmittedPlanModelScope(ctx, plan)
+		if err != nil {
+			return plan, err
+		}
+		pool = e.runtimeModelPool(ctx, modelScope, agentNeeds{})
+		if e.planModelPoolHook != nil {
+			pool = e.planModelPoolHook(pool)
+		}
+		scope, err := e.projectShellScope(ctx, task.ProjectID)
+		if err != nil {
+			return plan, err
+		}
+		offer := e.shellOfferFor(ctx, scope)
+		opts = agentrt.ResolveOptions{ShellReadOnlySupported: offer.ReadOnly}
+		if !scope.AllowNet {
+			opts.NetworkUnavailable = noNetworkReason
+		}
+		if offer.Confinement == tools.ConfNone {
+			opts.ShellUnavailable = offer.Reason
+		} else if !offer.ReadOnly {
+			opts.ShellReadOnlyReason = offer.Reason
+		}
+	} else {
+		var err error
+		pool, _, err = e.planModelPool(ctx, task.ID)
+		if err != nil {
+			return plan, err
+		}
+		opts = e.runtimeResolveOptions(ctx, task.ID)
 	}
 	if _, err := foldedModelEdits(p.Models); err != nil {
 		return plan, err
@@ -960,7 +1463,6 @@ func (e *Engine) validatePlanApproval(ctx context.Context, plan protocol.AgentPl
 		}
 		agents[i].Model = m
 	}
-	opts := e.runtimeResolveOptions(ctx, task.ID)
 	lead := e.AgentRuntime.LeadCapabilities()
 	for i := range agents {
 		a := &agents[i]

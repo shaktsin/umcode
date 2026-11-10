@@ -370,7 +370,7 @@ func (t *runtimeIntegrateTool) Call(ctx context.Context, args json.RawMessage) (
 		return "", errors.New("agent runtime unavailable")
 	}
 	if id, ok := t.caller(ctx); !ok || id != "" {
-		return "", Refuse("agent.integrate is lead-only: agents cannot integrate revisions, whatever their capabilities", LeadOnlyNextStep)
+		return "", errors.New("agent.integrate is lead-only: agents cannot integrate revisions, whatever their capabilities")
 	}
 	if err := RequireWritable(ctx); err != nil {
 		return "", fmt.Errorf("agent.integrate needs writable tools (not available in read-only or plan mode): %w", err)
@@ -445,10 +445,7 @@ type agentSuggestTool struct{ a RuntimeActivation }
 func (t *agentSuggestTool) SelectionMetadata() (string, string) { return "core", "engine" }
 func (t *agentSuggestTool) Name() string                        { return "agent.suggest" }
 func (t *agentSuggestTool) Description() string {
-	return "Lead only. Ask the user to enable agents for this task, with a short reason. " +
-		"Suggest only for work that clearly benefits from parallel or independent agents (for example several separable parts, or an independent review); never for small or sequential work. " +
-		"It grants nothing: it shows the user a card to enable agents or continue without them. After calling it, stop and end your turn. " +
-		"At most once per user message, only in a committed Git project, and not again in this chat after the user declined unless they enable agents themselves."
+	return "Deprecated compatibility tool. New agent work uses agent.propose_plan directly from the user's prompt."
 }
 
 func (t *agentSuggestTool) Schema() json.RawMessage {
@@ -462,10 +459,10 @@ func (t *agentSuggestTool) Assess(json.RawMessage) (Risk, string) {
 
 func (t *agentSuggestTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	if t.a.Caller == nil {
-		return "", Refuse("agent.suggest is lead-only: the caller could not be resolved", LeadOnlyNextStep)
+		return "", errors.New("agent.suggest is lead-only: the caller could not be resolved")
 	}
 	if id, ok := t.a.Caller(ctx); !ok || id != "" {
-		return "", Refuse("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents", LeadOnlyNextStep)
+		return "", errors.New("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents")
 	}
 	if t.a.Suggest == nil {
 		return "", errors.New("agent runtime unavailable")
@@ -515,10 +512,9 @@ type agentProposePlanTool struct{ a RuntimeActivation }
 func (t *agentProposePlanTool) SelectionMetadata() (string, string) { return "core", "engine" }
 func (t *agentProposePlanTool) Name() string                        { return "agent.propose_plan" }
 func (t *agentProposePlanTool) Description() string {
-	return "Lead only, in a turn where agents are enabled. Propose the agents for this task and wait for the user's decision: each agent has a name, purpose, short summary, capabilities (files, shell, network, spawnMax) and optionally a model from this task's model pool (omitted: the previous assignment of the same name, else this chat's model). " +
-		"The user sees a plan card with what each agent is actually granted and can change models, drop agents, edit limits or decline. " +
-		"Results: approved (spawn agents from the approved entries with agent.spawn), declined (continue without agents) or revise (read the feedback and call agent.propose_plan again; the new plan replaces the old card). " +
-		"No agent can be spawned until a plan is approved."
+	return "Lead only. When the user asks for agents, create an agent plan directly from their prompt. Each agent has a name, purpose, short summary, capabilities (files, shell, network, spawnMax) and optionally a model from the offered model pool. " +
+		"In an ordinary project turn, a valid plan starts automatically in a private task workspace. The tool ends this turn and an admitted continuation receives agent tools. " +
+		"The plan and granted capabilities are visible in the chat."
 }
 
 func (t *agentProposePlanTool) Schema() json.RawMessage {
@@ -572,7 +568,7 @@ func ParsePlanProposal(args json.RawMessage) (PlanProposal, error) {
 		return PlanProposal{}, err
 	}
 	if len(a.Agents) < 1 || len(a.Agents) > MaxPlanAgents {
-		return PlanProposal{}, Refuse(fmt.Sprintf("a plan has 1 to %d agents, got %d", MaxPlanAgents, len(a.Agents)), fmt.Sprintf("Propose a plan with 1 to %d agents.", MaxPlanAgents))
+		return PlanProposal{}, fmt.Errorf("a plan has 1 to %d agents, got %d", MaxPlanAgents, len(a.Agents))
 	}
 	var p PlanProposal
 	seen := map[string]bool{}
@@ -642,10 +638,10 @@ func ParsePlanProposal(args json.RawMessage) (PlanProposal, error) {
 
 func (t *agentProposePlanTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	if t.a.Caller == nil {
-		return "", Refuse("agent.propose_plan is lead-only: the caller could not be resolved", LeadOnlyNextStep)
+		return "", errors.New("agent.propose_plan is lead-only: the caller could not be resolved")
 	}
 	if id, ok := t.a.Caller(ctx); !ok || id != "" {
-		return "", Refuse("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities", LeadOnlyNextStep)
+		return "", errors.New("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities")
 	}
 	if err := RequireWritable(ctx); err != nil {
 		return "", fmt.Errorf("agent.propose_plan needs writable tools (not available in read-only or plan mode): %w", err)

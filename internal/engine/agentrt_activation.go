@@ -16,6 +16,8 @@ import (
 // only from the plan the user approves, never from what an agent is called.
 const delegationLeadPrompt = `Agents are enabled for this task. You decide whether to use them, what each one does, what to check and when the user's request is satisfied. To use agents, propose a plan with agent.propose_plan and wait for the user's decision; each agent gets only the capabilities its approved plan entry grants. Spawn approved entries with agent.spawn, giving each focused requirements and relevant file references; its context is fresh. Accept or reject submitted revisions with agent.integrate, run the planned verification checks in the integrated checkout, and finish with agent.integrate {"action":"complete"} only after the checks actually passed. Agent findings and check results are evidence for your judgment, not engine certification. Workspace isolation, permissions, cancellation and the shared task budget apply. Never claim a blocked check passed.`
 
+const planApprovedLeadPrompt = `The user's request started an agent plan for this task. Inspect agent.list: the first suitable entry may already be running. Use agent.spawn for remaining entries at the right time; each agent receives only its displayed capabilities. Give them focused requirements and relevant file references. Review submitted revisions, accept or reject them with agent.integrate, run the planned verification checks in the private task checkout, and finish with agent.integrate {"action":"complete"} only after the checks actually passed. The plan authorizes integrating accepted agent changes into the selected checkout as worktree edits. It does not authorize creating a user Git commit or pushing. Agent findings and check results are evidence for your judgment, not engine certification. Never claim a blocked check passed.`
+
 // suggestStopMessage is what agent.suggest tells the model: the suggesting
 // turn ends, and the user's answer arrives as a new turn.
 const suggestStopMessage = "Stop now: the user decides whether to enable agents. Do not call agent.* tools or continue the task in this turn."
@@ -35,13 +37,13 @@ func (e *Engine) suggestOnlyTool(name string) bool {
 // task in the chat, one per user message, not after a decline.
 func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, error) {
 	if id, ok := runtimeCaller(ctx); !ok || id != "" {
-		return "", tools.Refuse("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents", tools.LeadOnlyNextStep)
+		return "", errors.New("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents")
 	}
 	if e.AgentRuntime == nil {
-		return "", suggestRefusal("agent.suggest refused: the agent runtime is unavailable")
+		return "", errors.New("agent.suggest refused: the agent runtime is unavailable")
 	}
 	if _, admitted := DelegationTaskFromContext(ctx); admitted {
-		return "", errSuggestAdmitted
+		return "", errors.New("agent.suggest refused: this turn is already admitted for delegation; agents are enabled, so do not suggest them")
 	}
 	turn, ok := ctx.Value(executionTurnKey{}).(protocol.Turn)
 	if !ok || turn.ID == "" || turn.ThreadID == "" {
@@ -52,36 +54,26 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 	}
 	base, err := e.delegationBase(ctx, turn.ThreadID)
 	if err != nil {
-		return "", tools.Refuse(fmt.Sprintf("agent.suggest refused: agents need a committed Git project (%v)", err), agentGitNextStep)
+		return "", fmt.Errorf("agent.suggest refused: agents need a committed Git project (%v)", err)
 	}
-	// An EMPTY active task does not refuse; it is replaced only once every
-	// other rule passed, just before the suggestion is stored, so a refused
-	// suggest never discards the user's activation.
-	emptyTask := ""
 	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil {
-		if !e.replaceableActivation(ctx, task.ID) {
-			return "", suggestRefusal(fmt.Sprintf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", task.ID))
-		}
-		emptyTask = task.ID
+		return "", fmt.Errorf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", task.ID)
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}
 	if last, err := e.Store.LatestAgentSuggestion(ctx, turn.ThreadID); err == nil && last.TurnID == turn.ID {
-		return "", suggestRefusal("agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it")
+		return "", errors.New("agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it")
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}
 	if declined, err := e.Store.ThreadDeclinedSuggestion(ctx, turn.ThreadID); err != nil {
 		return "", err
 	} else if declined {
-		return "", suggestRefusal("agent.suggest refused: the user declined agents in this chat; do not suggest them again unless the user enables agents themselves")
-	}
-	if emptyTask != "" && !e.replaceEmptyActivation(ctx, emptyTask) {
-		return "", suggestRefusal(fmt.Sprintf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", emptyTask))
+		return "", errors.New("agent.suggest refused: the user declined agents in this chat; do not suggest them again unless the user enables agents themselves")
 	}
 	sug, err := e.Store.CreateAgentSuggestion(ctx, store.AgentSuggestion{ThreadID: turn.ThreadID, TurnID: turn.ID, Reason: reason})
 	if errors.Is(err, store.ErrAgentConflict) {
-		return "", suggestRefusal("agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it")
+		return "", errors.New("agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it")
 	}
 	if err != nil {
 		return "", err
@@ -94,43 +86,31 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 	return string(out), err
 }
 
-// replaceEmptyActivation completes the chat's active runtime task when it is
-// EMPTY (no plan card waiting, no proposed or approved plan, no agents, no
-// revisions) and no running turn holds it, so an explicit enable
-// (delegation/enable, an enabled suggestion, an activation token) or
-// agent.suggest can proceed instead of refusing. It reports whether the task
-// was completed; a task with any delegated work is never replaced. It shares
-// closeEmptyRuntimeTask's checks and locks (delegationWorkflowMu ->
-// agentPlanMu). An empty task is otherwise kept, so a lead that asks the user
-// a question in the admitted turn can still propose in the follow-up turn
-// admitted by the task's ID.
-func (e *Engine) replaceEmptyActivation(ctx context.Context, taskID string) bool {
-	if !e.activationUnheld(taskID) {
-		return false
-	}
-	return e.closeEmptyRuntimeTaskIf(context.WithoutCancel(ctx), taskID, true)
+// closeUnproposedActivation runs when a root turn admitted for delegation
+// ends: a runtime task that never got a plan (no plan card waiting, no
+// proposed or approved plan, no agents, no revisions) is completed, so an
+// activation whose turn never called agent.propose_plan does not block
+// delegation/enable or agent.suggest later in the chat. It reports whether
+// the task was closed; it shares closeEmptyRuntimeTask's checks and locks.
+func (e *Engine) closeUnproposedActivation(ctx context.Context, taskID string) bool {
+	return e.closeEmptyRuntimeTaskIf(ctx, taskID, true)
 }
 
-// replaceableActivation reports, without changing anything, whether
-// replaceEmptyActivation would replace the task now. Callers that refuse for
-// other reasons first check with it and replace only once they proceed.
-func (e *Engine) replaceableActivation(ctx context.Context, taskID string) bool {
-	return e.activationUnheld(taskID) && e.isEmptyRuntimeTask(ctx, taskID, true)
-}
-
-// activationUnheld: the runtime is on and no running turn holds the task.
-func (e *Engine) activationUnheld(taskID string) bool {
-	if e.AgentRuntime == nil {
-		return false
+// endAdmittedTurn is called by finishTurn for every turn: only a root turn
+// (not an agent or child) of a task admitted with the agent runtime on is
+// considered for closeUnproposedActivation.
+func (e *Engine) endAdmittedTurn(ctx context.Context) {
+	if e.AgentRuntime == nil || delegationChild(ctx) || childExecutionFrom(ctx) != nil {
+		return
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for _, at := range e.activeTurns {
-		if at.taskID == taskID {
-			return false
-		}
+	if id, ok := runtimeAgentFrom(ctx); ok && id != "" {
+		return
 	}
-	return true
+	task, ok := DelegationTaskFromContext(ctx)
+	if !ok || task.ID == "" {
+		return
+	}
+	e.closeUnproposedActivation(context.WithoutCancel(ctx), task.ID)
 }
 
 // RespondAgentSuggestion records the user's answer to a suggestion card

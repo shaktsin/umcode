@@ -92,6 +92,47 @@ func TestTaskSnapshotPreservesVisibleDirtyState(t *testing.T) {
 	}
 }
 
+func TestTaskSnapshotFromOrdinaryProject(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "UMCODE.md", "project instructions\n")
+	write(t, root, "main.go", "package smoke\n")
+	before, err := CaptureSourceManifest(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Head != "" || len(before.Paths) != 2 {
+		t.Fatalf("ordinary manifest: %+v", before)
+	}
+	dest := filepath.Join(t.TempDir(), "snapshot")
+	snap, err := CaptureTaskSnapshot(t.Context(), root, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.SourceHead != "" || snap.BaseCommit == "" || read(t, dest, "UMCODE.md") != "project instructions\n" {
+		t.Fatalf("ordinary snapshot: %+v", snap)
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("snapshot changed source Git state: %v", err)
+	}
+	if got := git(t, dest, "status", "--porcelain=v1"); got != "" {
+		t.Fatalf("snapshot dirty: %q", got)
+	}
+}
+
+func TestTaskSnapshotOrdinaryProjectRejectsEscapingSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CaptureTaskSnapshot(t.Context(), root, filepath.Join(t.TempDir(), "task")); err == nil {
+		t.Fatal("escaping symlink entered the private task workspace")
+	}
+}
+
 func TestTaskSnapshotRejectsUnsafeInputs(t *testing.T) {
 	root := newRepo(t)
 	write(t, root, "file.txt", "base\n")
@@ -102,5 +143,38 @@ func TestTaskSnapshotRejectsUnsafeInputs(t *testing.T) {
 	}
 	if _, err := CaptureTaskSnapshot(context.Background(), root, filepath.Join(t.TempDir(), "snapshot")); err == nil {
 		t.Fatal("accepted escaping symlink")
+	}
+}
+
+func TestTaskSnapshotHonorsUserGlobalIgnore(t *testing.T) {
+	root := newRepo(t)
+	write(t, root, "tracked.txt", "base\n")
+	git(t, root, "add", "tracked.txt")
+	git(t, root, "commit", "-m", "initial")
+	config := t.TempDir()
+	ignore := filepath.Join(config, "ignore")
+	if err := os.WriteFile(ignore, []byte("secret.txt\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gitConfig := filepath.Join(config, "git", "config")
+	if err := os.MkdirAll(filepath.Dir(gitConfig), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gitConfig, []byte("[core]\n\texcludesFile = "+ignore+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", config)
+	write(t, root, "secret.txt", "excluded\n")
+	write(t, root, "visible.txt", "included\n")
+	dest := filepath.Join(t.TempDir(), "snapshot")
+	snap, err := CaptureTaskSnapshot(context.Background(), root, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.UntrackedPaths) != 1 || snap.UntrackedPaths[0] != "visible.txt" {
+		t.Fatalf("unexpected untracked paths: %v", snap.UntrackedPaths)
+	}
+	if _, err := os.Lstat(filepath.Join(dest, "secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("globally ignored file copied: %v", err)
 	}
 }

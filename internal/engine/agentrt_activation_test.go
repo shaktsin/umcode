@@ -103,17 +103,18 @@ func TestSuggestToolLeadOnly(t *testing.T) {
 	if n := env.count(t); n != 0 {
 		t.Fatalf("non-lead callers stored %d suggestions", n)
 	}
-	// The lead itself may suggest, through the real tool gate.
+	// The legacy suggestion tool is retained for reading/responding to old
+	// cards, but it is never offered to a new model turn.
 	tool, _ := env.e.Tools.Get("agent.suggest")
-	if !env.e.permittedToolFor(lead, turnTool{tool: tool}, nil) {
-		t.Fatal("agent.suggest not offered to the lead's ordinary turn")
+	if env.e.permittedToolFor(lead, turnTool{tool: tool}, nil) {
+		t.Fatal("agent.suggest offered to a new lead turn")
 	}
 	call := llm.ToolCall{ID: "c1", Name: tools.ToWire("agent.suggest"), Args: json.RawMessage(`{"reason":"parallel work"}`)}
-	if r := env.e.runTool(lead, t.Context(), env.th, turn, call, nil); r.IsError {
-		t.Fatalf("lead runTool refused: %s", r.Output)
+	if r := env.e.runTool(lead, t.Context(), env.th, turn, call, nil); !r.IsError {
+		t.Fatalf("lead runTool allowed a removed suggestion: %s", r.Output)
 	}
-	if n := env.count(t); n != 1 {
-		t.Fatalf("lead suggestion stored %d", n)
+	if n := env.count(t); n != 0 {
+		t.Fatalf("new model turn stored %d suggestions", n)
 	}
 }
 
