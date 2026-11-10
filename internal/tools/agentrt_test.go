@@ -12,48 +12,142 @@ import (
 )
 
 type fakeRT struct {
-	spawn     agentrt.SpawnRequest
-	spawnRes  agentrt.SpawnResult
-	spawnErr  error
-	waitIDs   []string
-	waitMode  agentrt.WaitMode
-	waitCalls int
-	msgTask   string
-	msgFrom   string
-	msgTo     string
-	msgBody   string
-	msgCall   string
-	cancelID  string
+	spawn       agentrt.SpawnRequest
+	spawnRes    agentrt.SpawnResult
+	spawnErr    error
+	waitIDs     []string
+	waitMode    agentrt.WaitMode
+	waitCalls   int
+	msgTask     string
+	msgFrom     string
+	msgTo       string
+	msgBody     string
+	msgCall     string
+	cancelID    string
+	statusState protocol.AgentState
+	callers     []string // callerID seen by List/Status/Wait/Cancel
+	calls       int      // every service call
 }
 
 func (f *fakeRT) Spawn(_ context.Context, r agentrt.SpawnRequest) (agentrt.SpawnResult, error) {
+	f.calls++
 	f.spawn = r
 	return f.spawnRes, f.spawnErr
 }
-func (f *fakeRT) List(context.Context, string) ([]protocol.RuntimeAgent, error) {
+func (f *fakeRT) List(_ context.Context, _, caller string) ([]protocol.RuntimeAgent, error) {
+	f.calls++
+	f.callers = append(f.callers, caller)
 	return []protocol.RuntimeAgent{{ID: "a1"}}, nil
 }
-func (f *fakeRT) Status(_ context.Context, _, id string) (protocol.RuntimeAgent, error) {
-	return protocol.RuntimeAgent{ID: id}, nil
+func (f *fakeRT) Status(_ context.Context, _, caller, id string) (protocol.RuntimeAgent, error) {
+	f.calls++
+	f.callers = append(f.callers, caller)
+	return protocol.RuntimeAgent{ID: id, State: f.statusState}, nil
 }
-func (f *fakeRT) Wait(_ context.Context, _ string, ids []string, m agentrt.WaitMode) ([]protocol.RuntimeAgent, error) {
+func (f *fakeRT) Wait(_ context.Context, _, caller string, ids []string, m agentrt.WaitMode) ([]protocol.RuntimeAgent, error) {
+	f.calls++
+	f.callers = append(f.callers, caller)
 	f.waitCalls++
 	f.waitIDs, f.waitMode = ids, m
 	return []protocol.RuntimeAgent{{ID: ids[0]}}, nil
 }
 func (f *fakeRT) Message(_ context.Context, task, from, to, body, callID string) (protocol.AgentMessage, error) {
+	f.calls++
 	f.msgTask, f.msgFrom, f.msgTo, f.msgBody, f.msgCall = task, from, to, body, callID
 	return protocol.AgentMessage{ID: "m1", ToAgentID: to}, nil
 }
-func (f *fakeRT) Cancel(_ context.Context, _, id string) error { f.cancelID = id; return nil }
+func (f *fakeRT) Cancel(_ context.Context, _, caller, id string) error {
+	f.calls++
+	f.callers = append(f.callers, caller)
+	f.cancelID = id
+	return nil
+}
 
-func rtTools(f *fakeRT) map[string]Tool {
+func rtToolsWithCaller(f *fakeRT, caller func(context.Context) (string, bool)) map[string]Tool {
 	auth := func(context.Context) (protocol.AgentTask, error) { return protocol.AgentTask{ID: "task1"}, nil }
 	m := map[string]Tool{}
-	for _, t := range NewRuntimeAgentTools(f, auth, func(context.Context) string { return "caller1" }) {
+	for _, t := range NewRuntimeAgentTools(f, auth, caller) {
 		m[t.Name()] = t
 	}
 	return m
+}
+
+func rtTools(f *fakeRT) map[string]Tool {
+	return rtToolsWithCaller(f, func(context.Context) (string, bool) { return "caller1", true })
+}
+
+func TestRuntimeToolsFailClosedWithoutCaller(t *testing.T) {
+	args := map[string]string{
+		"agent.spawn":   `{"planEntry":"p","assignment":{"prompt":"x"}}`,
+		"agent.list":    `{}`,
+		"agent.status":  `{"id":"a"}`,
+		"agent.wait":    `{"ids":["a"]}`,
+		"agent.message": `{"to":"a","message":"hi"}`,
+		"agent.cancel":  `{"id":"a"}`,
+	}
+	ctx := WithAgentCallID(context.Background(), "c1")
+	for _, caller := range []func(context.Context) (string, bool){
+		func(context.Context) (string, bool) { return "", false },
+		nil,
+	} {
+		f := &fakeRT{}
+		for name, tool := range rtToolsWithCaller(f, caller) {
+			_, err := tool.Call(ctx, json.RawMessage(args[name]))
+			if err == nil || !strings.Contains(err.Error(), "caller") {
+				t.Fatalf("%s: err=%v", name, err)
+			}
+		}
+		if f.calls != 0 {
+			t.Fatalf("service called %d times without a resolved caller", f.calls)
+		}
+	}
+}
+
+func TestRuntimeToolsPassCallerToEveryAction(t *testing.T) {
+	f := &fakeRT{}
+	m := rtTools(f)
+	ctx := context.Background()
+	for name, args := range map[string]string{"agent.list": `{}`, "agent.status": `{"id":"a"}`, "agent.wait": `{"ids":["a"]}`, "agent.cancel": `{"id":"a"}`} {
+		if _, err := m[name].Call(ctx, json.RawMessage(args)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	for _, c := range f.callers {
+		if c != "caller1" {
+			t.Fatalf("callers = %v", f.callers)
+		}
+	}
+	if len(f.callers) < 4 {
+		t.Fatalf("callers = %v", f.callers)
+	}
+}
+
+func TestCancelToolReportsStoredState(t *testing.T) {
+	f := &fakeRT{statusState: protocol.AgentStateCompleted}
+	out, err := rtTools(f)["agent.cancel"].Call(context.Background(), json.RawMessage(`{"id":"a3"}`))
+	if err != nil || f.cancelID != "a3" {
+		t.Fatalf("%v %s", err, f.cancelID)
+	}
+	var res map[string]string
+	if err := json.Unmarshal([]byte(out), &res); err != nil || res["id"] != "a3" || res["state"] != string(protocol.AgentStateCompleted) {
+		t.Fatalf("cancel result %s: %v", out, err)
+	}
+}
+
+func TestSpawnToolValidatesContextMode(t *testing.T) {
+	ctx := WithAgentCallID(context.Background(), "c1")
+	f := &fakeRT{}
+	if _, err := rtTools(f)["agent.spawn"].Call(ctx, json.RawMessage(`{"planEntry":"p","assignment":{"prompt":"x"},"context":"everything"}`)); err == nil || !strings.Contains(err.Error(), "context") {
+		t.Fatalf("bad context accepted: %v", err)
+	}
+	if f.calls != 0 {
+		t.Fatal("service called with invalid context")
+	}
+	for _, mode := range []string{"none", "summary", "full"} {
+		if _, err := rtTools(f)["agent.spawn"].Call(ctx, json.RawMessage(`{"planEntry":"p","assignment":{"prompt":"x"},"context":"`+mode+`"}`)); err != nil || f.spawn.ContextMode != mode {
+			t.Fatalf("%s: err=%v mode=%q", mode, err, f.spawn.ContextMode)
+		}
+	}
 }
 
 func TestSpawnToolRequiresStableCallID(t *testing.T) {
