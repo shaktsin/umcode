@@ -54,9 +54,16 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 	if err != nil {
 		return "", tools.Refuse(fmt.Sprintf("agent.suggest refused: agents need a committed Git project (%v)", err), agentGitNextStep)
 	}
-	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil && !e.replaceEmptyActivation(ctx, task.ID) {
-		return "", suggestRefusal(fmt.Sprintf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", task.ID))
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+	// An EMPTY active task does not refuse; it is replaced only once every
+	// other rule passed, just before the suggestion is stored, so a refused
+	// suggest never discards the user's activation.
+	emptyTask := ""
+	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil {
+		if !e.replaceableActivation(ctx, task.ID) {
+			return "", suggestRefusal(fmt.Sprintf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", task.ID))
+		}
+		emptyTask = task.ID
+	} else if !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}
 	if last, err := e.Store.LatestAgentSuggestion(ctx, turn.ThreadID); err == nil && last.TurnID == turn.ID {
@@ -68,6 +75,9 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 		return "", err
 	} else if declined {
 		return "", suggestRefusal("agent.suggest refused: the user declined agents in this chat; do not suggest them again unless the user enables agents themselves")
+	}
+	if emptyTask != "" && !e.replaceEmptyActivation(ctx, emptyTask) {
+		return "", suggestRefusal(fmt.Sprintf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", emptyTask))
 	}
 	sug, err := e.Store.CreateAgentSuggestion(ctx, store.AgentSuggestion{ThreadID: turn.ThreadID, TurnID: turn.ID, Reason: reason})
 	if errors.Is(err, store.ErrAgentConflict) {
@@ -95,18 +105,32 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 // a question in the admitted turn can still propose in the follow-up turn
 // admitted by the task's ID.
 func (e *Engine) replaceEmptyActivation(ctx context.Context, taskID string) bool {
+	if !e.activationUnheld(taskID) {
+		return false
+	}
+	return e.closeEmptyRuntimeTaskIf(context.WithoutCancel(ctx), taskID, true)
+}
+
+// replaceableActivation reports, without changing anything, whether
+// replaceEmptyActivation would replace the task now. Callers that refuse for
+// other reasons first check with it and replace only once they proceed.
+func (e *Engine) replaceableActivation(ctx context.Context, taskID string) bool {
+	return e.activationUnheld(taskID) && e.isEmptyRuntimeTask(ctx, taskID, true)
+}
+
+// activationUnheld: the runtime is on and no running turn holds the task.
+func (e *Engine) activationUnheld(taskID string) bool {
 	if e.AgentRuntime == nil {
 		return false
 	}
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	for _, at := range e.activeTurns {
 		if at.taskID == taskID {
-			e.mu.Unlock()
 			return false
 		}
 	}
-	e.mu.Unlock()
-	return e.closeEmptyRuntimeTaskIf(context.WithoutCancel(ctx), taskID, true)
+	return true
 }
 
 // RespondAgentSuggestion records the user's answer to a suggestion card

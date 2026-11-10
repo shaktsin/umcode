@@ -262,34 +262,56 @@ func (e *Engine) closeEmptyRuntimeTaskIf(ctx context.Context, taskID string, kee
 	// (saveProposedPlan re-checks the task under this lock).
 	e.agentPlanMu.Lock()
 	defer e.agentPlanMu.Unlock()
-	for _, w := range e.agentPlanWaits {
-		if w.taskID == taskID {
-			return false
-		}
-	}
-	task, err := e.Store.AgentTask(ctx, taskID)
-	if err != nil || !unfinishedDelegation(task.State) {
+	task, ok := e.emptyRuntimeTaskLocked(ctx, taskID, keepProposed)
+	if !ok {
 		return false
 	}
-	if _, err = e.Store.ApprovedAgentPlanForTask(ctx, taskID); !errors.Is(err, store.ErrNotFound) {
-		return false
-	}
-	if keepProposed {
-		if proposed, err := e.Store.HasProposedAgentPlan(ctx, taskID); err != nil || proposed {
-			return false
-		}
-	}
-	if agents, err := e.Store.RuntimeAgents(ctx, taskID); err != nil || len(agents) > 0 {
-		return false
-	}
-	if revs, err := e.Store.AgentRevisions(ctx, taskID); err != nil || len(revs) > 0 {
-		return false
-	}
-	if _, err = e.completeRuntimeTask(ctx, task); err != nil {
+	if _, err := e.completeRuntimeTask(ctx, task); err != nil {
 		e.Log.Warn("could not close the empty delegation task", "task", taskID, "err", err)
 		return false
 	}
 	return true
+}
+
+// isEmptyRuntimeTask reports, without changing anything, whether
+// closeEmptyRuntimeTaskIf would find the task empty now.
+func (e *Engine) isEmptyRuntimeTask(ctx context.Context, taskID string, keepProposed bool) bool {
+	e.delegationWorkflowMu.Lock()
+	defer e.delegationWorkflowMu.Unlock()
+	e.agentPlanMu.Lock()
+	defer e.agentPlanMu.Unlock()
+	_, ok := e.emptyRuntimeTaskLocked(ctx, taskID, keepProposed)
+	return ok
+}
+
+// emptyRuntimeTaskLocked is the emptiness check (no plan card waiting, active,
+// no approved plan, with keepProposed no proposed plan, no agents, no
+// revisions). Callers hold delegationWorkflowMu and agentPlanMu.
+func (e *Engine) emptyRuntimeTaskLocked(ctx context.Context, taskID string, keepProposed bool) (protocol.AgentTask, bool) {
+	for _, w := range e.agentPlanWaits {
+		if w.taskID == taskID {
+			return protocol.AgentTask{}, false
+		}
+	}
+	task, err := e.Store.AgentTask(ctx, taskID)
+	if err != nil || !unfinishedDelegation(task.State) {
+		return protocol.AgentTask{}, false
+	}
+	if _, err = e.Store.ApprovedAgentPlanForTask(ctx, taskID); !errors.Is(err, store.ErrNotFound) {
+		return protocol.AgentTask{}, false
+	}
+	if keepProposed {
+		if proposed, err := e.Store.HasProposedAgentPlan(ctx, taskID); err != nil || proposed {
+			return protocol.AgentTask{}, false
+		}
+	}
+	if agents, err := e.Store.RuntimeAgents(ctx, taskID); err != nil || len(agents) > 0 {
+		return protocol.AgentTask{}, false
+	}
+	if revs, err := e.Store.AgentRevisions(ctx, taskID); err != nil || len(revs) > 0 {
+		return protocol.AgentTask{}, false
+	}
+	return task, true
 }
 
 func marshalString(v any) (string, error) {

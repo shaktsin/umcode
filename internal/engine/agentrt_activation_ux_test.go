@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/store"
 )
 
 // UX fix 1: an activation survives a turn in which the lead only asks a
@@ -185,5 +186,51 @@ func TestTaskWithPlanFollowUpAfterNewCommitRefused(t *testing.T) {
 	}
 	if got, _ := x.e.Store.AgentTask(t.Context(), x.task.ID); !unfinishedDelegation(got.State) {
 		t.Fatalf("task with a plan = %s, want active", got.State)
+	}
+}
+
+// M3: a refused agent.suggest (here: the user declined agents in this chat)
+// does not discard the user's empty activation.
+func TestRefusedSuggestKeepsEmptyTask(t *testing.T) {
+	x := newActivationE2E(t, nil)
+	token := x.enable(t, x.suggestTurn(t))
+	old := x.askTurn(t, token)
+	sug, err := x.e.Store.CreateAgentSuggestion(t.Context(), store.AgentSuggestion{ThreadID: x.th.ID, TurnID: old.RootTurnID, Reason: "r"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = x.e.RespondAgentSuggestion(t.Context(), protocol.AgentSuggestionRespondParams{SuggestionID: sug.ID, Decision: protocol.SuggestionDecline}); err != nil {
+		t.Fatal(err)
+	}
+	x.setLead("suggest after decline", e2eLeadStep{"agent.suggest", `{"reason":"again"}`})
+	x.turn(t, protocol.TurnStartParams{Text: "suggest after decline"})
+	res := x.leadResults(t, "agent.suggest")
+	if last := res[len(res)-1]; !last.IsError || !strings.Contains(last.Result, "declined") {
+		t.Fatalf("lead told %+v, want the declined refusal", last)
+	}
+	if got, _ := x.e.Store.AgentTask(t.Context(), old.ID); !unfinishedDelegation(got.State) {
+		t.Fatalf("empty task after a refused suggest = %s, want active", got.State)
+	}
+}
+
+// M6: an empty task is not replaced while a turn of the task is running.
+func TestEmptyTaskNotReplacedWhileItsTurnRuns(t *testing.T) {
+	x := newActivationE2E(t, nil)
+	token := x.enable(t, x.suggestTurn(t))
+	old := x.askTurn(t, token)
+	x.e.mu.Lock()
+	x.e.activeTurns["trn_running"] = &activeTurn{taskID: old.ID}
+	x.e.mu.Unlock()
+	if _, err := x.e.PrepareDelegation(t.Context(), x.th.ID); err == nil || !strings.Contains(err.Error(), "already has an unfinished delegation task") {
+		t.Fatalf("enable while a turn of the empty task runs: %v, want the unfinished-task refusal", err)
+	}
+	if got, _ := x.e.Store.AgentTask(t.Context(), old.ID); !unfinishedDelegation(got.State) {
+		t.Fatalf("empty task with a running turn = %s, want active", got.State)
+	}
+	x.e.mu.Lock()
+	delete(x.e.activeTurns, "trn_running")
+	x.e.mu.Unlock()
+	if _, err := x.e.PrepareDelegation(t.Context(), x.th.ID); err != nil {
+		t.Fatalf("enable once the turn ended: %v", err)
 	}
 }
