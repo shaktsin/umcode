@@ -184,6 +184,16 @@ func TestRuntimeAgentListStatusMessageCancel(t *testing.T) {
 	if out, err := m["agent.list"].Call(ctx, json.RawMessage(`{}`)); err != nil || !strings.Contains(out, "a1") {
 		t.Fatalf("%v %s", err, out)
 	}
+	want, _ := json.Marshal([]protocol.RuntimeAgent{{ID: "a1"}})
+	for _, in := range []json.RawMessage{nil, json.RawMessage(``), json.RawMessage(`{}`)} {
+		out, err := m["agent.list"].Call(ctx, in)
+		if err != nil || out != string(want) {
+			t.Fatalf("args=%q err=%v out=%s", in, err, out)
+		}
+	}
+	if _, err := m["agent.list"].Call(ctx, json.RawMessage(`{} {}`)); err == nil {
+		t.Fatal("list accepted trailing data")
+	}
 	if _, err := m["agent.list"].Call(ctx, json.RawMessage(`{"x":1}`)); err == nil {
 		t.Fatal("list accepted fields")
 	}
@@ -198,5 +208,34 @@ func TestRuntimeAgentListStatusMessageCancel(t *testing.T) {
 	}
 	if _, err := m["agent.cancel"].Call(ctx, json.RawMessage(`{"id":"a3"}`)); err != nil || f.cancelID != "a3" {
 		t.Fatalf("%v %s", err, f.cancelID)
+	}
+}
+
+func TestSpawnToolRejectsIncompleteOrInvalidInputs(t *testing.T) {
+	ctx := WithAgentCallID(context.Background(), "c1")
+	base := `{"planEntry":"p","assignment":{"prompt":"x"},`
+	cases := map[string]string{
+		`"capabilities":{"network":true}`:                                              "capabilities.files",
+		`"capabilities":{"files":"read","network":true,"spawnMax":0}`:                  "capabilities.shell",
+		`"capabilities":{"files":"read","shell":"none","spawnMax":0}`:                  "capabilities.network",
+		`"capabilities":{"files":"read","shell":"none","network":false}`:               "capabilities.spawnMax",
+		`"capabilities":{"files":"read","shell":"none","network":false,"spawnMax":-1}`: "spawnMax",
+		`"budget":{"share":1.5}`:                                                       "budget.share",
+		`"budget":{"share":-0.1}`:                                                      "budget.share",
+	}
+	for body, want := range cases {
+		f := &fakeRT{}
+		_, err := rtTools(f)["agent.spawn"].Call(ctx, json.RawMessage(base+body+`}`))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: err=%v", body, err)
+		}
+		if f.spawn.CallID != "" {
+			t.Fatalf("%s: service called", body)
+		}
+	}
+	f := &fakeRT{}
+	_, err := rtTools(f)["agent.spawn"].Call(ctx, json.RawMessage(base+`"capabilities":{"files":"root","shell":"root","network":false,"spawnMax":0}}`))
+	if err != nil || f.spawn.Capabilities == nil || f.spawn.Capabilities.Files != "root" || f.spawn.Capabilities.Shell != "root" {
+		t.Fatalf("err=%v caps=%+v", err, f.spawn.Capabilities)
 	}
 }
