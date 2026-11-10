@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { AgentIntegrationReport, AgentIntegrationStatus, RuntimeAgent } from '$lib/types';
   import { conflictRevisions, reportView, resolveMessage } from '$lib/agentRuntime';
-  let { integration, report, agents, canResolve, onresolve }: { integration?: AgentIntegrationStatus; report?: AgentIntegrationReport; agents: RuntimeAgent[]; canResolve: boolean; onresolve: (text: string) => void } = $props();
+  let { integration, report, agents, canResolve, resolveQueued = false, onresolve }: { integration?: AgentIntegrationStatus; report?: AgentIntegrationReport; agents: RuntimeAgent[]; canResolve: boolean; resolveQueued?: boolean; onresolve: (text: string) => void } = $props();
   const conflicts = $derived(conflictRevisions(integration, agents));
   const view = $derived(report ? reportView(report, agents) : null);
-  const amendReason = $derived(view ? view.amended : integration?.amendments ? (integration.amendReason || 'Amended by lead') : undefined);
+  const amended = $derived(view ? view.amended : !!integration?.amendments);
+  const amendReason = $derived(view ? view.amendReason : integration?.amendReason ?? '');
   const head = $derived(report ?? integration);
 </script>
 
@@ -21,11 +22,12 @@
       {#each conflicts as c (c.agentId)}
         <div class="flex flex-wrap items-center gap-2" data-conflict={c.agentId}>
           <span class="text-rust break-words min-w-0">{c.name}{c.conflict ? ` · ${c.conflict}` : ''}</span>
-          {#if canResolve}<button class="btn-outline btn-sm" onclick={() => onresolve(resolveMessage(c.name))}>Resolve</button>{/if}
+          {#if canResolve}<button class="btn-outline btn-sm" disabled={resolveQueued} onclick={() => onresolve(resolveMessage(c.name))}>Resolve</button>{/if}
         </div>
       {/each}
+      {#if resolveQueued}<p class="text-muted" role="status">Queued · the lead gets your message when its current turn ends.</p>{/if}
     {/if}
-    {#if amendReason}<p class="text-ink-soft whitespace-pre-wrap break-words">Amended by lead · {amendReason}</p>{/if}
+    {#if amended}<p class="text-ink-soft whitespace-pre-wrap break-words">Amended by lead{amendReason ? ` · ${amendReason}` : ''}</p>{/if}
     {#if view}
       <p class="font-medium">{view.staged}</p>
       {#if view.unintegrated.length}<p class="text-rust break-words">Not integrated: {view.unintegrated.join(', ')}. Their work lives only in their workspaces.</p>{/if}

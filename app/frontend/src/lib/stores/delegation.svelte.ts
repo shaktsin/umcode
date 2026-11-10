@@ -132,7 +132,8 @@ export class DelegationState {
     try {
       const r = await app.call<Omit<AgentSnapshot, 'integration'> & { integration?: AgentIntegrationReport }>('delegation/cancel', { threadId: this.threadId, taskId, ...(childId ? { childId } : {}) });
       if (generation !== this.generation) return;
-      if (r.integration) this.reports = { ...this.reports, [taskId]: r.integration };
+      // A per-agent cancel's integration is partial; only a task-level cancel yields the task report.
+      if (r.integration && !childId) this.reports = { ...this.reports, [taskId]: r.integration };
       this.apply({ threadId: this.threadId!, taskId, task: r.task });
       // Hydration includes retained finalization errors; the cancellation reply
       // alone is not authority to clear their same-version partial outcomes.
