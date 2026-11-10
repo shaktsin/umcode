@@ -850,3 +850,69 @@ func TestChildPromptTextIsPathSpecific(t *testing.T) {
 		}
 	}
 }
+
+// S4: a message that arrives after the agent's last model-call boundary is
+// not silently lost: the agent's result says it was not read, and it is
+// acknowledged so it is not left pending forever.
+func TestUnreadMessagesAtFinishAreReported(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	a := env.newRuntimeAgent(t, "late", readOnlyCaps, "")
+	if _, err := env.e.Store.EnqueueAgentMessage(t.Context(), protocol.AgentMessage{TaskID: env.task.ID, ToAgentID: a.ID, Body: "LATE_NOTE_FROM_LEAD"}); err != nil {
+		t.Fatal(err)
+	}
+	note, err := env.e.settleUnreadAgentMessages(t.Context(), env.task.ID, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(note, "not read") || !strings.Contains(note, "LATE_NOTE_FROM_LEAD") || !strings.Contains(note, "the lead") {
+		t.Fatalf("note = %q", note)
+	}
+	pending, err := env.e.Store.PendingAgentMessages(t.Context(), env.task.ID, a.ID)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("still pending %+v %v", pending, err)
+	}
+	if note, err = env.e.settleUnreadAgentMessages(t.Context(), env.task.ID, a.ID); err != nil || note != "" {
+		t.Fatalf("nothing pending: note %q err %v", note, err)
+	}
+}
+
+// Through the runner: a message enqueued after the agent's turn ended (here
+// from the runtime event of the runner's final usage update) is reported in
+// the agent's result summary.
+func TestRunnerReportsMessageAfterLastBoundary(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	var once sync.Once
+	var agentID string
+	var mu sync.Mutex
+	turnOver := false
+	env.p.script = func(int, context.Context, llm.Request) []llm.Event {
+		return textReply("final answer")
+	}
+	shared := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100000, MaxCostUSD: 10, MaxDurationMinutes: 10}, protocol.UsageTotals{}, nil)
+	ctx := delegation.WithBudget(t.Context(), shared)
+	rt := env.runtimeFor(t, ctx, readOnlyCaps, agentrt.WithEvents(func(ra protocol.RuntimeAgent) {
+		mu.Lock()
+		over := turnOver && ra.ID == agentID
+		mu.Unlock()
+		if over {
+			once.Do(func() {
+				if _, err := env.e.Store.EnqueueAgentMessage(context.Background(), protocol.AgentMessage{TaskID: ra.TaskID, ToAgentID: ra.ID, Body: "TOO_LATE"}); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+	}))
+	env.e.agentTurnDone = func(id string) {
+		mu.Lock()
+		agentID, turnOver = id, true
+		mu.Unlock()
+	}
+	spawned, err := rt.Spawn(ctx, agentrt.SpawnRequest{TaskID: env.task.ID, CallID: "late", PlanEntry: "worker", Assignment: protocol.AgentAssignment{Prompt: "look"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitAgentTerminal(t, rt, env.task.ID, spawned.Agent.ID)
+	if got.State != protocol.AgentStateCompleted || !strings.HasPrefix(got.Result.Summary, "final answer") || !strings.Contains(got.Result.Summary, "TOO_LATE") {
+		t.Fatalf("state %q summary %q", got.State, got.Result.Summary)
+	}
+}

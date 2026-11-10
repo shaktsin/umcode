@@ -457,6 +457,9 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 	if err != nil {
 		return result, err
 	}
+	if e.agentTurnDone != nil {
+		e.agentTurnDone(a.ID)
+	}
 	done, sctx := out.done, out.sctx
 	err = out.readErr
 	result.Summary = out.summary
@@ -471,6 +474,13 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 		err = errors.Join(err, usageErr)
 	} else {
 		err = errors.Join(err, e.updateRuntimeAgent(sctx, task.ID, a.ID, func(c *protocol.RuntimeAgent) bool { c.Usage = usage; return true }))
+	}
+	// Messages that arrived after the last model-call boundary were never
+	// read: say so in the result rather than dropping them silently.
+	if note, noteErr := e.settleUnreadAgentMessages(sctx, task.ID, a.ID); noteErr != nil {
+		err = errors.Join(err, noteErr)
+	} else if note != "" {
+		result.Summary = strings.TrimSpace(result.Summary + "\n\n" + note)
 	}
 	if done.Status != protocol.TurnCompleted {
 		if ctx.Err() == nil && sliceExhausted(slice, shared, done.Error) {
@@ -572,6 +582,37 @@ func (e *Engine) consumeAgentMessages(ctx, sctx context.Context, turn protocol.T
 		}
 	}
 	return msgs, added, nil
+}
+
+// unreadExcerptLimit bounds how much of an unread message's body is quoted.
+const unreadExcerptLimit = 200
+
+// settleUnreadAgentMessages acknowledges the agent's messages still pending
+// when it finished (they arrived after its last model-call boundary) and
+// returns a note for its result naming each one, or "" when there are none.
+// A message enqueued after this check and before the agent is persisted
+// terminal is still possible; the window is the runner's final bookkeeping.
+func (e *Engine) settleUnreadAgentMessages(ctx context.Context, taskID, agentID string) (string, error) {
+	pending, err := e.Store.PendingAgentMessages(ctx, taskID, agentID)
+	if err != nil || len(pending) == 0 {
+		return "", err
+	}
+	parts := make([]string, 0, len(pending))
+	for _, m := range pending {
+		from := "the lead"
+		if m.FromAgentID != "" {
+			from = "agent " + m.FromAgentID
+		}
+		body := m.Body
+		if r := []rune(body); len(r) > unreadExcerptLimit {
+			body = string(r[:unreadExcerptLimit]) + "..."
+		}
+		parts = append(parts, fmt.Sprintf("from %s: %q", from, body))
+		if err = e.Store.AcknowledgeAgentMessage(ctx, taskID, m.ID); err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("Note: %d message(s) arrived after this agent's last step and were not read (%s).", len(pending), strings.Join(parts, "; ")), nil
 }
 
 // runtimeAgentPrompt is a runtime agent's system prompt: its purpose, its
