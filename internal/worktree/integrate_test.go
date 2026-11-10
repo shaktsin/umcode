@@ -361,7 +361,7 @@ func TestIntegrationScanRefusesForbiddenEntries(t *testing.T) {
 			result := commitWith(entry)
 			_, err := scanRevision(context.Background(), ws.Path, f.base, result)
 			if err == nil {
-				err = checkSymlinks(context.Background(), f.parent, ws.Path, result+"^{tree}", nil)
+				err = checkSymlinks(context.Background(), f.parent, ws.Path, result+"^{tree}", nil, nil)
 			}
 			if name == "inside is legal" {
 				if err != nil {
@@ -807,5 +807,153 @@ func TestValidateOwnedMetadataExported(t *testing.T) {
 	git(t, ws.Path, "config", "core.sshCommand", "touch x")
 	if err := ValidateOwnedMetadata(context.Background(), ws.Path); err == nil || !strings.Contains(err.Error(), "core.sshcommand") {
 		t.Fatalf("unsupported key accepted: %v", err)
+	}
+}
+
+// N1: on case-insensitive or normalizing filesystems (macOS, Windows) `L` is
+// the symlink `l`. A target through a case or Unicode-normalization alias of
+// a symlink must be refused, not resolved as an ordinary missing directory.
+func TestApplyOnIntegratedSymlinkAliasRefused(t *testing.T) {
+	for name, tc := range map[string]struct{ link, via string }{
+		"case":          {"l", "L"},
+		"nfc vs nfd":    {"é", "é"},
+		"nfd vs nfc":    {"é", "é"},
+		"hfs ignorable": {"l", "l‌"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n"})
+			result := f.agent(t, "agent", func(dir string) {
+				if err := os.Symlink(".", filepath.Join(dir, tc.link)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(tc.via+"/../outside", filepath.Join(dir, "y")); err != nil {
+					t.Fatal(err)
+				}
+			})
+			before := parentSnapshot(t, f.parent)
+			_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+			if err == nil || !strings.Contains(err.Error(), "alias") {
+				t.Fatalf("symlink through an alias of %q must be refused, got %v", tc.link, err)
+			}
+			assertUnchanged(t, f.parent, before)
+		})
+	}
+}
+
+// N1: a revision may not add a path that collides with another tracked path
+// under case folding or Unicode normalization.
+func TestApplyOnIntegratedCollidingPathsRefused(t *testing.T) {
+	for name, add := range map[string][]string{
+		"case against parent":  {"A.go"},
+		"case within revision": {"b.go", "B.go"},
+		"directory case":       {"SUB/y.go"},
+		"normalization":        {"café.go", "café.go"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "sub/x.go": "x\n"})
+			result := f.agent(t, "agent", func(dir string) {
+				for _, p := range add {
+					write(t, dir, p, p+"\n")
+				}
+			})
+			before := parentSnapshot(t, f.parent)
+			_, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+			if err == nil || !strings.Contains(err.Error(), "alias") {
+				t.Fatalf("colliding paths %v must be refused, got %v", add, err)
+			}
+			assertUnchanged(t, f.parent, before)
+		})
+	}
+}
+
+// N1: distinct names, inside symlinks and non-ASCII names still apply.
+func TestApplyOnIntegratedDistinctNamesApply(t *testing.T) {
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "sub/x.go": "x\n", "Docs/readme": "r\n"})
+	result := f.agent(t, "agent", func(dir string) {
+		write(t, dir, "docs2/x", "x\n")
+		write(t, dir, "café.go", "c\n")
+		write(t, dir, "cafe.go", "c\n")
+		write(t, dir, "ü.go", "u\n")
+		if err := os.Symlink("sub", filepath.Join(dir, "l")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("l/x.go", filepath.Join(dir, "m")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	applied, err := f.m.ApplyOnIntegrated(context.Background(), "agent", f.parent, f.base, f.baseTree(t), result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := gitInWorkspace(t, f, "agent", "rev-parse", result+"^{tree}"); applied.TreeAfter != want {
+		t.Fatalf("tree %s, want %s", applied.TreeAfter, want)
+	}
+}
+
+func TestAliasKey(t *testing.T) {
+	same := [][2]string{{"l", "L"}, {"café", "café"}, {"Å", "Å"}, {"k", "K"}, {"l‌", "l"}, {"Sub", "sUB"}}
+	for _, p := range same {
+		if aliasKey(p[0]) != aliasKey(p[1]) {
+			t.Fatalf("%q and %q should alias", p[0], p[1])
+		}
+	}
+	for _, p := range [][2]string{{"cafe", "café"}, {"a.go", "b.go"}, {"e", "é"}, {"docs", "docs2"}} {
+		if aliasKey(p[0]) == aliasKey(p[1]) {
+			t.Fatalf("%q and %q should be distinct", p[0], p[1])
+		}
+	}
+}
+
+// M-b: ApplyResult.Paths lists what actually changed in the parent: a hunk
+// that is a no-op on the integrated state (both agents made the same mode
+// change) is not listed.
+func TestApplyOnIntegratedPathsFromParentDiff(t *testing.T) {
+	f := newIntegrationFixture(t, map[string]string{"a.go": "a\n", "b.go": "b\n", "run.sh": "#!/bin/sh\n"})
+	chmod := func(dir string) {
+		if err := os.Chmod(filepath.Join(dir, "run.sh"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resultA := f.agent(t, "agent-a", func(dir string) { chmod(dir); write(t, dir, "a.go", "a2\n") })
+	resultB := f.agent(t, "agent-b", func(dir string) { chmod(dir); write(t, dir, "b.go", "b2\n") })
+	ctx := context.Background()
+	applied, err := f.m.ApplyOnIntegrated(ctx, "agent-a", f.parent, f.base, f.baseTree(t), resultA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(applied.Paths, ","); got != "a.go,run.sh" {
+		t.Fatalf("first paths %q", got)
+	}
+	applied, err = f.m.ApplyOnIntegrated(ctx, "agent-b", f.parent, f.base, applied.TreeAfter, resultB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(applied.Paths, ","); got != "b.go" {
+		t.Fatalf("no-op mode change must not be listed: paths %q", got)
+	}
+}
+
+// M-a: a genuine conflict on a non-ASCII path is a ConflictError whether git
+// prints the path raw or C-quoted.
+func TestApplyOnIntegratedNonASCIIConflict(t *testing.T) {
+	name := "été x.go"
+	f := newIntegrationFixture(t, map[string]string{name: "base\n"})
+	resultA := f.agent(t, "agent-a", func(dir string) { write(t, dir, name, "a\n") })
+	resultB := f.agent(t, "agent-b", func(dir string) { write(t, dir, name, "b\n") })
+	ctx := context.Background()
+	applied, err := f.m.ApplyOnIntegrated(ctx, "agent-a", f.parent, f.base, f.baseTree(t), resultA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.m.ApplyOnIntegrated(ctx, "agent-b", f.parent, f.base, applied.TreeAfter, resultB)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || len(conflict.Paths) != 1 || conflict.Paths[0] != name {
+		t.Fatalf("want conflict on %q, got %v", name, err)
+	}
+	quoted := `error: patch failed: "\303\251t\303\251 x.go":1` + "\n" + `error: "\303\251t\303\251 x.go": patch does not apply` + "\n" +
+		`error: "tab\there\".go": already exists in index` + "\n"
+	err = classifyApplyCheck(quoted, []string{name, "tab\there\".go"}, errors.New("exit status 1"))
+	if !errors.As(err, &conflict) || strings.Join(conflict.Paths, "|") != "tab\there\".go|"+name {
+		t.Fatalf("quoted paths: want conflict, got %v", err)
 	}
 }
