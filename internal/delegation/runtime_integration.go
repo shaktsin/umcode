@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 
@@ -156,6 +155,21 @@ func (s *WorkspaceService) runtimeAuthority(ctx context.Context, t protocol.Agen
 	return nil
 }
 
+// runtimeWorkspace loads a runtime writer's owned checkout and checks it is
+// still that agent's private, uncleaned checkout of the task base at the
+// manager's location, with safe Git metadata. Used before every read of an
+// agent checkout.
+func (s *WorkspaceService) runtimeWorkspace(ctx context.Context, t protocol.AgentTask, agentID, workspaceID string) (store.AgentWorkspace, error) {
+	w, err := s.Store.AgentWorkspace(ctx, workspaceID)
+	if err != nil {
+		return w, err
+	}
+	if w.TaskID != t.ID || w.ChildID != agentID || w.Kind != "implementer" || w.Cleaned || w.Root != s.Manager.Path(w.ID) || w.BaseRevision != t.BaseRevision {
+		return w, errors.New("agent revision workspace identity changed")
+	}
+	return w, validatePrivate(ctx, w.Root)
+}
+
 // RecordRuntimeRevision records a stopped writer's committed result as a
 // submitted revision. Only a completed write-capable agent whose result
 // differs from the base gets one; for any other stopped agent (read-only,
@@ -180,18 +194,18 @@ func (s *WorkspaceService) RecordRuntimeRevision(ctx context.Context, task proto
 	if a.Capabilities.Files != protocol.FilesReadWrite || a.State != protocol.AgentStateCompleted {
 		return store.AgentRevision{}, nil
 	}
-	w, err := s.Store.AgentWorkspace(ctx, ws.ID)
+	if a.WorkspaceID != ws.ID {
+		return store.AgentRevision{}, errors.New("agent revision workspace identity changed")
+	}
+	w, err := s.runtimeWorkspace(ctx, t, a.ID, ws.ID)
 	if err != nil {
 		return store.AgentRevision{}, err
 	}
-	if w.TaskID != t.ID || w.ChildID != a.ID || a.WorkspaceID != w.ID || w.Kind != "implementer" || w.Cleaned || w.Root != ws.Root || w.Root != s.Manager.Path(w.ID) || w.BaseRevision != t.BaseRevision {
+	if w.Root != ws.Root {
 		return store.AgentRevision{}, errors.New("agent revision workspace identity changed")
 	}
 	if a.Revision == "" || a.Revision != w.ResultRevision {
 		return store.AgentRevision{}, errors.New("agent has no recorded workspace result revision")
-	}
-	if err = validatePrivate(ctx, w.Root); err != nil {
-		return store.AgentRevision{}, err
 	}
 	head, err := privateGit(ctx, w.Root, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
@@ -276,7 +290,14 @@ func (s *WorkspaceService) IntegrateRuntime(ctx context.Context, taskID, agentID
 	if err = s.Manager.CheckParentState(ctx, t.ParentRoot, t.BaseRevision, h.HeadTree); err != nil {
 		return RuntimeIntegration{Revision: rev}, fmt.Errorf("integration refused: %w", err)
 	}
-	rev.State, rev.TreeBefore, rev.TreeAfter, rev.Conflict = store.RevisionApplying, h.HeadTree, "", nil
+	if _, err = s.runtimeWorkspace(ctx, t, rev.AgentID, rev.WorkspaceID); err != nil {
+		return RuntimeIntegration{Revision: rev}, err
+	}
+	// Conflict paths are kept until an apply succeeds, so a failed retry of a
+	// conflicted revision restores it as it was. A stale reason (for example
+	// an interrupted manual resolution) must not mark this intent as manual.
+	prior := rev.State
+	rev.State, rev.TreeBefore, rev.TreeAfter, rev.Reason = store.RevisionApplying, h.HeadTree, "", ""
 	if rev, err = s.updateRevision(ctx, rev); err != nil {
 		return RuntimeIntegration{}, err
 	}
@@ -288,6 +309,9 @@ func (s *WorkspaceService) IntegrateRuntime(ctx context.Context, taskID, agentID
 	// means the parent was never mutated by this attempt.
 	passes := 0
 	guard := func() error {
+		if runtimeIntegrateHook != nil {
+			runtimeIntegrateHook(fmt.Sprintf("guard%d", passes+1))
+		}
 		if err := s.runtimeAuthority(ctx, t, rev); err != nil {
 			return err
 		}
@@ -306,6 +330,9 @@ func (s *WorkspaceService) IntegrateRuntime(ctx context.Context, taskID, agentID
 			return errors.New("integration revision changed")
 		}
 		passes++
+		if runtimeIntegrateHook != nil {
+			runtimeIntegrateHook(fmt.Sprintf("passed%d", passes))
+		}
 		return nil
 	}
 	res, applyErr := s.Manager.ApplyOnIntegrated(ctx, rev.WorkspaceID, t.ParentRoot, t.BaseRevision, h.HeadTree, rev.ResultRevision, guard)
@@ -314,6 +341,7 @@ func (s *WorkspaceService) IntegrateRuntime(ctx context.Context, taskID, agentID
 	var conflict *worktree.ConflictError
 	switch {
 	case applyErr == nil:
+		rev.Conflict = nil
 		return s.finishApply(done, t, rev, h, res.TreeAfter)
 	case errors.As(applyErr, &conflict):
 		rev.State, rev.Conflict = store.RevisionConflict, conflict.Paths
@@ -322,7 +350,7 @@ func (s *WorkspaceService) IntegrateRuntime(ctx context.Context, taskID, agentID
 		}
 		return RuntimeIntegration{Revision: rev, HeadTree: h.HeadTree, Options: conflictOptions()}, nil
 	case passes < 2:
-		rev.State = store.RevisionSubmitted
+		rev.State = prior
 		if rev, err = s.updateRevision(done, rev); err != nil {
 			return RuntimeIntegration{}, errors.Join(applyErr, err)
 		}
@@ -404,159 +432,103 @@ func (s *WorkspaceService) reconcileLocked(ctx context.Context, t protocol.Agent
 }
 
 // reconcileRevision decides an applying revision from the actual parent index
-// tree. ApplyOnIntegrated does not expose its predicted tree before it writes,
-// so the tree after is not known in advance; instead:
-//   - parent tree == TreeBefore: nothing was applied; back to submitted so the
-//     accept can be retried.
-//   - the parent is a clean integrated state whose difference from TreeBefore
-//     is exactly the revision's changed paths, each with the mode and content
-//     of the revision's result tree: the apply finished; mark it applied with
-//     that tree and advance the head. (A revision that merged into a file an
-//     earlier revision also changed cannot be proven this way and is blocked.)
-//   - anything else: left applying, and an error names the mismatch; the lead
-//     restores the parent to TreeBefore (then retries) or inspects it.
+// tree, compared exactly with the tree before and with the tree the apply
+// produces (worktree.PredictIntegration, computed read-only from the agent's
+// revision and TreeBefore, so a merge into a file an earlier revision changed
+// is recognised too):
+//   - parent tree == TreeBefore: nothing was applied; the revision returns to
+//     the state it had before the intent (conflict when it has conflict paths
+//     or was a manual resolution, else submitted) and can be retried.
+//   - parent tree == predicted tree: the apply finished; mark it applied and
+//     move the head.
+//   - anything else: left applying (blocked) with an error naming both trees.
 //
-// An interrupted manual resolution is only returned to submitted when the
-// parent is still TreeBefore; otherwise ResolveRuntimeManually must be called
-// again to finish it.
+// An interrupted manual resolution with a changed parent stays applying until
+// ResolveRuntimeManually is called again.
 func (s *WorkspaceService) reconcileRevision(ctx context.Context, t protocol.AgentTask, rev store.AgentRevision) error {
 	tree, err := s.Manager.ParentTree(ctx, t.ParentRoot)
 	if err != nil {
 		return fmt.Errorf("agent %s revision is blocked in applying: %w", rev.AgentID, err)
 	}
+	manual := rev.Reason == manualResolution
 	if tree == rev.TreeBefore {
 		rev.State = store.RevisionSubmitted
+		if manual || len(rev.Conflict) > 0 {
+			rev.State = store.RevisionConflict
+		}
+		if manual {
+			rev.Reason = "manual resolution interrupted before the parent changed"
+		}
 		_, err = s.updateRevision(ctx, rev)
 		return err
 	}
-	if rev.Reason == manualResolution {
-		return fmt.Errorf("agent %s manual resolution was interrupted; call resolved again to record the parent tree %s", rev.AgentID, tree)
+	if manual {
+		return fmt.Errorf("agent %s manual resolution was interrupted; call resolved again to record the parent tree %s (head was %s)", rev.AgentID, tree, rev.TreeBefore)
 	}
-	if mismatch := s.appliedMismatch(ctx, t, rev, tree); mismatch != "" {
-		return fmt.Errorf("agent %s revision is blocked in applying: the parent tree %s is neither the tree before (%s) nor that tree with the revision applied: %s; restore the parent to the tree before to retry", rev.AgentID, tree, rev.TreeBefore, mismatch)
+	predicted, err := s.predictRevision(ctx, t, rev)
+	if err != nil {
+		return fmt.Errorf("agent %s revision is blocked in applying: the parent tree %s is not the tree before %s and the applied tree cannot be computed: %w", rev.AgentID, tree, rev.TreeBefore, err)
+	}
+	if tree != predicted {
+		where := ""
+		if diff, diffErr := privateGit(ctx, t.ParentRoot, "diff-tree", "-r", "-z", "--name-only", "--no-renames", predicted, tree, "--"); diffErr == nil {
+			where = " (it differs from the applied tree at " + strings.Join(nulPaths(diff), ", ") + ")"
+		}
+		return fmt.Errorf("agent %s revision is blocked in applying: the parent tree %s is neither the tree before %s nor the tree after %s%s; "+
+			"restore the project checkout so HEAD is the task base and its staged state is the integrated head tree %s "+
+			"(for a checkout with only staged changes: git read-tree -m -u %s), then retry", rev.AgentID, tree, rev.TreeBefore, predicted, where, rev.TreeBefore, rev.TreeBefore)
 	}
 	h, err := s.head(ctx, t, true)
 	if err != nil {
 		return err
 	}
+	rev.Conflict = nil
 	_, err = s.finishApply(ctx, t, rev, h, tree)
 	return err
 }
 
-// appliedMismatch returns "" when tree is TreeBefore with exactly the
-// revision applied, else a description of the first difference found.
-func (s *WorkspaceService) appliedMismatch(ctx context.Context, t protocol.AgentTask, rev store.AgentRevision, tree string) string {
-	if err := s.Manager.CheckParentState(ctx, t.ParentRoot, t.BaseRevision, tree); err != nil {
-		return err.Error()
+// predictRevision returns the tree applying rev onto its TreeBefore produces.
+func (s *WorkspaceService) predictRevision(ctx context.Context, t protocol.AgentTask, rev store.AgentRevision) (string, error) {
+	if _, err := s.runtimeWorkspace(ctx, t, rev.AgentID, rev.WorkspaceID); err != nil {
+		return "", err
 	}
-	diff, err := privateGit(ctx, t.ParentRoot, "diff-tree", "-r", "-z", "--name-only", "--no-renames", rev.TreeBefore, tree, "--")
-	if err != nil {
-		return err.Error()
-	}
-	want := map[string]bool{}
-	for _, p := range rev.ChangedPaths {
-		want[p] = true
-	}
-	got := map[string]bool{}
-	var extra, missing []string
-	for _, p := range nulPaths(diff) {
-		got[p] = true
-		if !want[p] {
-			extra = append(extra, p)
-		}
-	}
-	for _, p := range rev.ChangedPaths {
-		if !got[p] {
-			missing = append(missing, p)
-		}
-	}
-	var parts []string
-	if len(extra) > 0 {
-		parts = append(parts, "the parent also differs at "+strings.Join(extra, ", "))
-	}
-	if len(missing) > 0 {
-		parts = append(parts, "revision paths not applied: "+strings.Join(missing, ", "))
-	}
-	if len(parts) > 0 {
-		return strings.Join(parts, "; ")
-	}
-	w, err := s.Store.AgentWorkspace(ctx, rev.WorkspaceID)
-	if err != nil {
-		return err.Error()
-	}
-	if err = validatePrivate(ctx, w.Root); err != nil {
-		return err.Error()
-	}
-	parent, err := treeEntries(ctx, t.ParentRoot, tree)
-	if err != nil {
-		return err.Error()
-	}
-	result, err := treeEntries(ctx, w.Root, rev.ResultTree)
-	if err != nil {
-		return err.Error()
-	}
-	var differ []string
-	for _, p := range rev.ChangedPaths {
-		if parent[p] != result[p] {
-			differ = append(differ, p)
-		}
-	}
-	if len(differ) > 0 {
-		sort.Strings(differ)
-		return "content differs from the revision at " + strings.Join(differ, ", ")
-	}
-	return ""
-}
-
-// treeEntries lists tree recursively as path -> "mode id" (hardened plumbing).
-func treeEntries(ctx context.Context, root, tree string) (map[string]string, error) {
-	out, err := privateGit(ctx, root, "ls-tree", "-r", "-z", "--full-tree", tree)
-	if err != nil {
-		return nil, err
-	}
-	entries := map[string]string{}
-	for _, line := range nulPaths(out) {
-		meta, name, ok := strings.Cut(line, "\t")
-		f := strings.Fields(meta)
-		if !ok || len(f) != 3 {
-			return nil, errors.New("invalid tree listing")
-		}
-		entries[name] = f[0] + " " + f[2]
-	}
-	return entries, nil
+	return s.Manager.PredictIntegration(ctx, rev.WorkspaceID, t.ParentRoot, t.BaseRevision, rev.TreeBefore, rev.ResultRevision)
 }
 
 // repairHead advances a head that missed the write after its last applied
-// revision (crash inside finishApply).
+// revision (crash inside finishApply). The last applied revision is the one
+// most recently updated: applied is terminal, so its update time is when it
+// was applied (submission order, seq, need not be apply order).
 func (s *WorkspaceService) repairHead(ctx context.Context, t protocol.AgentTask) error {
 	revs, err := s.Store.AgentRevisions(ctx, t.ID)
 	if err != nil {
 		return err
 	}
-	var applied []store.AgentRevision
-	for _, r := range revs {
-		if r.State == store.RevisionApplied {
-			applied = append(applied, r)
+	var last *store.AgentRevision
+	applied := 0
+	for i, r := range revs {
+		if r.State != store.RevisionApplied {
+			continue
+		}
+		applied++
+		if last == nil || r.UpdatedAt.After(last.UpdatedAt) || (r.UpdatedAt.Equal(last.UpdatedAt) && r.Seq > last.Seq) {
+			last = &revs[i]
 		}
 	}
-	if len(applied) == 0 {
+	if applied == 0 {
 		return nil
 	}
 	h, err := s.head(ctx, t, true)
 	if err != nil {
 		return err
 	}
-	switch {
-	case len(applied) == h.AppliedCount:
+	if applied == h.AppliedCount {
 		return nil
-	case len(applied) == h.AppliedCount+1:
-		for _, r := range applied {
-			if r.TreeBefore == h.HeadTree && r.TreeAfter != "" && (r.TreeAfter != h.HeadTree || r.Reason == manualResolution) {
-				return s.advanceHead(ctx, h, r.TreeAfter)
-			}
-		}
 	}
-	return fmt.Errorf("integration head %s (%d applied) is inconsistent with %d applied revisions", h.HeadTree, h.AppliedCount, len(applied))
+	if applied == h.AppliedCount+1 && last.TreeBefore == h.HeadTree && last.TreeAfter != "" {
+		return s.advanceHead(ctx, h, last.TreeAfter)
+	}
+	return fmt.Errorf("integration head %s (%d applied) is inconsistent with %d applied revisions", h.HeadTree, h.AppliedCount, applied)
 }
 
 // DropRuntime explicitly drops an agent's submitted or conflicted revision
