@@ -428,6 +428,7 @@ func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing
 			e.mu.Lock()
 			e.turnLimits.MaxTokens = tc.limit
 			e.mu.Unlock()
+			e.Cfg.Models.AgentTaskLimits.MaxTokens = tc.limit
 			p := &budgetProvider{events: []llm.Event{
 				{Type: llm.EventTextDelta, Text: "Partial response"},
 				{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "incomplete", Name: "file__write", Args: []byte(`{"path":"never.txt","content":"unfinished`)}},

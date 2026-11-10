@@ -6,16 +6,26 @@ import AgentRow from './AgentRow.svelte';
 import IntegrationStrip from './IntegrationStrip.svelte';
 import AgentInspector from './AgentInspector.svelte';
 import Agents from './Agents.svelte';
+import { groupAgents } from '$lib/agentGroups';
 
 const caps = { files: 'read-write', shell: 'none', network: false, spawnMax: 0 };
 const ag = (id: string, extra: any = {}) => ({ id, taskId: 'task', name: `Agent ${id}`, purpose: 'Does things', assignment: { prompt: 'Implement <b>it</b>', acceptanceChecks: ['go test'] }, capabilities: caps, budgetShare: 0.25, depth: 0, state: 'running', result: { summary: '' }, usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 }, version: 1, createdAt: `2026-01-01T00:00:0${id.length}Z`, updatedAt: '', modelRequested: 'p/m1', ...extra });
 const html = (C: any, props: any) => render(C, { props }).body;
+const groupOf = (a: any, depth = 0) => groupAgents([{ agent: a, depth }])[0];
 
-it('row shows state, chips, requested model, fallback badge and Cancel only while active', () => {
-  const b = html(AgentRow, { agent: ag('a', { modelActual: 'p/m2' }), depth: 1, pending: false, selected: false, onselect() {}, oncancel() {} });
-  expect(b).toContain('Agent a'); expect(b).toContain('files:rw'); expect(b).toContain('p/m1'); expect(b).toContain('fell back to p/m2'); expect(b).toContain('Cancel Agent a'); expect(b).toContain('Running');
-  const done = html(AgentRow, { agent: ag('a', { state: 'completed', modelActual: 'p/m1' }), depth: 0, pending: false, selected: false, onselect() {}, oncancel() {} });
-  expect(done).not.toContain('fell back'); expect(done).not.toContain('Cancel Agent a');
+it('row shows state, plain permissions, requested model, fallback badge and Cancel only while active', () => {
+  const b = html(AgentRow, { group: groupOf(ag('a', { modelActual: 'p/m2' }), 1), pending: false, selected: false, onselect() {}, oncancel() {} });
+  expect(b).toContain('Agent a'); expect(b).toContain('Edits files · p/m1'); expect(b).toContain('fell back to p/m2'); expect(b).toContain('Cancel Agent a'); expect(b).toContain('Running');
+  expect(b).not.toContain('files:rw'); expect(b).toContain('data-depth="1"');
+  const done = html(AgentRow, { group: groupOf(ag('a', { state: 'completed', modelActual: 'p/m1' })), pending: false, selected: false, onselect() {}, oncancel() {} });
+  expect(done).not.toContain('fell back'); expect(done).not.toContain('Cancel Agent a'); expect(done).toContain('Completed');
+});
+it('row hides attempts until there is a retry, and shows the latest status', () => {
+  const single = html(AgentRow, { group: groupOf(ag('a')), pending: false, selected: false, onselect() {}, oncancel() {} });
+  expect(single).not.toContain('attempts');
+  const retried = groupAgents([{ agent: ag('a', { planEntry: 'e', state: 'failed' }), depth: 0 }, { agent: ag('bb', { planEntry: 'e', state: 'running' }), depth: 0 }]);
+  const b = html(AgentRow, { group: retried[0], pending: false, selected: false, onselect() {}, oncancel() {} });
+  expect(b).toContain('2 attempts'); expect(b).toContain('Running'); expect(b).toContain('Attempt 2'); expect(b).toContain('Attempt 1');
 });
 it('Resolve appears only for a conflict revision and names the agent', () => {
   const agents = [ag('a', { name: 'Builder' })];
@@ -46,13 +56,13 @@ it('Agents renders the runtime tree to depth 3 and labels historical runs separa
     { task: { id: 'task', threadId: 't', state: 'running' }, children: [], childErrors: {}, agents, integration: { headTree: 'h', appliedCount: 0, verified: true } },
     { task: { id: 'old', threadId: 't', state: 'completed' }, children: [legacy], childErrors: {} }], reports: {}, pending: false, error: '', cancel() {} } as any;
   const b = html(Agents, { state, threadId: 't', projectId: 'p', onsend() {} });
-  expect(b).toContain('Agents · 4'); expect(b).toContain('Earlier runs · 1'); expect(b).toContain('Deep'); expect(b).toContain('Cancel task'); expect(b).toContain('Legacy work'); expect(b).toContain('legacy-model'); expect(b).toContain('p/m1 ×3, p/m2');
+  expect(b.match(/data-agent-row=/g)).toHaveLength(4); expect(b).toContain('4 running'); expect(b).toContain('Deep'); expect(b).toContain('Cancel task'); expect(b).toContain('Earlier agent run'); expect(b).toContain('Legacy work'); expect(b).toContain('legacy-model'); expect(b).toContain('data-depth="3"');
 });
 it('amend note without a reason has no duplicated label; queued Resolve is shown and disables the button', () => {
   const b = html(IntegrationStrip, { integration: { headTree: 'h', appliedCount: 1, verified: true, amendments: 1, revisions: [{ agentId: 'a', state: 'conflict' }] }, agents: [ag('a')], canResolve: true, resolveQueued: true, onresolve() {} });
   expect(b).toContain('Amended by lead<'); expect(b).not.toContain('Amended by lead · Amended'); expect(b).toContain('Queued'); expect(b).toMatch(/<button[^>]*disabled[^>]*>Resolve/);
 });
-it('a reloaded cancelled task shows the rebuilt report with a single Cancel-free Agents bar', () => {
+it('a reloaded cancelled task shows the rebuilt report with no Cancel task button', () => {
   const state = { tasks: [{ task: { id: 'task', threadId: 't', state: 'cancelled' }, children: [], childErrors: {}, agents: [ag('a', { name: 'Builder' })], integration: { headTree: 'h', appliedCount: 3, verified: true, revisions: [{ agentId: 'a', state: 'submitted' }] } }], reports: {}, pending: false, error: '', cancel() {} } as any;
   const b = html(Agents, { state, threadId: 't', onsend() {} });
   expect(b).toContain('3 applied changes stay staged and kept.'); expect(b).toContain('Not integrated: Builder'); expect(b).not.toContain('Cancel task');

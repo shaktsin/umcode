@@ -300,8 +300,11 @@ func TestPortedBudgetStop(t *testing.T) {
 	limits.MaxConcurrent = 2
 	use := llm.Usage{InputTokens: 15000, OutputTokens: 5000, Reported: true}
 	x := newRuntimeE2EOpts(t, runtimeE2EOpts{
-		limits:    &limits,
-		configure: func(c *config.Config) { c.Models.ExecutionLimits.MaxTokens = 200000 },
+		limits: &limits,
+		configure: func(c *config.Config) {
+			c.Models.ExecutionLimits.MaxTokens = 200000
+			c.Models.AgentTaskLimits.MaxTokens = 200000
+		},
 	},
 		fakeStep{Agent: "fixer", Tool: "file.write", Args: `{"path":"x.go","content":` + jsonString("package x\n\nfunc F() int { return 3 }\n") + `}`, Usage: use},
 		fakeStep{Agent: "fixer", Tool: "file.read", Args: `{"path":"x.go"}`, Usage: use},

@@ -126,7 +126,10 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 	if err != nil {
 		return r, err
 	}
-	if x := childExecutionFrom(ctx); x != nil {
+	// A scope frozen before keys were recorded (no credential IDs) restricts
+	// nothing, as in runtimeModelPool; filtering by an empty list would drop
+	// every route.
+	if x := childExecutionFrom(ctx); x != nil && len(x.credentialIDs) > 0 {
 		kept := plan.Routes[:0]
 		for _, route := range plan.Routes {
 			if slices.Contains(x.credentialIDs, route.Cred.Record.ID) {
@@ -478,7 +481,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	sctx := context.WithoutCancel(ctx)
 	budget.shared = delegation.BudgetFromContext(ctx)
 	if task, ok := DelegationTaskFromContext(ctx); ok {
-		owned, shared, ownerErr := e.DelegationCoordinator.Task(sctx, task, res.limits)
+		owned, shared, ownerErr := e.DelegationCoordinator.Task(sctx, task, e.agentTaskLimits())
 		if ownerErr != nil {
 			e.finishTurn(sctx, th, turn, fmt.Errorf("initialize shared task budget: %w", ownerErr), release)
 			return

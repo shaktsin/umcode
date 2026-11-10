@@ -15,6 +15,8 @@ func TestManualCompactionDelegationBudget(t *testing.T) {
 	for _, mode := range []string{"success", "exhausted", "stopped", "missing_ledger", "foreign_project", "ordinary"} {
 		t.Run(mode, func(t *testing.T) {
 			e, th, _, _ := delegationFixture(t)
+			// Agent tasks are uncapped by default; the exhausted mode needs a cap.
+			e.Cfg.Models.AgentTaskLimits.MaxTokens = 1_000_000
 			var task protocol.AgentTask
 			var shared *delegation.Budget
 			if mode == "ordinary" {

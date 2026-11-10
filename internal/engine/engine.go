@@ -987,6 +987,19 @@ func (e *Engine) SetComplexityDefaults(ctx context.Context, d protocol.Complexit
 
 func validDefaultMaxOutput(n int) bool { return n >= 1024 && n <= 1_000_000 }
 
+// agentTaskLimits are the limits of an agent task's shared budget, from
+// models.agent_task_limits. Zero means unlimited, so by default agents are
+// not capped; the per-turn limits (models.execution_limits) still bound each
+// individual turn. The first lead turn or agent that needs the task's budget
+// creates it with these limits and the store keeps them for the task.
+func (e *Engine) agentTaskLimits() protocol.ExecutionLimits {
+	if e.Cfg == nil {
+		return protocol.ExecutionLimits{}
+	}
+	l := e.Cfg.Models.AgentTaskLimits
+	return protocol.ExecutionLimits{MaxDurationMinutes: l.MaxDurationMinutes, MaxTokens: l.MaxTokens, MaxCostUSD: l.MaxCostUSD}
+}
+
 func validExecutionLimits(l protocol.ExecutionLimits) bool {
 	return l.MaxDurationMinutes >= 1 && l.MaxDurationMinutes <= 480 &&
 		l.MaxTokens >= 10_000 && l.MaxTokens <= 10_000_000 &&

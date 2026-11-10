@@ -1,5 +1,5 @@
 import { expect,it } from 'vitest';
-import { capacityFields, describeCapacity, capacityIsAssumed, assumedCapacityNotice, DEFAULT_CONTEXT_WINDOW } from './modelCapacity';
+import { capacityFields, describeCapacity, capacityIsAssumed, assumedCapacityNotice, assumedCapacityDetail, DEFAULT_CONTEXT_WINDOW } from './modelCapacity';
 it('omits empty capacity overrides rather than persisting zero',()=>{
  expect(capacityFields(undefined,undefined,undefined)).toEqual({});
  expect(capacityFields(32768,8192,4096)).toEqual({contextWindow:32768,maxOutputTokens:8192,responseReserveTokens:4096});
@@ -20,5 +20,13 @@ it('flags only an assumed window for the chat warning',()=>{
  for(const source of ['runtime','observed','override','catalog','runtime+override']) expect(capacityIsAssumed({source})).toBe(false);
  expect(capacityIsAssumed(null)).toBe(false);
  expect(DEFAULT_CONTEXT_WINDOW).toBe(256000);
- expect(assumedCapacityNotice('qwen3-coder')).toContain('256,000 tokens');
+ expect(assumedCapacityNotice()).toBe('Context window assumed at 256k tokens');
+ expect(assumedCapacityNotice(8192)).toBe('Context window assumed at 8.2k tokens');
+});
+it('keeps the full explanation for the tooltip, not the line',()=>{
+ const detail=assumedCapacityDetail('qwen3-coder');
+ expect(detail).toContain("doesn't know the context limit for qwen3-coder");
+ expect(detail).toContain('256,000 tokens');
+ expect(detail).toContain('Chat works normally');
+ expect(assumedCapacityNotice()).not.toContain('qwen3-coder');
 });

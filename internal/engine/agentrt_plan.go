@@ -303,16 +303,19 @@ func (e *Engine) proposeUnadmittedAgentPlan(ctx context.Context, p tools.PlanPro
 		return "", err
 	}
 
-	// Admission freezes the current model pool for the private task.
-	modelScope := store.AgentModelScope{Provider: turn.Resolved.Provider, Model: turn.Resolved.Model}
-	if modelScope.Model == "" {
-		modelScope.Provider, modelScope.Model = th.Settings.Provider, th.Settings.Model
+	// Admission freezes the chat's approved models for the private task: the
+	// pool (or single model) the user's turn selected, as an admitted turn
+	// would, not just the one route that happens to serve the lead right now.
+	leadRoute := turn.Resolved
+	if leadRoute.Model == "" {
+		leadRoute.Provider, leadRoute.Model = th.Settings.Provider, th.Settings.Model
 	}
+	modelScope := e.approvedModelScope(ctx, th, turn.Selection, leadRoute)
 	pool := e.runtimeModelPool(ctx, modelScope, agentNeeds{})
 	if e.planModelPoolHook != nil {
 		pool = e.planModelPoolHook(pool)
 	}
-	defaultModel := poolModelRef(pool, modelScope.Provider+"/"+modelScope.Model, modelScope.Model)
+	defaultModel := poolModelRef(pool, leadRoute.Provider+"/"+leadRoute.Model, leadRoute.Model)
 	lead := e.AgentRuntime.LeadCapabilities()
 	offer := e.shellOfferFor(ctx, shellScope)
 	opts := agentrt.ResolveOptions{ShellReadOnlySupported: offer.ReadOnly}
@@ -656,27 +659,56 @@ func (e *Engine) planModelPool(ctx context.Context, taskID string) ([]modelRoute
 	return pool, scope, nil
 }
 
+// approvedModelScope is the model scope a delegation task freezes when it is
+// admitted without an admitted turn (an automatic or approved plan). It is
+// the scope an admitted turn would freeze (turn.go): the selection's pool or
+// model with its candidates and the keys that can serve them, resolved the
+// same way as the turn itself (resolveSelection). Freezing only the lead's
+// concrete route would drop the chat's pool and leave no approved keys, so
+// every agent route would be filtered out ("no model is available").
+//
+// lead is the route that served the turn. It is the fallback when the
+// selection cannot be resolved now (every route cooling down, say): the
+// task then keeps that one model and the key it ran on.
+func (e *Engine) approvedModelScope(ctx context.Context, th protocol.Thread, selection, lead protocol.ModelSelection) store.AgentModelScope {
+	if res, err := e.resolveSelection(ctx, th, selection, "", 0); err == nil {
+		return store.AgentModelScope{Provider: res.approved.provider, Model: res.approved.model, PoolID: res.approved.poolID,
+			Strategy: res.approved.strategy, Explicit: res.approved.explicit, Candidates: res.approved.candidates,
+			CredentialID: res.approvedCredentialID, CredentialIDs: res.approvedCredentialIDs}
+	}
+	scope := store.AgentModelScope{Provider: lead.Provider, Model: lead.Model, CredentialID: lead.CredentialID}
+	if lead.CredentialID != "" {
+		scope.CredentialIDs = []string{lead.CredentialID}
+	}
+	return scope
+}
+
 func (e *Engine) unadmittedPlanModelScope(ctx context.Context, plan protocol.AgentPlan) (store.AgentModelScope, error) {
 	th, err := e.Store.GetThread(ctx, plan.ThreadID)
 	if err != nil {
 		return store.AgentModelScope{}, err
 	}
-	scope := store.AgentModelScope{Provider: th.Settings.Provider, Model: th.Settings.Model}
+	lead := protocol.ModelSelection{Provider: th.Settings.Provider, Model: th.Settings.Model}
+	fallback := store.AgentModelScope{Provider: lead.Provider, Model: lead.Model}
 	approval, err := e.Store.LatestApprovalForNode(ctx, "agent_plan", plan.ID)
 	if err != nil {
-		return scope, err
+		return fallback, err
 	}
 	turns, err := e.Store.ListTurns(ctx, plan.ThreadID)
 	if err != nil {
-		return scope, err
+		return fallback, err
 	}
+	var selection protocol.ModelSelection
 	for _, turn := range turns {
-		if turn.ID == approval.TurnID && turn.Resolved.Model != "" {
-			scope.Provider, scope.Model = turn.Resolved.Provider, turn.Resolved.Model
+		if turn.ID == approval.TurnID {
+			selection = turn.Selection
+			if turn.Resolved.Model != "" {
+				lead = turn.Resolved
+			}
 			break
 		}
 	}
-	return scope, nil
+	return e.approvedModelScope(ctx, th, selection, lead), nil
 }
 
 // poolModelRef returns the pool's reference (provider/model) for the first
@@ -1261,6 +1293,25 @@ func (e *Engine) startPlanContinuation(threadID, taskID string) {
 	}
 }
 
+// registerTaskBudget creates the task's shared budget through the delegation
+// coordinator (the same owner a lead turn gets, so both share one budget) and
+// registers it for runtime agents, as runTurn does for a task-bound turn.
+func (e *Engine) registerTaskBudget(ctx context.Context, taskID string) error {
+	if e.DelegationCoordinator == nil {
+		return nil
+	}
+	task, err := e.Store.AgentTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	_, shared, err := e.DelegationCoordinator.Task(ctx, task, e.agentTaskLimits())
+	if err != nil {
+		return err
+	}
+	e.trackRuntimeBudget(task.ID, shared)
+	return nil
+}
+
 func (e *Engine) startFirstApprovedAgent(ctx context.Context, taskID string) error {
 	if e.AgentRuntime == nil {
 		return errors.New("agent runtime unavailable")
@@ -1275,6 +1326,12 @@ func (e *Engine) startFirstApprovedAgent(ctx context.Context, taskID string) err
 	}
 	if len(plan.Agents) == 0 {
 		return errors.New("approved agent plan has no entries")
+	}
+	// The agent starts before the lead's continuation turn, which is what
+	// otherwise creates and registers the task's shared budget. Without it the
+	// runner fails closed with "task budget unavailable", so register it first.
+	if err := e.registerTaskBudget(ctx, taskID); err != nil {
+		return fmt.Errorf("register task budget: %w", err)
 	}
 	first := plan.Agents[0]
 	for _, entry := range plan.Agents {

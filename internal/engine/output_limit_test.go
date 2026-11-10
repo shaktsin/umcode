@@ -147,6 +147,7 @@ func TestOutputLimitDelegationOverrunPreservesFailureAndAccounting(t *testing.T)
 	e.mu.Lock()
 	e.turnLimits.MaxTokens = 20000
 	e.mu.Unlock()
+	e.Cfg.Models.AgentTaskLimits.MaxTokens = 20000
 	token, err := e.PrepareDelegation(t.Context(), th.ID)
 	if err != nil {
 		t.Fatal(err)
