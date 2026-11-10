@@ -442,18 +442,43 @@ func TestCraftedGitPointerDoesNotWidenAccess(t *testing.T) {
 		os.WriteFile(filepath.Join(gd, "gitdir"), []byte(filepath.Join(root, ".git")), 0o644)
 		os.WriteFile(filepath.Join(gd, "commondir"), []byte(other), 0o644)
 		os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+gd+"\n"), 0o644)
-		p := AgentWritePolicy(root, false, t.TempDir())
-		if hasPath(p.Readable, other) || hasPath(p.ReadOnlyPaths, other) {
-			t.Errorf("non-git commondir accepted: %v", p.ReadOnlyPaths)
+		assertOnlyPointer(t, root, other)
+	})
+	// An agent builds scratch dir S (HEAD, a gitdir file back to its own
+	// pointer, commondir -> ANOTHER repository's .git). The other repository
+	// has no worktrees/<S>/gitdir naming this checkout, so nothing it holds
+	// may become readable.
+	t.Run("commondir of another repository", func(t *testing.T) {
+		root, scratch, victim := realPath(t.TempDir()), realPath(t.TempDir()), realPath(t.TempDir())
+		fakeGitDir(t, victim)
+		os.WriteFile(filepath.Join(scratch, "HEAD"), []byte("ref: refs/heads/x\n"), 0o644)
+		os.WriteFile(filepath.Join(scratch, "gitdir"), []byte(filepath.Join(root, ".git")), 0o644)
+		os.WriteFile(filepath.Join(scratch, "commondir"), []byte(victim), 0o644)
+		os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+scratch+"\n"), 0o644)
+		assertOnlyPointer(t, root, victim)
+		for _, p := range []Policy{AgentWritePolicy(root, false, t.TempDir()), ReadOnlyChildPolicy(root, false, t.TempDir())} {
+			if hasPath(p.Readable, scratch) {
+				t.Errorf("unproven scratch gitdir became readable: %v", p.Readable)
+			}
 		}
-		if !hasPath(p.ReadOnlyPaths, gd) {
-			t.Errorf("validated gitdir should still be protected: %v", p.ReadOnlyPaths)
-		}
+	})
+	t.Run("reverse link names another checkout", func(t *testing.T) {
+		root, scratch, victim := realPath(t.TempDir()), realPath(t.TempDir()), realPath(t.TempDir())
+		fakeGitDir(t, victim)
+		reverse := filepath.Join(victim, "worktrees", filepath.Base(scratch))
+		os.MkdirAll(reverse, 0o755)
+		os.WriteFile(filepath.Join(reverse, "gitdir"), []byte(filepath.Join(t.TempDir(), ".git")), 0o644)
+		os.WriteFile(filepath.Join(scratch, "HEAD"), []byte("ref: refs/heads/x\n"), 0o644)
+		os.WriteFile(filepath.Join(scratch, "gitdir"), []byte(filepath.Join(root, ".git")), 0o644)
+		os.WriteFile(filepath.Join(scratch, "commondir"), []byte(victim), 0o644)
+		os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+scratch+"\n"), 0o644)
+		assertOnlyPointer(t, root, victim)
 	})
 }
 
 func TestSymlinkedDotGitTargetIsProtected(t *testing.T) {
-	root, real := realPath(t.TempDir()), realPath(t.TempDir())
+	root := realPath(t.TempDir())
+	real := filepath.Join(root, "gitstore")
 	fakeGitDir(t, real)
 	if err := os.Symlink(real, filepath.Join(root, ".git")); err != nil {
 		t.Fatal(err)
@@ -461,6 +486,24 @@ func TestSymlinkedDotGitTargetIsProtected(t *testing.T) {
 	for name, p := range map[string]Policy{"write": AgentWritePolicy(root, false, t.TempDir()), "readonly": ReadOnlyChildPolicy(root, false, t.TempDir())} {
 		if !hasPath(p.ReadOnlyInRoot, real) || !hasPath(p.ReadOnlyInRoot, filepath.Join(root, ".git")) {
 			t.Errorf("%s: target and lexical path must be read-only: %v", name, p.ReadOnlyInRoot)
+		}
+	}
+}
+
+// A symlinked .git whose real target lies outside the checkout is never
+// trusted: only the lexical link is protected.
+func TestSymlinkedDotGitOutsideRootIsNotTrusted(t *testing.T) {
+	root, outside := realPath(t.TempDir()), realPath(t.TempDir())
+	fakeGitDir(t, outside)
+	if err := os.Symlink(outside, filepath.Join(root, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]Policy{"write": AgentWritePolicy(root, false, t.TempDir()), "readonly": ReadOnlyChildPolicy(root, false, t.TempDir())} {
+		if hasPath(p.ReadOnlyInRoot, outside) || hasPath(p.Readable, outside) || hasPath(p.ReadOnlyPaths, outside) {
+			t.Errorf("%s: outside target trusted: %+v", name, p)
+		}
+		if !hasPath(p.ReadOnlyInRoot, filepath.Join(root, ".git")) {
+			t.Errorf("%s: link itself must stay protected: %v", name, p.ReadOnlyInRoot)
 		}
 	}
 }

@@ -147,7 +147,7 @@ func (b *Budget) Slice(share float64) *Budget {
 	c := &Budget{parent: b, deadline: deadline, attempts: make(map[string]bool)}
 	c.limits.MaxDurationMinutes = limits.MaxDurationMinutes
 	if limits.MaxTokens > 0 {
-		if t := int64(math.Floor(share * float64(max(tokens, 0)))); t > 0 {
+		if t := int64(math.Floor(share*float64(max(tokens, 0)) + sliceEpsilon)); t > 0 {
 			c.limits.MaxTokens = t
 		} else {
 			c.zeroTokens = true
