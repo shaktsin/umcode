@@ -1,16 +1,40 @@
 # UMCode
 
-A local-first AI workbench for project-scoped chats and software work.
+A Mac coding agent for the models you choose, hosted or local. When one hits a quota or rate limit, the next model in your pool continues. Free and open source (MIT). Site: [umcode.dev](https://umcode.dev).
 
-Choose a project folder and UMCode keeps its chats and project instructions together. Start a clean chat or a contextual side chat, choose configured provider/model IDs, or combine models into an ordered pool. When a provider reports a quota or rate limit, the engine can continue with the next configured model. Tool actions stay visible, with approvals for sensitive operations.
+Choose a project folder and UMCode keeps its chats and project instructions together. Start a clean chat or a contextual side chat, choose configured provider/model IDs, or combine models into an ordered pool. Tool actions stay visible, with approvals for sensitive operations. Chats and settings stay on your Mac; prompts go only to the models you configure.
+
+**Download:** [UMCode.dmg](https://github.com/shaktsin/umcode/releases/latest/download/UMCode.dmg) (macOS 14+, signed and notarized), or [build from source](#build-and-run).
 
 ![UMCode desktop app](media/umcode-screenshot.png)
+
+## What's new in 0.4.3
+
+- **Agents.** Ask for several agents in one message. A plan card shows each agent's purpose, model, file/shell/network access and limits before anything runs. Agents work in isolated checkouts of a private snapshot of your project (Git is not required), the lead integrates and verifies the results, and a merge stops if you edited the target files in the meantime. Agents share one budget, and you can cancel or continue them from the Agents panel. See the [agent guide](docs/subagent-development.md).
+- **Visual ML Workbench.** Build text, vision and feature-vector models as connected layers with live shapes and validation, export the generated `.py`, ask the assistant about a layer and preview its proposed change before applying it, bring data from local files or Hugging Face, train on CPU with train/validation/test metrics, try the checkpoint in Inference, and promote it to chat. You can also import and inspect GPT-2, Llama, Mistral, Qwen2, BERT, ViT, ResNet and ConvNeXT weights. See the [Workbench guide](docs/ml-workbench/README.md) and [imported models](docs/workbench-imported-models.md).
+- **Automatic context compaction.** Older history is summarized before the window fills and full output stays saved. UMCode reads the loaded context from Ollama and assumes 256,000 tokens when it cannot tell. It never blocks a turn. See [model capacity and compaction](docs/model-capacity-and-compaction.md).
+- **Effort control.** Low, medium or high effort from the message box, including thinking control for local llama.cpp models.
+- **Smaller changes.** First-run provider tiles, effort and approval-mode pills on the composer, approvals docked above the message box, live activity and turn time, the `/` skill picker, and globally installed skills.
+
+### Agents
+
+![Agent plan card showing two agents, their access and limits](media/umcode-agent-plan.png)
+
+The plan card is shown before agents start. The agents in this capture are example data.
+
+### ML Workbench
+
+Training runs on CPU and needs the PyTorch runtime installed separately. Image training is not included yet, and small models trained from scratch can produce gibberish: a finished run shows that training executed, not that answers are good.
+
+| Build | Ask | Train |
+| --- | --- | --- |
+| ![Visual model builder](docs/ml-workbench/screenshots/03-text-builder.png) | ![Assistant previewing a layer change](docs/ml-workbench/screenshots/assistant/03-preview.png) | ![Training run](docs/ml-workbench/screenshots/data-inference/07-training-checkpoint.jpg) |
 
 ---
 
 - **Project-aware chats** — work in a selected folder with its `UMCODE.md` instructions
 - **Provider and model choice** — use configured models directly or create ordered pools across providers
-- **Quota-aware routing** — move to the next model in a pool when a provider reports a retryable quota or rate-limit failure
+- **Quota-aware routing** — move to the next model in a pool when a provider reports a retryable quota or rate-limit failure (see `config.example.yaml`)
 - **Local controls** — keep chat history, model settings, engine status, and approval workflows in one desktop app
 - **Protected credentials** — provider API keys are stored in the macOS Keychain
 - **Unified plugins** — install portable Agent Plugins or compatible Codex and Claude plugin folders containing skills, MCP servers, hooks, and metadata
