@@ -501,3 +501,23 @@ func TestApproveAgentPlanRequiresTaskOfPlanThread(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSaveAgentPlanNormalisesZeroLimits(t *testing.T) {
+	s, task := runtimeFixture(t)
+	p := protocol.AgentPlan{ID: "Z", ThreadID: task.ThreadID, Limits: protocol.PlanLimits{MaxConcurrent: 2, Network: true}, Agents: []protocol.PlanAgent{{Name: "w"}}}
+	if err := s.SaveAgentPlan(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "Z", task.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ApprovedAgentPlanForTask(t.Context(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := protocol.DefaultPlanLimits()
+	want := protocol.PlanLimits{MaxConcurrent: 2, MaxDepth: def.MaxDepth, MaxTotal: def.MaxTotal, SliceShare: def.SliceShare, Network: true}
+	if got.Limits != want {
+		t.Fatalf("limits = %+v, want %+v", got.Limits, want)
+	}
+}

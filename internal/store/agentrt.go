@@ -227,6 +227,8 @@ func (s *Store) SaveAgentPlan(ctx context.Context, p protocol.AgentPlan) error {
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = time.Now().UTC()
 	}
+	// Zero limits (propose_plan carries only some of them) take the defaults.
+	p.Limits = p.Limits.Normalized()
 	js, err := marshalAll(p.Agents, p.Limits)
 	if err != nil {
 		return err

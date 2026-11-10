@@ -214,3 +214,39 @@ func countField(r []protocol.CapabilityRejection, f string) int {
 	}
 	return n
 }
+
+func TestAdmitNormalisesZeroPlanLimits(t *testing.T) {
+	in := admitBase()
+	in.Plan.Limits = protocol.PlanLimits{MaxConcurrent: 2}
+	in.ParentShareFree = 0.1
+	// SliceShare 0 must not make every default request "fit": the default
+	// share (0.25) exceeds the free 0.1.
+	if _, err := Admit(in); admissionFieldOf(err) != "budget.share" {
+		t.Fatalf("zero sliceShare: want budget.share refusal, got %v", err)
+	}
+	in.ParentShareFree = 1
+	adm, err := Admit(in)
+	if err != nil {
+		t.Fatalf("zero depth/total disabled admission: %v", err)
+	}
+	if adm.Share != protocol.DefaultPlanLimits().SliceShare {
+		t.Fatalf("share = %v", adm.Share)
+	}
+	in.All = make([]protocol.RuntimeAgent, protocol.DefaultPlanLimits().MaxTotal)
+	if _, err := Admit(in); admissionFieldOf(err) != "total" {
+		t.Fatalf("zero maxTotal: want total refusal at default, got %v", err)
+	}
+	in.All = nil
+	in.Caller.Depth = protocol.DefaultPlanLimits().MaxDepth
+	if _, err := Admit(in); admissionFieldOf(err) != "depth" {
+		t.Fatalf("zero maxDepth: want depth refusal at default, got %v", err)
+	}
+}
+
+func admissionFieldOf(err error) string {
+	var ae *AdmissionError
+	if errors.As(err, &ae) {
+		return ae.Field
+	}
+	return fmt.Sprintf("<%v>", err)
+}

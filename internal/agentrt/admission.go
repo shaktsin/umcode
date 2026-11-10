@@ -79,7 +79,8 @@ func Admit(in AdmissionInput) (Admission, error) {
 		return Admission{}, refuse("spawn", "caller may spawn at most %d agents and already has %d", in.Caller.Capabilities.SpawnMax, children)
 	}
 
-	lim := in.Plan.Limits
+	// Defensive: a stored plan with zero limits must not disable a rail.
+	lim := in.Plan.Limits.Normalized()
 	depth := in.Caller.Depth + 1
 	if depth > lim.MaxDepth {
 		return Admission{}, refuse("depth", "depth %d exceeds the plan maximum of %d", depth, lim.MaxDepth)
