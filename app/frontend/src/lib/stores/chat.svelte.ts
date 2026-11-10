@@ -34,13 +34,11 @@ export class ThreadView {
   compaction = $state<CompactionState|null>(null);
   delegation = new DelegationState();
   cards = new AgentCards();
-  /** Follow-up text for an answered suggestion, waiting for the suggesting turn to finish. */
+  /** A resolution message waiting for the current turn to finish. */
   private queued = $state<{ threadId: string | null; text: string; kind?: 'resolve' } | null>(null);
-  /** Shown on the card of the thread that queued it only. */
-  get queuedFollowUp(): string | null { return this.queued && this.queued.threadId === this.id && this.queued.kind !== 'resolve' ? this.queued.text : null; }
-  /** Resolve messages waiting for the lead's running turn to end (not a suggestion follow-up). */
+  /** Resolve messages waiting for the lead's running turn to end. */
   get queuedResolve(): boolean { return !!this.queued && this.queued.threadId === this.id && this.queued.kind === 'resolve'; }
-  /** Why a queued follow-up was dropped (for example an expired activation). */
+  /** Why a queued conflict-resolution follow-up could not be sent. */
   followUpError = $state('');
   id = $state<string | null>(null);
   thread = $state<Thread | null>(null);
@@ -171,15 +169,8 @@ export class ThreadView {
         this.items = [];
       }
       if (!workbench && (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId)) await this.delegation.bind(this.id, this.thread?.projectId);
-      const held = workbench ? undefined : this.delegation.token;
       const submission = workbench ? { workbench } : this.delegation.submission();
-      try {
-        await app.call('turn/start', { threadId: this.id, text, attachments, ...submission });
-      } catch (e) {
-        // A turn that never started must not spend the activation.
-        if (held && 'delegationActivationToken' in submission && submission.delegationActivationToken && Date.parse(held.expiresAt) > Date.now()) this.delegation.token = held;
-        throw e;
-      }
+      await app.call('turn/start', { threadId: this.id, text, attachments, ...submission });
       if (!workbench) void this.delegation.hydrate();
     } catch (e) {
       this.sending = false;
@@ -187,24 +178,7 @@ export class ThreadView {
     }
   }
 
-  /**
-   * The user's answer to an agent.suggest card. The UI grants nothing: it calls the
-   * admin RPC, then starts the follow-up turn (with the activation token on enable).
-   */
-  async answerSuggestion(suggestionId: string, decision: 'enable' | 'decline') {
-    const r = await this.cards.respondSuggestion(suggestionId, decision);
-    if (decision === 'enable') {
-      if (!r.activationToken || !r.expiresAt) return;
-      // Bind first: binding a different chat clears the token.
-      if (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId) await this.delegation.bind(this.id, this.thread?.projectId);
-      this.delegation.adopt({ activationToken: r.activationToken, expiresAt: r.expiresAt });
-      await this.submitFollowUp('Agents are enabled for this task. Please continue.');
-    } else {
-      await this.submitFollowUp('Continue without agents.');
-    }
-  }
-
-  /** Starts the follow-up turn now, or queues it while the suggesting turn is still running (the token stays held). */
+  /** Starts a conflict-resolution follow-up now, or queues it while a turn runs. */
   async submitFollowUp(text: string, kind?: 'resolve') {
     this.followUpError = '';
     if (this.running) {
@@ -219,13 +193,24 @@ export class ThreadView {
       return;
     }
     this.queued = null;
-    const held = this.delegation.token;
-    if (held && Date.parse(held.expiresAt) <= Date.now()) {
-      this.delegation.token = null;
-      this.followUpError = 'Activation expired — enable agents again.';
-      return;
-    }
     await this.send(text);
+  }
+
+  /** Recovers an approved plan whose automatic continuation did not start. */
+  async continueApprovedTask(taskId: string) {
+    if (!this.id || this.running || this.sending) return;
+    const entry = this.cards.approvedPlanNeedingContinuation(taskId);
+    if (!entry) return;
+    this.sending = true;
+    try {
+      await app.call('turn/start', { threadId: this.id, text: 'Continue the approved agent plan and original request.', delegationTaskId: taskId });
+      void this.cards.refreshPlan(entry.plan.id);
+      void this.delegation.hydrate();
+    } catch (e) {
+      app.toast('error', errMsg(e));
+    } finally {
+      this.sending = false;
+    }
   }
 
   async interrupt() {
@@ -412,36 +397,6 @@ class ChatState {
     });
     this.upsertThread(th);
     return th;
-  }
-
-  /** Manual permission works before the first paid message. The pending guard
-   * coalesces repeated clicks; navigation cannot attach a token to another scope. */
-  async enableDelegation(view: ThreadView) {
-    if (view.delegation.pending || view.sending || view.running) return;
-    const projectId = view.id ? view.thread?.projectId : view === this.main ? projects.activeId : null;
-    if (!projectId) { view.delegation.error = 'Agents require a committed Git project. Open a project first.'; return; }
-    if (view.id) {
-      if (view.delegation.threadId !== view.id || view.delegation.projectId !== projectId) await view.delegation.bind(view.id, projectId);
-      await view.delegation.enable(); return;
-    }
-    if (view !== this.main) return;
-    const generation = this.mainGeneration;
-    view.delegation.pending = true; view.delegation.error = '';
-    try {
-      const th = await this.startMainThread();
-      if (generation !== this.mainGeneration || projects.activeId !== projectId || view.id) return;
-      view.id = th.id; view.thread = th;
-      await view.delegation.bind(th.id, th.projectId, true);
-      if (generation !== this.mainGeneration || projects.activeId !== projectId || view.id !== th.id || view.delegation.threadId !== th.id) return;
-      // Transfer the pending guard synchronously to enable; no submission can
-      // run between hydration and the one-use permission request.
-      view.delegation.pending = false;
-      await view.delegation.enable();
-    } catch (e) {
-      if (generation === this.mainGeneration) view.delegation.error = errMsg(e);
-    } finally {
-      if (generation === this.mainGeneration) { view.delegation.pending = false; }
-    }
   }
 
   /** Send in the main chat, creating the thread in the open project on first send. */

@@ -1,11 +1,5 @@
 import type { Approval, Item, PlanCard, PlanCardAgent, PlanCardModel, PlanLimits, AgentPlanRespondParams } from './types';
 
-/** Result JSON of agent.suggest (internal/engine/agentrt_activation.go). */
-export function parseSuggestionResult(output?: string): { suggestionId: string; state: string } | null {
-  const r = parseObject(output);
-  return r && typeof r.suggestionId === 'string' && r.suggestionId ? { suggestionId: r.suggestionId, state: String(r.state ?? '') } : null;
-}
-
 /** Result JSON of agent.propose_plan: approved carries planId, revise carries feedback, declined a message. */
 export function parsePlanResult(output?: string): { planId?: string; state?: string; feedback?: string; message?: string } | null {
   const r = parseObject(output);

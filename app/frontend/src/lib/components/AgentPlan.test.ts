@@ -16,11 +16,12 @@ const card = {
   notices: ['shell was dropped because no sandbox is available'], previous: [{ planId: 'p0', name: 'Reader', model: 'b/two' }],
 };
 const plan = (state = 'proposed') => ({ id: 'p1', threadId: 't', taskId: 'k', agents: [], limits, state, createdAt: '' });
-const view = (opts: { status?: string; state?: string; card?: any; active?: boolean } = {}) => {
-  const entry = { plan: plan(opts.state), card: 'card' in opts ? opts.card : card, approvalStatus: opts.status ?? 'pending' };
+const view = (opts: { status?: string; state?: string; card?: any; active?: boolean; continuationNeeded?: boolean; taskId?: string } = {}) => {
+  const entry = { plan: { ...plan(opts.state), taskId: opts.taskId ?? 'k' }, card: 'card' in opts ? opts.card : card, approvalStatus: opts.status ?? 'pending', continuationNeeded: opts.continuationNeeded };
   return {
     cards: { plan: () => entry, planActionable: () => entry.plan.state === 'proposed' && entry.approvalStatus === 'pending', respondPlan: vi.fn(), error: '' },
     delegation: { tasks: [{ task: { id: 'k' } }], active: opts.active ? { task: { id: 'k' } } : undefined, pending: false, cancel: vi.fn() },
+    continueApprovedTask: vi.fn(),
   } as any;
 };
 const item = (output?: string) => ({ id: 'i', kind: 'toolCall', status: 'inProgress', tool: { name: 'agent.propose_plan', args: {}, output } }) as any;
@@ -91,4 +92,9 @@ it('a revised result is a read-only summary with the feedback', () => {
 it('keeps Cancel task reachable while the task is active, even after a revise', () => {
   expect(html(view({ status: 'denied', active: true }))).toContain('Cancel task');
   expect(html(view({ active: false }))).not.toContain('Cancel task');
+});
+it('offers Continue only when the server says an approved plan lacks a continuation', () => {
+  expect(html(view({ status: 'approved', state: 'approved', continuationNeeded: true }))).toContain('Continue');
+  expect(html(view({ status: 'approved', state: 'approved', continuationNeeded: false }))).not.toContain('>Continue<');
+  expect(html(view({ status: 'approved', state: 'approved', continuationNeeded: true, taskId: '' }))).not.toContain('>Continue<');
 });

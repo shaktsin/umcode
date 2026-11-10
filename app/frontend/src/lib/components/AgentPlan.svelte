@@ -8,7 +8,7 @@
   import { applyLimit, approveParams, canApprove, declineParams, draftOf, kept, limitsError, modelOutsidePool, modelUsable, noEdits, PLAN_CEILINGS, parsePlanResult, planIdForItem, reviseParams, type PlanEdits } from '$lib/agentPlanCard';
   import { errMsg } from '$lib/format';
 
-  let { item, view }: { item: Item; view: Pick<ThreadView, 'cards' | 'delegation'> } = $props();
+  let { item, view }: { item: Item; view: Pick<ThreadView, 'cards' | 'delegation' | 'continueApprovedTask'> } = $props();
   const planId = $derived(planIdForItem(item, app.approvals));
   const result = $derived(parsePlanResult(item.tool?.output));
   const entry = $derived(planId ? view.cards.plan(planId) : undefined);
@@ -128,6 +128,12 @@
     <div class="mt-2 flex items-center gap-2 border-t border-line pt-2 text-muted">
       <span>This task stays active until it is cancelled.</span>
       <button class="btn-ghost btn-sm ml-auto" disabled={view.delegation.pending} onclick={() => view.delegation.cancel(task.task.id)}>Cancel task</button>
+    </div>
+  {/if}
+  {#if entry?.plan.state === 'approved' && entry.continuationNeeded && entry.plan.taskId}
+    <div class="mt-2 flex items-center gap-2 border-t border-line pt-2 text-muted">
+      <span>The approved agent task is ready to continue.</span>
+      <button class="btn-primary btn-sm ml-auto" disabled={busy} onclick={() => view.continueApprovedTask(entry.plan.taskId)}>Continue</button>
     </div>
   {/if}
   {#if error || view.cards.error}<p class="mt-1.5 text-rust" role="alert">{error || view.cards.error}</p>{/if}

@@ -14,14 +14,13 @@ const setup = `
   state.notify = (method, params) => app.rpc.handle(JSON.stringify({jsonrpc:'2.0',method,params}));
   app.credentials = [{id:'fixture-key', provider:'claude', enabled:true}];
   app.call = async (method, params) => {
-    if (!['delegation/list','delegation/enable','delegation/cancel','thread/read','thread/list','project/list','credential/list','turn/start','turn/interrupt'].includes(method)) return originalCall(method,params);
+    if (!['delegation/list','delegation/cancel','thread/read','thread/list','project/list','credential/list','turn/start','turn/interrupt'].includes(method)) return originalCall(method,params);
     state.calls.push({method,params});
     if(method==='thread/read') return {thread, turns:[], items:[]};
     if(method==='thread/list') return {threads:[thread]};
     if(method==='project/list') return {projects:projects.list};
     if(method==='credential/list') return {credentials:app.credentials};
     if(method==='delegation/list') {if(state.listError) throw new Error('Hydration failed; retained outcomes remain available');return {tasks:structuredClone(state.snapshots)};}
-    if(method==='delegation/enable') return {activationToken:'one-use-token',expiresAt:'2099-01-01T00:00:00Z'};
     if(method==='turn/interrupt') {state.notify('turn/completed',{turn:{...state.runningTurn,status:'interrupted'}});return {};}
     if(method==='delegation/cancel') {
       const s=state.snapshots[0];s.task.state='cancelled';s.task.updatedAt='2026-10-15T12:00:05Z';
@@ -64,16 +63,13 @@ try {
     const shot = name => page.screenshot({ path: `${artifacts}/${name}-${theme}-${width}.png` });
     try {
       await page.goto(server.url + '?scenario=delegation');
-      const more = page.getByRole('button', { name: 'More options', exact: true });
-      await more.focus(); await page.keyboard.press('Enter');
-      await page.getByRole('menuitem', { name: /Agents for next message/ }).click();
-      await page.getByTitle('Agents are on for the next message', { exact: true }).waitFor();
-      assert.equal(await page.evaluate(() => window.uiTest.calls.filter(c => c.method === 'thread/start').length), 1);
-      assert.equal(await page.evaluate(() => window.uiTest.calls.filter(c => c.method === 'turn/start').length), 0, 'enable never submits');
       const input = page.getByRole('textbox', { name: 'Message', exact: true }).first();
-      await input.fill('Implement the assignment');
+      await input.fill('Use agents to implement the assignment and review it');
       await page.getByRole('button', { name: 'Send', exact: true }).click();
-      assert.equal(await page.evaluate(() => window.uiTest.calls.find(c => c.method === 'turn/start').params.delegationActivationToken), 'one-use-token');
+      assert.equal(await page.evaluate(() => window.uiTest.calls.filter(c => c.method === 'thread/start').length), 1);
+      assert.equal(await page.evaluate(() => window.uiTest.calls.filter(c => c.method === 'turn/start').length), 1);
+      assert.equal(await page.evaluate(() => window.uiTest.calls.find(c => c.method === 'turn/start').params.delegationActivationToken), undefined);
+      assert.equal(await page.getByRole('button', { name: 'More options', exact: true }).count(), 0);
       await page.evaluate(() => window.uiTest.startAgents());
       const agents = page.locator('[data-agents]');
       await agents.waitFor(); assert.equal(await agents.getAttribute('open'), null, 'collapsed by default');

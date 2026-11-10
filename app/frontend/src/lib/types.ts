@@ -598,14 +598,11 @@ export interface BudgetWarning {
   percent: number;
 }
 
-// Explicit delegation preparation is chat-bound; the token is consumed on submission.
-export interface DelegationEnableResult { activationToken: string; expiresAt: string }
 export interface TurnStartParams {
   threadId: string;
   text: string;
   attachments?: Attachment[];
   override?: ModelSelection;
-  delegationActivationToken?: string;
   delegationTaskId?: string;
 }
 
@@ -654,12 +651,9 @@ export interface RuntimeAgent {
 export interface AgentRevisionView { agentId: string; state: string; conflict?: string }
 export interface AgentIntegrationStatus { headTree: string; appliedCount: number; verified: boolean; revisions?: AgentRevisionView[]; amendments?: number; amendReason?: string; blocked?: string }
 export interface AgentIntegrationReport { headTree: string; appliedCount: number; verified: boolean; applied?: string[]; unintegrated?: string[]; blockedAgents?: string[]; blocked?: string; amendments?: number; amendReason?: string; message: string }
-export type SuggestionState = 'pending' | 'enabled' | 'declined' | 'expired';
-export interface AgentSuggestion { id: string; threadId: string; turnId: string; reason: string; state: SuggestionState; createdAt: string; decidedAt?: string }
-export interface AgentSuggestionRespondResult { suggestion: AgentSuggestion; activationToken?: string; expiresAt?: string }
 export type PlanDecision = 'approve' | 'decline' | 'revise';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired';
-export interface AgentPlanGetResult { plan: AgentPlan; card?: PlanCard; approvalId?: string; approvalStatus?: ApprovalStatus | '' }
+export interface AgentPlanGetResult { plan: AgentPlan; card?: PlanCard; approvalId?: string; approvalStatus?: ApprovalStatus | ''; continuationNeeded?: boolean }
 export interface AgentPlanRespondParams { planId: string; decision: PlanDecision; models?: Record<string, string>; drop?: string[]; limits?: PlanLimits; feedback?: string }
-export interface AgentPlanRespondResult { plan: AgentPlan; approvalStatus: ApprovalStatus }
+export interface AgentPlanRespondResult { plan: AgentPlan; approvalStatus: ApprovalStatus; taskId?: string; continuationNeeded?: boolean }
 export interface AgentPlanUpdated { threadId: string; plan: AgentPlan; approvalStatus?: ApprovalStatus }

@@ -21,12 +21,11 @@ function timestamp(value: string): bigint | null {
   return BigInt(seconds - offset) * 1000000n + BigInt((m[2] ?? '').padEnd(9, '0'));
 }
 
-/** Owned by one ThreadView; no activation permission or results cross columns. */
+/** Owned by one ThreadView; task state never crosses columns. */
 export class DelegationState {
   threadId = $state<string | null>(null);
   projectId = $state<string | undefined>();
   tasks = $state<Snapshot[]>([]);
-  token = $state<{ activationToken: string; expiresAt: string } | null>(null);
   /** What the lead integrated when a task was cancelled, by task id. Session-only: the server does not list it. */
   reports = $state<Record<string, AgentIntegrationReport>>({});
   pending = $state(false);
@@ -35,10 +34,10 @@ export class DelegationState {
   private request = 0;
   private events = 0;
   get active() { return this.tasks.find(s => agentActive(s.task.state)); }
-  async bind(threadId: string | null, projectId?: string, preservePending = false) {
+  async bind(threadId: string | null, projectId?: string) {
     if (threadId === null || this.threadId !== threadId || this.projectId !== projectId) {
       this.generation++; this.request++; this.threadId = threadId; this.projectId = projectId;
-      this.tasks = []; this.reports = {}; this.token = null; this.pending = preservePending; this.error = '';
+      this.tasks = []; this.reports = {}; this.pending = false; this.error = '';
     }
     if (threadId) await this.hydrate();
   }
@@ -102,23 +101,9 @@ export class DelegationState {
       }
     }
   }
-  async enable() {
-    if (!this.threadId || this.pending || this.active) return;
-    const generation = this.generation; this.pending = true; this.error = ''; this.token = null;
-    try {
-      const token = await app.call<{ activationToken: string; expiresAt: string }>('delegation/enable', { threadId: this.threadId });
-      if (generation === this.generation) this.token = token;
-    } catch (e) { if (generation === this.generation) this.error = errMsg(e); }
-    finally { if (generation === this.generation) this.pending = false; }
-  }
-  /** Holds the token an enabled suggestion returned; the next turn/start consumes it like delegation/enable's. */
-  adopt(token: { activationToken: string; expiresAt: string }) { this.token = token; this.error = ''; }
-  submission(): { delegationTaskId?: string; delegationActivationToken?: string } {
+  submission(): { delegationTaskId?: string } {
     if (this.active) return { delegationTaskId: this.active.task.id };
-    const token = this.token; this.token = null;
-    if (!token) return {};
-    if (Date.parse(token.expiresAt) <= Date.now()) { this.error = 'Activation expired. Enable agents again.'; throw new Error(this.error); }
-    return { delegationActivationToken: token.activationToken };
+    return {};
   }
   async cancel(taskId: string, childId?: string) {
     if (!this.threadId || this.pending) return;

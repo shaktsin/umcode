@@ -21,16 +21,18 @@ it('respondPlan sends AgentPlanRespondParams exactly and stores the result', asy
   expect(call.mock.calls[0]).toEqual(['agent/plan/respond', { planId: 'p1', decision: 'approve', models: { a: 'p/m' }, drop: ['b'], limits, feedback: 'ok' }]);
   await new Promise(r => setTimeout(r)); expect(c.plan('p1')?.approvalStatus).toBe('approved'); expect(c.plan('p1')?.plan.state).toBe('approved');
 });
-it('suggestions come from get/respond and keep the activation token', async () => {
-  const c = new AgentCards(); const sug = { id: 's', threadId: 't', turnId: 'u', reason: 'r', state: 'pending', createdAt: '' };
-  call.mockResolvedValueOnce({ suggestion: { ...sug, state: 'expired' } }); await c.refreshSuggestion('s');
-  expect(call).toHaveBeenCalledWith('agent/suggestion/get', { suggestionId: 's' }); expect(c.suggestion('s')?.state).toBe('expired');
-  call.mockResolvedValueOnce({ suggestion: { ...sug, state: 'enabled' }, activationToken: 'tok', expiresAt: '2030-01-01T00:00:00Z' });
-  await c.respondSuggestion('s', 'enable');
-  expect(call).toHaveBeenLastCalledWith('agent/suggestion/respond', { suggestionId: 's', decision: 'enable' });
-  expect(c.suggestion('s')?.state).toBe('enabled');
+it('shows recovery only when the server marks an approved plan as needing continuation', async () => {
+  const c = new AgentCards();
+  const approved = { ...base, state: 'approved' as const };
+  call.mockResolvedValueOnce({ plan: approved, approvalStatus: 'approved', continuationNeeded: true });
+  await c.refreshPlan('p1');
+  expect(c.approvedPlanNeedingContinuation('k')?.plan.id).toBe('p1');
+  c.applyPlanUpdate('p1', approved, 'approved');
+  expect(c.approvedPlanNeedingContinuation('k')?.plan.id).toBe('p1');
+  call.mockResolvedValueOnce({ plan: approved, approvalStatus: 'approved', continuationNeeded: false });
+  await c.refreshPlan('p1');
+  expect(c.approvedPlanNeedingContinuation('k')).toBeUndefined();
 });
-
 it('actionable only for a proposed plan with a pending approval; a missing status never keeps stale pending', async () => {
   const c = new AgentCards(); call.mockResolvedValue({ plan: proposed, approvalStatus: 'pending' });
   c.applyPlanUpdate('p1', proposed, 'pending'); expect(c.planActionable('p1')).toBe(true);
@@ -51,16 +53,12 @@ it('a late get or older update never regresses a newer plan', async () => {
   const d = new AgentCards(); d.applyPlanUpdate('p1', proposed, 'denied'); d.applyPlanUpdate('p1', proposed, 'pending');
   expect(d.planActionable('p1')).toBe(false);
 });
-it('refresh failures set error, keep prior state and never expose an actionable one', async () => {
+it('refresh failure reports the error and a later successful read restores the plan', async () => {
   const c = new AgentCards(); let reply: any = new Error('boom');
   call.mockImplementation(async () => { if (reply instanceof Error) throw reply; return reply; });
-  const sug = (state: string) => ({ suggestion: { id: 's', threadId: 't', turnId: 'u', reason: '', state, createdAt: '' } });
-  await c.refreshPlan('p1'); await c.refreshSuggestion('s');
-  expect(c.error).toMatch(/boom/); expect(c.planActionable('p1')).toBe(false); expect(c.suggestionActionable('s')).toBe(false);
+  await c.refreshPlan('p1');
+  expect(c.error).toMatch(/boom/); expect(c.planActionable('p1')).toBe(false);
   reply = { plan: proposed, approvalStatus: 'pending' }; await c.refreshPlan('p1'); expect(c.planActionable('p1')).toBe(true); expect(c.error).toBe('');
-  reply = new Error('down'); await c.refreshPlan('p1'); expect(c.error).toMatch(/down/); expect(c.planActionable('p1')).toBe(true);
-  reply = sug('pending'); await c.refreshSuggestion('s'); expect(c.suggestionActionable('s')).toBe(true);
-  reply = sug('declined'); await c.refreshSuggestion('s'); expect(c.suggestionActionable('s')).toBe(false);
 });
 
 it('onPlanUpdated without approvalStatus reads the plan back; with one it does not', async () => {

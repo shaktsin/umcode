@@ -9,9 +9,3 @@ it('renders earlier agent runs as read-only history beside lead verification', (
   const { body } = render(Agents, { props: { state, threadId: 'parent', projectId: 'project' } });
   expect(body).toContain('Earlier agent run'); expect(body).toContain('Inspect exact revision'); expect(body).toContain('review-model'); expect(body).toContain('Interrupted'); expect(body).toContain('Partial review'); expect(body).toContain('not_run'); expect(body).not.toContain('Retry saving outcome'); expect(body).not.toContain('Cancel reviewer'); expect(body).not.toMatch(/<details[^>]* open/);
 });
-
-import DelegationActivation from './DelegationActivation.svelte';
-it('shows unsupported projectless activation errors before a chat exists', () => {
-  const { body } = render(DelegationActivation, { props: { state: { active: undefined, threadId: null, error: 'Agents require a committed Git project. Open a project first.', pending: false, token: null } as any, onenable() {} } });
-  expect(body).toContain('role="alert"'); expect(body).toContain('Agents require a committed Git project. Open a project first.');
-});

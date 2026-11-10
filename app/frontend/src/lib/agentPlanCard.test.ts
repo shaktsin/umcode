@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { applyLimit, approveParams, canApprove, clampLimits, limitsError, modelOutsidePool, declineParams, defaultModel, draftOf, noEdits, parsePlanResult, parseSuggestionResult, planIdForItem, reviseParams } from './agentPlanCard';
+import { applyLimit, approveParams, canApprove, clampLimits, limitsError, modelOutsidePool, declineParams, defaultModel, draftOf, noEdits, parsePlanResult, planIdForItem, reviseParams } from './agentPlanCard';
 
 const caps = { files: 'read' as const, shell: 'none' as const, network: false, spawnMax: 0 };
 const limits = { maxConcurrent: 4, maxDepth: 2, maxTotal: 10, sliceShare: 0.5, network: false };
@@ -11,8 +11,6 @@ const card: any = {
 };
 
 it('parses tool results', () => {
-  expect(parseSuggestionResult('{"suggestionId":"s1","state":"pending","message":"x"}')).toEqual({ suggestionId: 's1', state: 'pending' });
-  expect(parseSuggestionResult('nope')).toBeNull();
   expect(parsePlanResult('{"planId":"p","state":"approved"}')).toMatchObject({ planId: 'p', state: 'approved' });
   expect(parsePlanResult('{"state":"revise","feedback":"smaller"}')).toMatchObject({ state: 'revise', feedback: 'smaller' });
 });
