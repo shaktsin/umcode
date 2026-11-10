@@ -958,3 +958,33 @@ func TestRunnerUsesEnabledPoolModelsOnly(t *testing.T) {
 		}
 	}
 }
+
+// Final review m5: when every frozen candidate is disabled, the pool is empty:
+// neither the plan card nor the runner offers the scope's model as enabled.
+func TestAllCandidatesDisabledMeansEmptyPool(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	scope, err := env.e.Store.AgentModelScope(t.Context(), env.task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope.Provider, scope.Model = "claude", "deterministic"
+	scope.Candidates = []protocol.ConfiguredModel{{ID: "cfg-a", Provider: "claude", Model: "deterministic", Enabled: false}}
+	data, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.e.Store.DB.Exec(`UPDATE agent_model_scopes SET scope_json=? WHERE task_id=?`, string(data), env.task.ID); err != nil {
+		t.Fatal(err)
+	}
+	pool, _, err := env.e.planModelPool(t.Context(), env.task.ID)
+	if err != nil || len(pool) != 0 {
+		t.Fatalf("plan pool = %+v %v, want empty", pool, err)
+	}
+	a := env.newRuntimeAgent(t, "nopool", readOnlyCaps, "")
+	if _, err = env.run(t, a); err == nil || !strings.Contains(err.Error(), "no compatible model") {
+		t.Fatalf("run with every candidate disabled: %v", err)
+	}
+	if reqs, _ := env.p.snapshot(); len(reqs) != 0 {
+		t.Fatalf("a disabled model was called: %d", len(reqs))
+	}
+}
