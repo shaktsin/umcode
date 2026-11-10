@@ -182,3 +182,56 @@ func TestConfinementSummaryForProject(t *testing.T) {
 		t.Fatalf("read-write needs no read-only check: %q", got)
 	}
 }
+
+func setProjectNetwork(t *testing.T, e *Engine, projectID string, on bool) {
+	t.Helper()
+	if _, err := e.Store.UpdateProject(t.Context(), protocol.ProjectUpdateParams{ProjectID: projectID, Tools: &protocol.ProjectTools{Network: &on}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func networkRejection(res agentrt.SpawnResult) string {
+	for _, r := range res.Rejected {
+		if r.Field == "capabilities.network" {
+			return r.Reason
+		}
+	}
+	return ""
+}
+
+// C1: the project's network setting is a ceiling at admission: an agent that
+// asks for network in a project without it is refused network, visibly.
+func TestAdmissionNetworkCeilingFromProject(t *testing.T) {
+	env := runtimeRunnerFixture(t)
+	limits := protocol.DefaultPlanLimits()
+	limits.Network = true
+	netCaps := protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone, Network: true}
+	env.approvePlan(t, limits, protocol.PlanAgent{Name: "fetcher", Purpose: "fetch", Capabilities: netCaps})
+	rt := agentrt.NewRuntime(env.e.Store, instantRunner{}, env.e.baseCtx, agentrt.WithResolveOptionsFunc(env.e.runtimeResolveOptions))
+	env.e.AgentRuntime = rt
+	(&shellSeams{}).install(env.e, fakeSandbox{}, nil)
+	spawn := func(call string, caps protocol.AgentCapabilities) agentrt.SpawnResult {
+		t.Helper()
+		res, err := rt.Spawn(t.Context(), agentrt.SpawnRequest{TaskID: env.task.ID, CallID: call, PlanEntry: "fetcher", Capabilities: &caps, Assignment: protocol.AgentAssignment{Prompt: "go"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	setProjectNetwork(t, env.e, env.th.ProjectID, false)
+	res := spawn("off-on", netCaps)
+	if res.Granted.Network || networkRejection(res) == "" {
+		t.Fatalf("project off, agent on: granted %+v rejected %+v", res.Granted, res.Rejected)
+	}
+
+	setProjectNetwork(t, env.e, env.th.ProjectID, true)
+	res = spawn("on-on", netCaps)
+	if !res.Granted.Network || networkRejection(res) != "" {
+		t.Fatalf("project on, agent on: granted %+v rejected %+v", res.Granted, res.Rejected)
+	}
+	res = spawn("on-off", protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone})
+	if res.Granted.Network || networkRejection(res) != "" {
+		t.Fatalf("project on, agent off: granted %+v rejected %+v", res.Granted, res.Rejected)
+	}
+}

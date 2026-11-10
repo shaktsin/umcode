@@ -149,8 +149,17 @@ func (e *Engine) projectShellScope(ctx context.Context, projectID string) (*tool
 	if err != nil {
 		return nil, err
 	}
-	return &tools.Scope{ProjectID: p.ID, UseCompute: boolOr(p.Tools.Compute, false)}, nil
+	return &tools.Scope{ProjectID: p.ID, UseCompute: boolOr(p.Tools.Compute, false), AllowNet: e.projectAllowNet(p)}, nil
 }
+
+// projectAllowNet is the project's effective network, computed exactly as the
+// lead's turn scope computes AllowNet.
+func (e *Engine) projectAllowNet(p protocol.Project) bool {
+	return boolOr(p.Tools.Network, e.Cfg == nil || e.Cfg.Tools.NetworkDefault())
+}
+
+// noNetworkReason is the network ceiling's reason when the project has none.
+const noNetworkReason = "the project's network is off"
 
 // runtimeResolveOptions computes the capability resolution options for a
 // task at admission time, from the confinement its project would use. It
@@ -158,14 +167,19 @@ func (e *Engine) projectShellScope(ctx context.Context, projectID string) (*tool
 func (e *Engine) runtimeResolveOptions(ctx context.Context, taskID string) agentrt.ResolveOptions {
 	task, err := e.Store.AgentTask(ctx, taskID)
 	if err != nil {
-		return agentrt.ResolveOptions{ShellUnavailable: fmt.Sprintf("the task could not be read: %v", err)}
+		why := fmt.Sprintf("the task could not be read: %v", err)
+		return agentrt.ResolveOptions{ShellUnavailable: why, NetworkUnavailable: why}
 	}
 	scope, err := e.projectShellScope(ctx, task.ProjectID)
 	if err != nil {
-		return agentrt.ResolveOptions{ShellUnavailable: fmt.Sprintf("the project could not be read: %v", err)}
+		why := fmt.Sprintf("the project could not be read: %v", err)
+		return agentrt.ResolveOptions{ShellUnavailable: why, NetworkUnavailable: why}
 	}
 	offer := e.shellOfferFor(ctx, scope)
 	opts := agentrt.ResolveOptions{ShellReadOnlySupported: offer.ReadOnly}
+	if !scope.AllowNet {
+		opts.NetworkUnavailable = noNetworkReason
+	}
 	switch {
 	case offer.Confinement == tools.ConfNone:
 		opts.ShellUnavailable = offer.Reason

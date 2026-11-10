@@ -171,3 +171,41 @@ func TestAgentNetworkIgnoresProjectDefault(t *testing.T) {
 		t.Fatal("agent inherited project network")
 	}
 }
+
+// C1: the agent's network is caps.Network AND the project's effective network
+// (the lead scope's AllowNet). It never comes from the project alone.
+func TestAgentNetworkNeverExceedsProject(t *testing.T) {
+	cases := []struct {
+		project, agent, want bool
+	}{
+		{project: false, agent: true, want: false},
+		{project: true, agent: true, want: true},
+		{project: true, agent: false, want: false},
+		{project: false, agent: false, want: false},
+	}
+	for _, c := range cases {
+		base := &tools.Scope{Root: "/w", AllowNet: c.project}
+		s := runtimeScope(base, protocol.AgentCapabilities{Files: protocol.FilesRead, Network: c.agent}, tools.ConfOSSandbox, normalMode)
+		if s.AllowNet != c.want {
+			t.Errorf("project=%v agent=%v: AllowNet=%v, want %v", c.project, c.agent, s.AllowNet, c.want)
+		}
+	}
+}
+
+// I1: no mode overrides "red action triggered by an inbound message -> Ask",
+// not even an agent's confined shell.
+func TestConfinedAgentShellAsksOnListenerChannel(t *testing.T) {
+	e := testEngine()
+	caps := protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadWrite}
+	for _, conf := range []tools.Confinement{tools.ConfOSSandbox, tools.ConfMicroVM} {
+		ctx := agentCtx(conf, caps, func() string { return "auto_all" })
+		for _, name := range []string{"shell.run", "verification.run"} {
+			if d, _ := e.gateDecision(ctx, name, tools.RiskRed, true, ""); d != policy.Ask {
+				t.Errorf("%s %s from listener = %v, want Ask", conf, name, d)
+			}
+			if d, _ := e.gateDecision(ctx, name, tools.RiskRed, false, ""); d != policy.Allow {
+				t.Errorf("%s %s not from listener = %v, want Allow", conf, name, d)
+			}
+		}
+	}
+}
