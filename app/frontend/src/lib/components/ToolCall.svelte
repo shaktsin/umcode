@@ -4,6 +4,7 @@
   import { app } from '$lib/stores/app.svelte';
   import { inspector } from '$lib/stores/inspector.svelte';
   import { prettyJSON } from '$lib/format';
+  import { agentToolFailure } from '$lib/taskOutcome';
   import ApprovalCard from './ApprovalCard.svelte';
 
   let { item, projectId }: { item: Item; projectId?: string } = $props();
@@ -13,6 +14,8 @@
   const approval = $derived(app.approvals.find((a) => a.itemId === item.id));
   const args = $derived(prettyJSON(tool.args));
   const longOutput = $derived((tool.output ?? '').length > 1200);
+  // A refused agent.* call: its short message stays readable, its record collapsed.
+  const agentFailure = $derived(agentToolFailure(item));
   const summary = $derived.by(() => {
     const a = tool.args as Record<string, unknown> | null;
     if (!a || typeof a !== 'object') return '';
@@ -71,6 +74,14 @@
       {#if tool.error}
         <div class="px-3 py-2 text-rust selectable">{tool.error}</div>
       {/if}
+    </div>
+  {:else if agentFailure}
+    <div class="px-3 pb-1.5 text-[11px] {item.status === 'denied' ? 'text-amber-warm' : 'text-rust'} [overflow-wrap:anywhere]">
+      <p>{agentFailure.message}</p>
+      <details class="mt-1 text-faint">
+        <summary class="cursor-pointer">Technical details</summary>
+        <pre class="mt-1 whitespace-pre-wrap font-mono selectable">{agentFailure.details}</pre>
+      </details>
     </div>
   {:else if tool.error && item.status !== 'inProgress'}
     <div class="px-3 pb-1.5 text-[11px] {item.status === 'denied' ? 'text-amber-warm' : 'text-rust'} truncate">{tool.error}</div>
