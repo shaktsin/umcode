@@ -23,6 +23,7 @@ import (
 type integrateOut struct {
 	HeadTree     string
 	AppliedCount int
+	Amendments   int
 	Revisions    []store.AgentRevision
 	Verified     bool
 	Settled      bool
