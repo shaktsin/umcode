@@ -9,6 +9,7 @@ import (
 	"github.com/shaktsin/umcode/internal/agentrt"
 	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/protocol"
+	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
@@ -102,32 +103,60 @@ func (e *Engine) rememberRuntimeBudget(taskID string, b *delegation.Budget) {
 	}
 }
 
-func (e *Engine) forgetRuntimeBudget(taskID string) { e.runtimeBudgets.Delete(taskID) }
-
-// runtimeBudgetPoll is how often a closed task's budget entry checks whether
-// its runtime agents have all stopped.
-const runtimeBudgetPoll = 100 * time.Millisecond
-
-// trackRuntimeBudget registers the task's budget and drops it once the task's
-// owner context is done AND none of its runtime agents is still live, so a
-// running runner never loses its budget and finished tasks do not leak.
-func (e *Engine) trackRuntimeBudget(taskID string, owned context.Context, b *delegation.Budget) {
-	e.rememberRuntimeBudget(taskID, b)
-	if owned != nil {
-		context.AfterFunc(owned, func() { go e.forgetRuntimeBudgetWhenIdle(taskID) })
-	}
+// forgetRuntimeBudget drops the task's tracker guard first (so a fresh budget
+// can be tracked again), then its budget.
+func (e *Engine) forgetRuntimeBudget(taskID string) {
+	e.runtimeBudgetTrackers.Delete(taskID)
+	e.runtimeBudgets.Delete(taskID)
 }
 
-func (e *Engine) forgetRuntimeBudgetWhenIdle(taskID string) {
-	for e.runtimeAgentsLive(taskID) {
+// Backoff for the budget tracker's checks of whether its task is still active.
+const (
+	runtimeBudgetPoll    = 100 * time.Millisecond
+	runtimeBudgetPollMax = 2 * time.Second
+)
+
+// trackRuntimeBudget registers the task's budget and, once per task, starts a
+// tracker that drops it when the task is no longer active (completed, failed,
+// cancelled, ...) AND none of its runtime agents is queued or running, so a
+// running runner never loses its budget and finished tasks do not leak. It
+// does not depend on how the task ended. It stops when the engine shuts down.
+func (e *Engine) trackRuntimeBudget(taskID string, b *delegation.Budget) {
+	e.rememberRuntimeBudget(taskID, b)
+	if _, loaded := e.runtimeBudgetTrackers.LoadOrStore(taskID, struct{}{}); loaded {
+		return
+	}
+	go e.trackRuntimeBudgetUntilIdle(taskID)
+}
+
+func (e *Engine) trackRuntimeBudgetUntilIdle(taskID string) {
+	wait := runtimeBudgetPoll
+	for !e.runtimeTaskIdle(taskID) {
 		select {
 		case <-e.baseCtx.Done():
 			e.forgetRuntimeBudget(taskID)
 			return
-		case <-time.After(runtimeBudgetPoll):
+		case <-time.After(wait):
 		}
+		wait = min(wait*2, runtimeBudgetPollMax)
 	}
 	e.forgetRuntimeBudget(taskID)
+}
+
+// runtimeTaskIdle reports that the task left the active states and has no live
+// runtime agent. Any read error counts as not idle (retry later), except a
+// missing task.
+func (e *Engine) runtimeTaskIdle(taskID string) bool {
+	ctx := context.WithoutCancel(e.baseCtx)
+	task, err := e.Store.AgentTask(ctx, taskID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return false
+	case unfinishedDelegation(task.State):
+		return false
+	}
+	return !e.runtimeAgentsLive(taskID)
 }
 
 // runtimeAgentsLive reports whether any runtime agent of the task is queued or

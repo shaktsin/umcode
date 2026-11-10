@@ -11,6 +11,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/agentrt"
 	"github.com/shaktsin/umcode/internal/config"
+	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/secrets"
@@ -473,6 +474,17 @@ func budgetEntry(e *Engine, taskID string) bool {
 	return ok
 }
 
+func trackerEntry(e *Engine, taskID string) bool {
+	_, ok := e.runtimeBudgetTrackers.Load(taskID)
+	return ok
+}
+
+func trackerCount(e *Engine) int {
+	n := 0
+	e.runtimeBudgetTrackers.Range(func(any, any) bool { n++; return true })
+	return n
+}
+
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -489,37 +501,46 @@ func (env runtimeRunnerEnv) trackBudget(t *testing.T) {
 	env.e.mu.Lock()
 	limits := env.e.turnLimits
 	env.e.mu.Unlock()
-	owned, shared, err := env.e.DelegationCoordinator.Task(context.WithoutCancel(t.Context()), env.task, limits)
+	_, shared, err := env.e.DelegationCoordinator.Task(context.WithoutCancel(t.Context()), env.task, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env.e.trackRuntimeBudget(env.task.ID, owned, shared)
+	env.e.trackRuntimeBudget(env.task.ID, shared)
 	if !budgetEntry(env.e, env.task.ID) {
 		t.Fatal("budget not registered")
 	}
 }
 
-func TestRuntimeBudgetForgottenAfterTaskCloses(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
-	env.trackBudget(t)
-	a := env.newRuntimeAgent(t, "late", readOnlyCaps, "")
-	done := a
-	done.State = protocol.AgentStateCompleted
-	if err := env.e.Store.UpdateRuntimeAgent(t.Context(), done, a.Version); err != nil {
+func (env runtimeRunnerEnv) completeTask(t *testing.T) {
+	t.Helper()
+	cur, err := env.e.Store.AgentTask(t.Context(), env.task.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if err = env.e.Store.UpdateAgentTaskState(t.Context(), cur.ID, cur.ThreadID, cur.ProjectID, cur.State, protocol.AgentStateCompleted); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeBudgetForgottenAfterTaskCancel(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	env.trackBudget(t)
 	if _, err := env.e.CancelDelegation(t.Context(), protocol.DelegationCancelParams{ThreadID: env.th.ID, TaskID: env.task.ID}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "budget entry removed after CancelDelegation", func() bool { return !budgetEntry(env.e, env.task.ID) })
-	// A late runner for the task fails closed rather than running unbounded.
-	if _, err := env.run(t, a); err == nil {
-		// (An active task with a forgotten budget is TestRunnerWithoutTaskBudgetFailsCleanly.)
-		t.Fatal("late runner for a closed task succeeded")
+}
+
+func TestRuntimeBudgetForgottenAfterTaskCompletes(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	env.trackBudget(t)
+	time.Sleep(3 * runtimeBudgetPoll)
+	if !budgetEntry(env.e, env.task.ID) {
+		t.Fatal("budget forgotten while the task is active")
 	}
-	if reqs, _ := env.p.snapshot(); len(reqs) != 0 {
-		t.Fatal("provider called by a late runner")
-	}
+	env.completeTask(t)
+	eventually(t, "budget entry removed after completion", func() bool { return !budgetEntry(env.e, env.task.ID) })
+	eventually(t, "tracker removed with the budget", func() bool { return !trackerEntry(env.e, env.task.ID) })
 }
 
 func TestRuntimeBudgetKeptWhileAgentRuns(t *testing.T) {
@@ -534,10 +555,7 @@ func TestRuntimeBudgetKeptWhileAgentRuns(t *testing.T) {
 	}
 	waitForSignal(t, r.started, "the runner to start")
 	env.trackBudget(t)
-	// Close the task underneath the running agent (its runner ignores that).
-	if err = env.e.DelegationCoordinator.CancelTask(t.Context(), env.task.ID); err != nil {
-		t.Fatal(err)
-	}
+	env.completeTask(t) // the lead finishes while the agent still runs
 	time.Sleep(5 * runtimeBudgetPoll)
 	if !budgetEntry(env.e, env.task.ID) {
 		t.Fatal("budget forgotten while a runtime agent is still running")
@@ -546,4 +564,37 @@ func TestRuntimeBudgetKeptWhileAgentRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "budget entry removed once the agent stopped", func() bool { return !budgetEntry(env.e, env.task.ID) })
+}
+
+func TestRuntimeBudgetOneTrackerPerTask(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	for i := 0; i < 3; i++ {
+		env.trackBudget(t) // one per lead turn
+	}
+	if n := trackerCount(env.e); n != 1 {
+		t.Fatalf("trackers = %d, want 1", n)
+	}
+	// After the task ends and the budget is forgotten, a fresh budget can be
+	// tracked again.
+	kept, _ := env.e.runtimeBudgets.Load(env.task.ID)
+	env.completeTask(t)
+	eventually(t, "tracker removed", func() bool { return !trackerEntry(env.e, env.task.ID) && !budgetEntry(env.e, env.task.ID) })
+	env.e.trackRuntimeBudget(env.task.ID, kept.(*delegation.Budget))
+	if !trackerEntry(env.e, env.task.ID) {
+		t.Fatal("tracker did not register again after forget")
+	}
+	eventually(t, "second tracker also cleans up", func() bool { return !budgetEntry(env.e, env.task.ID) && !trackerEntry(env.e, env.task.ID) })
+}
+
+// A forgotten budget on an ACTIVE task fails closed without calling the model.
+func TestRuntimeLateRunnerFailsClosedOnActiveTask(t *testing.T) {
+	env := runtimeRunnerFixture(t, runtimeV2On)
+	a := env.newRuntimeAgent(t, "late", readOnlyCaps, "")
+	env.e.forgetRuntimeBudget(env.task.ID)
+	if _, err := env.run(t, a); err == nil || !strings.Contains(err.Error(), "task budget unavailable") {
+		t.Fatalf("late runner err = %v, want task budget unavailable", err)
+	}
+	if reqs, _ := env.p.snapshot(); len(reqs) != 0 {
+		t.Fatal("provider called by a late runner")
+	}
 }
