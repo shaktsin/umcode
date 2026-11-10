@@ -19,8 +19,7 @@ import (
 )
 
 // restart builds a second engine on the same store and data directory, as
-// after a crash, with agents.runtime_v2 off: the integration reconcile must
-// not depend on the flag.
+// after a crash.
 func (env rvEnv) restart(t *testing.T) *Engine {
 	t.Helper()
 	e, _ := env.restartLogged(t)
@@ -49,7 +48,6 @@ func (l *lockedBuffer) String() string {
 func (env rvEnv) restartLogged(t *testing.T) (*Engine, *lockedBuffer) {
 	t.Helper()
 	cfg := *env.e.Cfg
-	cfg.Agents.RuntimeV2 = false
 	reg := llm.NewRegistry()
 	reg.Register(&delegationProvider{})
 	logs := &lockedBuffer{}

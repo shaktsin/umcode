@@ -602,7 +602,6 @@ func TestPendingPlanExpiresOnRestart(t *testing.T) {
 	cfg := config.Default(t.TempDir())
 	cfg.LLM.Provider = "claude"
 	cfg.LLM.Model = "deterministic"
-	runtimeV2On(cfg)
 	reg := llm.NewRegistry()
 	reg.Register(&delegationProvider{})
 	restarted, err := New(t.Context(), Options{Config: cfg, Store: env.e.Store, Secrets: secrets.NewMemoryStore(), LLMs: reg, DisableMCP: true, DisableScheduler: true})

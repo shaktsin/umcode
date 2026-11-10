@@ -113,8 +113,7 @@ func (e *Engine) publishRuntimeWorkflow(ctx context.Context, taskID string, w ru
 
 // planVerificationChecks calls the verification.plan tool and returns its
 // checks, every one not_run, plus a blocked Visual QA check when the planner
-// requires visual QA. Shared by the legacy integrate action and the runtime
-// head (planRuntimeVerification).
+// requires visual QA. Used for the runtime head (planRuntimeVerification).
 func (e *Engine) planVerificationChecks(ctx context.Context) ([]store.AgentWorkflowCheck, error) {
 	planner, ok := e.Tools.Get("verification.plan")
 	if !ok {
@@ -142,10 +141,9 @@ func (e *Engine) planVerificationChecks(ctx context.Context) ([]store.AgentWorkf
 }
 
 // verificationTarget is what a bracketed verification.run/browser.verify call
-// records into: the legacy implementer workflow, or a runtime task's
-// integration head (headTree is the tree its plan was made for).
+// records into: a runtime task's integration head (headTree is the tree its
+// plan was made for).
 type verificationTarget struct {
-	legacy   *store.AgentWorkflow
 	taskID   string
 	headTree string
 }
@@ -154,9 +152,9 @@ type verificationTarget struct {
 // model text nor tool arguments provide status evidence. Pre-integration and
 // child checks intentionally never create lead receipts.
 //
-// A task whose integration head row exists is a runtime task: that row is
-// written only by runtime integration (Plan 3), and it is exactly what gets
-// verified. Every other task keeps the legacy workflow target.
+// Only a task whose integration head row exists has something to verify:
+// that row is written only by runtime integration, and it is exactly what
+// gets verified.
 func (e *Engine) beginDelegationVerification(ctx context.Context, name string) (*verificationTarget, error) {
 	if name != "verification.run" && name != "browser.verify" {
 		return nil, nil
@@ -169,54 +167,16 @@ func (e *Engine) beginDelegationVerification(ctx context.Context, name string) (
 	if err == nil {
 		return e.beginRuntimeVerification(ctx, head)
 	}
-	if !errors.Is(err, store.ErrNotFound) {
-		return nil, err
-	}
-	w, err := e.Store.AgentWorkflow(ctx, task.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	if err = e.DelegationWorkspaceService.ValidateIntegrated(ctx, task.ID, w.ChildID, w.Revision); err != nil {
-		return nil, err
-	}
-	return &verificationTarget{legacy: &w}, nil
+	return nil, err
 }
 func (e *Engine) finishDelegationVerification(ctx context.Context, name string, target *verificationTarget, raw string) error {
 	if target == nil {
 		return nil
 	}
-	if target.legacy == nil {
-		return e.recordRuntimeVerification(ctx, target.taskID, target.headTree, name, raw)
-	}
-	w := target.legacy
-	e.delegationWorkflowMu.Lock()
-	defer e.delegationWorkflowMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := e.DelegationWorkspaceService.ValidateIntegrated(ctx, w.TaskID, w.ChildID, w.Revision); err != nil {
-		return err
-	}
-	current, err := e.Store.AgentWorkflow(ctx, w.TaskID)
-	if err != nil {
-		return err
-	}
-	if current.Revision != w.Revision {
-		return errors.New("verification revision changed")
-	}
-	if err = recordVerificationResults(current.Checks, name, raw); err != nil {
-		return err
-	}
-	if err = e.Store.SaveAgentWorkflow(ctx, current); err != nil {
-		return err
-	}
-	if task, readErr := e.Store.AgentTask(ctx, w.TaskID); readErr == nil {
-		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &task, Workflow: &current})
-	}
-	return nil
+	return e.recordRuntimeVerification(ctx, target.taskID, target.headTree, name, raw)
 }
 
 // recordVerificationResults applies the raw output of a real verification.run

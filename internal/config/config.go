@@ -79,9 +79,6 @@ type AgentsConfig struct {
 	MaxAgentIterations        int              `yaml:"max_agent_iterations"`
 	MaxOrchestratorIterations int              `yaml:"max_orchestrator_iterations"`
 	TokensPerMinute           int              `yaml:"tokens_per_minute"`
-	// RuntimeV2 replaces the legacy agent.* delegation tools with the agent
-	// runtime tools. Off by default while the runtime is dark (spec section 6).
-	RuntimeV2 bool `yaml:"runtime_v2"`
 }
 
 type WorkspaceACL struct {

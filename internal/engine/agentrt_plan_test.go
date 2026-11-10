@@ -29,12 +29,12 @@ type planEnv struct {
 	endTurn func()
 }
 
-// planFixture admits a runtime_v2 delegation task without any plan and
+// planFixture admits a delegation task without any plan and
 // returns the lead's tool context for it. Confinement is faked: a host
 // sandbox whose read-only self-check passes.
 func planFixture(t *testing.T) planEnv {
 	t.Helper()
-	e, th, root, p := delegationFixtureWith(t, runtimeV2On)
+	e, th, root, p := delegationFixture(t)
 	seams := &shellSeams{}
 	seams.install(e, fakeSandbox{}, nil)
 	activation, err := e.PrepareDelegation(t.Context(), th.ID)
@@ -55,7 +55,7 @@ func (env planEnv) tool(t *testing.T) tools.Tool {
 	t.Helper()
 	tool, ok := env.e.Tools.Get("agent.propose_plan")
 	if !ok {
-		t.Fatal("agent.propose_plan not registered with runtime_v2 on")
+		t.Fatal("agent.propose_plan not registered")
 	}
 	return tool
 }

@@ -20,7 +20,7 @@ import (
 // (spawned by the lead) with its own child C, and a sibling S of P.
 func runtimeCancelTree(t *testing.T) (env runtimeRunnerEnv, parent, child, sibling string) {
 	t.Helper()
-	env = runtimeRunnerFixture(t, runtimeV2On)
+	env = runtimeRunnerFixture(t)
 	started := make(chan struct{}, 8)
 	env.p.script = blockUntilCancelled(started)
 	env.approvePlan(t, protocol.DefaultPlanLimits(),
@@ -246,7 +246,7 @@ func TestReadDelegationFileRuntimeAgent(t *testing.T) {
 // runner recorded it as it finished, and the cancel won the race) reports the
 // changed integration state; the task goes on.
 func TestCancelDelegationRuntimeAgentReportsSettledRevision(t *testing.T) {
-	env := runtimeRunnerFixture(t, runtimeV2On)
+	env := runtimeRunnerFixture(t)
 	a := env.newRuntimeAgent(t, "writer", protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellNone}, "")
 	if _, err := env.e.Store.SubmitAgentRevision(t.Context(), store.AgentRevision{TaskID: env.task.ID, AgentID: a.ID, WorkspaceID: "ws-writer",
 		BaseRevision: env.task.BaseRevision, ResultRevision: strings.Repeat("a", 40), ResultTree: strings.Repeat("b", 40), ChangedPaths: []string{"x.go"}}); err != nil {

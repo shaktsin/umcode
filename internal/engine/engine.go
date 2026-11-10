@@ -93,12 +93,10 @@ type Engine struct {
 	toolReducerFailures     atomic.Int64 // recovered tool-result reducer panics
 	reduceHook              func()       // instance-local panic test seam; set before use
 
-	delegationWorkflowMu  sync.Mutex
-	DelegationCoordinator *delegation.Coordinator
-	// The default uses owned Git checkouts. Tests may inject an explicit resolver.
-	DelegationWorkspaces       WorkspaceResolver
+	delegationWorkflowMu       sync.Mutex
+	DelegationCoordinator      *delegation.Coordinator
 	DelegationWorkspaceService *delegation.WorkspaceService
-	// AgentRuntime is set only when agents.runtime_v2 is on.
+	// AgentRuntime runs the plan-bound runtime agents (the only delegation path).
 	AgentRuntime *agentrt.Runtime
 	// RuntimeWorkspaces gives runtime agents their checkouts. Nil uses the
 	// owned Git checkouts of DelegationWorkspaceService.
@@ -197,12 +195,11 @@ type activeTurn struct {
 
 // Options configures New.
 type Options struct {
-	DelegationWorkspaces WorkspaceResolver
-	Config               *config.Config
-	Store                *store.Store
-	Secrets              secrets.Store
-	LLMs                 *llm.Registry // nil = built-in adapters
-	Logger               *slog.Logger
+	Config  *config.Config
+	Store   *store.Store
+	Secrets secrets.Store
+	LLMs    *llm.Registry // nil = built-in adapters
+	Logger  *slog.Logger
 	// DisableScheduler turns off scheduled task runs (tests, secondary engines).
 	DisableScheduler bool
 	// DisableMCP skips starting MCP servers.
@@ -280,23 +277,10 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		approvals: map[string]chan bool{}, budgetWarned: map[string]string{},
 		turnWaiters: map[string]chan protocol.Turn{},
 	}
-	e.DelegationWorkspaceService = delegation.NewWorkspaceService(o.Store, e.Worktrees, e.validateDelegationParent, o.Store.AgentReviewEligible)
+	e.DelegationWorkspaceService = delegation.NewWorkspaceService(o.Store, e.Worktrees, e.validateDelegationParent)
 	e.DelegationWorkspaceService.WithEvents(e.delegationRuntimeEvent)
-	e.DelegationWorkspaces = o.DelegationWorkspaces
-	if e.DelegationWorkspaces == nil {
-		e.DelegationWorkspaces = managedChildWorkspaces{service: e.DelegationWorkspaceService}
-	}
-	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store, delegation.WithEventSink(e.Bus), delegation.WithRunner(workflowRunner{engine: e}), delegation.WithWorkflowPolicy(e.delegationWorkflowPolicy))
-	for _, tool := range tools.NewAgentWorkflowTools(e.delegationWorkflowCall) {
-		reg.Add(tool)
-	}
-	if o.Config.Agents.RuntimeV2 {
-		e.registerAgentRuntime(reg, base)
-	} else {
-		for _, tool := range tools.NewAgentTools(e.DelegationCoordinator, e.authorizeDelegationTool) {
-			reg.Add(tool)
-		}
-	}
+	e.DelegationCoordinator = delegation.NewCoordinator(base, o.Store)
+	e.registerAgentRuntime(reg, base)
 	e.Work.StartGC(base, e.storageRetention) // best-effort, background, never prompts
 	e.Creds.OnSignIn = func(r protocol.ChatGPTSignInResult) { e.Bus.PublishAdmin(protocol.NotifyChatGPTSignIn, r) }
 	e.Router = router.New(o.Store, e.Creds, cat, o.LLMs, o.Config, o.Logger)
@@ -319,16 +303,14 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 		return nil, err
 	}
 	// Like ReconcileAgentChildren: reconcile stored runtime agent statuses only,
-	// never run agents. Store-only and cheap, so it runs whether or not
-	// agents.runtime_v2 is on (agents left by an earlier flag-on run are still
-	// interrupted); it is what AgentRuntime.Recover does.
+	// never run agents (it is what AgentRuntime.Recover does).
 	if err := o.Store.ReconcileRuntimeAgents(ctx); err != nil {
 		return nil, err
 	}
-	// Likewise regardless of the flag: settle accepts a crash left between
+	// Likewise: settle accepts a crash left between
 	// "intent recorded" and "apply finished". Never applies anything.
 	e.reconcileRuntimeIntegrations(ctx)
-	// Likewise regardless of the flag: a pending agent.suggest card does not
+	// Likewise: a pending agent.suggest card does not
 	// survive a restart. Logged, never fatal.
 	e.expireAgentSuggestions(ctx)
 	if n, err := o.Store.MarkStaleTurns(ctx); err != nil {
@@ -1106,16 +1088,14 @@ func (e *Engine) systemPromptLayers(ctx context.Context, userText string, proj *
 	if x := childExecutionFrom(ctx); x != nil && x.runtime != nil {
 		return []promptLayer{{Name: layerCore, Text: runtimeAgentPrompt(x.runtime.agent, x.workspace.Root)}}
 	}
-	if x := childExecutionFrom(ctx); x != nil {
-		review := ""
-		if x.child.Role == protocol.AgentRoleReviewer {
-			review = " You may submit agent.review_report for a structured review with findings and exact revision " + x.workspace.Revision + ". Clearly attribute your review conclusions. "
-		}
-		return []promptLayer{{Name: layerCore, Text: review + "You are a scoped UMCode child agent. Complete only the supplied assignment and acceptance criteria. The supplied guidance and references are your context. Read applicable nested UMCODE.md and explicitly requested skills through scoped read tools. No delegation or activation is permitted. Report the result, changed paths, findings and actual verification evidence; never claim blocked checks passed. Reviewer command, script, hook and plugin execution is blocked because a read-only command sandbox is unavailable. All file access is confined to the owned checkout: " + x.workspace.Root}}
+	if childExecutionFrom(ctx) != nil {
+		// Every execution is a runtime agent; anything else gets no prompt
+		// of its own and its tools fail closed (childToolAllowed).
+		return nil
 	}
 	var layers []promptLayer
 	if _, ok := DelegationTaskFromContext(ctx); ok {
-		layers = append(layers, promptLayer{Name: "delegation_workflow", Text: delegationWorkflowPrompt})
+		layers = append(layers, promptLayer{Name: "delegation_workflow", Text: delegationLeadPrompt})
 	}
 	var b strings.Builder
 	flush := func(name string) {

@@ -6,12 +6,11 @@ import (
 	"time"
 
 	"github.com/shaktsin/umcode/internal/client"
-	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
 func TestPlanRespondAdminOnly(t *testing.T) {
-	h := newHarness(t, func(c *config.Config) { c.Agents.RuntimeV2 = true })
+	h := newHarness(t, nil)
 	var th protocol.Thread
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID, Title: "plan"}, &th)
 	plan := protocol.AgentPlan{ID: "plan-admin", ThreadID: th.ID, State: protocol.PlanProposed, Limits: protocol.DefaultPlanLimits(), Agents: []protocol.PlanAgent{

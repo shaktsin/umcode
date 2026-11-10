@@ -11,15 +11,19 @@ import (
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
+// delegationLeadPrompt is the system prompt layer of a lead turn admitted for
+// delegation. The lead decides whether and how to use agents; authority comes
+// only from the plan the user approves, never from what an agent is called.
+const delegationLeadPrompt = `Agents are enabled for this task. You decide whether to use them, what each one does, what to check and when the user's request is satisfied. To use agents, propose a plan with agent.propose_plan and wait for the user's decision; each agent gets only the capabilities its approved plan entry grants. Spawn approved entries with agent.spawn, giving each focused requirements and relevant file references; its context is fresh. Accept or reject submitted revisions with agent.integrate, run the planned verification checks in the integrated checkout, and finish with agent.integrate {"action":"complete"} only after the checks actually passed. Agent findings and check results are evidence for your judgment, not engine certification. Workspace isolation, permissions, cancellation and the shared task budget apply. Never claim a blocked check passed.`
+
 // suggestStopMessage is what agent.suggest tells the model: the suggesting
 // turn ends, and the user's answer arrives as a new turn.
 const suggestStopMessage = "Stop now: the user decides whether to enable agents. Do not call agent.* tools or continue the task in this turn."
 
-// suggestOnlyTool reports agent.suggest while the agent runtime is on. Unlike
-// the other agent.* tools it is offered only in turns that are NOT admitted
-// for delegation, so it is exempt from the "admitted task required" gate
-// (and gated the other way round in permittedToolFor). With the runtime off
-// it is not registered and every agent.* name keeps the legacy gate.
+// suggestOnlyTool reports agent.suggest. Unlike the other agent.* tools it is
+// offered only in turns that are NOT admitted for delegation, so it is exempt
+// from the "admitted task required" gate (and gated the other way round in
+// permittedToolFor).
 func (e *Engine) suggestOnlyTool(name string) bool {
 	return e.AgentRuntime != nil && tools.FromWire(name) == "agent.suggest"
 }
@@ -27,14 +31,14 @@ func (e *Engine) suggestOnlyTool(name string) bool {
 // suggestAgents records the lead's agent.suggest card. It grants nothing:
 // delegation is still enabled by the app before a new turn starts. The rules
 // are checked in this order and every refusal names its rule: lead only,
-// runtime on, turn not admitted, committed Git project, no active delegation
+// runtime available, turn not admitted, committed Git project, no active delegation
 // task in the chat, one per user message, not after a decline.
 func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, error) {
 	if id, ok := runtimeCaller(ctx); !ok || id != "" {
 		return "", errors.New("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents")
 	}
 	if e.AgentRuntime == nil {
-		return "", errors.New("agent.suggest refused: it needs the agent runtime (agents.runtime_v2)")
+		return "", errors.New("agent.suggest refused: the agent runtime is unavailable")
 	}
 	if _, admitted := DelegationTaskFromContext(ctx); admitted {
 		return "", errors.New("agent.suggest refused: this turn is already admitted for delegation; agents are enabled, so do not suggest them")
@@ -235,7 +239,7 @@ func (e *Engine) revokeDelegationToken(token string) {
 	e.mu.Unlock()
 }
 
-// expireAgentSuggestions runs at startup, whatever agents.runtime_v2 says: a
+// expireAgentSuggestions runs at startup: a
 // suggestion still pending lost its card with the previous engine, so it is
 // shown stale (expired) and nothing starts. Failure is logged, never fatal.
 func (e *Engine) expireAgentSuggestions(ctx context.Context) {

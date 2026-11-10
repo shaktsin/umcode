@@ -363,19 +363,9 @@ func TestRunnerCancellationEndsPromptly(t *testing.T) {
 	if got.State != protocol.AgentStateCancelled {
 		t.Fatalf("state = %q", got.State)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		env.e.mu.Lock()
-		running := len(env.e.activeTurns)
-		env.e.mu.Unlock()
-		if running == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("agent turn stayed alive after cancellation")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	// The lead's admitted turn (childExecutionTask) stays live; only the
+	// agent's own turn must end.
+	waitNoActiveTurns(t, env.e, 1)
 	if time.Since(start) > 10*time.Second {
 		t.Fatal("cancellation was not prompt")
 	}

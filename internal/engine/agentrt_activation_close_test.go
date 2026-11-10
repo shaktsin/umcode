@@ -31,7 +31,7 @@ func (x *activationE2E) latestTask(t *testing.T) protocol.AgentTask {
 }
 
 func TestAdmittedTurnWithoutPlanClosesTask(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	token := x.enable(t, x.suggestTurn(t))
 	// The admitted turn: the lead answers without agent.propose_plan.
 	x.setLead("just answer")
@@ -52,7 +52,7 @@ func TestAdmittedTurnWithoutPlanClosesTask(t *testing.T) {
 }
 
 func TestAdmittedTurnWithPendingPlanKeepsTask(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	token := x.enable(t, x.suggestTurn(t))
 	_, wait := x.proposeTurn(t, token, `{"agents":[`+planEntry("worker", "read A", "read", "")+`]}`)
 	_, card := x.pendingCard(t, x.e)
@@ -75,7 +75,7 @@ func TestAdmittedTurnWithPendingPlanKeepsTask(t *testing.T) {
 }
 
 func TestRevisedPlanTurnEndKeepsTask(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	token := x.enable(t, x.suggestTurn(t))
 	// One proposal only: after the revise the lead ends its turn.
 	_, wait := x.proposeTurn(t, token, `{"agents":[`+planEntry("worker", "change A", "read-write", "")+`]}`)
@@ -94,7 +94,7 @@ func TestRevisedPlanTurnEndKeepsTask(t *testing.T) {
 // error) in agent/plan/respond; the waiting agent.propose_plan then binds it
 // and that successful bind announces agent/plan/updated approved, once.
 func TestApprovedPlanPublishedWhenBindFailsOnce(t *testing.T) {
-	x := newActivationE2E(t, runtimeV2On)
+	x := newActivationE2E(t, nil)
 	sub := &recordingSub{}
 	x.e.Bus.Add(sub)
 	defer x.e.Bus.Remove(sub.ID())

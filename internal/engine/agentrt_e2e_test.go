@@ -45,7 +45,7 @@ type runtimeE2E struct {
 
 const e2eBase = "package x\n\nfunc F() int { return 1 }\n"
 
-// newRuntimeE2E builds an engine with runtime_v2 on over a git project whose
+// newRuntimeE2E builds an engine over a git project whose
 // base holds x.go, an approved plan with scout {read, read-only} and fixer
 // {read-write, read-write} (plus helper {read, none}), fake confinement
 // signals so shells are offered, and the scripted model.
@@ -62,7 +62,7 @@ func newRuntimeE2EWith(t *testing.T, base func(root string), script ...fakeStep)
 }
 
 // runtimeE2EOpts customizes newRuntimeE2EOpts: base adds files before the
-// base commit, configure adjusts the config (runtime_v2 is always on),
+// base commit, configure adjusts the config,
 // limits and entries replace the default plan (maxConcurrent 2; scout,
 // fixer, helper).
 type runtimeE2EOpts struct {
@@ -75,7 +75,6 @@ type runtimeE2EOpts struct {
 func newRuntimeE2EOpts(t *testing.T, o runtimeE2EOpts, script ...fakeStep) *runtimeE2E {
 	t.Helper()
 	e, th, root, _ := delegationFixtureWith(t, func(c *config.Config) {
-		runtimeV2On(c)
 		if o.configure != nil {
 			o.configure(c)
 		}

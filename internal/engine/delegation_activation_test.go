@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -20,7 +19,6 @@ import (
 	"github.com/shaktsin/umcode/internal/skills"
 	"github.com/shaktsin/umcode/internal/store"
 	"github.com/shaktsin/umcode/internal/teststore"
-	"github.com/shaktsin/umcode/internal/tools"
 )
 
 type delegationProvider struct {
@@ -202,6 +200,53 @@ func liveAdmittedTurn(t *testing.T, e *Engine, p protocol.TurnStartParams) (prot
 	return tr, finish
 }
 
+// approvePlanFor binds an approved one-entry plan to task, as the user's
+// plan approval does, so the runtime task stays open across follow-up turns
+// (a runtime task whose admitted turn ends without a plan is closed).
+func approvePlanFor(t *testing.T, e *Engine, task protocol.AgentTask) {
+	t.Helper()
+	if err := approvePlan(context.Background(), e, task); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func approvePlan(ctx context.Context, e *Engine, task protocol.AgentTask) error {
+	plan := protocol.AgentPlan{ID: store.NewID("plan"), ThreadID: task.ThreadID, Limits: protocol.DefaultPlanLimits(),
+		Agents: []protocol.PlanAgent{{Name: "worker", Purpose: "investigate", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone}}}}
+	if err := e.Store.SaveAgentPlan(ctx, plan); err != nil {
+		return err
+	}
+	return e.Store.ApproveAgentPlan(ctx, plan.ID, task.ID)
+}
+
+// plannedDelegationTurn runs the admitted turn p starts like delegationTurn,
+// but approves a plan for its task while the turn is live, so the task stays
+// open for the follow-up turns of the test. It returns the turn and task.
+func plannedDelegationTurn(t *testing.T, e *Engine, p protocol.TurnStartParams) (protocol.Turn, protocol.AgentTask) {
+	t.Helper()
+	tr, finish := liveAdmittedTurn(t, e, p)
+	task, err := e.Store.AgentTaskForRootTurn(t.Context(), tr.ThreadID, tr.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvePlanFor(t, e, task)
+	finish()
+	return tr, task
+}
+
+// plannedTask admits a delegation task in th through a finished admitted
+// turn with an approved plan (plannedDelegationTurn): unlike
+// childExecutionTask no lead turn stays running.
+func plannedTask(t *testing.T, e *Engine, th protocol.Thread) protocol.AgentTask {
+	t.Helper()
+	token, err := e.PrepareDelegation(t.Context(), th.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, task := plannedDelegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "parent private unrelated transcript", DelegationActivationToken: token.ActivationToken})
+	return task
+}
+
 // Removing explicit request validation, token consumption or runtime context propagation must fail this test.
 func TestDelegationAdmission(t *testing.T) {
 	e, th, _, p := delegationFixture(t)
@@ -233,7 +278,7 @@ func TestDelegationAdmission(t *testing.T) {
 	if err = e.Store.DB.QueryRow(`SELECT count(*) FROM agent_tasks`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("preparation created task: %d %v", count, err)
 	}
-	tr := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: prepared.ActivationToken})
+	tr, _ := plannedDelegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: prepared.ActivationToken})
 	id := p.last()
 	if id == "" {
 		t.Fatal("explicit activation missing in real execution")
@@ -634,7 +679,7 @@ func TestDelegationAdmissionFailedFollowupPreservesTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: token.ActivationToken})
+	plannedDelegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: token.ActivationToken})
 	id := provider.last()
 	original, err := e.Store.AgentTask(t.Context(), id)
 	if err != nil {
@@ -662,11 +707,8 @@ func TestDelegationAdmissionFailedFollowupPreservesTask(t *testing.T) {
 
 // Admission must bind the existing active parent checkout, independently of
 // the registered project root; workspace-mode changes revoke that binding.
-func TestDelegationWorkspaceParentAdmission(t *testing.T) {
+func TestRuntimeWorkspaceParentAdmission(t *testing.T) {
 	e, th, root, _ := delegationFixture(t)
-	if e.DelegationWorkspaces == nil {
-		t.Fatal("default real resolver missing")
-	}
 	if err := e.Store.UpdateThread(t.Context(), th.ID, map[string]any{"workspace_mode": "worktree"}); err != nil {
 		t.Fatal(err)
 	}
@@ -686,19 +728,18 @@ func TestDelegationWorkspaceParentAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: token.ActivationToken})
-	task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, tr.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, task := plannedDelegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "implement", DelegationActivationToken: token.ActivationToken})
 	if !pathutil.SameFolder(task.BaseRoot, root) || !pathutil.SameFolder(task.ParentRoot, ws.Path) || task.BaseRevision != delegationGit(t, ws.Path, "rev-parse", "HEAD") {
 		t.Fatalf("wrong parent contract %+v", task)
 	}
-	child, err := e.Store.CreateAgentChild(t.Context(), protocol.AgentChild{TaskID: task.ID, Role: protocol.AgentRoleImplementer, Assignment: protocol.AgentAssignment{Prompt: "edit"}}, "workspace-call")
+	agent, err := e.Store.CreateRuntimeAgent(t.Context(), protocol.RuntimeAgent{TaskID: task.ID, Name: "worker", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellNone}}, "workspace-call")
 	if err != nil {
 		t.Fatal(err)
 	}
-	isolated, err := e.DelegationWorkspaces.Resolve(t.Context(), task, child)
+	if _, err = e.Store.EnsureRuntimeAgentExecution(t.Context(), agent); err != nil {
+		t.Fatal(err)
+	}
+	isolated, err := e.runtimeWorkspaces().ResolveRuntime(t.Context(), task, agent, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,53 +749,8 @@ func TestDelegationWorkspaceParentAdmission(t *testing.T) {
 	if err = e.Store.UpdateThread(t.Context(), th.ID, map[string]any{"workspace_mode": "local"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.DelegationWorkspaces.Resolve(t.Context(), task, child); err == nil {
+	if _, err = e.runtimeWorkspaces().ResolveRuntime(t.Context(), task, agent, true); err == nil {
 		t.Fatal("changed parent mode accepted")
-	}
-}
-
-func TestDelegationWorkspaceDefaultRunner(t *testing.T) {
-	e, th, parent, _ := delegationFixture(t)
-	task := childExecutionTask(t, e, th)
-	e.LLMs.Register(&budgetProvider{eventsFor: func(n int) []llm.Event {
-		if n == 1 {
-			return []llm.Event{{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "write", Name: tools.ToWire("file.write"), Args: json.RawMessage(`{"path":"generated","content":"real owned result"}`)}}, {Type: llm.EventDone}}
-		}
-		return []llm.Event{{Type: llm.EventTextDelta, Text: "completed"}, {Type: llm.EventDone}}
-	}})
-	child, err := e.DelegationCoordinator.Spawn(t.Context(), task.ID, "real-owned", protocol.AgentRoleImplementer, protocol.AgentAssignment{Prompt: "write generated"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
-	defer cancel()
-	children, err := e.DelegationCoordinator.Wait(ctx, task.ID, []string{child.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := children[0]
-	if got.State != protocol.AgentStateCompleted || got.Revision == "" || got.WorkspaceID == "" || len(got.Result.ChangedPaths) != 1 || got.Result.ChangedPaths[0] != "generated" {
-		t.Fatalf("real finalization missing %+v", got)
-	}
-	owned, err := e.Store.AgentWorkspace(t.Context(), got.WorkspaceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if owned.ResultRevision != got.Revision || owned.ResultTree == "" || delegationGit(t, owned.Root, "rev-parse", "HEAD") != got.Revision {
-		t.Fatalf("submitted checkout mismatch %+v", owned)
-	}
-	if b, err := os.ReadFile(filepath.Join(owned.Root, "generated")); err != nil || string(b) != "real owned result" {
-		t.Fatalf("owned output %q %v", b, err)
-	}
-	if _, err = os.Stat(filepath.Join(parent, "generated")); !os.IsNotExist(err) {
-		t.Fatal("real child changed parent")
-	}
-	execution, err := e.Store.AgentExecution(t.Context(), task.ID, child.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = e.Store.GetThread(t.Context(), execution.ThreadID); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("owned execution not hidden: %v", err)
 	}
 }
 
@@ -765,7 +761,7 @@ func (*delegationProvider) RuntimeCapacity(context.Context, llm.Credential, stri
 // delegation/enable lifts a decline only together with the token it issues;
 // a refused enable (dirty checkout) clears nothing.
 func TestDelegationEnableClearsDeclinesOnlyWithToken(t *testing.T) {
-	e, th, root, _ := delegationFixtureWith(t, runtimeV2On)
+	e, th, root, _ := delegationFixture(t)
 	sug, err := e.Store.CreateAgentSuggestion(t.Context(), store.AgentSuggestion{ThreadID: th.ID, TurnID: "t1"})
 	if err != nil {
 		t.Fatal(err)

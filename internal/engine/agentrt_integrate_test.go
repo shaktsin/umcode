@@ -424,7 +424,7 @@ const twoWritersBase = "package a\n\nfunc A() int { return 0 }\n"
 func TestEndToEndTwoWritersOneConflict(t *testing.T) {
 	const fromAlpha = "package a\n\nfunc A() int { return 1 }\n"
 	const fromBeta = "package a\n\nfunc A() int { return 2 }\n"
-	e, th, root, _ := delegationFixtureWith(t, runtimeV2On)
+	e, th, root, _ := delegationFixture(t)
 	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(twoWritersBase), 0o644); err != nil {
 		t.Fatal(err)
 	}

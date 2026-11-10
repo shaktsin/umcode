@@ -4,13 +4,12 @@ import (
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/client"
-	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
 )
 
 func TestSuggestionRespondAdminOnly(t *testing.T) {
-	h := newHarness(t, func(c *config.Config) { c.Agents.RuntimeV2 = true })
+	h := newHarness(t, nil)
 	commitDelegationFixture(t, h)
 	h.addKey("claude", "test", "fake")
 	var th protocol.Thread
@@ -49,7 +48,7 @@ func TestSuggestionRespondAdminOnly(t *testing.T) {
 
 // agent/suggestion/get and agent/plan/get are app-only reads.
 func TestActivationGetAdminOnly(t *testing.T) {
-	h := newHarness(t, func(c *config.Config) { c.Agents.RuntimeV2 = true })
+	h := newHarness(t, nil)
 	var th protocol.Thread
 	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID, Title: "get"}, &th)
 	sug, err := h.eng.Store.CreateAgentSuggestion(h.ctx, store.AgentSuggestion{ThreadID: th.ID, TurnID: "turn-1", Reason: "parallel work"})

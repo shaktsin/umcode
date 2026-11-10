@@ -55,7 +55,7 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 		return "", errors.New("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities")
 	}
 	if e.AgentRuntime == nil {
-		return "", errors.New("agent.propose_plan refused: it needs the agent runtime (agents.runtime_v2)")
+		return "", errors.New("agent.propose_plan refused: the agent runtime is unavailable")
 	}
 	if err := tools.RequireWritable(ctx); err != nil {
 		return "", fmt.Errorf("agent.propose_plan needs writable tools (not available in read-only or plan mode): %w", err)
@@ -871,7 +871,7 @@ func clampPlanLimits(l protocol.PlanLimits) (protocol.PlanLimits, error) {
 // available or with an available fallback in the pool).
 func (e *Engine) validatePlanApproval(ctx context.Context, plan protocol.AgentPlan, task protocol.AgentTask, p protocol.AgentPlanRespondParams) (protocol.AgentPlan, error) {
 	if e.AgentRuntime == nil {
-		return plan, errors.New("plan approval needs the agent runtime (agents.runtime_v2)")
+		return plan, errors.New("plan approval refused: the agent runtime is unavailable")
 	}
 	agents := append([]protocol.PlanAgent(nil), plan.Agents...)
 	if len(p.Drop) > 0 {

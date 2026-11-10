@@ -26,7 +26,7 @@ type suggestEnv struct {
 
 func suggestFixture(t *testing.T) suggestEnv {
 	t.Helper()
-	e, th, root, p := delegationFixtureWith(t, runtimeV2On)
+	e, th, root, p := delegationFixture(t)
 	return suggestEnv{e: e, th: th, root: root, p: p}
 }
 
@@ -42,7 +42,7 @@ func (env suggestEnv) suggest(t *testing.T, ctx context.Context) (string, error)
 	t.Helper()
 	tool, ok := env.e.Tools.Get("agent.suggest")
 	if !ok {
-		t.Fatal("agent.suggest not registered with runtime_v2 on")
+		t.Fatal("agent.suggest not registered")
 	}
 	return tool.Call(ctx, json.RawMessage(`{"reason":"three independent modules can be built in parallel"}`))
 }
@@ -115,17 +115,6 @@ func TestSuggestToolLeadOnly(t *testing.T) {
 	if n := env.count(t); n != 1 {
 		t.Fatalf("lead suggestion stored %d", n)
 	}
-}
-
-func TestSuggestRequiresRuntimeV2(t *testing.T) {
-	e, th, root, _ := delegationFixture(t)
-	if _, ok := e.Tools.Get("agent.suggest"); ok {
-		t.Fatal("agent.suggest registered with runtime_v2 off")
-	}
-	turn := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "hello"})
-	ctx := tools.WithScope(context.WithValue(t.Context(), executionTurnKey{}, turn), &tools.Scope{ThreadID: th.ID, ProjectID: th.ProjectID, Root: root})
-	_, err := e.suggestAgents(ctx, "parallel work")
-	requireRefused(t, err, "agents.runtime_v2")
 }
 
 func TestSuggestOncePerTurn(t *testing.T) {
@@ -215,7 +204,7 @@ func TestSuggestRefusedWhileDelegationTaskActive(t *testing.T) {
 }
 
 func TestSuggestNotListedWhenAdmitted(t *testing.T) {
-	e, _, turn, _, admitted := runtimeV2Admitted(t)
+	e, _, turn, _, admitted := runtimeAdmitted(t)
 	tool, ok := e.Tools.Get("agent.suggest")
 	if !ok {
 		t.Fatal("agent.suggest not registered")

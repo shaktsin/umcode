@@ -18,7 +18,7 @@ import (
 // answers "done", except a plan entry named "fixer", which writes x.go first.
 func newReadModelE2E(t *testing.T, entries ...protocol.PlanAgent) *runtimeE2E {
 	t.Helper()
-	e, th, root, _ := delegationFixtureWith(t, runtimeV2On)
+	e, th, root, _ := delegationFixture(t)
 	if err := os.WriteFile(filepath.Join(root, "x.go"), []byte(e2eBase), 0o644); err != nil {
 		t.Fatal(err)
 	}

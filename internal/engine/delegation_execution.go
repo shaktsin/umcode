@@ -2,16 +2,12 @@ package engine
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
-	"time"
 
-	"github.com/shaktsin/umcode/internal/delegation"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/memory"
 	"github.com/shaktsin/umcode/internal/pathutil"
@@ -20,30 +16,20 @@ import (
 	"github.com/shaktsin/umcode/internal/store"
 )
 
-// WorkspaceResolver is implemented by the managed delegation workspace owner.
-// Resolve must verify durable task BaseRoot/BaseRevision and child.WorkspaceID,
-// return an exclusive canonical checkout, and preserve it on failure/cancellation.
-// A reviewer receives a distinct snapshot of the implementation revision.
-type WorkspaceResolver interface {
-	Resolve(context.Context, protocol.AgentTask, protocol.AgentChild) (ChildWorkspace, error)
-}
+// ChildWorkspace is the isolated checkout an agent execution works in.
 type ChildWorkspace struct {
 	ID, Root, Revision string
 	ChangedPaths       []string
 }
 
-// ChildWorkspaceFinalizer snapshots the stopped execution. Task6's managed
-// resolver implements this; a successful Resolve revision is only its input.
-// Finalize must retain the workspace on error and honor its bounded context.
-type ChildWorkspaceFinalizer interface {
-	Finalize(context.Context, protocol.AgentTask, protocol.AgentChild, ChildWorkspace) (ChildWorkspace, error)
-}
-
 type childExecution struct {
-	// runtime is set for a runtime agent's execution; its authority comes
-	// only from the agent's capabilities, never from child.Role.
-	runtime       *runtimeExecution
-	task          protocol.AgentTask
+	// runtime is the runtime agent this execution runs; its authority comes
+	// only from the agent's capabilities. An execution without it is refused
+	// every tool (childToolAllowed).
+	runtime *runtimeExecution
+	task    protocol.AgentTask
+	// child carries the agent's identity (child.ID is the agent ID, used to
+	// attribute approvals); it grants nothing.
 	child         protocol.AgentChild
 	workspace     ChildWorkspace
 	selection     candidateSet
@@ -58,129 +44,6 @@ func withChildExecution(ctx context.Context, x *childExecution) context.Context 
 func childExecutionFrom(ctx context.Context) *childExecution {
 	x, _ := ctx.Value(childExecutionKey{}).(*childExecution)
 	return x
-}
-
-type childRunner struct{ engine *Engine }
-
-func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child protocol.AgentChild) (result protocol.AgentResult, err error) {
-	e := r.engine
-	if e.DelegationWorkspaces == nil {
-		return result, errors.New("isolated child workspace resolver unavailable")
-	}
-	if delegation.BudgetFromContext(ctx) == nil {
-		return result, errors.New("child shared task budget unavailable")
-	}
-	ws, err := e.DelegationWorkspaces.Resolve(ctx, task, child)
-	if err != nil {
-		return result, err
-	}
-	if !isolatedChildRoot(task, ws.ID, ws.Root) {
-		return result, errors.New("child workspace must be an isolated owned checkout outside the parent")
-	}
-	ws.Root = pathutil.Resolved(ws.Root)
-	info, err := os.Stat(ws.Root)
-	if err != nil || !info.IsDir() {
-		return result, errors.New("child workspace is unavailable")
-	}
-	parent, proj, err := e.childProjectBase(ctx, task)
-	if err != nil {
-		return result, err
-	}
-	modelScope, err := e.Store.AgentModelScope(ctx, task.ID)
-	if err != nil {
-		return result, err
-	}
-	pick := candidateSet{provider: modelScope.Provider, model: modelScope.Model, poolID: modelScope.PoolID, strategy: modelScope.Strategy, explicit: modelScope.Explicit, candidates: modelScope.Candidates}
-	// Worker preferences may reorder the inherited approved candidates, never add one.
-	preference := e.Cfg.Models.Roles["worker"]
-	if preference.Model != "" || preference.Provider != "" {
-		found := -1
-		for i, m := range pick.candidates {
-			if (preference.Model == "" || m.Model == preference.Model) && (preference.Provider == "" || preference.Provider == m.Provider) {
-				found = i
-				break
-			}
-		}
-		if found < 0 {
-			return result, errors.New("configured worker model is outside the parent's approved model set")
-		}
-		chosen := pick.candidates[found]
-		pick.candidates = append([]protocol.ConfiguredModel{chosen}, append(append([]protocol.ConfiguredModel{}, pick.candidates[:found]...), pick.candidates[found+1:]...)...)
-		pick.provider, pick.model, pick.explicit = chosen.Provider, chosen.Model, true
-	}
-	guidance, err := e.childGuidance(ctx, proj, ws.Root, child.ID, child.Assignment.Prompt)
-	if err != nil {
-		return result, err
-	}
-	builder := delegation.ScopedContextBuilder{Root: ws.Root, Guidance: guidance}
-	supplied, err := builder.Build(ctx, task, child)
-	if err != nil {
-		return result, err
-	}
-	execution, err := e.Store.EnsureAgentExecution(ctx, task, child, parent, supplied)
-	if err != nil {
-		return result, err
-	}
-	if err = e.updateChildExecution(ctx, task.ID, child.ID, func(c *protocol.AgentChild) { c.WorkspaceID = ws.ID; c.Revision = "" }); err != nil {
-		return result, err
-	}
-	defer func() {
-		if finalizer, ok := e.DelegationWorkspaces.(ChildWorkspaceFinalizer); ok {
-			fail := func(cause error) {
-				result.Blocker = fmt.Sprintf("workspace finalization failed: %v", cause)
-				err = errors.Join(err, cause)
-			}
-			finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			latest, readErr := e.Store.AgentChild(finalCtx, task.ID, child.ID)
-			if readErr != nil {
-				fail(readErr)
-				return
-			}
-			final, finalErr := finalizer.Finalize(finalCtx, task, latest, ws)
-			if finalErr == nil && (final.ID != ws.ID || !pathutil.SameFolder(final.Root, ws.Root) || final.Revision == "") {
-				finalErr = errors.New("child finalizer returned invalid workspace or missing final revision")
-			}
-			if finalErr != nil {
-				fail(finalErr)
-				return
-			}
-			if final.ChangedPaths != nil {
-				result.ChangedPaths = append([]string(nil), final.ChangedPaths...)
-			}
-			if updateErr := e.updateChildExecution(finalCtx, task.ID, child.ID, func(c *protocol.AgentChild) { c.WorkspaceID = final.ID; c.Revision = final.Revision }); updateErr != nil {
-				fail(updateErr)
-			}
-		}
-	}()
-	x := &childExecution{task: task, child: child, workspace: ws, selection: pick, credentialID: modelScope.CredentialID, credentialIDs: modelScope.CredentialIDs}
-	out, err := e.driveChildTurn(ctx, x, execution)
-	if err != nil {
-		return result, err
-	}
-	done, sctx := out.done, out.sctx
-	err = out.readErr
-	result.Summary = out.summary
-	result.ChangedPaths = append(result.ChangedPaths, out.changed...)
-	if child.Role == protocol.AgentRoleReviewer {
-		result.Checks = append(result.Checks, protocol.AgentCheckEvidence{Command: "reviewer command verification", Status: "blocked", Summary: "Read-only command sandbox is unavailable; reviewer inspected files/evidence only. Implementer and lead must execute checks."})
-	}
-	if modelErr := e.Store.UpdateAgentExecutionModel(sctx, task.ID, child.ID, done.Resolved); modelErr != nil {
-		err = errors.Join(err, modelErr)
-	}
-	usage, usageErr := e.Store.UsageTotalsWhere(sctx, "thread_id = ?", execution.ThreadID)
-	if usageErr != nil {
-		err = errors.Join(err, usageErr)
-	} else {
-		err = errors.Join(err, e.updateChildExecution(sctx, task.ID, child.ID, func(c *protocol.AgentChild) { c.Usage = usage }))
-	}
-	if done.Status != protocol.TurnCompleted {
-		err = errors.Join(err, fmt.Errorf("child turn %s: %s", done.Status, done.Error))
-	}
-	if ctx.Err() != nil {
-		err = errors.Join(err, ctx.Err())
-	}
-	return result, err
 }
 
 // childProjectBase revalidates the delegation parent thread, project and
@@ -235,9 +98,8 @@ type childTurnOutcome struct {
 	readErr error           // a failure reading the turn's items
 }
 
-// driveChildTurn runs one engine turn of an execution (legacy delegated
-// child or runtime agent) on its internal thread and waits until the actual
-// loop exits. Both runners share it so the turn mechanics stay identical.
+// driveChildTurn runs one engine turn of a runtime agent's execution on its
+// internal thread and waits until the actual loop exits.
 func (e *Engine) driveChildTurn(ctx context.Context, x *childExecution, execution store.AgentExecution) (childTurnOutcome, error) {
 	var out childTurnOutcome
 	ctx = withChildExecution(store.WithInternalThreads(WithDelegationChild(ctx)), x)
@@ -276,56 +138,21 @@ func (e *Engine) driveChildTurn(ctx context.Context, x *childExecution, executio
 	return out, nil
 }
 
-func (e *Engine) updateChildExecution(ctx context.Context, taskID, childID string, mutate func(*protocol.AgentChild)) error {
-	for i := 0; i < 5; i++ {
-		c, err := e.Store.AgentChild(ctx, taskID, childID)
-		if err != nil {
-			return err
-		}
-		mutate(&c)
-		err = e.Store.UpdateAgentChild(ctx, c, c.Version)
-		if err == nil {
-			updated, readErr := e.Store.AgentChild(ctx, taskID, childID)
-			if readErr != nil {
-				return readErr
-			}
-			task, readErr := e.Store.AgentTask(ctx, taskID)
-			if readErr != nil {
-				return readErr
-			}
-			e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Child: updated})
-		}
-		if !errors.Is(err, store.ErrAgentConflict) {
-			return err
-		}
+func (e *Engine) setChildApprovalState(ctx context.Context, x *childExecution, waiting bool) error {
+	if x.runtime == nil {
+		return errNotRuntimeExecution
 	}
-	return store.ErrAgentConflict
+	return e.setRuntimeApprovalState(ctx, x, waiting)
 }
 
-func (e *Engine) setChildApprovalState(ctx context.Context, x *childExecution, waiting bool) error {
-	if x.runtime != nil {
-		return e.setRuntimeApprovalState(ctx, x, waiting)
-	}
-	return e.updateChildExecution(ctx, x.task.ID, x.child.ID, func(c *protocol.AgentChild) {
-		// A late approval response must never resurrect a cancelled child or
-		// replace the concurrent correction ledger/results read on this CAS attempt.
-		if waiting && c.State == protocol.AgentStateRunning {
-			c.State = protocol.AgentStateWaitingApproval
-		}
-		if !waiting && c.State == protocol.AgentStateWaitingApproval {
-			c.State = protocol.AgentStateRunning
-		}
-	})
-}
+// errNotRuntimeExecution refuses an execution that is not a runtime agent's.
+var errNotRuntimeExecution = errors.New("agent execution without a runtime agent")
 
 func (e *Engine) recordChildModel(ctx context.Context, x *childExecution, model protocol.ModelSelection) error {
-	if x.runtime != nil {
-		return e.recordRuntimeModel(ctx, x, model)
+	if x.runtime == nil {
+		return errNotRuntimeExecution
 	}
-	if err := e.Store.UpdateAgentExecutionModel(ctx, x.task.ID, x.child.ID, model); err != nil {
-		return err
-	}
-	return e.updateChildExecution(ctx, x.task.ID, x.child.ID, func(c *protocol.AgentChild) { c.Model = model })
+	return e.recordRuntimeModel(ctx, x, model)
 }
 func messageText(msgs []llm.Message) string {
 	var b strings.Builder
@@ -338,49 +165,11 @@ func messageText(msgs []llm.Message) string {
 	return b.String()
 }
 
-// consumeChildFollowups is called only outside a provider stream/tool action.
-// The deterministic item identity makes persist-before-ack retries idempotent.
+// consumeChildFollowups delivers a runtime agent's pending messages; it is
+// called only outside a provider stream/tool action. Other turns have none.
 func (e *Engine) consumeChildFollowups(ctx, sctx context.Context, turn protocol.Turn, msgs []llm.Message) ([]llm.Message, bool, error) {
 	if x := childExecutionFrom(ctx); x != nil && x.runtime != nil {
 		return e.consumeAgentMessages(ctx, sctx, turn, msgs, x)
 	}
-	queue := delegation.FollowupsFromContext(ctx)
-	if queue == nil {
-		return msgs, false, nil
-	}
-	pending, err := queue.Pending(ctx)
-	if err != nil {
-		return msgs, false, err
-	}
-	added := false
-	for _, followup := range pending {
-		if len(followup.Message) > delegation.AssignmentLimit {
-			return msgs, added, errors.New("correction exceeds assignment context limit")
-		}
-		id := fmt.Sprintf("agent-followup-%x", sha256.Sum256([]byte(turn.ThreadID+"\x00"+followup.CallID)))
-		existing, readErr := e.Store.GetItem(sctx, id)
-		if errors.Is(readErr, store.ErrNotFound) {
-			item, itemErr := e.newItem(sctx, turn, protocol.ItemUserMessage)
-			if itemErr != nil {
-				return msgs, added, itemErr
-			}
-			item.ID = id
-			item.Text = followup.Message
-			item.Status = protocol.ItemCompleted
-			if err = e.Store.SaveItem(sctx, item); err != nil {
-				return msgs, added, err
-			}
-			msgs = appendText(msgs, llm.RoleUser, followup.Message)
-			added = true
-		} else if readErr != nil {
-			return msgs, added, readErr
-		} else if existing.TurnID == turn.ID {
-			// An acknowledgement failure ends the turn; a later run gets this from history.
-			return msgs, added, errors.New("correction already recorded in current turn without acknowledgement")
-		}
-		if err = queue.Acknowledge(ctx, followup.CallID); err != nil {
-			return msgs, added, err
-		}
-	}
-	return msgs, added, nil
+	return msgs, false, nil
 }
