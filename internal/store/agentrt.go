@@ -203,7 +203,8 @@ func scanAgentPlan(row interface{ Scan(...any) error }) (protocol.AgentPlan, err
 	return p, nil
 }
 
-// SaveAgentPlan inserts a plan or replaces the stored plan with the same ID.
+// SaveAgentPlan inserts a plan or replaces the stored plan with the same ID. It
+// performs no supersede logic; use ApproveAgentPlan for approval.
 func (s *Store) SaveAgentPlan(ctx context.Context, p protocol.AgentPlan) error {
 	if p.ID == "" || p.ThreadID == "" {
 		return fmt.Errorf("agent plan requires ID and thread ID")
@@ -239,12 +240,23 @@ func (s *Store) ApproveAgentPlan(ctx context.Context, planID, taskID string) err
 		return err
 	}
 	defer tx.Rollback()
-	var threadID string
-	if err := tx.QueryRowContext(ctx, `SELECT thread_id FROM agent_plans WHERE id=?`, planID).Scan(&threadID); err != nil {
+	var threadID, boundTask string
+	var state protocol.PlanState
+	if err := tx.QueryRowContext(ctx, `SELECT thread_id, state, task_id FROM agent_plans WHERE id=?`, planID).Scan(&threadID, &state, &boundTask); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		return err
+	}
+	switch state {
+	case protocol.PlanProposed:
+	case protocol.PlanApproved:
+		if boundTask == taskID {
+			return nil
+		}
+		return fmt.Errorf("%w: plan already approved for another task", ErrAgentConflict)
+	default:
+		return fmt.Errorf("%w: plan is %s", ErrAgentTransition, state)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE agent_plans SET state=? WHERE thread_id=? AND id<>? AND state=?`,
 		protocol.PlanSuperseded, threadID, planID, protocol.PlanApproved); err != nil {

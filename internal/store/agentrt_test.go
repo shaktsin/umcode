@@ -192,8 +192,8 @@ func TestApproveAgentPlanSupersedesPreviousAndBindsTask(t *testing.T) {
 
 func TestProposedPlanIsNotReturnedAsApproved(t *testing.T) {
 	s, task := runtimeFixture(t)
-	p := savePlan(t, s, "P", task.ThreadID)
-	if _, err := s.ApprovedAgentPlanForTask(t.Context(), p.TaskID); !errors.Is(err, ErrNotFound) {
+	savePlan(t, s, "P", task.ThreadID)
+	if _, err := s.ApprovedAgentPlanForTask(t.Context(), task.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("task getter: %v", err)
 	}
 	if _, err := s.LatestApprovedAgentPlan(t.Context(), task.ThreadID); !errors.Is(err, ErrNotFound) {
@@ -236,5 +236,71 @@ func TestAgentMessagesDeliverOnceInOrder(t *testing.T) {
 	}
 	if g := ids("Y"); len(g) != 1 || g[0] != "m3" {
 		t.Fatalf("Y=%v", g)
+	}
+}
+
+func TestApproveAgentPlanStateGuards(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, "A", task.ThreadID)
+	savePlan(t, s, "B", task.ThreadID)
+	if err := s.ApproveAgentPlan(t.Context(), "A", "T"); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.ApprovedAgentPlanForTask(t.Context(), "T")
+	// idempotent repeat for the same task
+	if err := s.ApproveAgentPlan(t.Context(), "A", "T"); err != nil {
+		t.Fatalf("repeat: %v", err)
+	}
+	again, err := s.ApprovedAgentPlanForTask(t.Context(), "T")
+	if err != nil || again.ApprovedAt == nil || !again.ApprovedAt.Equal(*first.ApprovedAt) {
+		t.Fatalf("approved_at changed: %+v %v", again, err)
+	}
+	if got, err := s.LatestApprovedAgentPlan(t.Context(), task.ThreadID); err != nil || got.ID != "A" {
+		t.Fatalf("latest: %+v %v", got, err)
+	}
+	// different task conflicts and leaves the binding unchanged
+	if err := s.ApproveAgentPlan(t.Context(), "A", "T9"); !errors.Is(err, ErrAgentConflict) {
+		t.Fatalf("other task: %v", err)
+	}
+	if got, err := s.ApprovedAgentPlanForTask(t.Context(), "T"); err != nil || got.ID != "A" {
+		t.Fatalf("binding: %+v %v", got, err)
+	}
+	if _, err := s.ApprovedAgentPlanForTask(t.Context(), "T9"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("T9: %v", err)
+	}
+	// supersede A via B, then A cannot be resurrected
+	if err := s.ApproveAgentPlan(t.Context(), "B", "T2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "A", "T"); !errors.Is(err, ErrAgentTransition) {
+		t.Fatalf("superseded: %v", err)
+	}
+	var state string
+	if err := s.DB.QueryRowContext(t.Context(), `SELECT state FROM agent_plans WHERE id='A'`).Scan(&state); err != nil || state != string(protocol.PlanSuperseded) {
+		t.Fatalf("A state=%q err=%v", state, err)
+	}
+	if got, err := s.LatestApprovedAgentPlan(t.Context(), task.ThreadID); err != nil || got.ID != "B" {
+		t.Fatalf("latest: %+v %v", got, err)
+	}
+}
+
+func TestAgentMessagesAckScopedToTaskAndStableOrder(t *testing.T) {
+	s, task := runtimeFixture(t)
+	for _, id := range []string{"z1", "a2"} {
+		if _, err := s.DB.ExecContext(t.Context(), `INSERT INTO agent_messages (id,task_id,from_agent_id,to_agent_id,body,created_at) VALUES(?,?,?,?,?,?)`,
+			id, task.ID, "root", "X", id, "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.PendingAgentMessages(t.Context(), task.ID, "X")
+	if err != nil || len(got) != 2 || got[0].ID != "z1" || got[1].ID != "a2" {
+		t.Fatalf("order: %+v %v", got, err)
+	}
+	if err := s.AcknowledgeAgentMessage(t.Context(), "other-task", "z1"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.PendingAgentMessages(t.Context(), task.ID, "X")
+	if len(got) != 2 {
+		t.Fatalf("foreign ack delivered message: %+v", got)
 	}
 }
