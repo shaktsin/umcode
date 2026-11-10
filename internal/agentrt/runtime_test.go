@@ -138,6 +138,30 @@ func TestSpawnRefusesUnapprovedPlan(t *testing.T) {
 	}
 }
 
+func TestSpawnRefusesSupersededPlan(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	// A newer plan approved for another task of the thread supersedes plan-1.
+	if err := s.CreateTurn(t.Context(), protocol.Turn{ID: "root2", ThreadID: task.ThreadID, Status: protocol.TurnCompleted, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecContext(t.Context(), `INSERT INTO agent_tasks (id,thread_id,root_turn_id,activation,state,base_revision,base_root,project_id,created_at,updated_at,parent_root) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		"task2", task.ThreadID, "root2", protocol.AgentActivationExplicitUser, protocol.AgentStateCompleted, "base", "", "", store.Now(), store.Now(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveAgentPlan(t.Context(), protocol.AgentPlan{ID: "plan-2", ThreadID: task.ThreadID, Agents: []protocol.PlanAgent{{Name: "worker"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "plan-2", "task2"); err != nil {
+		t.Fatal(err)
+	}
+	rt := newTestRuntime(t, s, newFakeRunner())
+	_, err := rt.Spawn(t.Context(), spawnReq(task, "call-1", "a", 0.25))
+	if f := admissionField(t, err); f != "plan" {
+		t.Fatalf("field %q", f)
+	}
+}
+
 func TestSpawnReportsPartialGrant(t *testing.T) {
 	s, task := runtimeFixture(t)
 	lim := protocol.DefaultPlanLimits()
