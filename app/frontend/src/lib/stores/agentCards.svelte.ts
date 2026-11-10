@@ -46,6 +46,11 @@ export class AgentCards {
     this.applyPlanUpdate(r.plan.id, r.plan, r.approvalStatus);
     return r;
   }
+  /** agent/plan/updated: a payload without approvalStatus cannot be acted on, so read the plan back. */
+  onPlanUpdated(p: { plan: AgentPlan; approvalStatus?: AgentPlanGetResult['approvalStatus'] }) {
+    this.applyPlanUpdate(p.plan.id, p.plan, p.approvalStatus);
+    if (!p.approvalStatus) void this.refreshPlan(p.plan.id);
+  }
   /** agent/plan/updated and respond results: keep the card, take the new plan and status; fetch the card if never loaded. */
   applyPlanUpdate(planId: string, plan: AgentPlan, approvalStatus?: AgentPlanGetResult['approvalStatus']) {
     const had = this.plans[planId]?.card;

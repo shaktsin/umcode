@@ -114,6 +114,8 @@ export class DelegationState {
     } catch (e) { if (generation === this.generation) this.error = errMsg(e); }
     finally { if (generation === this.generation) this.pending = false; }
   }
+  /** Holds the token an enabled suggestion returned; the next turn/start consumes it like delegation/enable's. */
+  adopt(token: { activationToken: string; expiresAt: string }) { this.token = token; this.error = ''; }
   submission(): { delegationTaskId?: string; delegationActivationToken?: string } {
     if (this.active) return { delegationTaskId: this.active.task.id };
     const token = this.token; this.token = null;

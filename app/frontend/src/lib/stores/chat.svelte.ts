@@ -160,6 +160,23 @@ export class ThreadView {
     }
   }
 
+  /**
+   * The user's answer to an agent.suggest card. The UI grants nothing: it calls the
+   * admin RPC, then starts the follow-up turn (with the activation token on enable).
+   */
+  async answerSuggestion(suggestionId: string, decision: 'enable' | 'decline') {
+    const r = await this.cards.respondSuggestion(suggestionId, decision);
+    if (decision === 'enable') {
+      if (!r.activationToken || !r.expiresAt) return;
+      // Bind first: binding a different chat clears the token.
+      if (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId) await this.delegation.bind(this.id, this.thread?.projectId);
+      this.delegation.adopt({ activationToken: r.activationToken, expiresAt: r.expiresAt });
+      await this.send('Agents are enabled for this task. Please continue.');
+    } else {
+      await this.send('Continue without agents.');
+    }
+  }
+
   async interrupt() {
     const t = this.running;
     if (this.delegation.active) await this.delegation.cancel(this.delegation.active.task.id);
@@ -208,7 +225,7 @@ class ChatState {
   constructor() {
     const r = app.rpc;
     r.on('delegation/updated', (p: DelegationUpdated) => this.each(v => v.delegation.apply(p)));
-    r.on('agent/plan/updated', (p: AgentPlanUpdated) => this.each(v => { if (v.id === p.threadId) v.cards.applyPlanUpdate(p.plan.id, p.plan, p.approvalStatus); }));
+    r.on('agent/plan/updated', (p: AgentPlanUpdated) => this.each(v => { if (v.id === p.threadId) v.cards.onPlanUpdated(p); }));
     r.on('thread/compactionUpdated',(state:CompactionState)=>this.each(v=>v.applyCompaction(state)));
     r.on('thread/updated', (p: { thread: Thread }) => this.upsertThread(p.thread));
     r.on('turn/started', (p: { turn: Turn }) => {

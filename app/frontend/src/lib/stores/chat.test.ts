@@ -44,3 +44,29 @@ it('does not restore active progress from a snapshot after a terminal turn event
  resolve({thread:{id:'main',settings:{}},turns:[{id:'t',threadId:'main',status:'running'}],items:[],compaction:state});await loading;
  expect(v.compaction?.status).not.toBe('summarizing');
 });
+
+it('enabling a suggestion responds, then starts the follow-up turn with the returned token', async () => {
+ const v=new ThreadView();v.id='main';v.thread={id:'main',settings:{}} as any;
+ call.mockImplementation(async(method:string)=>method==='agent/suggestion/respond'?{suggestion:{id:'s1',state:'enabled'},activationToken:'tok',expiresAt:'2999-01-01T00:00:00Z'}:{tasks:[]});
+ await v.answerSuggestion('s1','enable');
+ const order=call.mock.calls.map(c=>c[0]);
+ expect(order.indexOf('agent/suggestion/respond')).toBeLessThan(order.indexOf('turn/start'));
+ expect(call).toHaveBeenCalledWith('agent/suggestion/respond',{suggestionId:'s1',decision:'enable'});
+ expect(call.mock.calls.find(c=>c[0]==='turn/start')![1]).toMatchObject({threadId:'main',delegationActivationToken:'tok'});
+});
+it('continuing without agents declines and starts a turn without a token', async () => {
+ call.mockClear();const v=new ThreadView();v.id='main';v.thread={id:'main',settings:{}} as any;
+ call.mockImplementation(async(method:string)=>method==='agent/suggestion/respond'?{suggestion:{id:'s1',state:'declined'}}:{tasks:[]});
+ await v.answerSuggestion('s1','decline');
+ expect(call).toHaveBeenCalledWith('agent/suggestion/respond',{suggestionId:'s1',decision:'decline'});
+ expect(call.mock.calls.find(c=>c[0]==='turn/start')![1]).not.toHaveProperty('delegationActivationToken');
+});
+it('agent/plan/updated without a status reads the plan back for the matching chat only', async () => {
+ call.mockClear();call.mockImplementation(async()=>({tasks:[]}));
+ const {chat}=await import('./chat.svelte');chat.main.id='t9';
+ const plan={id:'pl',threadId:'t9',taskId:'k',agents:[],limits:{},state:'proposed',createdAt:''};
+ handlers.get('agent/plan/updated')!({threadId:'t9',plan});
+ expect(call).toHaveBeenCalledWith('agent/plan/get',{planId:'pl'});
+ call.mockClear();handlers.get('agent/plan/updated')!({threadId:'other',plan});
+ expect(call).not.toHaveBeenCalledWith('agent/plan/get',expect.anything());
+});
