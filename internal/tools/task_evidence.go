@@ -8,9 +8,11 @@ func IsVerificationSource(tool Tool) bool {
 	}
 	return false
 }
+// IsAgentControlSource reports the engine-owned agent runtime tools, whose
+// succeeded calls are engine control actions rather than model claims.
 func IsAgentControlSource(tool Tool) bool {
 	switch tool.(type) {
-	case *agentTool, *agentWorkflowTool:
+	case *runtimeAgentTool, *runtimeIntegrateTool, *agentSuggestTool, *agentProposePlanTool:
 		return true
 	}
 	return false

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -22,26 +20,81 @@ type WorkspaceSnapshot struct {
 	ResultRevision string
 	ChangedPaths   []string
 }
-type IntegrationEvidence = store.AgentIntegration
 
 // ParentValidator checks live project membership and the already existing
 // active parent checkout; it must never create or retarget a checkout.
 type ParentValidator func(context.Context, protocol.AgentTask) error
 
-// IntegrationEligibility is supplied by Task7, which owns review verdicts and
-// check policy. Nil always blocks integration; text summaries grant no approval.
-type IntegrationEligibility func(context.Context, protocol.AgentTask, protocol.AgentChild, string) error
-
 type WorkspaceService struct {
 	Store          *store.Store
 	Manager        *worktree.Manager
 	ValidateParent ParentValidator
-	Eligibility    IntegrationEligibility
 	mu             sync.Mutex
+	// taskLocks serialises runtime integration per task (guarded by mu).
+	taskLocks map[string]*taskLock
+	// events receives runtime agent and integration changes (WithEvents).
+	events func(AgentEvent)
+	// eventsMu guards integrationDirty: the tasks whose integration changed
+	// under their task lock and not yet announced (see lockTask).
+	eventsMu         sync.Mutex
+	integrationDirty map[string]bool
 }
 
-func NewWorkspaceService(s *store.Store, m *worktree.Manager, parent ParentValidator, eligible IntegrationEligibility) *WorkspaceService {
-	return &WorkspaceService{Store: s, Manager: m, ValidateParent: parent, Eligibility: eligible}
+// AgentEvent reports a persisted runtime change made by the service: Agent
+// is the agent's new state (nil if only the integration changed);
+// IntegrationChanged means the task's revisions or integration head changed
+// and the integration status should be read again. ThreadID is the task's
+// parent chat when known.
+type AgentEvent struct {
+	ThreadID, TaskID   string
+	Agent              *protocol.RuntimeAgent
+	IntegrationChanged bool
+}
+
+// WithEvents registers fn for the service's runtime changes. Agent events are
+// delivered synchronously after the write, possibly with service locks held,
+// so fn must not call back into the service for them; integration events
+// are delivered after the task's integration lock is released, so fn may
+// read the integration status. Call it before the service is used.
+func (s *WorkspaceService) WithEvents(fn func(AgentEvent)) { s.events = fn }
+
+// integrationChanged marks that the task's integration changed; the caller
+// holds the task lock, whose release announces it once.
+func (s *WorkspaceService) integrationChanged(taskID string) {
+	if s.events == nil {
+		return
+	}
+	s.eventsMu.Lock()
+	if s.integrationDirty == nil {
+		s.integrationDirty = map[string]bool{}
+	}
+	s.integrationDirty[taskID] = true
+	s.eventsMu.Unlock()
+}
+
+// takeIntegrationChanged clears and returns the task's mark.
+func (s *WorkspaceService) takeIntegrationChanged(taskID string) bool {
+	s.eventsMu.Lock()
+	defer s.eventsMu.Unlock()
+	dirty := s.integrationDirty[taskID]
+	delete(s.integrationDirty, taskID)
+	return dirty
+}
+
+// emitIntegration announces a task's integration change.
+func (s *WorkspaceService) emitIntegration(taskID string) {
+	if s.events == nil {
+		return
+	}
+	ev := AgentEvent{TaskID: taskID, IntegrationChanged: true}
+	if t, err := s.Store.AgentTask(context.Background(), taskID); err == nil {
+		ev.ThreadID = t.ThreadID
+	}
+	s.events(ev)
+}
+
+func NewWorkspaceService(s *store.Store, m *worktree.Manager, parent ParentValidator) *WorkspaceService {
+	return &WorkspaceService{Store: s, Manager: m, ValidateParent: parent}
 }
 func ref(w store.AgentWorkspace) WorkspaceRef {
 	return WorkspaceRef{ID: w.ID, Root: w.Root, BaseRevision: w.BaseRevision}
@@ -62,58 +115,19 @@ func (s *WorkspaceService) task(ctx context.Context, supplied protocol.AgentTask
 	}
 	return t, err
 }
-func (s *WorkspaceService) attach(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild, id string) error {
-	for i := 0; i < 8; i++ {
-		latest, err := s.Store.AgentChild(ctx, t.ID, c.ID)
-		if err != nil {
-			return err
-		}
-		if latest.WorkspaceID != "" && latest.WorkspaceID != id {
-			return errors.New("child already owns a different workspace")
-		}
-		if latest.WorkspaceID == id {
-			return nil
-		}
-		latest.WorkspaceID = id
-		err = s.Store.UpdateAgentChild(ctx, latest, latest.Version)
-		if errors.Is(err, store.ErrAgentConflict) {
-			continue
-		}
-		return err
-	}
-	return store.ErrAgentConflict
-}
-func (s *WorkspaceService) Prepare(ctx context.Context, task protocol.AgentTask, child protocol.AgentChild) (WorkspaceRef, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.prepare(ctx, task, child)
-}
-func (s *WorkspaceService) prepare(ctx context.Context, task protocol.AgentTask, child protocol.AgentChild) (WorkspaceRef, error) {
-	t, err := s.task(ctx, task)
-	if err != nil {
-		return WorkspaceRef{}, err
-	}
-	c, err := s.Store.AgentChild(ctx, t.ID, child.ID)
-	if err != nil {
-		return WorkspaceRef{}, err
-	}
-	if child.TaskID != t.ID || child.Role != c.Role {
-		return WorkspaceRef{}, errors.New("child workspace ownership changed")
-	}
-	if c.Role == protocol.AgentRoleReviewer {
-		return s.prepareReviewer(ctx, t, c)
-	}
-	if err = worktree.ValidateCommitted(ctx, t.ParentRoot, t.BaseRevision); err != nil {
-		return WorkspaceRef{}, err
-	}
-	id := "delegation-" + t.ID + "-" + c.ID
-	planned := s.Manager.Path(id)
-	if pathutil.Within(t.ParentRoot, planned) || pathutil.Within(planned, t.ParentRoot) || pathutil.Within(t.BaseRoot, planned) || pathutil.Within(planned, t.BaseRoot) {
+
+// ownedCheckout loads (or first records) the planned workspace w, attaches it
+// to its owner and ensures its private checkout of the task's base revision
+// with ensure. The checkout must lie outside the parent and registered
+// project roots.
+func (s *WorkspaceService) ownedCheckout(ctx context.Context, t protocol.AgentTask, planned store.AgentWorkspace, attach func(id string) error, ensure func(id string) (worktree.Workspace, error)) (WorkspaceRef, error) {
+	id := planned.ID
+	if pathutil.Within(t.ParentRoot, planned.Root) || pathutil.Within(planned.Root, t.ParentRoot) || pathutil.Within(t.BaseRoot, planned.Root) || pathutil.Within(planned.Root, t.BaseRoot) {
 		return WorkspaceRef{}, errors.New("owned child checkout must be outside parent and registered project roots")
 	}
 	w, err := s.Store.AgentWorkspace(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
-		w = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: c.ID, Kind: "implementer", Root: s.Manager.Path(id), ParentRoot: t.ParentRoot, BaseRevision: t.BaseRevision}
+		w = planned
 		if err = s.Store.SaveAgentWorkspace(ctx, w); err != nil {
 			return WorkspaceRef{}, err
 		}
@@ -123,10 +137,10 @@ func (s *WorkspaceService) prepare(ctx context.Context, task protocol.AgentTask,
 	if w.Cleaned {
 		return ref(w), errors.New("workspace was cleaned after verified integration")
 	}
-	if err = s.attach(ctx, t, c, w.ID); err != nil {
+	if err = attach(w.ID); err != nil {
 		return ref(w), err
 	}
-	ws, err := s.Manager.EnsureCommitted(ctx, id, t.ParentRoot, t.BaseRevision)
+	ws, err := ensure(id)
 	if err != nil {
 		return ref(w), err
 	}
@@ -139,56 +153,40 @@ func (s *WorkspaceService) prepare(ctx context.Context, task protocol.AgentTask,
 	return ref(w), nil
 }
 
-// Snapshot is only called after execution stops. It creates an engine-owned
-// private commit of the actual tree, including staged, untracked and deletions.
-// Parent changes do not prevent saving recoverable stopped work.
-func (s *WorkspaceService) Snapshot(ctx context.Context, task protocol.AgentTask, child protocol.AgentChild, workspace WorkspaceRef) (WorkspaceSnapshot, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t, err := s.task(ctx, task)
-	if err != nil {
-		return WorkspaceSnapshot{}, err
-	}
-	c, err := s.Store.AgentChild(ctx, t.ID, child.ID)
-	if err != nil {
-		return WorkspaceSnapshot{}, err
-	}
-	w, err := s.Store.AgentWorkspace(ctx, workspace.ID)
-	if err != nil {
-		return WorkspaceSnapshot{}, err
-	}
-	if w.TaskID != t.ID || w.Root != workspace.Root || c.WorkspaceID != w.ID || w.Cleaned {
-		return WorkspaceSnapshot{}, errors.New("finalization workspace identity changed")
-	}
+// snapshotOwned validates a stopped owned workspace and returns its result:
+// a read-only (reviewer kind) checkout must still be its exact committed
+// revision; any other is committed privately unless recorded says its result
+// revision was already recorded by its owner.
+func (s *WorkspaceService) snapshotOwned(ctx context.Context, w store.AgentWorkspace, recorded bool) (WorkspaceSnapshot, error) {
 	source := w.ParentRoot
-	if _, err = s.Manager.Lookup(ctx, w.ID, source); err != nil {
+	if _, err := s.Manager.Lookup(ctx, w.ID, source); err != nil {
 		return WorkspaceSnapshot{}, err
 	}
-	if err = validatePrivate(ctx, w.Root); err != nil {
+	if err := validatePrivate(ctx, w.Root); err != nil {
 		return WorkspaceSnapshot{}, err
 	}
 	if w.Kind == "reviewer" {
-		if err = worktree.ValidateCommitted(ctx, w.Root, w.ResultRevision); err != nil {
+		if err := worktree.ValidateCommitted(ctx, w.Root, w.ResultRevision); err != nil {
 			return WorkspaceSnapshot{}, err
 		}
 		return WorkspaceSnapshot{WorkspaceRef: ref(w), ResultRevision: w.ResultRevision}, nil
 	}
-	if err = worktree.ValidateIndexFlags(ctx, w.Root); err != nil {
+	if err := worktree.ValidateIndexFlags(ctx, w.Root); err != nil {
 		return WorkspaceSnapshot{}, err
 	}
-	if err = worktree.ValidatePaths(ctx, w.Root); err != nil {
+	if err := worktree.ValidatePaths(ctx, w.Root); err != nil {
 		return WorkspaceSnapshot{}, err
 	}
-	if c.Revision != "" && w.ResultRevision != "" {
-		if err = worktree.ValidateCommitted(ctx, w.Root, w.ResultRevision); err != nil {
+	if recorded && w.ResultRevision != "" {
+		if err := worktree.ValidateCommitted(ctx, w.Root, w.ResultRevision); err != nil {
 			return WorkspaceSnapshot{}, err
 		}
 		return WorkspaceSnapshot{WorkspaceRef: ref(w), ResultRevision: w.ResultRevision, ChangedPaths: w.ChangedPaths}, nil
 	}
-	if _, err = privateGit(ctx, w.Root, "add", "--all", "--"); err != nil {
+	if _, err := privateGit(ctx, w.Root, "add", "--all", "--"); err != nil {
 		return WorkspaceSnapshot{}, err
 	}
-	if _, err = privateGit(ctx, w.Root, "-c", "user.name=UMCode", "-c", "user.email=umcode@localhost", "commit", "--quiet", "--allow-empty", "-m", "UMCode delegated result"); err != nil {
+	if _, err := privateGit(ctx, w.Root, "-c", "user.name=UMCode", "-c", "user.email=umcode@localhost", "commit", "--quiet", "--allow-empty", "-m", "UMCode delegated result"); err != nil {
 		return WorkspaceSnapshot{}, err
 	}
 	revision, err := privateGit(ctx, w.Root, "rev-parse", "--verify", "HEAD^{commit}")
@@ -224,226 +222,49 @@ func nulPaths(s string) []string {
 	}
 	return out
 }
-func (s *WorkspaceService) submitted(ctx context.Context, childID string) (protocol.AgentTask, protocol.AgentChild, store.AgentWorkspace, error) {
-	w, err := s.Store.AgentWorkspaceForChild(ctx, childID, "implementer")
-	if err != nil {
-		return protocol.AgentTask{}, protocol.AgentChild{}, w, err
-	}
-	t, err := s.Store.AgentTask(ctx, w.TaskID)
-	if err != nil {
-		return t, protocol.AgentChild{}, w, err
-	}
-	if _, err = s.task(ctx, t); err != nil {
-		return t, protocol.AgentChild{}, w, err
-	}
-	c, err := s.Store.AgentChild(ctx, t.ID, childID)
-	if err != nil {
-		return t, c, w, err
-	}
-	if c.Role != protocol.AgentRoleImplementer || c.State != protocol.AgentStateCompleted || c.Revision == "" || c.Revision != w.ResultRevision || c.WorkspaceID != w.ID || w.Cleaned {
-		return t, c, w, errors.New("implementer has no stopped submitted workspace revision")
-	}
-	if _, err = s.Manager.Lookup(ctx, w.ID, w.ParentRoot); err != nil {
-		return t, c, w, err
-	}
-	if err = validatePrivate(ctx, w.Root); err != nil {
-		return t, c, w, err
-	}
-	err = worktree.ValidateCommitted(ctx, w.Root, w.ResultRevision)
-	return t, c, w, err
-}
 
-// Review returns a distinct exact revision copy. BindReviewer records which
-// result a reviewer child is authorized to inspect before paid execution.
-func (s *WorkspaceService) Review(ctx context.Context, implementerID string) (WorkspaceRef, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t, c, w, err := s.submitted(ctx, implementerID)
-	if err != nil {
-		return WorkspaceRef{}, err
-	}
-	return s.reviewCopy(ctx, t, c, w, c.ID, "inspection")
-}
-func (s *WorkspaceService) BindReviewer(ctx context.Context, taskID, reviewerID, implementerID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t, _, w, err := s.submitted(ctx, implementerID)
-	if err != nil {
-		return err
-	}
-	if t.ID != taskID {
-		return store.ErrNotFound
-	}
-	old, rev, err := s.Store.AgentReviewerSource(ctx, taskID, reviewerID)
-	if err == nil {
-		if old == implementerID && rev == w.ResultRevision {
-			return nil
-		}
-		return errors.New("reviewer already bound to a different submitted revision")
-	}
-	if !errors.Is(err, store.ErrNotFound) {
-		return err
-	}
-	return s.Store.BindAgentReviewer(ctx, taskID, reviewerID, implementerID, w.ResultRevision)
-}
-func (s *WorkspaceService) prepareReviewer(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild) (WorkspaceRef, error) {
-	id, rev, err := s.Store.AgentReviewerSource(ctx, t.ID, c.ID)
-	if errors.Is(err, store.ErrNotFound) && c.WorkspaceID != "" {
-		admitted, readErr := s.Store.AgentWorkspace(ctx, c.WorkspaceID)
-		if readErr != nil {
-			return WorkspaceRef{}, readErr
-		}
-		if admitted.Kind == "reviewer" && admitted.SourceID == "lead_snapshot" {
-			return s.prepareStandaloneReviewer(ctx, t, c)
-		}
-	}
-	if err != nil {
-		return WorkspaceRef{}, fmt.Errorf("reviewer requires an explicit submitted revision binding: %w", err)
-	}
-	_, impl, w, err := s.submitted(ctx, id)
-	if err != nil {
-		return WorkspaceRef{}, err
-	}
-	if w.ResultRevision != rev {
-		return WorkspaceRef{}, errors.New("reviewer binding is stale after implementer correction")
-	}
-	r, err := s.reviewCopy(ctx, t, impl, w, c.ID, "reviewer")
-	if err != nil {
-		return r, err
-	}
-	return r, s.attach(ctx, t, c, r.ID)
-}
-func (s *WorkspaceService) reviewCopy(ctx context.Context, t protocol.AgentTask, impl protocol.AgentChild, source store.AgentWorkspace, owner, suffix string) (WorkspaceRef, error) {
-	id := "delegation-review-" + owner + "-" + suffix
-	kind := "reviewer"
-	if suffix == "inspection" {
-		id += "-" + source.ResultRevision
-		kind = "inspection"
-	}
-	w, err := s.Store.AgentWorkspace(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
-		w = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: owner, Kind: kind, SourceID: impl.ID, Root: s.Manager.Path(id), ParentRoot: source.Root, BaseRevision: source.ResultRevision, ResultRevision: source.ResultRevision}
-		if err = s.Store.SaveAgentWorkspace(ctx, w); err != nil {
-			return WorkspaceRef{}, err
-		}
-	} else if err != nil {
-		return WorkspaceRef{}, err
-	}
-	if w.ResultRevision != source.ResultRevision || w.SourceID != impl.ID || w.Cleaned {
-		return ref(w), errors.New("review copy bound to a different revision")
-	}
-	if _, err = s.Manager.EnsureCommitted(ctx, id, source.Root, source.ResultRevision); err != nil {
-		return ref(w), err
-	}
-	if err = validatePrivate(ctx, w.Root); err != nil {
-		return ref(w), err
-	}
-	if err = worktree.ValidateCommitted(ctx, w.Root, source.ResultRevision); err != nil {
-		return ref(w), err
-	}
-	return ref(w), nil
-}
-
-func (s *WorkspaceService) Integrate(ctx context.Context, taskID, childID, expectedBase string) (IntegrationEvidence, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t, c, w, err := s.submitted(ctx, childID)
-	if err != nil {
-		return IntegrationEvidence{}, err
-	}
-	if t.ID != taskID || expectedBase != t.BaseRevision || !active(t.State) {
-		return IntegrationEvidence{}, errors.New("integration base or task changed")
-	}
-	if s.Eligibility == nil {
-		return IntegrationEvidence{}, errors.New("integration requires resolved review eligibility")
-	}
-	if err = s.Eligibility(ctx, t, c, w.ResultRevision); err != nil {
-		return IntegrationEvidence{}, err
-	}
-	evidence, err := s.Store.AgentIntegration(ctx, taskID, childID)
-	if err == nil {
-		if evidence.BaseRevision != expectedBase {
-			return evidence, errors.New("saved integration refers to another base")
-		}
-		if evidence.ResultRevision != w.ResultRevision {
-			if evidence.Applied || evidence.Verified {
-				return evidence, errors.New("previous integration was applied; retain its evidence and workspace")
-			}
-			prior := evidence
-			next := IntegrationEvidence{BaseRevision: expectedBase, ResultRevision: w.ResultRevision, ChangedPaths: w.ChangedPaths}
-			err = s.Manager.WithCommittedBase(ctx, t.ParentRoot, expectedBase,
-				func() error { return s.integrationAuthority(ctx, t, c, w) },
-				func() error {
-					var saveErr error
-					next, saveErr = s.Store.SupersedeAgentIntegration(ctx, taskID, childID, prior.ResultRevision, next)
-					return saveErr
-				})
-			if err != nil {
-				return prior, err
-			}
-			evidence = next
-		} else if err = s.verifyApplied(ctx, t, w); err == nil {
-			if !evidence.Applied {
-				evidence.Applied = true
-				err = s.Store.SaveAgentIntegration(ctx, taskID, childID, evidence)
-			}
-			return evidence, err
-		}
-		if evidence.Applied {
-			return evidence, errors.New("previously integrated parent tree changed; workspace retained")
-		}
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return evidence, err
-	}
-	if err = worktree.ValidateCommitted(ctx, t.ParentRoot, expectedBase); err != nil {
-		return evidence, err
-	}
-	evidence = IntegrationEvidence{BaseRevision: expectedBase, ResultRevision: w.ResultRevision, ChangedPaths: w.ChangedPaths, PreviousAttempts: evidence.PreviousAttempts}
-	if err = s.Store.SaveAgentIntegration(ctx, taskID, childID, evidence); err != nil {
-		return evidence, err
-	}
-	// Recheck live eligibility after the durable intent and immediately before the
-	// manager acquires its integration lock; manager repeats base/tree guards.
-	if _, err = s.task(ctx, t); err != nil {
-		return evidence, err
-	}
-	if err = s.Eligibility(ctx, t, c, w.ResultRevision); err != nil {
-		return evidence, err
-	}
-	if _, err = s.Manager.KeepCommitted(ctx, w.ID, t.ParentRoot, expectedBase, w.ResultRevision, func() error { return s.integrationAuthority(ctx, t, c, w) }); err != nil {
-		return evidence, err
-	}
-	if err = s.verifyApplied(ctx, t, w); err != nil {
-		return evidence, err
-	}
-	evidence.Applied = true
-	err = s.Store.SaveAgentIntegration(ctx, taskID, childID, evidence)
-	return evidence, err
-}
-
-// This storage-only recheck runs under the manager's integration lock. It must
-// not call ParentValidator (which may itself look up a managed parent checkout).
-func (s *WorkspaceService) integrationAuthority(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild, w store.AgentWorkspace) error {
-	current, err := s.Store.AgentTask(ctx, t.ID)
-	if err != nil {
-		return err
-	}
-	if !active(current.State) || current.ParentRoot != t.ParentRoot || current.BaseRoot != t.BaseRoot || current.BaseRevision != t.BaseRevision || current.ThreadID != t.ThreadID || current.ProjectID != t.ProjectID {
-		return errors.New("integration task admission changed or was cancelled")
-	}
-	latest, err := s.Store.AgentChild(ctx, t.ID, c.ID)
-	if err != nil {
-		return err
-	}
-	if latest.State != protocol.AgentStateCompleted || latest.Revision != w.ResultRevision || latest.WorkspaceID != w.ID {
-		return errors.New("integration child submission changed")
-	}
+// parentAuthority is the storage-only part of integrationAuthority that does
+// not depend on the integrated agent: the task's thread, project and parent
+// workspace mode still admit its parent checkout. Shared by runtime agents.
+func (s *WorkspaceService) parentAuthority(ctx context.Context, t protocol.AgentTask) error {
 	th, err := s.Store.GetThread(ctx, t.ThreadID)
 	if err != nil {
 		return err
 	}
 	if th.ProjectID != t.ProjectID {
 		return errors.New("integration parent project changed")
+	}
+	if t.Activation == protocol.AgentActivationPlanApproval {
+		workspace, err := s.Store.AgentTaskWorkspace(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		if workspace.ExecutionRoot != t.ParentRoot || workspace.SnapshotCommit != t.BaseRevision || workspace.State != "active" || workspace.SourceRoot == "" ||
+			pathutil.Within(workspace.SourceRoot, t.ParentRoot) || pathutil.Within(t.ParentRoot, workspace.SourceRoot) {
+			return errors.New("integration private parent identity changed")
+		}
+		switch th.WorkspaceMode {
+		case "", "local":
+			if workspace.SourceRoot != t.BaseRoot {
+				return errors.New("integration source checkout changed")
+			}
+		case "worktree":
+			if workspace.SourceRoot != s.Manager.Path(th.ID) {
+				return errors.New("integration source worktree changed")
+			}
+		default:
+			return errors.New("integration source workspace mode unsupported")
+		}
+		if t.ProjectID != "" {
+			p, err := s.Store.GetProject(ctx, t.ProjectID)
+			if err != nil {
+				return err
+			}
+			if pathutil.Resolved(p.Root) != t.BaseRoot {
+				return errors.New("integration project root changed")
+			}
+		}
+		return nil
 	}
 	switch th.WorkspaceMode {
 	case "", "local":
@@ -466,113 +287,7 @@ func (s *WorkspaceService) integrationAuthority(ctx context.Context, t protocol.
 			return errors.New("integration project root changed")
 		}
 	}
-	return s.Eligibility(ctx, current, latest, w.ResultRevision)
-}
-
-func (s *WorkspaceService) verifyApplied(ctx context.Context, t protocol.AgentTask, w store.AgentWorkspace) error {
-	if err := worktree.ValidateIndexFlags(ctx, t.ParentRoot); err != nil {
-		return err
-	}
-	head, err := privateGit(ctx, t.ParentRoot, "rev-parse", "HEAD")
-	if err != nil || strings.TrimSpace(head) != t.BaseRevision {
-		return errors.New("integration parent HEAD changed")
-	}
-	tree, err := privateGit(ctx, t.ParentRoot, "write-tree")
-	if err != nil {
-		return err
-	}
-	expected := w.ResultTree
-	if expected == "" {
-		return errors.New("integration result tree evidence is missing")
-	}
-	if strings.TrimSpace(tree) != strings.TrimSpace(expected) {
-		return errors.New("integration parent index differs from submitted result")
-	}
-	dirty, err := privateGit(ctx, t.ParentRoot, "diff", "--name-only", "--")
-	if err != nil || dirty != "" {
-		return errors.New("integration parent working tree differs from result")
-	}
-	other, err := privateGit(ctx, t.ParentRoot, "ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil || other != "" {
-		return errors.New("integration parent has untracked edits")
-	}
-	return worktree.ValidatePaths(ctx, t.ParentRoot)
-}
-
-// RecordVerification is a trusted lead seam, never a model tool. Task7 decides
-// which actual checks are sufficient before recording verified evidence.
-func (s *WorkspaceService) RecordVerification(ctx context.Context, taskID, childID, revision string, checks []protocol.AgentCheckEvidence) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t, _, w, err := s.submitted(ctx, childID)
-	if err != nil {
-		return err
-	}
-	if t.ID != taskID || revision != w.ResultRevision || len(checks) == 0 {
-		return errors.New("verification must identify integrated revision and actual checks")
-	}
-	for _, check := range checks {
-		if check.Command == "" || check.Status != "passed" {
-			return errors.New("verification requires successful recorded checks")
-		}
-	}
-	e, err := s.Store.AgentIntegration(ctx, taskID, childID)
-	if err != nil {
-		return err
-	}
-	if !e.Applied {
-		return errors.New("integration has not been durably recorded")
-	}
-	if err = s.verifyApplied(ctx, t, w); err != nil {
-		return err
-	}
-	e.Verified = true
-	e.CheckResults = checks
-	return s.Store.SaveAgentIntegration(ctx, taskID, childID, e)
-}
-func (s *WorkspaceService) Cleanup(ctx context.Context, taskID, childID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, err := s.Store.AgentIntegration(ctx, taskID, childID)
-	if err != nil {
-		return err
-	}
-	if !e.Applied || !e.Verified {
-		return errors.New("retain workspace until integration and verification are durable")
-	}
-	w, err := s.Store.AgentWorkspaceForChild(ctx, childID, "implementer")
-	if err != nil {
-		return err
-	}
-	if w.TaskID != taskID || e.ResultRevision != w.ResultRevision {
-		return errors.New("cleanup integration identity changed")
-	}
-	if w.Cleaned {
-		return nil
-	}
-	t, err := s.Store.AgentTask(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	if _, err = s.task(ctx, t); err != nil {
-		return err
-	}
-	if err = s.verifyApplied(ctx, t, w); err != nil {
-		return err
-	}
-	reviews, err := s.Store.AgentWorkspaces(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	for _, review := range reviews {
-		if (review.Kind != "reviewer" && review.Kind != "inspection") || review.SourceID != childID || review.Cleaned {
-			continue
-		}
-		if err = s.discardVerified(ctx, review); err != nil {
-			return err
-		}
-	}
-	return s.discardVerified(ctx, w)
+	return nil
 }
 
 func (s *WorkspaceService) discardVerified(ctx context.Context, w store.AgentWorkspace) error {
@@ -596,138 +311,267 @@ func (s *WorkspaceService) discardVerified(ctx context.Context, w store.AgentWor
 	return s.Store.SaveAgentWorkspace(ctx, w)
 }
 
+// privateGit and validatePrivate delegate to the single hardened runner and
+// metadata validator in internal/worktree.
 func privateGit(ctx context.Context, root string, args ...string) (string, error) {
-	prefix := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.attributesFile=/dev/null", "-C", root}
-	cmd := exec.CommandContext(ctx, "git", append(prefix, args...)...)
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "GIT_") {
-			cmd.Env = append(cmd.Env, e)
-		}
-	}
-	cmd.Env = append(cmd.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0")
-	b, err := cmd.CombinedOutput()
+	out, stderr, err := worktree.HardenedGit(ctx, root, nil, args...)
 	if err != nil {
-		return "", fmt.Errorf("workspace git %s: %w: %s", strings.Join(args, " "), err, b)
+		return "", fmt.Errorf("workspace git %s: %w: %s%s", strings.Join(args, " "), err, out, stderr)
 	}
-	return string(b), nil
+	return string(out), nil
 }
 func validatePrivate(ctx context.Context, root string) error {
-	metadata := filepath.Join(root, ".git")
-	if err := filepath.WalkDir(metadata, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return errors.New("private Git metadata contains a symlink")
-		}
-		return ctx.Err()
-	}); err != nil {
-		return err
-	}
-	for _, p := range []string{"objects/info/alternates", "objects/info/http-alternates", "commondir", "info/grafts", "refs/replace"} {
-		if _, err := os.Lstat(filepath.Join(metadata, p)); err == nil {
-			return errors.New("private Git metadata redirects outside its owned snapshot")
-		}
-	}
-	config, err := privateGit(ctx, root, "config", "--local", "--no-includes", "--list")
-	if err != nil {
-		return err
-	}
-	for _, line := range strings.Split(strings.TrimSpace(config), "\n") {
-		key, _, _ := strings.Cut(line, "=")
-		switch key {
-		case "core.repositoryformatversion", "core.filemode", "core.bare", "core.logallrefupdates", "core.ignorecase", "core.precomposeunicode", "extensions.objectformat", "user.name", "user.email":
-		default:
-			return fmt.Errorf("unsupported private Git configuration %q; retain workspace for inspection", key)
-		}
-	}
-	return nil
+	return worktree.ValidateOwnedMetadata(ctx, root)
 }
 
-// ValidateIntegrated brackets actual lead tool execution and completion. It
-// checks exact parent bytes and durable review without accepting model evidence.
-func (s *WorkspaceService) ValidateIntegrated(ctx context.Context, taskID, childID, revision string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t, c, w, err := s.submitted(ctx, childID)
-	if err != nil {
-		return err
+// runtimeBaseSource marks a runtime agent's read-only checkout of the task's
+// base revision (nothing integrated yet); runtimeHeadSource marks one of the
+// integrated head (a view commit on top of the base, see
+// worktree.ApplyRuntimeView).
+const (
+	runtimeBaseSource = "runtime_base"
+	runtimeHeadSource = "runtime_head"
+)
+
+// IntegrationApplyingText refuses a new agent workspace while a revision of
+// the task is applying: the project checkout may be mid-write.
+const IntegrationApplyingText = "an integration is being applied to the project checkout"
+
+// IntegrationApplyingAdvice is the refusal for rev, a revision that is
+// applying. Under the task lock an applying revision is an interrupted or
+// blocked apply, which waiting never settles, so it tells the lead how to
+// settle it: accept again, or resolved again for a manual resolution.
+func IntegrationApplyingAdvice(rev store.AgentRevision) string {
+	if rev.Reason == manualResolution {
+		return fmt.Sprintf("%s (agent %s's manual resolution is being recorded); if no agent.integrate call is running, it was interrupted: call agent.integrate {action:\"resolved\", agent:%q} again to record it, and if it stays blocked check agent.integrate {action:\"status\"}", IntegrationApplyingText, rev.AgentID, rev.AgentID)
 	}
-	if t.ID != taskID || w.ResultRevision != revision {
-		return errors.New("integrated revision changed")
-	}
-	if s.Eligibility == nil {
-		return errors.New("review eligibility unavailable")
-	}
-	if err = s.Eligibility(ctx, t, c, revision); err != nil {
-		return err
-	}
-	i, err := s.Store.AgentIntegration(ctx, taskID, childID)
-	if err != nil {
-		return err
-	}
-	if !i.Applied || i.ResultRevision != revision {
-		return errors.New("integration not applied")
-	}
-	return s.verifyApplied(ctx, t, w)
+	return fmt.Sprintf("%s (agent %s's revision is applying); if no accept is running, its apply was interrupted: accept agent %s again (agent.integrate {action:\"accept\", agent:%q}) to settle it, and if it stays blocked check agent.integrate {action:\"status\"}", IntegrationApplyingText, rev.AgentID, rev.AgentID, rev.AgentID)
 }
 
-// A focused optional review snapshots the lead's current tree into a distinct
-// checkout. It grants neither mutation permission nor integration approval.
-func (s *WorkspaceService) prepareStandaloneReviewer(ctx context.Context, t protocol.AgentTask, c protocol.AgentChild) (WorkspaceRef, error) {
-	id := "delegation-standalone-review-" + t.ID + "-" + c.ID
-	planned := s.Manager.Path(id)
-	if pathutil.Within(t.ParentRoot, planned) || pathutil.Within(planned, t.ParentRoot) || pathutil.Within(t.BaseRoot, planned) || pathutil.Within(planned, t.BaseRoot) {
-		return WorkspaceRef{}, errors.New("review checkout must be isolated from parent")
-	}
-	w, err := s.Store.AgentWorkspace(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
-		snapshot, err := s.Manager.Ensure(ctx, id, t.ParentRoot)
-		if err != nil {
-			return WorkspaceRef{}, err
-		}
-		w = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: c.ID, Kind: "reviewer", SourceID: "lead_snapshot", Root: snapshot.Path, ParentRoot: t.ParentRoot, BaseRevision: snapshot.BaselineCommit, ResultRevision: snapshot.BaselineCommit}
-		if err = s.Store.SaveAgentWorkspace(ctx, w); err != nil {
-			return WorkspaceRef{}, err
-		}
-	} else if err != nil {
-		return WorkspaceRef{}, err
-	}
-	if w.Cleaned || w.TaskID != t.ID || w.ChildID != c.ID || w.Root != planned || w.SourceID != "lead_snapshot" {
-		return WorkspaceRef{}, errors.New("review snapshot ownership changed")
-	}
-	if err = validatePrivate(ctx, w.Root); err != nil {
-		return ref(w), err
-	}
-	if err = worktree.ValidateCommitted(ctx, w.Root, w.ResultRevision); err != nil {
-		return ref(w), err
-	}
-	if err = s.attach(ctx, t, c, w.ID); err != nil {
-		return ref(w), err
-	}
-	return ref(w), nil
-}
-
-// PrepareStandaloneReview explicitly admits a lead snapshot before execution;
-// missing submitted-revision provenance never implicitly grants this path.
-func (s *WorkspaceService) PrepareStandaloneReview(ctx context.Context, task protocol.AgentTask, child protocol.AgentChild) (WorkspaceRef, error) {
+// PrepareRuntime gives a runtime agent its own private checkout. A
+// write-capable agent gets an isolated writable checkout of the task's
+// committed base revision (snapshotted by SnapshotRuntime; its revision is
+// integrated onto the current head like any other). Any other agent gets a
+// read-only view (PrepareRuntimeView). The workspace is recorded on the agent
+// (RuntimeAgent.WorkspaceID). Runtime agents are inert to the legacy
+// delegation paths: their mirror rows are hidden from AgentChild.
+//
+// Workspaces can be prepared after revisions were integrated: the project
+// checkout must then be HEAD == base with its index exactly the recorded
+// integration head (worktree.ParentStateForRuntime), and it is only read.
+//
+// Serialisation: preparation holds the task's integration lock (taken before
+// the service lock, the order CleanupRuntime uses), the lock IntegrateRuntime,
+// ResolveRuntimeManually and reconcile hold for their whole run. So the head
+// read here, the parent check and the clone or view never interleave with an
+// accept: a preparation started during an accept waits for it and then sees
+// the new head. A revision still applying under the lock is an interrupted
+// apply; preparation is refused until it is reconciled.
+func (s *WorkspaceService) PrepareRuntime(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, writable bool) (WorkspaceRef, error) {
+	defer s.lockTask(task.ID)()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, err := s.task(ctx, task)
 	if err != nil {
 		return WorkspaceRef{}, err
 	}
-	c, err := s.Store.AgentChild(ctx, t.ID, child.ID)
+	a, err := s.Store.RuntimeAgent(ctx, t.ID, agent.ID)
 	if err != nil {
 		return WorkspaceRef{}, err
 	}
-	if c.Role != protocol.AgentRoleReviewer || child.TaskID != t.ID {
-		return WorkspaceRef{}, errors.New("standalone review requires its owning reviewer child")
+	if agent.TaskID != t.ID || a.Capabilities != agent.Capabilities {
+		return WorkspaceRef{}, errors.New("agent workspace ownership changed")
 	}
-	if _, _, err = s.Store.AgentReviewerSource(ctx, t.ID, c.ID); err == nil {
-		return WorkspaceRef{}, errors.New("reviewer already bound to submitted revision")
-	} else if !errors.Is(err, store.ErrNotFound) {
+	return s.prepareRuntimeLocked(ctx, t, a, writable)
+}
+
+// PrepareRuntimeView gives a read-only runtime agent (files read or none) its
+// private view: before any accept a checkout of the base revision; after one,
+// a checkout of the integrated head, built by applying the trusted parent's
+// base→head diff inside the private checkout and verified to be exactly the
+// head tree before the agent starts (worktree.ApplyRuntimeView). Reviewers
+// therefore see the integrated result. Same locking as PrepareRuntime.
+func (s *WorkspaceService) PrepareRuntimeView(ctx context.Context, taskID, agentID string) (WorkspaceRef, error) {
+	defer s.lockTask(taskID)()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, err := s.Store.AgentTask(ctx, taskID)
+	if err != nil {
 		return WorkspaceRef{}, err
 	}
-	return s.prepareStandaloneReviewer(ctx, t, c)
+	t, err := s.task(ctx, stored)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	a, err := s.Store.RuntimeAgent(ctx, t.ID, agentID)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	return s.prepareRuntimeLocked(ctx, t, a, false)
+}
+
+// prepareRuntimeLocked is PrepareRuntime for a caller holding the task lock
+// and the service lock.
+func (s *WorkspaceService) prepareRuntimeLocked(ctx context.Context, t protocol.AgentTask, a protocol.RuntimeAgent, writable bool) (WorkspaceRef, error) {
+	if !writable && a.Capabilities.Files == protocol.FilesReadWrite {
+		return WorkspaceRef{}, fmt.Errorf("agent %s can write files; it gets a writable checkout, not a read-only view", a.ID)
+	}
+	revs, err := s.Store.AgentRevisions(ctx, t.ID)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	for _, r := range revs {
+		if r.State == store.RevisionApplying {
+			return WorkspaceRef{}, errors.New(IntegrationApplyingAdvice(r))
+		}
+	}
+	h, err := s.head(ctx, t, false)
+	if err != nil {
+		return WorkspaceRef{}, err
+	}
+	// Refuse an unusable project checkout before any workspace identity is
+	// recorded, so a refused first preparation leaves nothing stale behind
+	// (EnsureRuntime checks again under the manager lock).
+	if err = worktree.ParentStateForRuntime(ctx, t.ParentRoot, t.BaseRevision, h.HeadTree); err != nil {
+		return WorkspaceRef{}, err
+	}
+	// A view shows the recorded integration head (built from its objects in
+	// the parent), not whatever the parent currently holds: the parent check
+	// also accepts an index reset to the base tree, and a parent whose
+	// integration was discarded with reset --hard still gets the recorded
+	// head while its objects exist (after gc --prune the view fails closed).
+	// The next accept refuses such a parent anyway.
+	integrated := h.AppliedCount > 0
+	id := "agent-" + t.ID + "-" + a.ID
+	planned := store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: a.ID, Kind: "implementer", Root: s.Manager.Path(id), ParentRoot: t.ParentRoot, BaseRevision: t.BaseRevision}
+	viewCommit := ""
+	if !writable {
+		id = "agent-view-" + t.ID + "-" + a.ID
+		planned = store.AgentWorkspace{ID: id, TaskID: t.ID, ChildID: a.ID, Kind: "reviewer", SourceID: runtimeBaseSource, Root: s.Manager.Path(id), ParentRoot: t.ParentRoot, BaseRevision: t.BaseRevision, ResultRevision: t.BaseRevision}
+		if integrated {
+			if viewCommit, err = worktree.RuntimeViewCommit(ctx, t.ParentRoot, t.BaseRevision, h.HeadTree); err != nil {
+				return WorkspaceRef{}, err
+			}
+			planned.SourceID, planned.ResultRevision, planned.ResultTree = runtimeHeadSource, viewCommit, h.HeadTree
+		}
+	}
+	if existing, readErr := s.Store.AgentWorkspace(ctx, id); readErr == nil {
+		if existing.TaskID != t.ID || existing.ChildID != a.ID || existing.Kind != planned.Kind || (writable && existing.SourceID != planned.SourceID) {
+			return ref(existing), errors.New("agent workspace ownership changed")
+		}
+		if !writable && (existing.SourceID != planned.SourceID || existing.ResultRevision != planned.ResultRevision) {
+			_, statErr := os.Lstat(s.Manager.Path(id))
+			// A view whose checkout was never created (its first
+			// preparation failed after the identity was recorded) is
+			// re-planned for the current head; the store keeps SourceID
+			// fixed, so only a head-to-head re-plan is possible.
+			if !errors.Is(statErr, os.ErrNotExist) || existing.SourceID != planned.SourceID || existing.Cleaned || existing.Cleaning {
+				return ref(existing), fmt.Errorf("agent %s's view was prepared for an earlier integrated state; cancel it and spawn a new agent", a.ID)
+			}
+			if err = s.Store.SaveAgentWorkspace(ctx, planned); err != nil {
+				return ref(existing), err
+			}
+		}
+	} else if !errors.Is(readErr, store.ErrNotFound) {
+		return WorkspaceRef{}, readErr
+	}
+	r, err := s.ownedCheckout(ctx, t, planned, func(id string) error { return s.attachRuntime(ctx, t, a.ID, id) },
+		func(id string) (worktree.Workspace, error) {
+			return s.Manager.EnsureRuntime(ctx, id, t.ParentRoot, t.BaseRevision, h.HeadTree)
+		})
+	if err != nil || writable {
+		return r, err
+	}
+	if !integrated {
+		return r, worktree.ValidateCommitted(ctx, r.Root, t.BaseRevision)
+	}
+	if err = s.Manager.ApplyRuntimeView(ctx, id, t.ParentRoot, t.BaseRevision, h.HeadTree, viewCommit); err != nil {
+		return r, fmt.Errorf("agent %s: integrated view not usable: %w", a.ID, err)
+	}
+	if err = validatePrivate(ctx, r.Root); err != nil {
+		return r, err
+	}
+	return r, worktree.ValidateCommitted(ctx, r.Root, viewCommit)
+}
+
+// attachRuntime records workspace id on the agent; an agent never changes
+// workspace once it owns one.
+func (s *WorkspaceService) attachRuntime(ctx context.Context, t protocol.AgentTask, agentID, id string) error {
+	for i := 0; i < 8; i++ {
+		latest, err := s.Store.RuntimeAgent(ctx, t.ID, agentID)
+		if err != nil {
+			return err
+		}
+		if latest.WorkspaceID != "" && latest.WorkspaceID != id {
+			return errors.New("agent already owns a different workspace")
+		}
+		if latest.WorkspaceID == id {
+			return nil
+		}
+		latest.WorkspaceID = id
+		err = s.Store.UpdateRuntimeAgent(ctx, latest, latest.Version)
+		if errors.Is(err, store.ErrAgentConflict) {
+			continue
+		}
+		if err == nil && s.events != nil {
+			latest.Version++
+			s.events(AgentEvent{ThreadID: t.ThreadID, TaskID: t.ID, Agent: &latest})
+		}
+		return err
+	}
+	return store.ErrAgentConflict
+}
+
+// DiscardRuntimeView removes the read-only view checkout of a stopped runtime
+// agent (completed, failed or cancelled). It refuses anything but a runtime
+// view owned by that agent: a write-capable agent's workspace is kept for
+// integration and is never touched. The checkout must still be exactly the
+// revision it was prepared at (the base, or its integrated view commit) and
+// clean (DiscardCommitted), else it is retained.
+func (s *WorkspaceService) DiscardRuntimeView(ctx context.Context, taskID, agentID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, err := s.Store.RuntimeAgent(ctx, taskID, agentID)
+	if err != nil {
+		return err
+	}
+	if a.WorkspaceID == "" {
+		return nil
+	}
+	w, err := s.Store.AgentWorkspace(ctx, a.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	if w.TaskID != taskID || w.ChildID != agentID || w.Kind != "reviewer" || (w.SourceID != runtimeBaseSource && w.SourceID != runtimeHeadSource) {
+		return errors.New("workspace is not a runtime view checkout of this agent")
+	}
+	if w.Cleaned {
+		return nil
+	}
+	return s.discardVerified(ctx, w)
+}
+
+// SnapshotRuntime is SnapshotOwned for a stopped runtime agent: a writable
+// checkout is committed privately and reports its changed paths; a read-only
+// checkout must still be exactly the revision it was prepared at (the base
+// or its integrated view commit) and reports none.
+func (s *WorkspaceService) SnapshotRuntime(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, workspace WorkspaceRef) (WorkspaceSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.task(ctx, task)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	a, err := s.Store.RuntimeAgent(ctx, t.ID, agent.ID)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	w, err := s.Store.AgentWorkspace(ctx, workspace.ID)
+	if err != nil {
+		return WorkspaceSnapshot{}, err
+	}
+	if w.TaskID != t.ID || w.ChildID != a.ID || w.Root != workspace.Root || a.WorkspaceID != w.ID || w.Cleaned {
+		return WorkspaceSnapshot{}, errors.New("finalization workspace identity changed")
+	}
+	return s.snapshotOwned(ctx, w, a.Revision != "")
 }

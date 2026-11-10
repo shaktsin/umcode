@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS agent_plan_continuations (
+ task_id TEXT PRIMARY KEY REFERENCES agent_tasks(id) ON DELETE CASCADE,
+ turn_id TEXT NOT NULL UNIQUE REFERENCES turns(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL
+);

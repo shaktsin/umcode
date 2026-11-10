@@ -111,3 +111,11 @@ it('child snapshots reuse child/revision/path tabs and never fall back to mutabl
   expect(inspector.active?.error).toMatch(/snapshot.*unavailable/i); expect(inspector.active?.content).toBeUndefined();
   expect(request.mock.calls.every(([method]) => method === 'delegation/file')).toBe(true);
 });
+it('opens one tab per runtime agent and syncs updates without stealing focus', () => {
+  const agent = (state: string) => ({ id: 'ag', taskId: 'task-a', name: 'Builder', state }) as any;
+  inspector.syncAgent(agent('running'), 'thread-a', 'project-a'); expect(inspector.tabs).toHaveLength(0);
+  inspector.openAgent(agent('running'), 'thread-a', 'project-a'); inspector.openAgent(agent('running'), 'thread-a', 'project-a');
+  expect(inspector.tabs).toHaveLength(1); expect(inspector.active?.kind).toBe('agent');
+  inspector.openOutput('x', 'y'); inspector.syncAgent(agent('completed'), 'thread-a', 'project-a');
+  expect(inspector.tabs.find(t => t.kind === 'agent')?.agent?.state).toBe('completed'); expect(inspector.active?.kind).toBe('output');
+});

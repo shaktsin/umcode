@@ -1,3 +1,4 @@
+import { fmtTokens } from './format';
 import type { ModelCapacityProfile } from './types';
 export function capacityFields(contextWindow: number | undefined, maxOutputTokens: number | undefined, responseReserveTokens: number | undefined): Partial<ModelCapacityProfile> {
  const fields = { contextWindow, maxOutputTokens, responseReserveTokens };
@@ -36,7 +37,12 @@ export function capacityIsAssumed(result: { source: string } | null): boolean {
  return result?.source === 'default';
 }
 
-/** Copy for the chat banner shown while the window is assumed. */
-export function assumedCapacityNotice(model: string, window = DEFAULT_CONTEXT_WINDOW): string {
- return `The context limit for ${model} is unknown, so UMCode assumes ${window.toLocaleString('en-US')} tokens. Chat works normally; if the server rejects a request as too large, UMCode adapts automatically.`;
+/** The one-line status shown while the window is assumed. */
+export function assumedCapacityNotice(window = DEFAULT_CONTEXT_WINDOW): string {
+ return `Context window assumed at ${fmtTokens(window)} tokens`;
+}
+
+/** The full explanation, shown on hover or focus rather than in the line itself. */
+export function assumedCapacityDetail(model: string, window = DEFAULT_CONTEXT_WINDOW): string {
+ return `UMCode doesn't know the context limit for ${model} yet, so it assumes ${window.toLocaleString('en-US')} tokens. Chat works normally, and UMCode adapts if the server rejects a request as too large.`;
 }

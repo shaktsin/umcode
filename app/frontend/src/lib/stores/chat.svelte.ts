@@ -1,7 +1,8 @@
 import { defaultApprovalMode } from '$lib/approvalModes';
 import { applyCompactionUpdate,compactionActive } from '$lib/compaction';
-import type { CompactionState } from '$lib/types';
+import type { AgentPlanUpdated, CompactionState } from '$lib/types';
 import { DelegationState } from './delegation.svelte';
+import { AgentCards } from './agentCards.svelte';
 import type { DelegationUpdated } from '$lib/delegation';
 import { app } from './app.svelte';
 import { projects } from './projects.svelte';
@@ -32,6 +33,13 @@ function isSideChat(t: Thread): boolean {
 export class ThreadView {
   compaction = $state<CompactionState|null>(null);
   delegation = new DelegationState();
+  cards = new AgentCards();
+  /** A resolution message waiting for the current turn to finish. */
+  private queued = $state<{ threadId: string | null; text: string; kind?: 'resolve' } | null>(null);
+  /** Resolve messages waiting for the lead's running turn to end. */
+  get queuedResolve(): boolean { return !!this.queued && this.queued.threadId === this.id && this.queued.kind === 'resolve'; }
+  /** Why a queued conflict-resolution follow-up could not be sent. */
+  followUpError = $state('');
   id = $state<string | null>(null);
   thread = $state<Thread | null>(null);
   turns = $state<Turn[]>([]);
@@ -60,6 +68,7 @@ export class ThreadView {
   }
 
   reset() {
+    this.queued = null; this.followUpError = '';
     void this.delegation.bind(null);
     this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();
     this.id = null;
@@ -74,7 +83,7 @@ export class ThreadView {
   }
 
   async load(id: string) {
-    if (this.id !== id) {this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();void this.delegation.bind(id);}
+    if (this.id !== id) {this.queued = null; this.followUpError = '';this.compaction=null;this.compactionVersion++;this.terminalCompactionTurns.clear();void this.delegation.bind(id);}
     this.id = id;
     this.loading = true;
     const compactionVersion=this.compactionVersion;
@@ -91,6 +100,7 @@ export class ThreadView {
       this.items = (r.items ?? []).sort((a, b) => a.seq - b.seq);
       this.selection = { ...(r.thread.settings ?? {}) };
       this.sending = this.turns.some((t) => t.status === 'running');
+      this.drainQueue();
       void this.loadRoute();
     } catch (e) {
       app.toast('error', errMsg(e));
@@ -114,6 +124,15 @@ export class ThreadView {
     if (i >= 0) this.turns[i] = t;
     else this.turns = [...this.turns, t];
     if (t.status !== 'running') this.sending = this.turns.some((x) => x.status === 'running');
+    if (t.status !== 'running') this.drainQueue();
+  }
+
+  /** Submits a follow-up queued by this thread once none of its turns is running (also after a reload that finds the turn done). */
+  private drainQueue() {
+    const q = this.queued;
+    if (!q || q.threadId !== this.id || this.running) return;
+    this.queued = null;
+    void this.submitFollowUp(q.text, q.kind);
   }
 
   applyItem(it: Item) {
@@ -136,7 +155,7 @@ export class ThreadView {
   }
 
   async send(text: string, attachments: Attachment[] = [], start?: () => Promise<Thread>, workbench?: WorkbenchContext) {
-    if (this.delegation.pending) return;
+    if (this.delegation.pending) { app.toast('error', 'Agents are being prepared. Try again in a moment.'); return; }
     text = text.trim();
     if (!text && attachments.length === 0) return;
     this.sending = true;
@@ -150,11 +169,47 @@ export class ThreadView {
         this.items = [];
       }
       if (!workbench && (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId)) await this.delegation.bind(this.id, this.thread?.projectId);
-      await app.call('turn/start', { threadId: this.id, text, attachments, ...(workbench ? { workbench } : this.delegation.submission()) });
+      const submission = workbench ? { workbench } : this.delegation.submission();
+      await app.call('turn/start', { threadId: this.id, text, attachments, ...submission });
       if (!workbench) void this.delegation.hydrate();
     } catch (e) {
       this.sending = false;
       app.toast('error', errMsg(e));
+    }
+  }
+
+  /** Starts a conflict-resolution follow-up now, or queues it while a turn runs. */
+  async submitFollowUp(text: string, kind?: 'resolve') {
+    this.followUpError = '';
+    if (this.running) {
+      const q = this.queued;
+      if (q && q.threadId === this.id) {
+        // One slot: Resolve messages join each other; anything else must not be dropped silently.
+        if (q.kind === 'resolve' && kind === 'resolve') { if (!q.text.split('\n').includes(text)) this.queued = { ...q, text: `${q.text}\n${text}` }; return; }
+        this.followUpError = 'Another follow-up is already waiting for the current turn. Try again once it is sent.';
+        return;
+      }
+      this.queued = { threadId: this.id, text, kind };
+      return;
+    }
+    this.queued = null;
+    await this.send(text);
+  }
+
+  /** Recovers an approved plan whose automatic continuation did not start. */
+  async continueApprovedTask(taskId: string) {
+    if (!this.id || this.running || this.sending) return;
+    const entry = this.cards.approvedPlanNeedingContinuation(taskId);
+    if (!entry) return;
+    this.sending = true;
+    try {
+      await app.call('turn/start', { threadId: this.id, text: 'Continue the approved agent plan and original request.', delegationTaskId: taskId });
+      void this.cards.refreshPlan(entry.plan.id);
+      void this.delegation.hydrate();
+    } catch (e) {
+      app.toast('error', errMsg(e));
+    } finally {
+      this.sending = false;
     }
   }
 
@@ -206,6 +261,7 @@ class ChatState {
   constructor() {
     const r = app.rpc;
     r.on('delegation/updated', (p: DelegationUpdated) => this.each(v => v.delegation.apply(p)));
+    r.on('agent/plan/updated', (p: AgentPlanUpdated) => this.each(v => { if (v.id === p.threadId) v.cards.onPlanUpdated(p); }));
     r.on('thread/compactionUpdated',(state:CompactionState)=>this.each(v=>v.applyCompaction(state)));
     r.on('thread/updated', (p: { thread: Thread }) => this.upsertThread(p.thread));
     r.on('turn/started', (p: { turn: Turn }) => {
@@ -341,36 +397,6 @@ class ChatState {
     });
     this.upsertThread(th);
     return th;
-  }
-
-  /** Manual permission works before the first paid message. The pending guard
-   * coalesces repeated clicks; navigation cannot attach a token to another scope. */
-  async enableDelegation(view: ThreadView) {
-    if (view.delegation.pending || view.sending || view.running) return;
-    const projectId = view.id ? view.thread?.projectId : view === this.main ? projects.activeId : null;
-    if (!projectId) { view.delegation.error = 'Agents require a committed Git project. Open a project first.'; return; }
-    if (view.id) {
-      if (view.delegation.threadId !== view.id || view.delegation.projectId !== projectId) await view.delegation.bind(view.id, projectId);
-      await view.delegation.enable(); return;
-    }
-    if (view !== this.main) return;
-    const generation = this.mainGeneration;
-    view.delegation.pending = true; view.delegation.error = '';
-    try {
-      const th = await this.startMainThread();
-      if (generation !== this.mainGeneration || projects.activeId !== projectId || view.id) return;
-      view.id = th.id; view.thread = th;
-      await view.delegation.bind(th.id, th.projectId, true);
-      if (generation !== this.mainGeneration || projects.activeId !== projectId || view.id !== th.id || view.delegation.threadId !== th.id) return;
-      // Transfer the pending guard synchronously to enable; no submission can
-      // run between hydration and the one-use permission request.
-      view.delegation.pending = false;
-      await view.delegation.enable();
-    } catch (e) {
-      if (generation === this.mainGeneration) view.delegation.error = errMsg(e);
-    } finally {
-      if (generation === this.mainGeneration) { view.delegation.pending = false; }
-    }
   }
 
   /** Send in the main chat, creating the thread in the open project on first send. */

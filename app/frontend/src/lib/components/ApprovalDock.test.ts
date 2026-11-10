@@ -32,3 +32,10 @@ it('renders nothing when no approval is pending', () => {
   expect(body).not.toContain('Allow once');
   expect(body).not.toContain('Approval needed');
 });
+
+it('does not dock an agent_plan approval; the inline plan card is its only place', () => {
+  const plan = { ...mk('plan1', '2026-10-23T09:00:00Z'), kind: 'agent_plan', tool: 'agent.propose_plan' };
+  const { body } = render(ApprovalDock, { props: { approvals: [plan, mk('a1', '2026-10-23T10:00:00Z')], threadId: 't1' } });
+  expect(body).toContain('cmd a1'); expect(body).not.toContain('plan1'); expect(body).not.toContain('of 2');
+  expect(render(ApprovalDock, { props: { approvals: [plan], threadId: 't1' } }).body).not.toContain('Approval needed');
+});

@@ -45,7 +45,9 @@ func (e *Engine) ListDelegation(ctx context.Context, p protocol.DelegationListPa
 		tasks = []protocol.AgentTask{task}
 	}
 	for _, task := range tasks {
-		children, errs, sequences, err := e.DelegationCoordinator.Snapshot(ctx, task.ID)
+		// Legacy children are read-only history of tasks from before the
+		// agent runtime (runtime agents are filled by fillRuntimeSnapshot).
+		children, err := e.Store.AgentChildren(ctx, task.ID)
 		if err != nil {
 			return result, err
 		}
@@ -55,7 +57,7 @@ func (e *Engine) ListDelegation(ctx context.Context, p protocol.DelegationListPa
 		for i := range children {
 			children[i].WorkspaceID = ""
 		}
-		snapshot := protocol.AgentSnapshot{Task: task, Children: children, ChildErrors: errs, ChildSequences: sequences}
+		snapshot := protocol.AgentSnapshot{Task: task, Children: children}
 		workflow, err := e.Store.AgentWorkflow(ctx, task.ID)
 		if err == nil {
 			snapshot.Workflow = &workflow
@@ -73,12 +75,22 @@ func (e *Engine) ListDelegation(ctx context.Context, p protocol.DelegationListPa
 			snapshot.StopReason = stop
 			snapshot.BudgetAvailable = true
 		}
+		if err = e.fillRuntimeSnapshot(ctx, task, &snapshot); err != nil {
+			return result, err
+		}
 		result.Tasks = append(result.Tasks, snapshot)
 	}
 	return result, nil
 }
 func (e *Engine) ReadDelegationFile(ctx context.Context, p protocol.DelegationFileParams) (protocol.ProjectReadFileResult, error) {
 	if _, err := e.ownedDelegation(ctx, p.ThreadID, p.TaskID); err != nil {
+		return protocol.ProjectReadFileResult{}, err
+	}
+	// A runtime agent reads from its own retained workspace; anything else
+	// is a legacy child's retained snapshot, read as history.
+	if _, err := e.Store.RuntimeAgent(ctx, p.TaskID, p.ChildID); err == nil {
+		return e.DelegationWorkspaceService.ReadRuntimeSnapshotFile(ctx, p.TaskID, p.ChildID, p.Revision, p.Path)
+	} else if !errors.Is(err, store.ErrNotFound) {
 		return protocol.ProjectReadFileResult{}, err
 	}
 	return e.DelegationWorkspaceService.ReadSnapshotFile(ctx, p.TaskID, p.ChildID, p.Revision, p.Path)

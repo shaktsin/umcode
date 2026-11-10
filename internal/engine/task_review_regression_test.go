@@ -247,7 +247,7 @@ func TestTaskChildRequirementRevalidatedAfterApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	parentRoot, childRoot := t.TempDir(), t.TempDir()
-	x := &childExecution{task: protocol.AgentTask{ID: "admitted-child-task", ThreadID: th.ID, RootTurnID: turn.ID, ParentRoot: parentRoot}, child: protocol.AgentChild{Role: protocol.AgentRoleImplementer}, workspace: ChildWorkspace{Root: childRoot}}
+	x := &childExecution{task: protocol.AgentTask{ID: "admitted-child-task", ThreadID: th.ID, RootTurnID: turn.ID, ParentRoot: parentRoot}, runtime: &runtimeExecution{agent: protocol.RuntimeAgent{Capabilities: protocol.AgentCapabilities{Files: protocol.FilesReadWrite}}}, workspace: ChildWorkspace{Root: childRoot}}
 	ctx := tools.WithScope(withChildExecution(t.Context(), x), &tools.Scope{Root: childRoot, RestrictedChild: true})
 	op := protocol.TaskOperation{Tool: "file.write", Args: json.RawMessage(`{"path":"notes.txt","content":"changed"}`)}
 	initial, err := e.checkChildTaskAuthority(ctx, op)

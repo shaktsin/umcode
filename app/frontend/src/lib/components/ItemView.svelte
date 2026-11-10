@@ -7,6 +7,8 @@
   import { inspector } from '$lib/stores/inspector.svelte';
   import ToolCall from './ToolCall.svelte';
   import ChatError from './ChatError.svelte';
+  import AgentPlan from './AgentPlan.svelte';
+  import { parsePlanResult, planIdForItem } from '$lib/agentPlanCard';
 
   let { item, highlight = false, view }: { item: Item; highlight?: boolean; view?: ThreadView } = $props();
   let showThinking = $state(false);
@@ -15,6 +17,13 @@
   let actionsOpen = $state(false);
 
   const html = $derived(item.kind === 'agentMessage' ? renderMarkdown(item.text || '') : '');
+  // agent.propose_plan renders as a card once its result or pending plan card names an id;
+  // a refusal or a failed call stays an ordinary tool row.
+  const agentCard = $derived.by(() => {
+    if (item.kind !== 'toolCall' || !item.tool || !view) return null;
+    if (item.tool.name === 'agent.propose_plan' && (planIdForItem(item, app.approvals) || parsePlanResult(item.tool.output)?.state)) return 'plan';
+    return null;
+  });
   const change = $derived(item.kind === 'fileChange' ? (item.data as FileChangeData) : null);
 
   async function copyMessage() {
@@ -88,6 +97,8 @@
       </button>
       {#if showSummary}<p class="mt-2 whitespace-pre-wrap selectable text-ink-soft">{item.text}</p>{/if}
     </section>
+  {:else if agentCard === 'plan' && view}
+    <AgentPlan {item} {view} />
   {:else if item.kind === 'toolCall' && item.tool}
     <ToolCall {item} projectId={view?.thread?.projectId} />
   {:else if change}

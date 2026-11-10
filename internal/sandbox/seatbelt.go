@@ -44,6 +44,9 @@ func seatbeltProfile(p Policy) (string, error) {
 	}
 	b.WriteString("(deny file-write*)\n")
 	writable := append([]string{p.Root}, p.Writable...)
+	if p.RootReadOnly {
+		writable = append([]string{}, p.Writable...)
+	}
 	b.WriteString("(allow file-write*\n")
 	for _, w := range writable {
 		q, err := sbplQuote(w)
@@ -56,7 +59,7 @@ func seatbeltProfile(p Policy) (string, error) {
 		fmt.Fprintf(&b, "  (literal %q)\n", dev)
 	}
 	b.WriteString("  (regex #\"^/dev/fd/[0-9]+$\")\n  (regex #\"^/dev/ttys[0-9]+$\")\n)\n")
-	for _, ro := range p.ReadOnlyInRoot {
+	for _, ro := range append(append([]string{}, p.ReadOnlyPaths...), p.ReadOnlyInRoot...) {
 		q, err := sbplQuote(ro)
 		if err != nil {
 			return "", err

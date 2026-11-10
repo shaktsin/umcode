@@ -2,9 +2,9 @@ import { expect, it } from 'vitest';
 import { APPROVAL_MODES, approvalModeLabel } from './approvalModes';
 
 it('labels every approval mode and treats empty as Ask every time', () => {
-  expect(approvalModeLabel('')).toBe('Ask every time');
-  expect(approvalModeLabel(undefined)).toBe('Ask every time');
-  expect(approvalModeLabel('normal')).toBe('Ask every time');
+  expect(approvalModeLabel('')).toBe('Ask for external actions');
+  expect(approvalModeLabel(undefined)).toBe('Ask for external actions');
+  expect(approvalModeLabel('normal')).toBe('Ask for external actions');
   expect(approvalModeLabel('auto_workspace')).toBe('Auto-approve workspace');
   expect(approvalModeLabel('auto_all')).toBe('Auto-approve all');
 });

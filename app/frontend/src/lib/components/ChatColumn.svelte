@@ -448,8 +448,12 @@
     {/if}
   </div>
 
-  {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} />{/if}
-  <CapacityNotice selection={view.selection} />
+  <div class="shrink-0 px-4">
+    <div class="{variant === 'main' ? 'max-w-3xl' : ''} mx-auto">
+      {#if view.id}<Agents state={view.delegation} threadId={view.id} projectId={view.thread?.projectId} onsend={(text) => void view.submitFollowUp(text, 'resolve')} resolveQueued={view.queuedResolve} />{/if}
+      <CapacityNotice selection={view.selection} />
+    </div>
+  </div>
   <Composer {view} compact={workbenchMode || variant === 'side'} {workbenchMode} />
 </div>
 

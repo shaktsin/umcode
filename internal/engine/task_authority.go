@@ -124,6 +124,20 @@ func (e *Engine) requirementApproval(ctx context.Context, task protocol.Executio
 	}
 	return a, true, nil
 }
+
+// recordOnlyAgentTool names the activation cards whose only effects are the
+// engine's own records: agent.suggest stores a suggestion and agent.propose_plan
+// a proposed plan and its card. When such a call is cut off (turn interrupted,
+// engine restarted), nothing outside the engine's records was changed: either
+// the card expired and the plan stays proposed, or the user's decision was
+// stored just before the cut and the plan is approved. Even then nothing runs
+// until the lead makes further tool calls (agent.spawn), which pass their own
+// checks, and the stored states are readable (agent/plan/get). So the call
+// never blocks later actions as an uncertain mutation would.
+func recordOnlyAgentTool(name string) bool {
+	return name == "agent.suggest" || name == "agent.propose_plan"
+}
+
 func (e *Engine) checkTaskAuthority(ctx context.Context, th protocol.Thread, snapshot protocol.TaskSnapshot, op protocol.TaskOperation) (protocol.AuthorityDecision, error) {
 	latest, err := e.Store.ActiveExecutionTask(ctx, th.ID)
 	if err != nil {
@@ -196,7 +210,7 @@ func (e *Engine) checkTaskAuthority(ctx context.Context, th protocol.Thread, sna
 	}
 	if !workflowDiscoveryTool(op.Tool) {
 		for _, past := range latest.Operations {
-			if past.Status == "outcome_unknown" && past.ResolvedByID == "" {
+			if past.Status == "outcome_unknown" && past.ResolvedByID == "" && !recordOnlyAgentTool(past.Tool) {
 				d := taskDenied(op, "outcome_unknown", "A previous action's effects are uncertain.", "Inspect and verify its effects before any further mutation; do not replay it.")
 				d.Failure.BlockerID = past.ID
 				return d, nil

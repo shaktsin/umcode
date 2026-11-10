@@ -21,6 +21,7 @@ import (
 	"github.com/shaktsin/umcode/internal/compute"
 	"github.com/shaktsin/umcode/internal/computeruse"
 	"github.com/shaktsin/umcode/internal/config"
+	"github.com/shaktsin/umcode/internal/pathutil"
 	"github.com/shaktsin/umcode/internal/preview"
 	"github.com/shaktsin/umcode/internal/procutil"
 	"github.com/shaktsin/umcode/internal/sandbox"
@@ -124,7 +125,7 @@ func (t *verificationRun) Assess(args json.RawMessage) (Risk, string) {
 	return risk, fmt.Sprintf("Run %d verification checks", len(a.Checks))
 }
 func (t *verificationRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
-	if err := RequireWritable(ctx); err != nil {
+	if err := RequireShell(ctx); err != nil {
 		return "", err
 	}
 	type check struct {
@@ -355,7 +356,13 @@ func resolvePath(ctx context.Context, ws *Workspaces, name, path string, op Oper
 		if name != "" && name != "project" {
 			return "", fmt.Errorf("this chat works in the project %s; %q is not one of its folders", scope.ProjectName, name)
 		}
-		return scope.Resolve(path)
+		abs, err := scope.Resolve(path)
+		if err == nil && op != OpRead && scope.RuntimeAgent {
+			if guardErr := agentWriteTarget(scope, abs); guardErr != nil {
+				return "", guardErr
+			}
+		}
+		return abs, err
 	}
 	if op != OpRead {
 		return "", ErrNoProject
@@ -365,6 +372,60 @@ func resolvePath(ctx context.Context, ws *Workspaces, name, path string, op Oper
 		return "", err
 	}
 	return w.Resolve(path, op)
+}
+
+// agentWriteTarget refuses a runtime agent's write that would land in the
+// root's .git, judged both lexically and at the target a write would actually
+// reach after following every symlink, dangling ones included.
+func agentWriteTarget(scope *Scope, abs string) error {
+	gitErr := errors.New("the repository metadata (.git) is read-only for agents")
+	first, _, _ := strings.Cut(scope.Rel(abs), "/")
+	if strings.EqualFold(first, ".git") {
+		return gitErr
+	}
+	target := writeTarget(abs, 0)
+	rel, err := filepath.Rel(pathutil.Resolved(scope.Root), target)
+	if target == "" || err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s resolves outside the project folder (or through a symlink loop); writes through it to .git or elsewhere are refused", scope.Rel(abs))
+	}
+	if first, _, _ = strings.Cut(filepath.ToSlash(rel), "/"); strings.EqualFold(first, ".git") {
+		return gitErr
+	}
+	return nil
+}
+
+// writeTarget is where a write to abs lands: every existing component is
+// followed if it is a symlink (a dangling link to its would-be target) and
+// the missing remainder is appended. "" means a symlink loop.
+func writeTarget(abs string, depth int) string {
+	if depth > 40 {
+		return ""
+	}
+	abs = filepath.Clean(abs)
+	cur := filepath.VolumeName(abs) + string(filepath.Separator)
+	parts := strings.Split(strings.TrimPrefix(abs[len(filepath.VolumeName(abs)):], string(filepath.Separator)), string(filepath.Separator))
+	for i, part := range parts {
+		next := filepath.Join(cur, part)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return filepath.Join(append([]string{cur}, parts[i:]...)...)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(next)
+			if err != nil {
+				return ""
+			}
+			if !filepath.IsAbs(link) {
+				link = filepath.Join(cur, link)
+			}
+			if cur = writeTarget(link, depth+1); cur == "" {
+				return ""
+			}
+			continue
+		}
+		cur = next
+	}
+	return cur
 }
 
 // ---- file.read ----
@@ -677,7 +738,7 @@ func discoveredToolPath(path, home string) string {
 }
 
 func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, error) {
-	if err := RequireWritable(ctx); err != nil {
+	if err := RequireShell(ctx); err != nil {
 		return "", err
 	}
 	a, err := decode[struct {
@@ -695,6 +756,11 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 	scope := ScopeFrom(ctx)
 	if scope == nil {
 		return "", ErrNoProject
+	}
+	if scope.RuntimeAgent {
+		if err := t.runtimeConfinementError(scope); err != nil {
+			return "", err
+		}
 	}
 	sandboxed := !scope.UseCompute && t.sandbox != nil
 	if scope.RestrictedChild && !scope.UseCompute && !sandboxed {
@@ -741,7 +807,8 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		code, runErr := t.compute.Run(cctx, compute.Request{
 			Root: scope.Root, Dir: dir, Command: a.Command,
 			Network: scope.AllowNet, Timeout: int(timeout.Seconds()),
-			VCPUs: scope.ComputeVCPUs, MemoryMiB: scope.ComputeMemoryMiB,
+			RootReadOnly: scope.RuntimeAgent && scope.ShellReadOnly,
+			VCPUs:        scope.ComputeVCPUs, MemoryMiB: scope.ComputeMemoryMiB,
 			DiskLimitBytes: int64(scope.ComputeDiskMiB) << 20, Stdout: stdout, Stderr: stderr,
 		})
 		if runErr != nil {
@@ -779,7 +846,14 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 				return "", err
 			}
 			defer os.RemoveAll(temp)
-			policy = sandbox.IsolatedChildPolicy(scope.Root, scope.AllowNet, temp)
+			switch {
+			case scope.RuntimeAgent && scope.ShellReadOnly:
+				policy = sandbox.ReadOnlyChildPolicy(scope.Root, scope.AllowNet, temp)
+			case scope.RuntimeAgent:
+				policy = sandbox.AgentWritePolicy(scope.Root, scope.AllowNet, temp)
+			default:
+				policy = sandbox.IsolatedChildPolicy(scope.Root, scope.AllowNet, temp)
+			}
 			cmd.Env = append(cmd.Env, "TMPDIR="+temp, "TMP="+temp, "TEMP="+temp)
 		}
 		if err := t.sandbox.Wrap(cmd, policy); err != nil {
@@ -809,6 +883,23 @@ func (t *shellRun) Call(ctx context.Context, args json.RawMessage) (string, erro
 		out += sandboxHint(stdout.String()+stderr.String(), scope.AllowNet)
 	}
 	return out, nil
+}
+
+// runtimeConfinementError refuses a runtime agent's command unless the one
+// per-project confinement resolver confirms a microVM or OS sandbox. There is
+// no host fallback: the message names why the shell is unavailable.
+func (t *shellRun) runtimeConfinementError(scope *Scope) error {
+	if !scope.Confined {
+		return errors.New("shell is not available to this agent: no confirmed confinement")
+	}
+	switch ShellConfinement(scope, t.compute != nil, t.sandbox) {
+	case ConfMicroVM, ConfOSSandbox:
+		return nil
+	}
+	if scope.UseCompute {
+		return errors.New("shell is unavailable to this agent: the project microVM is unavailable (no fallback to the host)")
+	}
+	return errors.New("shell is unavailable to this agent: no sandbox available (no fallback to the host)")
 }
 
 // sandboxHint explains a failure that looks like the sandbox's doing, so the

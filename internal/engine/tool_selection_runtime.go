@@ -340,13 +340,18 @@ func (e *Engine) permittedToolFor(ctx context.Context, c turnTool, p *protocol.P
 	if !childToolAllowed(ctx, c.tool.Name()) || (childExecutionFrom(ctx) != nil && c.plugin) {
 		return false
 	}
-	if c.tool.Name() == "agent.review_report" {
-		x := childExecutionFrom(ctx)
-		if x == nil || x.child.Role != protocol.AgentRoleReviewer {
+	if e.suggestOnlyTool(c.tool.Name()) {
+		// Kept for reading older suggestion records and compatibility tests,
+		// but no new model turn offers the removed enable step.
+		return false
+	}
+	if e.AgentRuntime != nil && c.tool.Name() == "agent.propose_plan" {
+		// Proposal is available to the ordinary lead and to an admitted
+		// lead revising an approved task; neither grants agent authority.
+		if id, ok := runtimeCaller(ctx); !ok || id != "" {
 			return false
 		}
-	}
-	if isDelegationTool(c.tool.Name()) {
+	} else if isDelegationTool(c.tool.Name()) {
 		if _, ok := DelegationTaskFromContext(ctx); !ok {
 			return false
 		}

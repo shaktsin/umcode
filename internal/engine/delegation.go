@@ -93,7 +93,24 @@ func (e *Engine) delegationOpen() error {
 
 // PrepareDelegation is the app's explicit, pre-submit activation action. It
 // returns a one-use chat/project/root/revision-bound token, not a premature task.
+// The user enabled agents themselves, so an earlier declined agent.suggest no
+// longer suppresses suggestions in this chat; that is lifted only together
+// with an issued token (a refused enable clears nothing).
 func (e *Engine) PrepareDelegation(ctx context.Context, threadID string) (protocol.DelegationEnableResult, error) {
+	res, err := e.prepareDelegationToken(ctx, threadID)
+	if err != nil {
+		return res, err
+	}
+	if err = e.Store.ClearThreadDeclines(ctx, threadID); err != nil {
+		e.revokeDelegationToken(res.ActivationToken)
+		return protocol.DelegationEnableResult{}, err
+	}
+	return res, nil
+}
+
+// prepareDelegationToken issues the activation token without touching
+// suggestion declines; callers decide when declines are lifted.
+func (e *Engine) prepareDelegationToken(ctx context.Context, threadID string) (protocol.DelegationEnableResult, error) {
 	if delegationChild(ctx) {
 		return protocol.DelegationEnableResult{}, protocol.Errorf(protocol.CodeInvalidRequest, "children cannot enable delegation")
 	}
@@ -166,21 +183,31 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 			return nil, protocol.Errorf(protocol.CodeInvalidParams, "delegation activation token is invalid or expired")
 		}
 	}
-	skill := false
-	if _, explicit := skills.Invocation(p.Text); explicit && p.DelegationTaskID == "" && p.DelegationActivationToken == "" && e.Plugins != nil {
-		th, err := e.Store.GetThread(ctx, p.ThreadID)
-		if err != nil {
-			return nil, err
-		}
-		snapshot, err := e.Plugins.Acquire(ctx, th.ProjectID)
-		if err != nil {
-			return nil, err
-		}
-		skill = e.submittedDelegationSkill(skills.WithSnapshot(ctx, snapshot.SkillSnapshot()), p.Text)
-		snapshot.Release()
-	}
-	if p.DelegationTaskID == "" && p.DelegationActivationToken == "" && !skill {
+	// A skill invocation is an ordinary lead turn. It may propose an inert
+	// plan, but cannot bypass the plan card and private snapshot admission.
+	if p.DelegationTaskID == "" && p.DelegationActivationToken == "" {
 		return nil, nil
+	}
+	// A plan-approved task executes in its recorded private parent. Its source
+	// checkout may be dirty or gain unrelated edits while agents are working,
+	// so the old clean-parent token check must not run on continuation.
+	if p.DelegationTaskID != "" {
+		task, err := e.Store.AgentTask(ctx, p.DelegationTaskID)
+		if err != nil {
+			return nil, err
+		}
+		if task.Activation == protocol.AgentActivationPlanApproval {
+			if task.ThreadID != p.ThreadID || !unfinishedDelegation(task.State) {
+				return nil, protocol.Errorf(protocol.CodeInvalidParams, "delegation task does not belong to this chat or is finished")
+			}
+			if err := e.validateDelegationParent(ctx, task); err != nil {
+				return nil, err
+			}
+			return &delegationAdmission{delegationToken: delegationToken{
+				ThreadID: task.ThreadID, ProjectID: task.ProjectID, Root: task.BaseRoot,
+				ParentRoot: task.ParentRoot, Revision: task.BaseRevision,
+			}, Task: task}, nil
+		}
 	}
 	base, err := e.delegationBase(ctx, p.ThreadID)
 	if err != nil {
@@ -213,11 +240,7 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
-	activation := protocol.AgentActivationExplicitUser
-	if skill {
-		activation = protocol.AgentActivationInstalledSkill
-	}
-	return &delegationAdmission{delegationToken: base, Activation: activation}, nil
+	return &delegationAdmission{delegationToken: base, Activation: protocol.AgentActivationExplicitUser}, nil
 }
 func unfinishedDelegation(state protocol.AgentState) bool {
 	return state == protocol.AgentStateQueued || state == protocol.AgentStateRunning || state == protocol.AgentStateWaitingApproval
@@ -255,7 +278,7 @@ func (e *Engine) EnableDelegation(ctx context.Context, threadID, rootTurnID stri
 
 func isDelegationTool(name string) bool {
 	name = tools.FromWire(name)
-	return name != "agent.review_report" && strings.HasPrefix(name, "agent.") || name == "delegation.enable"
+	return strings.HasPrefix(name, "agent.") || name == "delegation.enable"
 }
 
 // CancelDelegation remains available when a project folder is unavailable, so
@@ -277,31 +300,51 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 		return result, protocol.Errorf(protocol.CodeInvalidParams, "delegation task belongs to another chat")
 	}
 	if p.ChildID != "" {
-		if _, err = e.Store.AgentChild(ctx, task.ID, p.ChildID); err != nil {
+		// ChildID names a runtime agent of this task. Legacy children are
+		// read-only history: they are never active, so never cancelled.
+		if _, err = e.Store.RuntimeAgent(ctx, task.ID, p.ChildID); err != nil {
 			return result, err
 		}
-		err = e.DelegationCoordinator.Cancel(ctx, task.ID, p.ChildID)
+		result.Integration, err = e.cancelRuntimeAgent(ctx, task.ID, p.ChildID)
 	} else {
-		err = e.DelegationCoordinator.CancelTask(ctx, task.ID)
+		// Runtime agents first, so they end cancelled rather than failed by
+		// the task closing under them.
+		err = errors.Join(e.cancelRuntimeAgents(ctx, task.ID), e.DelegationCoordinator.CancelTask(ctx, task.ID))
 	}
-	if err != nil {
-		return result, err
-	}
+	// Whatever part of the cancel failed (for example the task cancel after
+	// the agent cancel succeeded), clients still hear the task's current
+	// state; the error is returned after publishing.
+	cancelErr := err
 	result.Task, err = e.Store.AgentTask(ctx, task.ID)
 	if err != nil {
-		return result, err
+		return result, errors.Join(cancelErr, err)
 	}
-	result.Children, err = e.DelegationCoordinator.List(ctx, task.ID)
-	if err == nil {
-		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &result.Task})
+	// Only for a task the cancel left cancelled, so an accept in flight stops
+	// at its next guard or finishes before this reports; it never reverts. A
+	// task still active (the cancel failed) or already completed gets none.
+	if p.ChildID == "" && result.Task.State == protocol.AgentStateCancelled {
+		var reportErr error
+		result.Integration, reportErr = e.cancelledIntegrationReport(ctx, task.ID)
+		cancelErr = errors.Join(cancelErr, reportErr)
 	}
-	return result, err
+	// Runtime agents reach clients through the runtime's own agent events;
+	// legacy children are history only. The field stays for compatibility.
+	result.Children = []protocol.AgentChild{}
+	e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &result.Task})
+	if result.Integration != nil {
+		// What the cancel left integrated, for clients showing the task.
+		e.publishRuntimeIntegration(task.ID)
+	}
+	return result, cancelErr
 }
 
 // authorizeDelegationTool revalidates the admitted context against durable
 // chat/project ownership. Arguments never select a task or grant admission.
 // Terminal tasks remain readable; the coordinator admits active mutations.
 func (e *Engine) authorizeDelegationTool(ctx context.Context) (protocol.AgentTask, error) {
+	if id, ok := runtimeAgentFrom(ctx); ok {
+		return e.authorizeRuntimeAgentTool(ctx, id)
+	}
 	admitted, ok := DelegationTaskFromContext(ctx)
 	scope := tools.ScopeFrom(ctx)
 	if !ok || scope == nil || scope.ThreadID != admitted.ThreadID || scope.ProjectID != admitted.ProjectID {

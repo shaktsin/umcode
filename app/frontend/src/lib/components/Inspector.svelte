@@ -4,11 +4,12 @@
   import { inspector } from '$lib/stores/inspector.svelte';
   import DiffView from './DiffView.svelte';
   import TurnDetails from './TurnDetails.svelte';
+  import AgentInspector from './AgentInspector.svelte';
   import { highlightSource } from '$lib/highlight';
 
   const tab = $derived(inspector.active);
 
-  const icon = { file: FileText, diff: GitCompare, output: Terminal, preview: Monitor, browser: FlaskConical, artifact: Image, turnDetails: Terminal } as const;
+  const icon = { file: FileText, diff: GitCompare, output: Terminal, preview: Monitor, browser: FlaskConical, artifact: Image, turnDetails: Terminal, agent: GitCompare } as const;
 
   let strip: HTMLDivElement;
   let overflow = $state(false);
@@ -125,6 +126,8 @@
         <p class="p-4 text-sm text-rust">{tab.error}</p>
       {:else if tab.loading}
         <p class="p-4 text-sm text-muted">Loading…</p>
+      {:else if tab.kind === 'agent' && tab.agent && tab.threadId}
+        <AgentInspector agent={tab.agent} threadId={tab.threadId} projectId={tab.projectId} />
       {:else if tab.kind === 'diff' && tab.change}
         <div class="p-3">
           <p class="text-[11px] text-muted mb-2">

@@ -138,7 +138,7 @@ func TestDelegationBudgetCostCapAndAdmissionFailure(t *testing.T) {
 func TestDelegationBudgetInheritedAcrossFollowups(t *testing.T) {
 	e, th, _, _ := delegationFixture(t)
 	p := &budgetProvider{events: []llm.Event{{Type: llm.EventDone, Usage: llm.Usage{InputTokens: 10, OutputTokens: 20, Reported: true}}}}
-	e.LLMs.Register(p)
+	e.LLMs.Register(keepTasksOpen(t, e, p))
 	token, err := e.PrepareDelegation(t.Context(), th.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,8 @@ func TestDelegationBudgetInheritedAcrossFollowups(t *testing.T) {
 }
 
 func TestDelegationBudgetInterruptCancelsPendingApproval(t *testing.T) {
-	e, th, _, _ := delegationFixture(t)
+	e, th, _, dp := delegationFixture(t)
+	e.LLMs.Register(keepTasksOpen(t, e, dp))
 	token, err := e.PrepareDelegation(t.Context(), th.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +331,8 @@ func (p *waitingDelegationProvider) Stream(ctx context.Context, _ llm.Credential
 }
 
 func TestDelegationBudgetChildContextCancellationReleasesTurn(t *testing.T) {
-	e, th, _, _ := delegationFixture(t)
+	e, th, _, dp := delegationFixture(t)
+	e.LLMs.Register(keepTasksOpen(t, e, dp))
 	token, err := e.PrepareDelegation(t.Context(), th.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -389,7 +391,7 @@ func TestDelegationBudgetTaskGeneratedTitleRetainsContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &budgetProvider{events: []llm.Event{{Type: llm.EventTextDelta, Text: "A task title"}, {Type: llm.EventDone, Usage: llm.Usage{InputTokens: 10, OutputTokens: 20, Reported: true}}}}
-	e.LLMs.Register(p)
+	e.LLMs.Register(keepTasksOpen(t, e, p))
 	token, err := e.PrepareDelegation(t.Context(), th.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -426,12 +428,13 @@ func TestDelegationBudgetReportedErrorUsagePreservesIncompleteFailure(t *testing
 			e.mu.Lock()
 			e.turnLimits.MaxTokens = tc.limit
 			e.mu.Unlock()
+			e.Cfg.Models.AgentTaskLimits.MaxTokens = tc.limit
 			p := &budgetProvider{events: []llm.Event{
 				{Type: llm.EventTextDelta, Text: "Partial response"},
 				{Type: llm.EventToolCall, ToolCall: &llm.ToolCall{ID: "incomplete", Name: "file__write", Args: []byte(`{"path":"never.txt","content":"unfinished`)}},
 				{Type: llm.EventError, Err: errors.New("response incomplete: content_filter"), Usage: llm.Usage{InputTokens: tc.input, OutputTokens: tc.output, Reported: true}},
 			}}
-			e.LLMs.Register(p)
+			e.LLMs.Register(keepTasksOpen(t, e, p))
 			token, err := e.PrepareDelegation(t.Context(), th.ID)
 			if err != nil {
 				t.Fatal(err)

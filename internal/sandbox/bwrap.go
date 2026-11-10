@@ -39,6 +39,10 @@ func bwrapArgs(p Policy, dir string) []string {
 		args = append(args, "--unshare-net")
 	}
 	for _, w := range append(append([]string{}, p.Writable...), p.Root) {
+		if p.RootReadOnly && w == p.Root {
+			// Root is already mounted read-only (readable roots or "/").
+			continue
+		}
 		if w != "/tmp" && isDir(w) {
 			args = append(args, "--bind", w, w)
 		}
@@ -50,7 +54,7 @@ func bwrapArgs(p Policy, dir string) []string {
 			args = append(args, "--ro-bind", "/dev/null", d)
 		}
 	}
-	for _, ro := range p.ReadOnlyInRoot {
+	for _, ro := range append(append([]string{}, p.ReadOnlyPaths...), p.ReadOnlyInRoot...) {
 		if exists(ro) {
 			args = append(args, "--ro-bind", ro, ro)
 		}

@@ -159,6 +159,9 @@ type ModelsConfig struct {
 	DefaultMaxOutputTokens int                         `yaml:"default_max_output_tokens"`
 	Complexity             map[string]ComplexityPreset `yaml:"complexity"`
 	ExecutionLimits        ExecutionLimits             `yaml:"execution_limits"`
+	// AgentTaskLimits cap the shared budget of one agent task (all its agents
+	// together). Every field defaults to 0, which means no limit.
+	AgentTaskLimits AgentTaskLimits `yaml:"agent_task_limits"`
 	// Roles overrides the model per role: title, intent, orchestrator, worker.
 	Roles map[string]AgentModelConfig `yaml:"roles"`
 	// Configured is the user-approved model list shown in the app.
@@ -185,6 +188,14 @@ type ExecutionLimits struct {
 	MaxTokens          int64   `yaml:"max_tokens"`
 	MaxCostUSD         float64 `yaml:"max_cost_usd"`
 	MaxToolRounds      int     `yaml:"max_tool_rounds"`
+}
+
+// AgentTaskLimits bound a whole agent task, shared by the lead and all of its
+// agents. A zero field is unlimited (the default); set one to cap the task.
+type AgentTaskLimits struct {
+	MaxDurationMinutes int     `yaml:"max_duration_minutes"`
+	MaxTokens          int64   `yaml:"max_tokens"`
+	MaxCostUSD         float64 `yaml:"max_cost_usd"`
 }
 
 type ConfiguredModel struct {
@@ -430,6 +441,16 @@ func (c *Config) Validate() error {
 	}
 	if limits.MaxToolRounds < 1 || limits.MaxToolRounds > 1000 {
 		return fmt.Errorf("models.execution_limits.max_tool_rounds must be 1–1000")
+	}
+	task := c.Models.AgentTaskLimits
+	if task.MaxDurationMinutes != 0 && (task.MaxDurationMinutes < 1 || task.MaxDurationMinutes > 10_080) {
+		return fmt.Errorf("models.agent_task_limits.max_duration_minutes must be 0 (no limit) or 1–10080")
+	}
+	if task.MaxTokens != 0 && task.MaxTokens < 10_000 {
+		return fmt.Errorf("models.agent_task_limits.max_tokens must be 0 (no limit) or at least 10000")
+	}
+	if task.MaxCostUSD != 0 && task.MaxCostUSD < 0.01 {
+		return fmt.Errorf("models.agent_task_limits.max_cost_usd must be 0 (no limit) or at least 0.01")
 	}
 	seen := map[string]bool{}
 	modelIDs := map[string]bool{}

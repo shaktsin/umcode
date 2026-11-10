@@ -69,6 +69,12 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 // persistAndWaitApproval is shared transport; workflow decisions never consult
 // remembered tool decisions and commit their graph before this waiter wakes.
 func (e *Engine) persistAndWaitApproval(ctx, sctx context.Context, a protocol.Approval, timeout time.Duration, auditEvent string) (bool, error) {
+	return e.persistAndWaitApprovalNotify(ctx, sctx, a, timeout, auditEvent, nil)
+}
+
+// persistAndWaitApprovalNotify is persistAndWaitApproval that runs onCreated
+// (when set) once the approval is stored and announced.
+func (e *Engine) persistAndWaitApprovalNotify(ctx, sctx context.Context, a protocol.Approval, timeout time.Duration, auditEvent string, onCreated func()) (bool, error) {
 	if x := childExecutionFrom(ctx); x != nil {
 		if err := e.setChildApprovalState(sctx, x, true); err != nil {
 			return false, err
@@ -91,6 +97,11 @@ func (e *Engine) persistAndWaitApproval(ctx, sctx context.Context, a protocol.Ap
 		e.mu.Unlock()
 	}()
 
+	// The caller's announcement (an agent plan's proposed event) precedes
+	// the request, so a decision made on the request is never followed by it.
+	if onCreated != nil {
+		onCreated()
+	}
 	// Admin clients get the request; clients following the thread see it too.
 	ev := protocol.ApprovalEvent{Approval: a}
 	e.Bus.PublishAdmin(protocol.NotifyApprovalRequest, ev)
@@ -148,14 +159,48 @@ func (e *Engine) persistedApprovalOutcome(ctx context.Context, id string) (bool,
 
 // RespondApproval records a decision. The first answer wins; later answers
 // get a conflict error.
+//
+// A plan card (kind agent_plan) is answered through the same path as
+// agent/plan/respond without edits: approve runs every approve-time check
+// (models against the current pool, tool compatibility and availability,
+// limits, the capability clamp) and deny declines the plan.
 func (e *Engine) RespondApproval(ctx context.Context, id string, approve, remember bool, clientID string) (protocol.Approval, error) {
+	if a, err := e.Store.GetApproval(ctx, id); err == nil && a.Kind == "agent_plan" {
+		decision := protocol.PlanDecisionDecline
+		if approve {
+			decision = protocol.PlanDecisionApprove
+		}
+		_, decided, err := e.respondAgentPlan(ctx, protocol.AgentPlanRespondParams{PlanID: a.NodeID, Decision: decision}, clientID)
+		return decided, err
+	}
+	return e.respondApproval(ctx, id, approve, remember, clientID)
+}
+
+// respondApproval resolves a pending approval and wakes its waiter.
+func (e *Engine) respondApproval(ctx context.Context, id string, approve, remember bool, clientID string) (protocol.Approval, error) {
+	a, _, err := e.respondApprovalCommitted(ctx, id, approve, remember, clientID)
+	return a, err
+}
+
+// respondApprovalCommitted is respondApproval that also reports whether the
+// decision was stored (and the waiter woken), even when it then fails.
+func (e *Engine) respondApprovalCommitted(ctx context.Context, id string, approve, remember bool, clientID string) (protocol.Approval, bool, error) {
 	status := "denied"
 	if approve {
 		status = "approved"
 	}
 	a, err := e.Store.GetApproval(ctx, id)
 	if err != nil {
-		return protocol.Approval{}, protocol.Errorf(protocol.CodeConflict, "approval %s does not exist", id)
+		return protocol.Approval{}, false, protocol.Errorf(protocol.CodeConflict, "approval %s does not exist", id)
+	}
+	if a.Kind == "agent_plan" {
+		// A plan card is one decision; it is never remembered for the chat.
+		remember = false
+	}
+	if e.approvalDecideHook != nil {
+		if err := e.approvalDecideHook(id, false); err != nil {
+			return protocol.Approval{}, false, err
+		}
 	}
 	if a.Kind == "workflow" {
 		_, err = e.Store.DecideWorkflowApproval(ctx, id, status, clientID)
@@ -165,15 +210,20 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrWorkUpdateConflict) {
-			return protocol.Approval{}, protocol.Errorf(protocol.CodeConflict, "approval %s was already decided or does not exist", id)
+			return protocol.Approval{}, false, protocol.Errorf(protocol.CodeConflict, "approval %s was already decided or does not exist", id)
 		}
-		return protocol.Approval{}, err
+		return protocol.Approval{}, false, err
 	}
 	e.mu.Lock()
 	ch := e.approvals[id]
 	e.mu.Unlock()
 	if ch != nil {
 		ch <- approve
+	}
+	if e.approvalDecideHook != nil {
+		if err := e.approvalDecideHook(id, true); err != nil {
+			return protocol.Approval{}, true, err
+		}
 	}
 	decided, _ := e.Store.GetApproval(ctx, id)
 	if remember && decided.ID != "" && !isComputerUseTool(decided.Tool) {
@@ -194,9 +244,9 @@ func (e *Engine) RespondApproval(ctx context.Context, id string, approve, rememb
 	}
 	e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: decided})
 	if decided.ID == "" {
-		return decided, fmt.Errorf("approval %s not found after decision", id)
+		return decided, true, fmt.Errorf("approval %s not found after decision", id)
 	}
-	return decided, nil
+	return decided, true, nil
 }
 
 func (e *Engine) expireApproval(ctx context.Context, a protocol.Approval, by string) error {

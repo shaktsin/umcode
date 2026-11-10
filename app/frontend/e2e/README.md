@@ -68,10 +68,10 @@ server and the installed Playwright/Chrome runtime:
 node e2e/delegation.mjs
 ```
 
-It runs widths 320, 720 and 1200 in both themes, checking keyboard activation
-before the first message, one-use token submission, collapsed/expanded Agents,
-results and check blockers, attributed approvals, cancellation, notification
-updates, reconnect hydration and failure recovery. Repeated exact-snapshot links
+It runs widths 320, 720 and 1200 in both themes, checking agent activity,
+collapsed/expanded Agents, results and check blockers,
+attributed approvals, cancellation, notification updates, reconnect hydration
+and continuation recovery. Repeated exact-snapshot links
 reuse inspector tabs. It captures page/console errors, failed requests and
 horizontal bounds. Screenshots and `report.json` go to `/tmp/umcode-delegation`
 (or `UI_ARTIFACT_DIR`). `PLAYWRIGHT_MODULE` and `CHROME_PATH` work as above.

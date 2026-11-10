@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"sort"
@@ -118,14 +119,17 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 		Candidates: candidates,
 		Strategy:   strategy,
 		Need: router.Capabilities{
-			Tools:  true,
+			Tools:  childNeedsTools(ctx),
 			Images: attachments > 0,
 		},
 	})
 	if err != nil {
 		return r, err
 	}
-	if x := childExecutionFrom(ctx); x != nil {
+	// A scope frozen before keys were recorded (no credential IDs) restricts
+	// nothing, as in runtimeModelPool; filtering by an empty list would drop
+	// every route.
+	if x := childExecutionFrom(ctx); x != nil && len(x.credentialIDs) > 0 {
 		kept := plan.Routes[:0]
 		for _, route := range plan.Routes {
 			if slices.Contains(x.credentialIDs, route.Cred.Record.ID) {
@@ -204,7 +208,8 @@ func (e *Engine) StartTurn(ctx context.Context, p protocol.TurnStartParams) (pro
 // turnRequest is a turn start with engine-internal options.
 type turnRequest struct {
 	protocol.TurnStartParams
-	wait chan protocol.Turn // receives the finished turn (buffered)
+	wait             chan protocol.Turn // receives the finished turn (buffered)
+	planContinuation bool               // engine-owned first turn after plan approval
 }
 
 func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, error) {
@@ -281,6 +286,9 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 		if x := childExecutionFrom(ctx); x != nil {
 			tctx = withChildExecution(store.WithInternalThreads(tctx), x)
 		}
+		if id, ok := runtimeAgentFrom(ctx); ok {
+			tctx = withRuntimeAgent(tctx, id)
+		}
 		if err := registerExecutionCancellation(tctx, cancel); err != nil {
 			cancel()
 			e.mu.Unlock()
@@ -330,7 +338,21 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 			cancel()
 		})
 	}
-	if err := e.Store.CreateTurn(ctx, turn); err != nil {
+	create := func() error {
+		if admission == nil || admission.Task.Activation != protocol.AgentActivationPlanApproval {
+			return e.Store.CreateTurn(ctx, turn)
+		}
+		if p.planContinuation {
+			return e.Store.CreatePlanContinuationTurn(ctx, admission.Task.ID, turn)
+		}
+		if needed, err := e.Store.AgentPlanContinuationNeedsRetry(ctx, admission.Task.ID); err == nil && needed {
+			return e.Store.CreatePlanContinuationTurn(ctx, admission.Task.ID, turn)
+		} else if err != nil {
+			return err
+		}
+		return e.Store.CreateTurn(ctx, turn)
+	}
+	if err := create(); err != nil {
 		release()
 		return protocol.Turn{}, abort(err)
 	}
@@ -420,7 +442,10 @@ func (e *Engine) InterruptTurn(turnID string) error {
 	}
 	at.cancel()
 	if taskID != "" {
-		return e.DelegationCoordinator.CancelTask(context.WithoutCancel(e.baseCtx), taskID)
+		// Runtime agents first: their cancellation is then recorded as the
+		// user's stop, not as a failure caused by the task closing under them.
+		stopCtx := context.WithoutCancel(e.baseCtx)
+		return errors.Join(e.cancelRuntimeAgents(stopCtx, taskID), e.DelegationCoordinator.CancelTask(stopCtx, taskID))
 	}
 	return nil
 }
@@ -459,12 +484,15 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 	sctx := context.WithoutCancel(ctx)
 	budget.shared = delegation.BudgetFromContext(ctx)
 	if task, ok := DelegationTaskFromContext(ctx); ok {
-		owned, shared, ownerErr := e.DelegationCoordinator.Task(sctx, task, res.limits)
+		owned, shared, ownerErr := e.DelegationCoordinator.Task(sctx, task, e.agentTaskLimits())
 		if ownerErr != nil {
 			e.finishTurn(sctx, th, turn, fmt.Errorf("initialize shared task budget: %w", ownerErr), release)
 			return
 		}
 		budget.shared = shared
+		if childExecutionFrom(ctx) == nil {
+			e.trackRuntimeBudget(task.ID, shared)
+		}
 		stop := context.AfterFunc(owned, cancelTurn)
 		defer stop()
 		if owned.Err() != nil {
@@ -552,6 +580,9 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		if x := childExecutionFrom(ctx); x != nil {
 			taskProject.Root = x.workspace.Root
 			computerEnabled = false
+		} else if task, ok := DelegationTaskFromContext(ctx); ok && task.Activation == protocol.AgentActivationPlanApproval {
+			taskProject.Root = task.ParentRoot
+			computerEnabled = false
 		} else if th.WorkspaceMode == "worktree" && workbenchContextFrom(ctx) == nil {
 			workspace, err := e.Worktrees.Ensure(ctx, th.ID, p.Root)
 			if err != nil {
@@ -576,10 +607,15 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			ComputeDiskMiB:   intOr(p.Tools.ComputeDiskMiB, 0),
 			ApprovalMode:     normalizedApprovalMode(th.ApprovalMode),
 			RestrictedChild:  childExecutionFrom(ctx) != nil,
-			ReadOnly:         childExecutionFrom(ctx) != nil && childExecutionFrom(ctx).child.Role == protocol.AgentRoleReviewer,
 			Record: func(c context.Context, abs string, before *string, deleted bool) {
 				rec.Record(sctx, abs, before, deleted)
 			},
+		}
+		if conf, _ := e.runtimeConfinementWhy(scope); conf != tools.ConfNone {
+			scope.Confined = true
+		}
+		if x := childExecutionFrom(ctx); x != nil && x.runtime != nil {
+			scope = e.runtimeAgentScope(scope, x)
 		}
 		ctx = tools.WithScope(ctx, scope)
 		sctx = tools.WithScope(sctx, scope)
@@ -648,10 +684,14 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 
 	var selection *turnSelection
 	var specs []llm.ToolSpec
+	// A runtime agent whose capabilities grant nothing tool-backed is sent no
+	// tools at all, not even the always-allowed context tools: its model was
+	// not required to support tools (agentNeedsFor).
+	offerTools := res.meta.Tools && childNeedsTools(ctx)
 	if p.Workbench != nil && res.meta.Tools {
 		tool := &workbenchProposalTool{}
 		specs = []llm.ToolSpec{{Name: tools.ToWire(tool.Name()), Description: tool.Description(), Schema: tool.Schema()}}
-	} else if res.meta.Tools && e.optimizationPolicy(ctx).ProgressiveTools {
+	} else if offerTools && e.optimizationPolicy(ctx).ProgressiveTools {
 		selection = e.startToolSelection(ctx, th, snapshot, proj, p.Text)
 		if selection.fatal {
 			finish(errors.New("tool catalog unavailable"))
@@ -661,7 +701,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		sctx = context.WithValue(sctx, selectionContextKey{}, selection)
 		specs = selection.specs()
 	} else {
-		if res.meta.Tools {
+		if offerTools {
 			for _, candidate := range e.turnTools(snapshot) {
 				if !e.permittedToolFor(ctx, candidate, proj) {
 					continue
@@ -828,15 +868,18 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Parts: textParts(out.text), Thinking: out.thinking, ToolCalls: out.calls})
 		results := make([]string, 0, len(out.calls))
 		lastToolMsg := -1
+		stopForPlan := false
 		for _, call := range out.calls {
-			toolResult := e.runTool(ctx, sctx, th, turn, call, snapshot)
+			// Count the occurrence before running so the tool sees it: agent
+			// runtime idempotency keys include it (runtimeAgentCallID).
+			key := nextToolReductionKey(toolOccurrences, call.ID)
+			toolResult := e.runTool(withToolOccurrence(ctx, key.Occurrence), sctx, th, turn, call, snapshot)
 			result, isErr := toolResult.Output, toolResult.IsError
 			hookContext = append(hookContext, toolResult.HookContext...)
 			if hint := instructionPathHint(call.Args); hint != "" {
 				instructionHint = hint
 			}
 			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: toolResult.ModelOutput, IsError: isErr})
-			key := nextToolReductionKey(toolOccurrences, call.ID)
 			if reductions != nil && toolResult.Reduction.Strategy != "" && toolResult.Reduction.OriginalTokens > toolResult.Reduction.SentTokens {
 				reductions[key] = toolResult.Reduction
 			}
@@ -849,11 +892,23 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 				}
 			}
 			results = append(results, result)
+			if !isErr && tools.FromWire(call.Name) == "agent.propose_plan" {
+				var proposed struct {
+					State string `json:"state"`
+				}
+				if json.Unmarshal([]byte(result), &proposed) == nil && (proposed.State == "pending" || proposed.State == "started") {
+					stopForPlan = true
+					break
+				}
+			}
 			if turnErr != nil {
 				break
 			}
 		}
 		if turnErr != nil {
+			break
+		}
+		if stopForPlan {
 			break
 		}
 		repeats := budget.observeToolRound(out.calls, results)
@@ -1022,6 +1077,7 @@ type modelOutput struct {
 func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *resolved,
 	req llm.Request, role string, budget *turnBudget) (modelOutput, error) {
 	contextRetried := false
+	transportRetried := false
 	continuations := 0
 	lowered := 0
 	templateRetried := false
@@ -1127,6 +1183,15 @@ func (e *Engine) callModel(ctx, sctx context.Context, turn protocol.Turn, res *r
 			e.invalidateCapacity(*res)
 			res.forceCompaction = true
 			res.retryCause = "context_exhausted"
+			req.Messages = prepared.Messages
+			continue
+		}
+		if !transportRetried && role == "chat" && budget.stopReason() == "" &&
+			(errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(strings.ToLower(err.Error()), "unexpected eof")) {
+			// The model stream ended before a complete response. No tool call from
+			// that stream is executed; retry the request once from its last
+			// complete conversation state.
+			transportRetried = true
 			req.Messages = prepared.Messages
 			continue
 		}
@@ -1571,19 +1636,27 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	var taskOperation protocol.TaskOperation
 	var taskFailure *protocol.ActionFailure
 	if !childToolAllowed(ctx, name) {
-		return e.selectionFailure(sctx, turn, call, name, childPolicyError(name).Error())
+		return e.selectionFailure(sctx, turn, call, name, childToolRefusal(ctx, name).Error())
 	}
 	var childPolicyErr error
 	ctx, th, childPolicyErr = e.narrowChildToolAuthority(ctx, th)
 	if childPolicyErr != nil {
 		return e.selectionFailure(sctx, turn, call, name, childPolicyErr.Error())
 	}
-	if isDelegationTool(name) {
+	// A plan proposal on an ordinary turn grants no authority. The tool
+	// persists only an inert card; approval admits the task later.
+	if isDelegationTool(name) && !e.suggestOnlyTool(name) && !(e.AgentRuntime != nil && tools.FromWire(name) == "agent.propose_plan") {
 		if _, err := e.authorizeDelegationTool(ctx); err != nil {
 			return e.selectionFailure(sctx, turn, call, name, err.Error())
 		}
 	}
-	ctx = tools.WithAgentCallID(ctx, call.ID)
+	agentCallID := call.ID
+	if e.AgentRuntime != nil && isDelegationTool(name) {
+		// Runtime agent tools key idempotency by turn, occurrence and provider
+		// call ID; the legacy delegation tools (flag off) keep the raw ID.
+		agentCallID = runtimeAgentCallID(turn.ID, call.ID, toolOccurrenceFrom(ctx))
+	}
+	ctx = tools.WithAgentCallID(ctx, agentCallID)
 	var tool tools.Tool
 	var ok bool
 	var toolIsPlugin bool
@@ -1833,8 +1906,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 		}
 	}
-	approvalMode := normalizedApprovalMode(th.ApprovalMode)
-	decision, reason := e.gate.Check(name, risk, th.Channel == "listener", approvalMode)
+	decision, reason := e.gateDecision(ctx, name, risk, th.Channel == "listener", th.ApprovalMode)
 	if decision == policy.Ask {
 		approved, err := e.requestApproval(ctx, sctx, turn, it, name, call.Args, risk, reason, summary)
 		if err != nil || !approved {
@@ -1900,7 +1972,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
 		}
 		if decision == policy.Allow {
-			if currentDecision, _ := e.gate.Check(name, risk, currentThread.Channel == "listener", normalizedApprovalMode(currentThread.ApprovalMode)); currentDecision != policy.Allow {
+			if currentDecision, _ := e.gateDecision(ctx, name, risk, currentThread.Channel == "listener", currentThread.ApprovalMode); currentDecision != policy.Allow {
 				it.Status = protocol.ItemDenied
 				it.Tool.Error = "approval policy narrowed before action; explicitly retry for approval"
 				_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
@@ -1910,7 +1982,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		th = currentThread
 	}
 	if childExecutionFrom(ctx) != nil && decision == policy.Allow {
-		if currentDecision, _ := e.gate.Check(name, risk, th.Channel == "listener", normalizedApprovalMode(th.ApprovalMode)); currentDecision != policy.Allow {
+		if currentDecision, _ := e.gateDecision(ctx, name, risk, th.Channel == "listener", th.ApprovalMode); currentDecision != policy.Allow {
 			it.Status, it.Tool.Error = protocol.ItemDenied, "parent approval policy narrowed before action; explicitly retry for approval"
 			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
 			return observe(hooks.ToolUseFailed, it.Tool.Error, it.Tool.Error, before.Context)
@@ -2145,6 +2217,8 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 		completedID, _ := e.Work.End(ctx, th.ID, turn.Status, paused, scopeRoot(ctx))
 		e.promoteMemory(ctx, th, turn, completedID)
 	}
+	// Before the chat is released: the next turn sees the closed task.
+	e.endAdmittedTurn(ctx)
 	release()
 	e.publishTurnEvent(ctx, th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
 	e.mu.Lock()

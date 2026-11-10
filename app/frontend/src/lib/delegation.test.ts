@@ -5,32 +5,28 @@ let DelegationState: typeof import('./stores/delegation.svelte').DelegationState
 let ThreadView: typeof import('./stores/chat.svelte').ThreadView;
 beforeAll(async () => { vi.stubGlobal('window', { addEventListener() {} }); ({ DelegationState } = await import('./stores/delegation.svelte')); ({ ThreadView } = await import('./stores/chat.svelte')); });
 beforeEach(() => { call.mockReset(); call.mockResolvedValue({ tasks: [] }); });
-const child = (version = 1, summary = '') => ({ id: 'child', taskId: 'task', role: 'implementer' as const, state: 'running' as const, version, assignment: { prompt: 'Fix it' }, result: { summary }, usage: { inputTokens: 10, outputTokens: 2, costUsd: .01, requests: 1, cachedInputTokens: 0, reasoningTokens: 0 }, correctionRounds: 0, createdAt: '', updatedAt: '' });
+const child = (version = 1, summary = '') => ({ id: 'child', taskId: 'task', state: 'running' as const, version, assignment: { prompt: 'Fix it' }, result: { summary }, usage: { inputTokens: 10, outputTokens: 2, costUsd: .01, requests: 1, cachedInputTokens: 0, reasoningTokens: 0 }, createdAt: '', updatedAt: '' });
 const task = { id: 'task', threadId: 'parent', state: 'running' as const, updatedAt: '2026-10-15T12:00:00Z', createdAt: '', rootTurnId: 'root', projectId: 'project', activation: 'explicit_user', baseRevision: 'abc' };
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => resolve = r); return { promise, resolve }; }
-it('upserts versions and ordered same-version finalization errors and recovery without fake child rows', async () => {
+it('hydrates earlier agent runs only from the durable list', async () => {
   const s = new DelegationState(); await s.bind('parent', 'project');
-  s.apply({ threadId: 'parent', taskId: 'task', task, child: child(2), sequence: 10 });
-  s.apply({ threadId: 'parent', taskId: 'task', child: child(1), sequence: 11 });
-  s.apply({ threadId: 'parent', taskId: 'task', child: child(2, 'partial'), error: 'storage unavailable', sequence: 12 });
-  s.apply({ threadId: 'parent', taskId: 'task', child: child(2), sequence: 10 });
-  expect(s.tasks[0].children).toHaveLength(1); expect(s.tasks[0].children[0].result.summary).toBe('partial'); expect(s.tasks[0].childErrors.child).toBe('storage unavailable');
-  s.apply({ threadId: 'parent', taskId: 'task', child: child(2, 'saved'), sequence: 13 });
-  s.apply({ threadId: 'parent', taskId: 'task', task: { ...task, state: 'completed', updatedAt: '2026-10-15T12:01:00Z' }, workflow: { taskId: 'task', childId: 'child', revision: 'abc', checks: [{ label: 'test', command: 'test', status: 'blocked' }] } });
-  expect(s.tasks[0].childErrors.child).toBeUndefined(); expect(s.tasks[0].children).toHaveLength(1); expect(s.tasks[0].workflow).toBeUndefined();
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [child(2, 'saved')] }] }); await s.hydrate();
+  expect(s.tasks[0].children).toHaveLength(1); expect(s.tasks[0].children[0].result.summary).toBe('saved');
+  s.apply({ threadId: 'parent', taskId: 'task', task: { ...task, state: 'completed', updatedAt: '2026-10-15T12:01:00Z' } });
+  expect(s.tasks[0].children[0].result.summary).toBe('saved');
 });
-it('ignores stale chat responses and live events cannot be overwritten by a reconnect fetch', async () => {
-  const s = new DelegationState(); const old = deferred<any>(); call.mockReturnValueOnce(old.promise); const loading = s.bind('old', 'project'); await s.bind('parent', 'project'); old.resolve({ tasks: [{ task: { ...task, threadId: 'old' }, children: [child()] }] }); await loading; expect(s.tasks).toEqual([]);
-  call.mockResolvedValueOnce({ tasks: [{ task, children: [child(2)], childErrors: { child: 'retained' }, childSequences: { child: 12 } }] }); await s.hydrate(); expect(s.tasks[0].childErrors.child).toBe('retained');
-  const reload = deferred<any>(); call.mockReturnValueOnce(reload.promise); const reloading = s.hydrate(); s.apply({ threadId: 'parent', taskId: 'task', child: child(2, 'recovered'), sequence: 13 }); reload.resolve({ tasks: [{ task, children: [child(2)], childErrors: { child: 'retained' }, childSequences: { child: 12 } }] }); await reloading; expect(s.tasks[0].children[0].result.summary).toBe('recovered'); expect(s.tasks[0].childErrors.child).toBeUndefined();
-});
-it('manual activation is one-use, expires actionably and resets on chat or project changes', async () => {
-  const s = new DelegationState(); await s.bind('parent', 'project'); call.mockResolvedValueOnce({ activationToken: 'token', expiresAt: new Date(Date.now() + 10000).toISOString() }); await s.enable(); expect(s.submission()).toEqual({ delegationActivationToken: 'token' }); expect(s.submission()).toEqual({});
-  call.mockResolvedValueOnce({ activationToken: 'expired', expiresAt: '2000-01-01' }); await s.enable(); expect(() => s.submission()).toThrow(/expired/);
-  await s.bind('parent', 'different'); expect(s.token).toBeNull();
+it('ignores stale chat responses and preserves a live runtime update over a reconnect fetch', async () => {
+  const s = new DelegationState(); const old = deferred<any>(); call.mockReturnValueOnce(old.promise); const loading = s.bind('old', 'project');
+  await s.bind('parent', 'project'); old.resolve({ tasks: [{ task: { ...task, threadId: 'old' }, children: [child()] }] });
+  await loading; expect(s.tasks).toEqual([]);
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [child(2)] }] }); await s.hydrate();
+  const reload = deferred<any>(); call.mockReturnValueOnce(reload.promise); const reloading = s.hydrate();
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('a', 2, { state: 'completed' }), sequence: 13 });
+  reload.resolve({ tasks: [{ task, children: [child(2)] }] }); await reloading;
+  expect(s.tasks[0].agents?.[0].state).toBe('completed');
 });
 it('parent stop cancels admitted task and also interrupts its running ordinary turn', async () => {
-  const v = new ThreadView(); v.id = 'parent'; await v.delegation.bind('parent', 'project'); v.delegation.apply({ threadId: 'parent', taskId: 'task', task, child: child() });
+  const v = new ThreadView(); v.id = 'parent'; await v.delegation.bind('parent', 'project'); v.delegation.apply({ threadId: 'parent', taskId: 'task', task });
   v.turns = [{ id: 'root', threadId: 'parent', status: 'running' } as any]; call.mockImplementation(async (method: string) => method === 'delegation/cancel' ? { task: { ...task, state: 'cancelled' }, children: [child()] } : {});
   await v.interrupt(); expect(call).toHaveBeenCalledWith('delegation/cancel', { threadId: 'parent', taskId: 'task' }); expect(call).toHaveBeenCalledWith('turn/interrupt', { turnId: 'root' }); expect(v.delegation.tasks[0].task.state).toBe('cancelled');
 });
@@ -44,81 +40,12 @@ it('late workflow deliveries hydrate current durable evidence instead of regress
   s.apply({ threadId: 'parent', taskId: 'task', task, workflow: { taskId: 'task', childId: 'child', revision: 'abc', checks: [{ label: 'Lead tests', command: 'test', status: 'not_run' }] } });
   expect(s.tasks[0].workflow?.checks[0].status).toBe('passed');
 });
-it('restart hydration clears transient same-version errors and rejects delayed old notifications', async () => {
-  const s = new DelegationState(); await s.bind('parent', 'project'); s.apply({ threadId: 'parent', taskId: 'task', task, child: child(2, 'pending'), error: 'old process error', sequence: 12 });
-  call.mockResolvedValueOnce({ tasks: [{ task, children: [child(2, 'durably saved')], childSequences: { child: 0 } }] }); await s.hydrate();
-  expect(s.tasks[0].childErrors.child).toBeUndefined(); expect(s.tasks[0].children[0].result.summary).toBe('durably saved');
-  s.apply({ threadId: 'parent', taskId: 'task', child: child(2, 'pending'), error: 'old process error', sequence: 12 });
-  expect(s.tasks[0].children[0].result.summary).toBe('durably saved'); expect(s.tasks[0].childErrors.child).toBeUndefined();
-});
-it('new project chat activates before its first message and repeated clicks create one empty thread', async () => {
-  const { chat } = await import('./stores/chat.svelte'); const { projects } = await import('./stores/projects.svelte');
-  await chat.newChatFor('project'); const opening = deferred<any>();
-  call.mockImplementation(async (method: string) => {
-    if (method === 'thread/start') return opening.promise;
-    if (method === 'delegation/enable') return { activationToken: 'first-message', expiresAt: new Date(Date.now() + 10000).toISOString() };
-    return { tasks: [] };
-  });
-  const first = chat.enableDelegation(chat.main), repeat = chat.enableDelegation(chat.main);
-  opening.resolve({ id: 'parent', projectId: 'project', settings: {}, updatedAt: '' }); await Promise.all([first, repeat]);
-  expect(call.mock.calls.filter(([m]) => m === 'thread/start')).toHaveLength(1);
-  expect(call).toHaveBeenCalledWith('thread/start', expect.objectContaining({ projectId: 'project' }));
-  await chat.send('build it'); expect(call).toHaveBeenCalledWith('turn/start', expect.objectContaining({ threadId: 'parent', delegationActivationToken: 'first-message' }));
-  expect(projects.activeId).toBe('project');
-});
-it('projectless activation explains unsupported scope without creating a chat or granting permission', async () => {
-  const { chat } = await import('./stores/chat.svelte'); await chat.newChatFor(null); await chat.enableDelegation(chat.main);
-  expect(chat.main.delegation.error).toMatch(/Git project/i); expect(chat.main.id).toBeNull(); expect(call.mock.calls.some(([m]) => m === 'delegation/enable' || m === 'thread/start')).toBe(false);
-});
-it('project switch while creating an activation chat never attaches its token to the new scope', async () => {
-  const { chat } = await import('./stores/chat.svelte'); await chat.newChatFor('old-project'); const opening = deferred<any>();
-  call.mockImplementation(async (method: string) => method === 'thread/start' ? opening.promise : { tasks: [] });
-  const enabling = chat.enableDelegation(chat.main); await chat.newChatFor('new-project'); opening.resolve({ id: 'old-chat', projectId: 'old-project', settings: {}, updatedAt: '' }); await enabling;
-  expect(chat.main.id).toBeNull(); expect(chat.main.delegation.token).toBeNull(); expect(call.mock.calls.some(([m]) => m === 'delegation/enable')).toBe(false);
-});
-it('switching chats revokes a prepared token before thread/read resolves', async () => {
-  const v = new ThreadView(); v.id = 'parent'; v.thread = { id: 'parent', projectId: 'project' } as any; await v.delegation.bind('parent', 'project');
-  call.mockResolvedValueOnce({ activationToken: 'old', expiresAt: new Date(Date.now() + 10000).toISOString() }); await v.delegation.enable();
-  const reading = deferred<any>(); call.mockImplementation(async (method: string) => method === 'thread/read' ? reading.promise : { tasks: [] });
-  const loading = v.load('other'); expect(v.delegation.token).toBeNull(); expect(v.delegation.threadId).toBe('other');
-  reading.resolve({ thread: { id: 'other', projectId: 'project', settings: {} }, turns: [], items: [] }); await loading;
-});
-it('submission waits while explicit activation is pending', async () => {
-  const v = new ThreadView(); v.id = 'parent'; v.thread = { id: 'parent', projectId: 'project' } as any; await v.delegation.bind('parent', 'project'); v.delegation.pending = true;
-  await v.send('first message'); expect(call.mock.calls.some(([m]) => m === 'turn/start')).toBe(false);
-});
-it('child events refresh shared actual usage', async () => {
+it('runtime agent events refresh shared actual usage', async () => {
   const v = new ThreadView(); await v.delegation.bind('parent', 'project');
   v.delegation.apply({ threadId: 'parent', taskId: 'task', task });
-  call.mockResolvedValueOnce({ tasks: [{ task, children: [child(2)], budgetAvailable: true, usage: { ...child().usage, costUsd: .5 } }] });
-  v.delegation.apply({ threadId: 'parent', taskId: 'task', child: child(2), sequence: 2 });
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], budgetAvailable: true, usage: { ...child().usage, costUsd: .5 } }] });
+  v.delegation.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('a', 2), sequence: 2 });
   await vi.waitFor(() => expect(v.delegation.tasks[0].usage?.costUsd).toBe(.5));
-});
-it('new-chat activation remains pending across delayed hydration until its token is ready', async () => {
-  const { chat } = await import('./stores/chat.svelte'); await chat.newChatFor('project'); const list = deferred<any>(); const permission = deferred<any>();
-  call.mockImplementation(async (method: string) => {
-    if (method === 'thread/start') return { id: 'parent', projectId: 'project', settings: {}, updatedAt: '' };
-    if (method === 'delegation/list') return list.promise;
-    if (method === 'delegation/enable') return permission.promise;
-    return {};
-  });
-  const enabling = chat.enableDelegation(chat.main); await vi.waitFor(() => expect(chat.main.id).toBe('parent'));
-  expect(chat.main.delegation.pending).toBe(true); await chat.send('should wait'); expect(call.mock.calls.some(([m]) => m === 'turn/start')).toBe(false);
-  await chat.enableDelegation(chat.main); expect(call.mock.calls.filter(([m]) => m === 'thread/start')).toHaveLength(1); expect(call.mock.calls.some(([m]) => m === 'delegation/enable')).toBe(false);
-  list.resolve({ tasks: [] }); await vi.waitFor(() => expect(call.mock.calls.some(([m]) => m === 'delegation/enable')).toBe(true)); expect(chat.main.delegation.pending).toBe(true);
-  permission.resolve({ activationToken: 'ready', expiresAt: new Date(Date.now() + 10000).toISOString() }); await enabling;
-  await chat.send('first paid message'); expect(call).toHaveBeenCalledWith('turn/start', expect.objectContaining({ delegationActivationToken: 'ready' }));
-});
-it('navigation while activation hydration waits cannot enable the replacement chat', async () => {
-  const { chat } = await import('./stores/chat.svelte'); await chat.newChatFor('project'); const list = deferred<any>();
-  call.mockImplementation(async (method: string, params: any) => {
-    if (method === 'thread/start') return { id: 'parent', projectId: 'project', settings: {}, updatedAt: '' };
-    if (method === 'delegation/list' && params.threadId === 'parent') return list.promise;
-    if (method === 'thread/read') return { thread: { id: 'replacement', projectId: 'project', settings: {} }, turns: [], items: [] };
-    return { tasks: [] };
-  });
-  const enabling = chat.enableDelegation(chat.main); await vi.waitFor(() => expect(chat.main.id).toBe('parent')); await chat.open('replacement'); list.resolve({ tasks: [] }); await enabling;
-  expect(chat.main.id).toBe('replacement'); expect(chat.main.delegation.token).toBeNull(); expect(call.mock.calls.some(([m]) => m === 'delegation/enable')).toBe(false);
 });
 it('orders RFC3339 task updates by instant including fractional seconds and nanoseconds', async () => {
   const s = new DelegationState(); await s.bind('parent', 'project');
@@ -157,4 +84,71 @@ it('hydration skips malformed task timestamps while retaining valid snapshots', 
   await s.bind('parent', 'project');
   expect(s.tasks.map(snapshot => snapshot.task.id)).toEqual(['task']);
   expect(s.active).toBeUndefined(); expect(s.error).toBe('');
+});
+
+const rtAgent = (id: string, version = 1, extra: any = {}) => ({ id, taskId: 'task', name: id, purpose: '', assignment: { prompt: '' }, capabilities: { files: 'read', shell: 'none', network: false, spawnMax: 0 }, budgetShare: 0, depth: 0, state: 'running', result: { summary: '' }, usage: {}, version, createdAt: '', updatedAt: '', ...extra });
+it('hydrates runtime agents, plan and integration from delegation/list', async () => {
+  const s = new DelegationState(); const integration = { headTree: 'h', appliedCount: 1, verified: false };
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], agents: [rtAgent('a'), rtAgent('b')], plan: { id: 'p' }, integration }] });
+  await s.bind('parent', 'project');
+  expect(s.tasks[0].agents?.map(a => a.id)).toEqual(['a', 'b']); expect(s.tasks[0].plan?.id).toBe('p'); expect(s.tasks[0].integration).toEqual(integration);
+});
+it('merges an agent update by id without touching siblings and ignores stale versions and sequences', async () => {
+  const s = new DelegationState(); call.mockResolvedValueOnce({ tasks: [{ task, children: [], agents: [rtAgent('a'), rtAgent('b')] }] }); await s.bind('parent', 'project');
+  const [a0, b0] = s.tasks[0].agents!;
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('a', 2, { state: 'completed' }) as any, sequence: 5 });
+  expect(s.tasks[0].agents![0].state).toBe('completed'); expect(s.tasks[0].agents![1]).toBe(b0); expect(s.tasks[0].agents![0]).not.toBe(a0);
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('a', 1, { state: 'running' }) as any, sequence: 9 });
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('a', 2, { state: 'failed' }) as any, sequence: 4 });
+  expect(s.tasks[0].agents![0].state).toBe('completed');
+  s.apply({ threadId: 'parent', taskId: 'task', agent: rtAgent('c', 1) as any, sequence: 6 });
+  expect(s.tasks[0].agents!.map(a => a.id)).toEqual(['a', 'b', 'c']);
+});
+it('integration follows event sequence; a stale one is ignored', async () => {
+  const s = new DelegationState(); call.mockResolvedValueOnce({ tasks: [{ task, children: [] }] }); await s.bind('parent', 'project');
+  s.apply({ threadId: 'parent', taskId: 'task', integration: { headTree: 'new', appliedCount: 2, verified: true }, sequence: 8 });
+  s.apply({ threadId: 'parent', taskId: 'task', integration: { headTree: 'old', appliedCount: 1, verified: false }, sequence: 7 });
+  expect(s.tasks[0].integration?.headTree).toBe('new');
+});
+it('agent/plan/updated refreshes the card state of the matching thread only', async () => {
+  const { chat } = await import('./stores/chat.svelte'); chat.main.id = 'parent'; const other = new ThreadView(); other.id = 'other'; chat.sides = [other];
+  call.mockResolvedValue({ plan: { id: 'p1' }, approvalStatus: 'pending' });
+  handlers.get('agent/plan/updated')!({ threadId: 'parent', plan: { id: 'p1', state: 'superseded' }, approvalStatus: 'expired' });
+  expect(chat.main.cards.plan('p1')?.approvalStatus).toBe('expired'); expect(chat.main.cards.plan('p1')?.plan.state).toBe('superseded');
+  expect(other.cards.plan('p1')).toBeUndefined(); chat.sides = [];
+});
+it('hydrate takes a forward plan state but never regresses the same plan', async () => {
+  const s = new DelegationState();
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p', state: 'approved' } }] }); await s.bind('parent', 'project');
+  expect(s.tasks[0].plan?.state).toBe('approved');
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p', state: 'proposed' } }] }); await s.hydrate();
+  expect(s.tasks[0].plan?.state).toBe('approved');
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p', state: 'superseded' } }] }); await s.hydrate();
+  expect(s.tasks[0].plan?.state).toBe('superseded');
+  call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p2', state: 'proposed' } }] }); await s.hydrate();
+  expect(s.tasks[0].plan?.id).toBe('p2');
+});
+it('keeps the cancel integration report per task and leaves unchanged agents identical on a sibling update', async () => {
+  const s = new DelegationState(); await s.bind('parent', 'project'); s.apply({ threadId: 'parent', taskId: 'task', task });
+  const ag = (id: string, version: number, state = 'running') => ({ id, taskId: 'task', name: id, version, state, createdAt: '', result: { summary: '' } }) as any;
+  s.apply({ threadId: 'parent', taskId: 'task', agent: ag('a', 1), sequence: 1 }); s.apply({ threadId: 'parent', taskId: 'task', agent: ag('b', 1), sequence: 2 });
+  const [a0] = s.tasks[0].agents!; s.apply({ threadId: 'parent', taskId: 'task', agent: ag('b', 2, 'completed'), sequence: 3 });
+  expect(s.tasks[0].agents![0]).toBe(a0); expect(s.tasks[0].agents![1].state).toBe('completed');
+  const report = { headTree: 'h', appliedCount: 2, verified: true, unintegrated: ['a'], message: 'ok' };
+  call.mockImplementation(async (m: string) => m === 'delegation/cancel' ? { task: { ...task, state: 'cancelled', updatedAt: '2026-10-15T12:05:00Z' }, children: [], integration: report } : { tasks: [] });
+  await s.cancel('task'); expect(s.reports.task).toEqual(report);
+  await s.bind('other', 'project'); expect(s.reports).toEqual({});
+});
+it('per-agent cancel sends the runtime agent id as childId and never stores a task report', async () => {
+  const s = new DelegationState(); await s.bind('parent', 'project'); s.apply({ threadId: 'parent', taskId: 'task', task });
+  call.mockImplementation(async (m: string) => m === 'delegation/cancel' ? { task, children: [], integration: { headTree: 'h', appliedCount: 1, verified: true, message: 'partial' } } : { tasks: [] });
+  await s.cancel('task', 'agent-1');
+  expect(call).toHaveBeenCalledWith('delegation/cancel', { threadId: 'parent', taskId: 'task', childId: 'agent-1' }); expect(s.reports).toEqual({});
+});
+it('Resolve follow-ups queue together while the lead runs and never replace another follow-up', async () => {
+  const v = new ThreadView(); v.id = 'parent'; v.turns = [{ id: 'root', threadId: 'parent', status: 'running' } as any];
+  await v.submitFollowUp('I resolved the conflict in A; continue integration', 'resolve'); await v.submitFollowUp('I resolved the conflict in B; continue integration', 'resolve'); await v.submitFollowUp('I resolved the conflict in B; continue integration', 'resolve');
+  expect(v.queuedResolve).toBe(true);
+  expect((v as any).queued.text).toBe('I resolved the conflict in A; continue integration\nI resolved the conflict in B; continue integration');
+  await v.submitFollowUp('something else'); expect(v.followUpError).toMatch(/already waiting/); expect((v as any).queued.kind).toBe('resolve');
 });

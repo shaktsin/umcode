@@ -11,26 +11,19 @@ import (
 	"github.com/shaktsin/umcode/internal/tools"
 )
 
-// A strict allowlist prevents plugins, MCP, scripts, hooks, sessions and unknown
-// future tools from bypassing child authority by guessing a canonical/wire name.
+// A runtime agent may call only the tools its capabilities grant
+// (runtimeToolAllowed), so plugins, MCP, scripts, hooks, sessions and unknown
+// future tools cannot bypass its authority by guessing a canonical/wire name.
+// An execution that is not a runtime agent's gets no tool at all.
 func childToolAllowed(ctx context.Context, name string) bool {
 	x := childExecutionFrom(ctx)
 	if x == nil {
 		return true
 	}
-	safe := []string{"file.read", "file.list", "file.search", "skill.get_instructions", "task.context"}
-	if x.child.Role == "reviewer" {
-		safe = append(safe, "agent.review_report")
+	if x.runtime == nil {
+		return false
 	}
-	if x.child.Role != "reviewer" {
-		safe = append(safe, "file.write", "file.edit", "shell.run", "verification.run")
-	}
-	for _, allowed := range safe {
-		if name == allowed || name == tools.ToWire(allowed) {
-			return true
-		}
-	}
-	return false
+	return runtimeToolAllowed(x.runtime.agent.Capabilities, name)
 }
 
 // Recheck ownership and intersect live policy with the admitted child scope.
@@ -90,10 +83,17 @@ func (e *Engine) narrowChildToolAuthority(ctx context.Context, th protocol.Threa
 	}
 	th.ApprovalMode = narrowed.ApprovalMode
 	th.Channel = parent.Channel
-	return tools.WithScope(ctx, &narrowed), th, nil
+	if x.runtime == nil {
+		return ctx, th, errNotRuntimeExecution
+	}
+	// Re-derive from capabilities with the live project confinement.
+	return tools.WithScope(ctx, e.runtimeAgentScope(&narrowed, x)), th, nil
 }
-func childPolicyError(name string) error {
-	return fmt.Errorf("child tool %s blocked: only scoped built-ins are permitted; reviewer command/script/plugin execution requires an enforceable read-only sandbox", name)
+
+// childToolRefusal explains a refused tool call: a runtime agent's authority
+// is its capabilities.
+func childToolRefusal(ctx context.Context, name string) error {
+	return fmt.Errorf("tool %s blocked: it is not granted by this agent's capabilities", name)
 }
 
 func (e *Engine) publishTurnEvent(ctx context.Context, threadID, method string, params any) {

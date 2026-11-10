@@ -3,6 +3,7 @@ package delegation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -86,5 +87,145 @@ func TestSharedBudgetTaskDurationDoesNotReset(t *testing.T) {
 	}
 	if _, err := b.Reserve(t.Context(), "expired", protocol.UsageTotals{OutputTokens: 1}); err == nil {
 		t.Fatal("admitted expired task")
+	}
+}
+
+func TestBudgetSliceForwardsAndCaps(t *testing.T) {
+	parent := NewBudget(protocol.ExecutionLimits{MaxTokens: 100, MaxCostUSD: 1}, protocol.UsageTotals{}, nil)
+	child := parent.Slice(0.25)
+	if tok, cost := child.Remaining(); tok != 25 || cost != 0.25 {
+		t.Fatalf("slice remaining = %d, %v", tok, cost)
+	}
+	if _, err := child.Reserve(t.Context(), "big", protocol.UsageTotals{OutputTokens: 26}); err == nil {
+		t.Fatal("slice admitted more than its share")
+	}
+	if got := parent.Usage(); got.OutputTokens != 0 {
+		t.Fatalf("rejected reservation leaked to parent: %+v", got)
+	}
+	settle, err := child.Reserve(t.Context(), "r1", protocol.UsageTotals{OutputTokens: 25, CostUSD: 0.1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok, _ := parent.Remaining(); tok != 75 {
+		t.Fatalf("parent did not hold the reservation: %d", tok)
+	}
+	settle(protocol.UsageTotals{OutputTokens: 25, CostUSD: 0.1, Requests: 1})
+	if child.StopReason() == "" {
+		t.Fatal("slice did not stop at its share")
+	}
+	if _, err = child.Reserve(t.Context(), "r2", protocol.UsageTotals{}); err == nil {
+		t.Fatal("exhausted slice admitted")
+	}
+	if got := parent.Usage(); got.OutputTokens != 25 || got.Requests != 1 || got.CostUSD != 0.1 {
+		t.Fatalf("parent totals: %+v", got)
+	}
+	if parent.StopReason() != "" {
+		t.Fatal("parent stopped by child exhaustion")
+	}
+	// A second slice is cut from what remains.
+	if tok, _ := parent.Slice(0.5).Remaining(); tok != 37 {
+		t.Fatalf("second slice = %d, want 37", tok)
+	}
+}
+
+func TestBudgetSliceClampAndUnlimited(t *testing.T) {
+	parent := NewBudget(protocol.ExecutionLimits{MaxTokens: 100}, protocol.UsageTotals{}, nil)
+	if tok, _ := parent.Slice(7).Remaining(); tok != 100 {
+		t.Fatalf("share>1 not clamped: %d", tok)
+	}
+	if c := parent.Slice(-1); c.StopReason() == "" {
+		t.Fatalf("share<=0 must clamp to an empty slice that is stopped, got %q", c.StopReason())
+	}
+	free := NewBudget(protocol.ExecutionLimits{}, protocol.UsageTotals{}, nil)
+	c := free.Slice(0.5)
+	if c.StopReason() != "" {
+		t.Fatal("slice of unlimited budget is stopped")
+	}
+	if _, err := c.Reserve(t.Context(), "x", protocol.UsageTotals{OutputTokens: 1 << 40}); err != nil {
+		t.Fatal(err)
+	}
+	spent := NewBudget(protocol.ExecutionLimits{MaxTokens: 10}, protocol.UsageTotals{InputTokens: 10}, nil)
+	if spent.Slice(1).StopReason() == "" {
+		t.Fatal("slice of exhausted parent is not stopped")
+	}
+}
+
+func TestBudgetSliceStopsWithParent(t *testing.T) {
+	parent := NewBudget(protocol.ExecutionLimits{MaxTokens: 100}, protocol.UsageTotals{}, nil)
+	owned, cancel := context.WithCancel(context.Background())
+	parent.owner = owned
+	child := parent.Slice(0.5)
+	if child.StopReason() != "" {
+		t.Fatal("fresh slice stopped")
+	}
+	cancel()
+	if child.StopReason() == "" {
+		t.Fatal("slice outlived cancelled parent")
+	}
+	if _, err := child.Reserve(context.Background(), "x", protocol.UsageTotals{}); err == nil {
+		t.Fatal("slice admitted after parent cancel")
+	}
+	// Parent accounting failure propagates through Err.
+	p2 := NewBudget(protocol.ExecutionLimits{MaxTokens: 100}, protocol.UsageTotals{}, func(protocol.UsageTotals) error { return errors.New("disk") })
+	c2 := p2.Slice(1)
+	settle, err := c2.Reserve(t.Context(), "a", protocol.UsageTotals{OutputTokens: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settle(protocol.UsageTotals{OutputTokens: 1})
+	if c2.Err() == nil || c2.StopReason() == "" {
+		t.Fatalf("parent accounting failure not propagated: %v %q", c2.Err(), c2.StopReason())
+	}
+}
+
+func TestBudgetSliceRoundsWithEpsilon(t *testing.T) {
+	// 0.29*100, 0.57*100 and 0.58*100 are 28.999..., 56.999... and 57.999...
+	// in float64; a plain floor loses a token.
+	for _, c := range []struct {
+		share float64
+		total int64
+		want  int64
+	}{{0.29, 100, 29}, {0.57, 100, 57}, {0.58, 100, 58}, {0.25, 1000, 250}} {
+		parent := NewBudget(protocol.ExecutionLimits{MaxTokens: c.total}, protocol.UsageTotals{}, nil)
+		if tok, _ := parent.Slice(c.share).Remaining(); tok != c.want {
+			t.Errorf("Slice(%v) of %d = %d, want %d", c.share, c.total, tok, c.want)
+		}
+	}
+	// Four quarter shares of one total never exceed it and lose at most the
+	// rounding remainder.
+	const total = 1_000_003
+	parent := NewBudget(protocol.ExecutionLimits{MaxTokens: total}, protocol.UsageTotals{}, nil)
+	var sum int64
+	for i := 0; i < 4; i++ {
+		tok, _ := parent.Slice(0.25).Remaining()
+		sum += tok
+	}
+	if sum > total || total-sum > 4 {
+		t.Fatalf("4 x 0.25 of %d = %d", total, sum)
+	}
+}
+
+func TestBudgetSliceConcurrent(t *testing.T) {
+	parent := NewBudget(protocol.ExecutionLimits{MaxTokens: 1_000_000, MaxCostUSD: 100}, protocol.UsageTotals{}, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c := parent.Slice(0.05)
+			release, err := c.Reserve(t.Context(), fmt.Sprintf("r%d", i), protocol.UsageTotals{InputTokens: 10})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			release(protocol.UsageTotals{InputTokens: 5})
+			c.Remaining()
+			c.StopReason()
+			parent.Remaining()
+		}(i)
+	}
+	wg.Wait()
+	if tok, _ := parent.Remaining(); tok != 1_000_000-16*5 {
+		t.Fatalf("parent remaining %d", tok)
 	}
 }

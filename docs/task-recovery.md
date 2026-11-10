@@ -42,7 +42,7 @@ and evidence. User acknowledgement permits further work without replay; the
 original invocation remains outcome_unknown and is never relabeled successful.
 
 Delegated work inherits the admitted lead task and its current restrictions,
-including readonly reviewer scopes. Children cannot approve their own actions or
+including read-only agent scopes. Agents cannot approve their own actions or
 change lead requirements. A model or compaction change does not reset authority.
 
 Chat shows one correlated primary blocker. Original tool results remain in the

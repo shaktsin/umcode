@@ -208,15 +208,19 @@ func (m *Manager) Ensure(ctx context.Context, taskID, projectRoot string) (Works
 }
 
 func (m *Manager) validateExisting(ctx context.Context, path string) error {
-	root, err := gitOutput(ctx, path, "rev-parse", "--show-toplevel")
+	return validateExistingWith(ctx, path, gitOutput)
+}
+
+func validateExistingWith(ctx context.Context, path string, run func(context.Context, string, ...string) (string, error)) error {
+	root, err := run(ctx, path, "rev-parse", "--show-toplevel")
 	if err != nil || !samePath(root, path) {
 		return errors.New("the saved task workspace is not a valid Git worktree; move it aside and retry")
 	}
-	common, err := gitOutput(ctx, path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	common, err := run(ctx, path, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil || !samePath(common, filepath.Join(path, ".git")) {
 		return errors.New("the saved task workspace does not contain self-contained Git metadata; preserve it and inspect it before retrying")
 	}
-	if _, err := gitOutput(ctx, path, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
+	if _, err := run(ctx, path, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
 		return errors.New("the saved task workspace no longer has a valid commit; preserve its work and inspect it before retrying")
 	}
 	return nil

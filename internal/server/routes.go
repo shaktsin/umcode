@@ -328,6 +328,37 @@ func (s *Server) routes() map[string]handler {
 			}
 			return e.PrepareDelegation(ctx, p.ThreadID)
 		}),
+		// The user's answer to an agent.suggest card; enable returns the
+		// delegation/enable token in the same call. App clients only.
+		protocol.MethodAgentSuggestionRespond: bind(func(ctx context.Context, c *conn, p protocol.AgentSuggestionRespondParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can answer agent suggestions")
+			}
+			return e.RespondAgentSuggestion(ctx, p)
+		}),
+		// Read-only views of the activation cards' stored state (Plan 5 renders
+		// cards from these after a reload, a restart or another client's
+		// answer). App clients only.
+		protocol.MethodAgentSuggestionGet: bind(func(ctx context.Context, c *conn, p protocol.AgentSuggestionGetParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read agent suggestions")
+			}
+			return e.GetAgentSuggestion(ctx, p)
+		}),
+		protocol.MethodAgentPlanGet: bind(func(ctx context.Context, c *conn, p protocol.AgentPlanGetParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read agent plan cards")
+			}
+			return e.GetAgentPlan(ctx, p)
+		}),
+		// The user's answer to an agent.propose_plan card: approve (with model
+		// choices, dropped agents and limits), decline or revise. App clients only.
+		protocol.MethodAgentPlanRespond: bind(func(ctx context.Context, c *conn, p protocol.AgentPlanRespondParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can answer agent plan cards")
+			}
+			return e.RespondAgentPlanAs(ctx, c.id, p)
+		}),
 		protocol.MethodDelegationList: bind(func(ctx context.Context, c *conn, p protocol.DelegationListParams) (any, error) {
 			if !c.admin.Load() {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read delegation")

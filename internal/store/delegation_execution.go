@@ -76,41 +76,6 @@ func (s *Store) AgentExecution(ctx context.Context, taskID, childID string) (Age
 	return x, err
 }
 
-func (s *Store) EnsureAgentExecution(ctx context.Context, task protocol.AgentTask, child protocol.AgentChild, parent protocol.Thread, msgs []llm.Message) (AgentExecution, error) {
-	if x, err := s.AgentExecution(ctx, task.ID, child.ID); err == nil {
-		return x, nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return x, err
-	}
-	data, err := json.Marshal(msgs)
-	if err != nil {
-		return AgentExecution{}, err
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return AgentExecution{}, err
-	}
-	defer tx.Rollback()
-	id := NewID("thr")
-	now := Now()
-	result, err := tx.ExecContext(ctx, `INSERT INTO threads (`+threadCols+`,internal_child_id) SELECT ?,?,th.project_id,'local',th.channel,0,0,?,?,?,?,th.approval_mode,'',?,?,c.id FROM threads th JOIN agent_tasks t ON t.thread_id=th.id JOIN agent_children c ON c.task_id=t.id WHERE t.id=? AND c.id=? AND th.id=? AND th.internal_child_id=''`, id, "Agent execution", parent.Settings.Provider, parent.Settings.Model, string(parent.Settings.Complexity), parent.Settings.CredentialID, now, now, task.ID, child.ID, parent.ID)
-	if err != nil {
-		return AgentExecution{}, err
-	}
-	n, _ := result.RowsAffected()
-	if n != 1 {
-		return AgentExecution{}, ErrNotFound
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO agent_executions(child_id,task_id,thread_id,context_json) VALUES(?,?,?,?)`, child.ID, task.ID, id, string(data))
-	if err != nil {
-		return AgentExecution{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return AgentExecution{}, err
-	}
-	return AgentExecution{ThreadID: id, Context: msgs}, nil
-}
-
 func (s *Store) UpdateAgentExecutionModel(ctx context.Context, taskID, childID string, model protocol.ModelSelection) error {
 	data, err := json.Marshal(model)
 	if err != nil {
@@ -134,4 +99,25 @@ func (s *Store) IsInternalThread(ctx context.Context, id string) (bool, error) {
 		return false, ErrNotFound
 	}
 	return child != "", err
+}
+
+// insertAgentExecution creates the internal execution thread for an existing
+// agent_children row and its agent_executions record in tx. A legacy child's
+// thread copies the lead's approval mode (inheritApproval); a runtime agent's
+// thread carries an empty mode, since agents read the lead's mode live.
+func insertAgentExecution(ctx context.Context, tx *sql.Tx, taskID, childID string, parent protocol.Thread, contextJSON string, inheritApproval bool) (string, error) {
+	id := NewID("thr")
+	now := Now()
+	result, err := tx.ExecContext(ctx, `INSERT INTO threads (`+threadCols+`,internal_child_id) SELECT ?,?,th.project_id,'local',th.channel,0,0,?,?,?,?,CASE WHEN ? THEN th.approval_mode ELSE '' END,'',?,?,c.id FROM threads th JOIN agent_tasks t ON t.thread_id=th.id JOIN agent_children c ON c.task_id=t.id WHERE t.id=? AND c.id=? AND th.id=? AND th.internal_child_id=''`, id, "Agent execution", parent.Settings.Provider, parent.Settings.Model, string(parent.Settings.Complexity), parent.Settings.CredentialID, b2i(inheritApproval), now, now, taskID, childID, parent.ID)
+	if err != nil {
+		return "", err
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return "", ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_executions(child_id,task_id,thread_id,context_json) VALUES(?,?,?,?)`, childID, taskID, id, contextJSON); err != nil {
+		return "", err
+	}
+	return id, nil
 }

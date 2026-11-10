@@ -57,7 +57,10 @@ func (e *Engine) checkChildTaskAuthority(ctx context.Context, operation protocol
 	comparison.Root = x.task.ParentRoot
 	comparison.ThreadID = parent.ID
 	comparison.ProjectID = parent.ProjectID
-	comparison.ReadOnly = actual.ReadOnly || x.child.Role == protocol.AgentRoleReviewer
+	comparison.ReadOnly = actual.ReadOnly
+	if x.runtime != nil && runtimeReadOnlySafe(actual, operation.Tool) {
+		comparison.ReadOnly = false
+	}
 	if operation.Tool == "file.read" || operation.Tool == "file.write" || operation.Tool == "file.edit" {
 		var args map[string]json.RawMessage
 		if json.Unmarshal(operation.Args, &args) == nil {
@@ -78,4 +81,19 @@ func (e *Engine) checkChildTaskAuthority(ctx context.Context, operation protocol
 	}
 	operation.TaskID = bound
 	return e.checkTaskAuthority(tools.WithScope(ctx, &comparison), parent, snapshot, operation)
+}
+
+// runtimeReadOnlySafe reports whether a runtime agent whose scope is read-only
+// (files:read) may still run tool past the task's read-only check. Its tool
+// gate already limited it to what its capabilities grant; these tools change
+// no files: a shell the confinement keeps read-only, and the agent.* control
+// tools (an agent it spawns gets at most its own, read-only, authority).
+func runtimeReadOnlySafe(s *tools.Scope, tool string) bool {
+	switch tool {
+	case "shell.run":
+		return s.RuntimeAgent && s.ShellReadOnly && s.Confined
+	case "agent.spawn", "agent.list", "agent.status", "agent.wait", "agent.message", "agent.cancel":
+		return s.RuntimeAgent
+	}
+	return false
 }

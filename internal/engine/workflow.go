@@ -9,6 +9,7 @@ import (
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/tools"
 	"github.com/shaktsin/umcode/internal/work"
 )
 
@@ -17,7 +18,7 @@ var errWorkflowNotReady = errors.New("workflow not ready")
 
 func workflowDiscoveryTool(name string) bool {
 	switch name {
-	case "tools.discover", "file.read", "file.list", "file.search", "web.search", "web.fetch", "verification.plan", "computer.list", "computer.inspect", "visual.inspect", "work.update", "task.propose", "task.context", "skill.get_instructions", "agent.review_report":
+	case "tools.discover", "file.read", "file.list", "file.search", "web.search", "web.fetch", "verification.plan", "computer.list", "computer.inspect", "visual.inspect", "work.update", "task.propose", "task.context", "skill.get_instructions":
 		return true
 	}
 	return false
@@ -50,6 +51,10 @@ func (e *Engine) escalateProspectiveWorkflow(ctx context.Context, threadID strin
 }
 
 func (e *Engine) workflowDetail(ctx context.Context, threadID, tool string) (*protocol.WorkDetail, error) {
+	if scope := tools.ScopeFrom(ctx); scope != nil && scope.ProjectID != "" && scope.Root != "" &&
+		projectLocalActionTool(tool) && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
+		return nil, nil
+	}
 	if _, err := e.Store.ActiveExecutionTask(ctx, threadID); err == nil && (e.Cfg == nil || !e.Cfg.Policy.RequireWorkflowApproval) {
 		return nil, nil
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
