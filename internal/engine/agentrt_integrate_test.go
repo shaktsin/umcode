@@ -534,8 +534,8 @@ func TestEndToEndTwoWritersOneConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept beta: %v", err)
 	}
-	wantConflict := `Conflict in a.go. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}; or start a new agent with the conflict as context.`
-	if out.Message != wantConflict || out.Revision.State != store.RevisionConflict || !slices.Equal(out.Options, []string{"drop", "resolved", "new_agent"}) {
+	wantConflict := `Conflict in a.go. Nothing was applied. Options: agent.integrate {action:"drop", agent, reason}; or fix the files in the project checkout, stage them, then agent.integrate {action:"resolved", agent}. No new agent can be spawned once work is integrated: to redo the work with the conflict as context, finish this task (drop or resolve, verify, complete) and start a new delegated task.`
+	if out.Message != wantConflict || out.Revision.State != store.RevisionConflict || !slices.Equal(out.Options, []string{"drop", "resolved"}) {
 		t.Fatalf("accept beta = %+v", out)
 	}
 	if after := delegationGit(t, root, "write-tree"); after != before {

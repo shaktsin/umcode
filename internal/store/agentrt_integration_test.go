@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -281,4 +282,38 @@ func TestRuntimeIntegrationsToReconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 	want()
+}
+
+// A database migrated by a Plan 1/2 build already recorded 0034 without the
+// revision tables; they must come from a later migration.
+func TestRevisionTablesAddedToExistingRuntimeDatabase(t *testing.T) {
+	body, err := migrationsFS.ReadFile("migrations/0034_agent_runtime.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "agent_revisions") || strings.Contains(string(body), "agent_integration_head") {
+		t.Fatal("0034 was edited in place; existing databases never re-run it")
+	}
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec(`DROP TABLE agent_revisions; DROP TABLE agent_integration_head; DELETE FROM schema_migrations WHERE version > 34`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, q := range []string{`SELECT COUNT(*) FROM agent_revisions`, `SELECT COUNT(*) FROM agent_integration_head`} {
+		var n int
+		if err = s.DB.QueryRow(q).Scan(&n); err != nil {
+			t.Fatalf("%s after upgrade: %v", q, err)
+		}
+	}
 }
