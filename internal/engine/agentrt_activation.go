@@ -175,6 +175,25 @@ func suggestionOpen(s store.AgentSuggestion) error {
 	}
 }
 
+// GetAgentSuggestion is agent/suggestion/get: the stored state of one
+// suggestion card. It never changes anything.
+func (e *Engine) GetAgentSuggestion(ctx context.Context, p protocol.AgentSuggestionGetParams) (protocol.AgentSuggestion, error) {
+	if delegationChild(ctx) || childExecutionFrom(ctx) != nil {
+		return protocol.AgentSuggestion{}, protocol.Errorf(protocol.CodeInvalidRequest, "children cannot read agent suggestions")
+	}
+	if p.SuggestionID == "" {
+		return protocol.AgentSuggestion{}, protocol.Errorf(protocol.CodeInvalidParams, "suggestionId required")
+	}
+	s, err := e.Store.GetAgentSuggestion(ctx, p.SuggestionID)
+	if errors.Is(err, store.ErrNotFound) {
+		return protocol.AgentSuggestion{}, protocol.Errorf(protocol.CodeNotFound, "agent suggestion %s not found", p.SuggestionID)
+	}
+	if err != nil {
+		return protocol.AgentSuggestion{}, err
+	}
+	return suggestionView(s), nil
+}
+
 func suggestionView(s store.AgentSuggestion) protocol.AgentSuggestion {
 	return protocol.AgentSuggestion{ID: s.ID, ThreadID: s.ThreadID, TurnID: s.TurnID, Reason: s.Reason, State: s.State, CreatedAt: s.CreatedAt, DecidedAt: s.DecidedAt}
 }

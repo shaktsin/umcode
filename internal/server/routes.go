@@ -230,6 +230,21 @@ func (s *Server) routes() map[string]handler {
 			}
 			return e.RespondAgentSuggestion(ctx, p)
 		}),
+		// Read-only views of the activation cards' stored state (Plan 5 renders
+		// cards from these after a reload, a restart or another client's
+		// answer). App clients only.
+		protocol.MethodAgentSuggestionGet: bind(func(ctx context.Context, c *conn, p protocol.AgentSuggestionGetParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read agent suggestions")
+			}
+			return e.GetAgentSuggestion(ctx, p)
+		}),
+		protocol.MethodAgentPlanGet: bind(func(ctx context.Context, c *conn, p protocol.AgentPlanGetParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can read agent plan cards")
+			}
+			return e.GetAgentPlan(ctx, p)
+		}),
 		// The user's answer to an agent.propose_plan card: approve (with model
 		// choices, dropped agents and limits), decline or revise. App clients only.
 		protocol.MethodAgentPlanRespond: bind(func(ctx context.Context, c *conn, p protocol.AgentPlanRespondParams) (any, error) {
