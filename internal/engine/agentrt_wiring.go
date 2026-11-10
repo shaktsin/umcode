@@ -28,13 +28,17 @@ func runtimeCloseBudget(ctx context.Context) time.Duration {
 }
 
 // registerAgentRuntime builds the agent runtime on base and registers its
-// model-facing tools in place of the legacy delegation agent tools. The lead
+// model-facing tools in place of the legacy delegation agent tools (including
+// agent.integrate, which replaces the legacy workflow action, so it must run
+// after the workflow tools are registered). The lead
 // keeps the default RootCapabilities authority (agentrt.WithLeadCapabilities).
 func (e *Engine) registerAgentRuntime(reg *tools.Registry, base context.Context) {
 	e.AgentRuntime = agentrt.NewRuntime(e.Store, runtimeRunner{engine: e}, base, e.runtimeAgentOptions()...)
-	for _, tool := range tools.NewRuntimeAgentTools(e.AgentRuntime, e.authorizeDelegationTool, runtimeCaller) {
+	for _, tool := range tools.NewRuntimeAgentTools(runtimeSpawnGate{Service: e.AgentRuntime, e: e}, e.authorizeDelegationTool, runtimeCaller) {
 		reg.Add(tool)
 	}
+	// Lead-only, never granted through capabilities (agentrt.AllowedTools).
+	e.registerRuntimeIntegrate(reg)
 }
 
 // runtimeCaller resolves the calling agent for the runtime agent tools: a

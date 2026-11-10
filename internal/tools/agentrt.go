@@ -293,3 +293,102 @@ func (t *runtimeAgentTool) Call(ctx context.Context, args json.RawMessage) (stri
 	out, err := json.Marshal(result)
 	return string(out), err
 }
+
+// RuntimeIntegrateArgs are the arguments of agent.integrate.
+type RuntimeIntegrateArgs struct {
+	Action string `json:"action"`
+	Agent  string `json:"agent"`
+	Reason string `json:"reason"`
+}
+
+// RuntimeIntegrateCall runs one validated agent.integrate action for the
+// lead's admitted task and returns the result to marshal.
+type RuntimeIntegrateCall func(ctx context.Context, task protocol.AgentTask, args RuntimeIntegrateArgs) (any, error)
+
+type runtimeIntegrateTool struct {
+	authorize AgentAuthorize
+	caller    func(context.Context) (string, bool)
+	call      RuntimeIntegrateCall
+}
+
+// NewRuntimeIntegrateTool returns agent.integrate, the lead's integration of
+// runtime agents' revisions. It is lead-only: any context that caller does
+// not resolve as the lead ("", true) is refused before anything else, so no
+// runtime agent can use it whatever its capabilities (and capabilities never
+// list it). It also requires writable tools (tools.RequireWritable).
+func NewRuntimeIntegrateTool(authorize AgentAuthorize, caller func(context.Context) (string, bool), call RuntimeIntegrateCall) Tool {
+	return &runtimeIntegrateTool{authorize: authorize, caller: caller, call: call}
+}
+
+func (t *runtimeIntegrateTool) SelectionMetadata() (string, string) { return "core", "engine" }
+func (t *runtimeIntegrateTool) Name() string                        { return "agent.integrate" }
+func (t *runtimeIntegrateTool) Description() string {
+	return "Lead only. Integrate agents' committed revisions into the project checkout, one at a time in submission order. " +
+		"accept applies an agent's revision onto the integrated state (staged; HEAD never moves) and plans the checks to run with verification.run; " +
+		"the next accept needs those checks passed. A conflict applies nothing and lists the options. " +
+		"drop discards a revision with a reason; resolved records your own staged fix of a conflict as the new state; " +
+		"status reports the integration; complete finishes the task once every agent stopped, every revision is applied or dropped and the final state's checks passed. " +
+		"Spawn every agent before the first accept: afterwards no new agent workspace can be created."
+}
+
+func (t *runtimeIntegrateTool) Schema() json.RawMessage {
+	return schema(`{"type":"object","additionalProperties":false,"required":["action"],"properties":{` +
+		`"action":{"type":"string","enum":["accept","drop","resolved","status","complete"]},` +
+		`"agent":{"type":"string","description":"Agent ID; required for accept, drop and resolved."},` +
+		`"reason":{"type":"string","description":"Why the revision is dropped; required for drop."}}}`)
+}
+
+func (t *runtimeIntegrateTool) Assess(args json.RawMessage) (Risk, string) {
+	var a RuntimeIntegrateArgs
+	_ = json.Unmarshal(args, &a)
+	if a.Action == "accept" {
+		return RiskYellow, "Apply agent " + a.Agent + "'s revision to the project checkout"
+	}
+	return RiskGreen, "Agent integration: " + a.Action
+}
+
+func (t *runtimeIntegrateTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if t.authorize == nil || t.call == nil || t.caller == nil {
+		return "", errors.New("agent runtime unavailable")
+	}
+	if id, ok := t.caller(ctx); !ok || id != "" {
+		return "", errors.New("agent.integrate is lead-only: agents cannot integrate revisions, whatever their capabilities")
+	}
+	if err := RequireWritable(ctx); err != nil {
+		return "", fmt.Errorf("agent.integrate needs writable tools (not available in read-only or plan mode): %w", err)
+	}
+	task, err := t.authorize(ctx)
+	if err != nil {
+		return "", err
+	}
+	if task.ID == "" {
+		return "", errors.New("admitted task required")
+	}
+	var a RuntimeIntegrateArgs
+	if err = decodeStrict(args, &a); err != nil {
+		return "", err
+	}
+	a.Agent, a.Reason = strings.TrimSpace(a.Agent), strings.TrimSpace(a.Reason)
+	switch a.Action {
+	case "accept", "resolved":
+		if a.Agent == "" {
+			return "", fmt.Errorf("agent required for %s", a.Action)
+		}
+	case "drop":
+		if a.Agent == "" {
+			return "", errors.New("agent required for drop")
+		}
+		if a.Reason == "" {
+			return "", errors.New("reason required for drop")
+		}
+	case "status", "complete":
+	default:
+		return "", fmt.Errorf("unknown action %q; use accept, drop, resolved, status or complete", a.Action)
+	}
+	result, err := t.call(ctx, task, a)
+	if err != nil {
+		return "", err
+	}
+	out, err := json.Marshal(result)
+	return string(out), err
+}

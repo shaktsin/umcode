@@ -180,6 +180,21 @@ func (s *WorkspaceService) runtimeWorkspace(ctx context.Context, t protocol.Agen
 // are computed in the agent checkout with hardened plumbing after its metadata
 // is validated, and must match the workspace evidence of SnapshotRuntime.
 func (s *WorkspaceService) RecordRuntimeRevision(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, ws store.AgentWorkspace) (store.AgentRevision, error) {
+	return s.recordRuntimeRevision(ctx, task, agent, ws, false)
+}
+
+// RecordFinishedRuntimeRevision is RecordRuntimeRevision for the agent's own
+// runner: it is called after the agent's turn loop exited successfully and
+// its workspace was finalized, but before the scheduler persists the terminal
+// state, so a failure here can still fail the agent with a blocker. The stored
+// agent must still be running and is treated as completed. If the agent ends
+// in any other state after all (a cancel that won the race), its revision is
+// never integrable: the integration authority requires a completed agent.
+func (s *WorkspaceService) RecordFinishedRuntimeRevision(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, ws store.AgentWorkspace) (store.AgentRevision, error) {
+	return s.recordRuntimeRevision(ctx, task, agent, ws, true)
+}
+
+func (s *WorkspaceService) recordRuntimeRevision(ctx context.Context, task protocol.AgentTask, agent protocol.RuntimeAgent, ws store.AgentWorkspace, finishing bool) (store.AgentRevision, error) {
 	defer s.lockTask(task.ID)()
 	t, err := s.task(ctx, task)
 	if err != nil {
@@ -189,10 +204,17 @@ func (s *WorkspaceService) RecordRuntimeRevision(ctx context.Context, task proto
 	if err != nil {
 		return store.AgentRevision{}, err
 	}
-	if active(a.State) {
+	switch {
+	case finishing:
+		if a.State != protocol.AgentStateRunning {
+			return store.AgentRevision{}, fmt.Errorf("agent %s is %s; its runner records a revision only as it finishes", a.ID, a.State)
+		}
+	case active(a.State):
 		return store.AgentRevision{}, fmt.Errorf("agent %s is %s; a revision is recorded only after it stops", a.ID, a.State)
+	case a.State != protocol.AgentStateCompleted:
+		return store.AgentRevision{}, nil
 	}
-	if a.Capabilities.Files != protocol.FilesReadWrite || a.State != protocol.AgentStateCompleted {
+	if a.Capabilities.Files != protocol.FilesReadWrite {
 		return store.AgentRevision{}, nil
 	}
 	if a.WorkspaceID != ws.ID {
@@ -697,4 +719,48 @@ func (s *WorkspaceService) updateWorkflowLocked(ctx context.Context, taskID, hea
 		return err
 	}
 	return s.Store.SetAgentIntegrationHead(ctx, h, h.Version)
+}
+
+// CleanupRuntime discards the checkouts of a completed task's applied runtime
+// revisions: their work is in the verified integrated head. Dropped, conflicted
+// and never-integrated work and manually resolved revisions are retained. Each
+// checkout must still be exactly its result revision (DiscardCommitted), else
+// it is retained and reported; the errors are warnings for the caller.
+func (s *WorkspaceService) CleanupRuntime(ctx context.Context, taskID string) error {
+	defer s.lockTask(taskID)()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.Store.AgentTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if t.State != protocol.AgentStateCompleted {
+		return fmt.Errorf("task %s is %s; workspaces are cleaned only after completion", t.ID, t.State)
+	}
+	revs, err := s.Store.AgentRevisions(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, r := range revs {
+		if r.State != store.RevisionApplied || r.Reason == manualResolution {
+			continue
+		}
+		w, err := s.Store.AgentWorkspace(ctx, r.WorkspaceID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("agent %s workspace: %w", r.AgentID, err))
+			continue
+		}
+		if w.TaskID != taskID || w.ChildID != r.AgentID || w.Kind != "implementer" || w.ResultRevision != r.ResultRevision {
+			errs = append(errs, fmt.Errorf("agent %s workspace identity changed; retained", r.AgentID))
+			continue
+		}
+		if w.Cleaned {
+			continue
+		}
+		if err = s.discardVerified(ctx, w); err != nil {
+			errs = append(errs, fmt.Errorf("agent %s workspace retained: %w", r.AgentID, err))
+		}
+	}
+	return errors.Join(errs...)
 }

@@ -3,9 +3,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
+	"github.com/shaktsin/umcode/internal/worktree"
 )
 
 // runtimeWorkflow is the verification state of a runtime task's integration
@@ -85,6 +88,10 @@ func (e *Engine) recordRuntimeVerification(ctx context.Context, taskID, headTree
 		recorded = current
 		return current, nil
 	})
+	var untracked *worktree.UntrackedError
+	if errors.As(err, &untracked) {
+		return fmt.Errorf("verification output left untracked files in the project checkout (%s), so the result cannot be recorded for the integrated state; remove them or ignore them in .gitignore, then run the checks again: %w", strings.Join(untracked.Paths, ", "), err)
+	}
 	if err != nil {
 		return err
 	}
