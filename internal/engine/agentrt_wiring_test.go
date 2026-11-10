@@ -677,3 +677,45 @@ func TestShutdownReachesPluginsAndMCPWhenRunnerHangs(t *testing.T) {
 		t.Fatalf("plugins were not closed by Shutdown: %v", err)
 	}
 }
+
+// failingListStore makes the runtime's agent listing fail, so cancelling the
+// task's runtime agents returns an error.
+type failingListStore struct {
+	agentrt.AgentStore
+}
+
+func (failingListStore) RuntimeAgents(context.Context, string) ([]protocol.RuntimeAgent, error) {
+	return nil, errors.New("injected runtime list failure")
+}
+
+// S1: when the legacy task cancel succeeded but the runtime cancel failed,
+// clients still hear about the cancelled task; the error is still returned.
+func TestCancelDelegationPublishesDespiteRuntimeCancelError(t *testing.T) {
+	e, th, _, _ := delegationFixture(t)
+	task := childExecutionTask(t, e, th)
+	e.AgentRuntime = agentrt.NewRuntime(failingListStore{e.Store}, instantRunner{}, e.baseCtx)
+	sub := &childSubscriber{events: make(chan childEvent, 64)}
+	e.Bus.Add(sub)
+	defer e.Bus.Remove(sub.ID())
+	_, err := e.CancelDelegation(t.Context(), protocol.DelegationCancelParams{ThreadID: th.ID, TaskID: task.ID})
+	if err == nil || !strings.Contains(err.Error(), "injected runtime list failure") {
+		t.Fatalf("err = %v, want the runtime cancel error", err)
+	}
+	got, getErr := e.Store.AgentTask(t.Context(), task.ID)
+	if getErr != nil || got.State != protocol.AgentStateCancelled {
+		t.Fatalf("legacy cancel did not happen: %q %v", got.State, getErr)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-sub.events:
+			if ev.method == protocol.NotifyDelegationUpdated {
+				if d := ev.params.(protocol.DelegationUpdated); d.TaskID == task.ID && d.Task != nil && d.Task.State == protocol.AgentStateCancelled {
+					return
+				}
+			}
+		case <-deadline:
+			t.Fatal("no delegation update published for the cancelled task")
+		}
+	}
+}

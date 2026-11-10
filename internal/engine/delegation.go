@@ -286,18 +286,19 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 		// the task closing under them. Without a runtime this is a no-op.
 		err = errors.Join(e.cancelRuntimeAgents(ctx, task.ID), e.DelegationCoordinator.CancelTask(ctx, task.ID))
 	}
-	if err != nil {
-		return result, err
-	}
+	// Whatever part of the cancel failed (for example the runtime cancel
+	// after the legacy task cancel succeeded), clients still hear the task's
+	// current state; the error is returned after publishing.
+	cancelErr := err
 	result.Task, err = e.Store.AgentTask(ctx, task.ID)
 	if err != nil {
-		return result, err
+		return result, errors.Join(cancelErr, err)
 	}
 	result.Children, err = e.DelegationCoordinator.List(ctx, task.ID)
 	if err == nil {
 		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &result.Task})
 	}
-	return result, err
+	return result, errors.Join(cancelErr, err)
 }
 
 // authorizeDelegationTool revalidates the admitted context against durable
