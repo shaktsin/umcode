@@ -213,8 +213,8 @@ func TestProposePlanLeadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = tool.Call(env.lead, json.RawMessage(onePlan))
-	if err == nil {
-		t.Fatal("proposal accepted for a cancelled task")
+	if err == nil || !strings.Contains(err.Error(), "no longer active") {
+		t.Fatalf("proposal for a cancelled task: want refusal naming the rule, got %v", err)
 	}
 	if n := env.planCount(t); n != 0 {
 		t.Fatalf("inactive task stored %d plans", n)
