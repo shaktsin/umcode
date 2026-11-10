@@ -221,6 +221,14 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 		}
 	}
 	base, err := e.delegationBase(ctx, p.ThreadID)
+	if err != nil && p.DelegationTaskID != "" {
+		// The project is no longer admissible (for example the checkout is
+		// not clean any more): an EMPTY task of this chat is completed and
+		// the message runs as a plain turn, so the chat is not stuck.
+		if task, ok := e.ownedActiveTask(ctx, p.ThreadID, p.DelegationTaskID); ok && e.replaceEmptyActivation(ctx, task.ID) {
+			return nil, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +242,12 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 		}
 		if !unfinishedDelegation(task.State) {
 			return nil, protocol.Errorf(protocol.CodeInvalidParams, "delegation task is finished or interrupted; explicitly enable a new task")
+		}
+		if (task.BaseRoot != base.Root || task.ParentRoot != base.ParentRoot || task.BaseRevision != base.Revision) && e.replaceEmptyActivation(ctx, task.ID) {
+			// An EMPTY task holds nothing bound to its old root or revision:
+			// the user's activation continues as a fresh task at the current
+			// one. A task with delegated work still refuses below.
+			return &delegationAdmission{delegationToken: base, Activation: task.Activation}, nil
 		}
 		if task.BaseRoot != base.Root || task.ParentRoot != base.ParentRoot {
 			return nil, protocol.Errorf(protocol.CodeConflict, "delegation project root changed")
@@ -258,6 +272,21 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 	}
 	return &delegationAdmission{delegationToken: base, Activation: activation}, nil
 }
+
+// ownedActiveTask returns the delegation task id when it is an active task of
+// the chat (same thread and the thread's current project).
+func (e *Engine) ownedActiveTask(ctx context.Context, threadID, id string) (protocol.AgentTask, bool) {
+	task, err := e.Store.AgentTask(ctx, id)
+	if err != nil || task.ThreadID != threadID || !unfinishedDelegation(task.State) {
+		return protocol.AgentTask{}, false
+	}
+	th, err := e.Store.GetThread(ctx, threadID)
+	if err != nil || th.ProjectID != task.ProjectID {
+		return protocol.AgentTask{}, false
+	}
+	return task, true
+}
+
 func unfinishedDelegation(state protocol.AgentState) bool {
 	return state == protocol.AgentStateQueued || state == protocol.AgentStateRunning || state == protocol.AgentStateWaitingApproval
 }

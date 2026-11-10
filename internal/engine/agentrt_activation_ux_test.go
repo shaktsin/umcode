@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -117,5 +119,71 @@ func TestTaskWithApprovedPlanStillBlocksEnable(t *testing.T) {
 	}
 	if got, _ := x.e.Store.AgentTask(t.Context(), x.task.ID); !unfinishedDelegation(got.State) {
 		t.Fatalf("task with an approved plan = %s, want active", got.State)
+	}
+}
+
+// The project moved on between the clarifying turn and the answer (a new
+// commit): the empty task carries nothing bound to the old revision, so the
+// follow-up by task ID continues the user's activation as a fresh task at the
+// current revision instead of failing turn/start.
+func TestEmptyTaskFollowUpAfterNewCommit(t *testing.T) {
+	x := newActivationE2E(t, nil)
+	token := x.enable(t, x.suggestTurn(t))
+	old := x.askTurn(t, token)
+	if err := os.WriteFile(filepath.Join(x.root, "c.txt"), []byte("c\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	delegationGit(t, x.root, "add", ".")
+	delegationGit(t, x.root, "commit", "-m", "c")
+	head := delegationGit(t, x.root, "rev-parse", "HEAD")
+	x.setLead("after the commit")
+	x.turn(t, protocol.TurnStartParams{Text: "after the commit", DelegationTaskID: old.ID, Override: uxOverride()})
+	if got, _ := x.e.Store.AgentTask(t.Context(), old.ID); got.State != protocol.AgentStateCompleted {
+		t.Fatalf("empty task at the old revision = %s, want completed", got.State)
+	}
+	fresh := x.latestTask(t)
+	if fresh.ID == old.ID || !unfinishedDelegation(fresh.State) || fresh.BaseRevision != head || fresh.Activation != old.Activation {
+		t.Fatalf("follow-up admitted %+v, want a new active task at %s with activation %s", fresh, head, old.Activation)
+	}
+}
+
+// The checkout is no longer clean: the follow-up by task ID runs as a plain
+// turn (the empty task is completed) instead of failing turn/start.
+func TestEmptyTaskFollowUpWithDirtyCheckout(t *testing.T) {
+	x := newActivationE2E(t, nil)
+	token := x.enable(t, x.suggestTurn(t))
+	old := x.askTurn(t, token)
+	if err := os.WriteFile(filepath.Join(x.root, "draft.txt"), []byte("draft\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	x.setLead("dirty now")
+	x.turn(t, protocol.TurnStartParams{Text: "dirty now", DelegationTaskID: old.ID, Override: uxOverride()})
+	if got := x.latestTask(t); got.ID != old.ID || got.State != protocol.AgentStateCompleted {
+		t.Fatalf("latest task %+v, want the empty task completed and no new one", got)
+	}
+}
+
+// A task with delegated work is never re-admitted at another revision.
+func TestTaskWithPlanFollowUpAfterNewCommitRefused(t *testing.T) {
+	x := newActivationE2E(t, nil)
+	token := x.enable(t, x.suggestTurn(t))
+	_, wait := x.proposeTurn(t, token, `{"agents":[`+planEntry("worker", "read A", "read", "")+`]}`)
+	_, card := x.pendingCard(t, x.e)
+	x.admitted(t)
+	if _, err := x.e.RespondAgentPlan(t.Context(), protocol.AgentPlanRespondParams{PlanID: card.PlanID, Decision: protocol.PlanDecisionApprove}); err != nil {
+		t.Fatal(err)
+	}
+	waitTurnDone(t, wait, protocol.TurnCompleted)
+	if err := os.WriteFile(filepath.Join(x.root, "c.txt"), []byte("c\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	delegationGit(t, x.root, "add", ".")
+	delegationGit(t, x.root, "commit", "-m", "c")
+	_, err := x.e.startTurn(t.Context(), turnRequest{TurnStartParams: protocol.TurnStartParams{ThreadID: x.th.ID, Text: "continue", DelegationTaskID: x.task.ID}})
+	if err == nil || !strings.Contains(err.Error(), "revision changed") {
+		t.Fatalf("follow-up of a task with a plan after a commit: %v, want the revision refusal", err)
+	}
+	if got, _ := x.e.Store.AgentTask(t.Context(), x.task.ID); !unfinishedDelegation(got.State) {
+		t.Fatalf("task with a plan = %s, want active", got.State)
 	}
 }
