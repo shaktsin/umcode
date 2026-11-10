@@ -147,6 +147,14 @@ type Engine struct {
 	// planModelPoolHook is a test seam that may edit the plan model pool
 	// (planModelPool) before use; set before use.
 	planModelPoolHook func([]modelRoute) []modelRoute
+	// agentPlanDecided records each plan card's decision (outcome and
+	// canonical approve edits) under agentPlanMu, so a repeat is recognised
+	// after the waiting tool call has returned.
+	agentPlanDecided map[string]planDecision
+	// approvalDecideHook is a test seam run by respondApproval before the
+	// decision is stored (committed=false) and after the waiter was woken
+	// (committed=true); an error is returned as the respond's error.
+	approvalDecideHook func(id string, committed bool) error
 	// agentPlanWaits holds the decision wait of each plan card still blocking
 	// agent.propose_plan, by plan ID; in memory only (a restart expires every
 	// pending approval).

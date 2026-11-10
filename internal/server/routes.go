@@ -236,7 +236,7 @@ func (s *Server) routes() map[string]handler {
 			if !c.IsAdmin() {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can answer agent plan cards")
 			}
-			return e.RespondAgentPlan(ctx, p)
+			return e.RespondAgentPlanAs(ctx, c.id, p)
 		}),
 		protocol.MethodDelegationList: bind(func(ctx context.Context, c *conn, p protocol.DelegationListParams) (any, error) {
 			if !c.admin.Load() {

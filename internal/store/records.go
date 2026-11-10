@@ -552,6 +552,19 @@ func (s *Store) GetApproval(ctx context.Context, id string) (protocol.Approval, 
 	return a, err
 }
 
+// UpdateApprovalArgs replaces an approval's payload (an agent_plan card
+// refreshed after an edited approve).
+func (s *Store) UpdateApprovalArgs(ctx context.Context, id string, args []byte) error {
+	res, err := s.DB.ExecContext(ctx, `UPDATE approvals SET args_json=? WHERE id=?`, string(args), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // LatestApprovalForNode returns the newest approval of a kind for a node ID
 // (an agent_plan card's plan ID), whatever its status.
 func (s *Store) LatestApprovalForNode(ctx context.Context, kind, nodeID string) (protocol.Approval, error) {
