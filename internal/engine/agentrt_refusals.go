@@ -2,7 +2,6 @@ package engine
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -11,8 +10,9 @@ import (
 
 // Agent tool refusals the lead can act on: a short message for the model and
 // the chat, and a NextStep naming the action instead of the generic
-// execution-failure advice. Rule refusals are not retryable: repeating the
-// same call cannot succeed until the rule is met.
+// execution-failure advice. Rule refusals are typed (*tools.RuleRefusal) and
+// recognised only by identity and only for agent.* tools: a failure whose
+// output merely quotes a refusal keeps the generic classification.
 
 const (
 	// agentsNotEnabledMessage is the refusal of an agent.* call in a turn
@@ -22,14 +22,25 @@ const (
 	agentsNotEnabledMessage = "Agents are not enabled for this message. Agent tools work only after the user approves an agent plan."
 	// agentsNotEnabledNextStep is that refusal's NextStep.
 	agentsNotEnabledNextStep = "Continue without agents in this message; do not retry agent tools until the user has approved an agent plan."
+	// agentGitNextStep is the NextStep of a refusal for a project that is
+	// not a committed Git repository.
+	agentGitNextStep = "Agents need a committed Git project: tell the user what this refusal says is missing, then agents can be enabled again."
+	// suggestRuleNextStep is the NextStep of agent.suggest's own rules.
+	suggestRuleNextStep = "Follow the rule this refusal names; do not call agent.suggest again in this message."
 )
 
-// agentRuleError is an agent tool refusal under one of the delegation rules.
-type agentRuleError struct{ msg, next string }
+// errAgentsNotEnabled is advisory: the lead continues without agents, so it
+// does not block the turn's outcome.
+var errAgentsNotEnabled error = &tools.RuleRefusal{Msg: agentsNotEnabledMessage, NextStep: agentsNotEnabledNextStep, Advisory: true}
 
-func (e *agentRuleError) Error() string { return e.msg }
+// errSuggestAdmitted is agent.suggest's refusal in a turn admitted for
+// delegation.
+var errSuggestAdmitted error = tools.Refuse(
+	"agent.suggest refused: this turn is already admitted for delegation; agents are enabled, so do not suggest them; use agent.propose_plan",
+	"Agents are already enabled for this message: call agent.propose_plan instead.")
 
-var errAgentsNotEnabled error = &agentRuleError{msg: agentsNotEnabledMessage, next: agentsNotEnabledNextStep}
+// suggestRefusal is one of agent.suggest's rules.
+func suggestRefusal(msg string) error { return tools.Refuse(msg, suggestRuleNextStep) }
 
 // agentToolName reports an agent.* tool of the lead or an agent (including
 // agent.suggest), by registered or wire name.
@@ -37,47 +48,22 @@ func agentToolName(name string) bool {
 	return strings.HasPrefix(tools.FromWire(name), "agent.")
 }
 
-// agentRuleFailure classifies an agent tool refusal under a delegation rule
-// (not admitted, not a committed Git project, plan limits, lead-only, an
-// agent.suggest rule). It reports false for anything else, including every
-// non-agent tool, whose failures keep the generic classification. The
-// not-enabled refusal is advisory: the lead continues without agents, so it
-// does not block the turn's outcome.
-func agentRuleFailure(tool, msg string) (protocol.ActionFailure, bool) {
-	f := protocol.ActionFailure{Category: "policy_denied", Message: msg}
-	if strings.Contains(msg, agentsNotEnabledMessage) {
-		f.Message, f.NextStep, f.Advisory = agentsNotEnabledMessage, agentsNotEnabledNextStep, true
-		return f, true
+// agentRuleFailure classifies a typed rule refusal of an agent.* tool. It
+// reports false for anything else: untyped errors whatever their wording,
+// and every non-agent tool.
+func agentRuleFailure(tool string, err error) (protocol.ActionFailure, bool) {
+	var r *tools.RuleRefusal
+	if err == nil || !agentToolName(tool) || !errors.As(err, &r) {
+		return protocol.ActionFailure{}, false
 	}
-	if !agentToolName(tool) {
-		return f, false
-	}
-	text := strings.ToLower(msg)
-	switch {
-	case strings.Contains(text, "lead-only"):
-		f.NextStep = "Only the lead can do this; report back to the lead instead of retrying."
-	case strings.Contains(text, "committed git") || strings.Contains(text, "git repository root") || strings.Contains(text, "clean committed checkout"):
-		f.NextStep = "Agents need a committed Git project: tell the user what this refusal says is missing, then agents can be enabled again."
-	case strings.Contains(text, "a plan has 1 to"):
-		f.NextStep = fmt.Sprintf("Propose a plan with 1 to %d agents.", tools.MaxPlanAgents)
-	case strings.Contains(msg, suggestAdmittedRefusal):
-		f.NextStep = "Agents are already enabled for this message: call agent.propose_plan instead."
-	case strings.Contains(text, "agent.suggest refused:"):
-		f.NextStep = "Follow the rule this refusal names; do not call agent.suggest again in this message."
-	default:
-		return f, false
-	}
-	return f, true
+	return protocol.ActionFailure{Category: "policy_denied", Message: err.Error(), NextStep: r.NextStep, Advisory: r.Advisory}, true
 }
 
-// classifyToolFailure is classifyActionFailure for a failure of a known tool:
-// agent tool rule refusals get their own NextStep and are not retryable.
+// classifyToolFailure is classifyActionFailure for the error a known tool
+// returned: agent tool rule refusals get their own NextStep and are not
+// retryable.
 func classifyToolFailure(operationID, tool string, err error) protocol.ActionFailure {
-	var typed *taskActionError
-	if errors.As(err, &typed) {
-		return classifyActionFailure(operationID, err)
-	}
-	if f, ok := agentRuleFailure(tool, err.Error()); ok {
+	if f, ok := agentRuleFailure(tool, err); ok {
 		f.OperationID = operationID
 		return f
 	}

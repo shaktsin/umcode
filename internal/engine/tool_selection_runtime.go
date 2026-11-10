@@ -283,6 +283,13 @@ func (e *Engine) selectionToolAvailable(c turnTool) bool {
 	return ok && sameTool(c.tool, current)
 }
 func (e *Engine) selectionFailure(ctx context.Context, turn protocol.Turn, call llm.ToolCall, name, reason string) toolRunResult {
+	return e.selectionRefusal(ctx, turn, call, name, errors.New(reason))
+}
+
+// selectionRefusal is selectionFailure for an error: a typed agent tool rule
+// refusal keeps its own NextStep (agentRuleFailure).
+func (e *Engine) selectionRefusal(ctx context.Context, turn protocol.Turn, call llm.ToolCall, name string, cause error) toolRunResult {
+	reason := cause.Error()
 	it, err := e.newItem(ctx, turn, protocol.ItemToolCall)
 	if err == nil {
 		it.Tool = &protocol.ToolCallData{CallID: call.ID, Name: name, Args: call.Args, Error: reason}
@@ -290,7 +297,7 @@ func (e *Engine) selectionFailure(ctx context.Context, turn protocol.Turn, call 
 		_ = e.saveAndPublish(ctx, it, protocol.NotifyItemCompleted)
 	}
 	failure := protocol.ActionFailure{Category: "policy_denied", Message: reason, NextStep: "Respect the current tool permission or availability constraint; clarify it rather than claiming execution.", OperationID: it.ID}
-	if rule, ok := agentRuleFailure(name, reason); ok {
+	if rule, ok := agentRuleFailure(name, cause); ok {
 		rule.OperationID = it.ID
 		failure = rule
 	}

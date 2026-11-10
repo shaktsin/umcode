@@ -1,7 +1,11 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,39 +66,103 @@ func TestAgentToolOutsideAdmittedTurnIsActionable(t *testing.T) {
 }
 
 func TestAgentRuleRefusalFailureMetadata(t *testing.T) {
-	f := classifyActionFailure("op", errAgentsNotEnabled)
-	if f.Retryable || f.NextStep != agentsNotEnabledNextStep || f.Message != agentsNotEnabledMessage {
+	f := classifyToolFailure("op", "agent.propose_plan", errAgentsNotEnabled)
+	if f.Retryable || !f.Advisory || f.NextStep != agentsNotEnabledNextStep || f.Message != agentsNotEnabledMessage || f.OperationID != "op" {
 		t.Fatalf("agent refusal classified %+v", f)
 	}
+	if w := classifyToolFailure("op", "agent__spawn", fmt.Errorf("spawn: %w", errAgentsNotEnabled)); w.Retryable || !w.Advisory {
+		t.Fatalf("wrapped agent refusal classified %+v", w)
+	}
 	g := classifyActionFailure("op", errorString("exit status 1"))
-	if !g.Retryable || g.Category != "execution_failed" || g.NextStep != "Inspect the failure and current resource state before proposing a focused correction." {
+	if !g.Retryable || g.Category != "execution_failed" || g.NextStep != genericNextStep {
 		t.Fatalf("non-agent failure changed: %+v", g)
 	}
 }
 
-func TestAgentToolRuleRefusalsNotRetryable(t *testing.T) {
-	for _, c := range []struct{ tool, msg, next string }{
-		{"agent.propose_plan", "agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities", "Only the lead"},
-		{"agent.suggest", "agent.suggest refused: agents need a committed Git project (delegation requires an initial committed Git revision)", "committed Git project"},
-		{"agent__propose_plan", "a plan has 1 to 8 agents, got 9", "Propose a plan with 1 to"},
-		{"agent.suggest", "agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it", "Follow the rule"},
+const genericNextStep = "Inspect the failure and current resource state before proposing a focused correction."
+
+// I1: refusals are recognised by identity and only for agent tools; text
+// that merely quotes a refusal (a failing test printing the constant, a cat
+// of the source) keeps the generic, blocking classification.
+func TestRefusalWordingNeverReclassifies(t *testing.T) {
+	quoted := errorString("--- FAIL: TestX\n    got " + agentsNotEnabledMessage + "\nexit status 1")
+	for _, f := range []protocol.ActionFailure{
+		classifyActionFailure("op", quoted),
+		classifyToolFailure("op", "shell.run", quoted),
+		classifyToolFailure("op", "agent.propose_plan", errorString(agentsNotEnabledMessage)),
+		// A typed refusal reported by a non-agent tool is not an agent rule.
+		classifyToolFailure("op", "shell.run", errAgentsNotEnabled),
 	} {
-		f := classifyToolFailure("op", c.tool, errorString(c.msg))
-		if f.Retryable || !strings.Contains(f.NextStep, c.next) || f.Message != c.msg || f.OperationID != "op" {
-			t.Fatalf("%s %q classified %+v", c.tool, c.msg, f)
+		if !f.Retryable || f.Advisory || f.Category != "execution_failed" || f.NextStep != genericNextStep {
+			t.Fatalf("quoted refusal classified %+v, want the generic retryable failure", f)
 		}
 	}
-	// Non-agent tools keep the generic classification, whatever the text.
-	g := classifyToolFailure("op", "shell.run", errorString("this script is lead-only"))
-	if !g.Retryable || g.Category != "execution_failed" {
-		t.Fatalf("non-agent failure changed: %+v", g)
-	}
-	// A real execution failure of an agent tool stays retryable.
-	h := classifyToolFailure("op", "agent.spawn", errorString("database is locked"))
-	if !h.Retryable || h.Category != "execution_failed" {
-		t.Fatalf("agent execution failure: %+v", h)
+	// Rule wording in a real agent tool failure stays a real failure.
+	for _, msg := range []string{"wait: child said this tool is lead-only", "integrate: git: not a committed git checkout", "accept: git repository root moved"} {
+		if f := classifyToolFailure("op", "agent.integrate", errorString(msg)); !f.Retryable || f.Advisory || f.Category != "execution_failed" {
+			t.Fatalf("%q classified %+v", msg, f)
+		}
 	}
 }
+
+func TestAgentToolRuleRefusalsNotRetryable(t *testing.T) {
+	x := newActivationE2E(t, nil)
+	agentCtx := withRuntimeAgent(withChildExecution(WithDelegationChild(t.Context()), &childExecution{runtime: &runtimeExecution{agent: protocol.RuntimeAgent{ID: "a1"}}}), "a1")
+	_, leadOnly := x.e.proposeAgentPlan(agentCtx, tools.PlanProposal{})
+	_, suggestLeadOnly := x.e.suggestAgents(agentCtx, "r")
+	notGit := x.suggestRefusalForTest(t)
+	for _, c := range []struct {
+		err  error
+		next string
+	}{{leadOnly, "Only the lead"}, {suggestLeadOnly, "Only the lead"}, {notGit, "committed Git project"}} {
+		f := classifyToolFailure("op", "agent.suggest", c.err)
+		if f.Retryable || f.Advisory || !strings.Contains(f.NextStep, c.next) || f.Message != c.err.Error() {
+			t.Fatalf("%v classified %+v", c.err, f)
+		}
+	}
+}
+
+// suggestRefusalForTest makes the chat's project non-Git and returns
+// agent.suggest's refusal.
+func (x *activationE2E) suggestRefusalForTest(t *testing.T) error {
+	t.Helper()
+	if err := os.RemoveAll(filepath.Join(x.root, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	ctx := tools.WithScope(context.WithValue(t.Context(), executionTurnKey{}, protocol.Turn{ID: "trn_x", ThreadID: x.th.ID}), &tools.Scope{ThreadID: x.th.ID, ProjectID: x.th.ProjectID, Root: x.root})
+	_, err := x.e.suggestAgents(ctx, "r")
+	if err == nil {
+		t.Fatal("agent.suggest accepted a non-Git project")
+	}
+	return err
+}
+
+// I1 end to end: a non-agent tool whose failure output quotes the refusal is
+// recorded as the real, blocking failure it is.
+func TestQuotedRefusalInToolOutputStaysBlocking(t *testing.T) {
+	x := newActivationE2E(t, nil)
+	x.e.Tools.Add(&failingTool{name: "probe.fail", err: errorString("--- FAIL: TestX: " + agentsNotEnabledMessage)})
+	x.setLead("run the probe", e2eLeadStep{"probe.fail", `{}`})
+	x.turn(t, protocol.TurnStartParams{Text: "run the probe"})
+	it := x.lastToolItem(t, "probe.fail")
+	f := itemFailure(t, it)
+	if !f.Retryable || f.Advisory || f.Category != "execution_failed" || !strings.Contains(f.Message, "--- FAIL: TestX") {
+		t.Fatalf("probe failure recorded %+v, want the real, blocking failure", f)
+	}
+}
+
+type failingTool struct {
+	name string
+	err  error
+}
+
+func (f *failingTool) Name() string            { return f.name }
+func (f *failingTool) Description() string     { return "fails" }
+func (f *failingTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (f *failingTool) Assess(json.RawMessage) (tools.Risk, string) {
+	return tools.RiskGreen, "probe"
+}
+func (f *failingTool) Call(context.Context, json.RawMessage) (string, error) { return "", f.err }
 
 type errorString string
 

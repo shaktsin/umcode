@@ -20,10 +20,6 @@ const delegationLeadPrompt = `Agents are enabled for this task. You decide wheth
 // turn ends, and the user's answer arrives as a new turn.
 const suggestStopMessage = "Stop now: the user decides whether to enable agents. Do not call agent.* tools or continue the task in this turn."
 
-// suggestAdmittedRefusal is agent.suggest's refusal in a turn admitted for
-// delegation.
-const suggestAdmittedRefusal = "agent.suggest refused: this turn is already admitted for delegation; agents are enabled, so do not suggest them; use agent.propose_plan"
-
 // suggestOnlyTool reports agent.suggest. Unlike the other agent.* tools it is
 // offered only in turns that are NOT admitted for delegation, so it is exempt
 // from the "admitted task required" gate (and gated the other way round in
@@ -39,13 +35,13 @@ func (e *Engine) suggestOnlyTool(name string) bool {
 // task in the chat, one per user message, not after a decline.
 func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, error) {
 	if id, ok := runtimeCaller(ctx); !ok || id != "" {
-		return "", errors.New("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents")
+		return "", tools.Refuse("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents", tools.LeadOnlyNextStep)
 	}
 	if e.AgentRuntime == nil {
-		return "", errors.New("agent.suggest refused: the agent runtime is unavailable")
+		return "", suggestRefusal("agent.suggest refused: the agent runtime is unavailable")
 	}
 	if _, admitted := DelegationTaskFromContext(ctx); admitted {
-		return "", errors.New(suggestAdmittedRefusal)
+		return "", errSuggestAdmitted
 	}
 	turn, ok := ctx.Value(executionTurnKey{}).(protocol.Turn)
 	if !ok || turn.ID == "" || turn.ThreadID == "" {
@@ -56,26 +52,26 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 	}
 	base, err := e.delegationBase(ctx, turn.ThreadID)
 	if err != nil {
-		return "", fmt.Errorf("agent.suggest refused: agents need a committed Git project (%v)", err)
+		return "", tools.Refuse(fmt.Sprintf("agent.suggest refused: agents need a committed Git project (%v)", err), agentGitNextStep)
 	}
 	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil && !e.replaceEmptyActivation(ctx, task.ID) {
-		return "", fmt.Errorf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", task.ID)
+		return "", suggestRefusal(fmt.Sprintf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", task.ID))
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}
 	if last, err := e.Store.LatestAgentSuggestion(ctx, turn.ThreadID); err == nil && last.TurnID == turn.ID {
-		return "", errors.New("agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it")
+		return "", suggestRefusal("agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it")
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}
 	if declined, err := e.Store.ThreadDeclinedSuggestion(ctx, turn.ThreadID); err != nil {
 		return "", err
 	} else if declined {
-		return "", errors.New("agent.suggest refused: the user declined agents in this chat; do not suggest them again unless the user enables agents themselves")
+		return "", suggestRefusal("agent.suggest refused: the user declined agents in this chat; do not suggest them again unless the user enables agents themselves")
 	}
 	sug, err := e.Store.CreateAgentSuggestion(ctx, store.AgentSuggestion{ThreadID: turn.ThreadID, TurnID: turn.ID, Reason: reason})
 	if errors.Is(err, store.ErrAgentConflict) {
-		return "", errors.New("agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it")
+		return "", suggestRefusal("agent.suggest refused: only one per user message, and this message already has one; stop and let the user answer it")
 	}
 	if err != nil {
 		return "", err

@@ -21,11 +21,6 @@ func classifyActionFailure(operationID string, err error) protocol.ActionFailure
 		f.OperationID = operationID
 		return f
 	}
-	// The not-enabled agent refusal is recognised whatever the tool name.
-	if rule, ok := agentRuleFailure("", err.Error()); ok {
-		rule.OperationID = operationID
-		return rule
-	}
 	f := protocol.ActionFailure{OperationID: operationID, Category: "execution_failed", Message: err.Error(), Retryable: true, NextStep: "Inspect the failure and current resource state before proposing a focused correction."}
 	text := strings.ToLower(err.Error())
 	switch {
@@ -143,13 +138,13 @@ func (e *Engine) recoverInterruptedTask(ctx context.Context, taskID string) erro
 				case protocol.ItemDenied:
 					status = "blocked"
 					if item.Tool != nil {
-						f := classifyToolFailure(op.ID, op.Tool, errors.New(item.Tool.Error))
+						f := classifyActionFailure(op.ID, errors.New(item.Tool.Error))
 						failure = &f
 					}
 				case protocol.ItemFailed:
 					status = "failed"
 					if item.Tool != nil {
-						f := classifyToolFailure(op.ID, op.Tool, errors.New(item.Tool.Error))
+						f := classifyActionFailure(op.ID, errors.New(item.Tool.Error))
 						failure = &f
 					}
 				}

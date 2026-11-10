@@ -370,7 +370,7 @@ func (t *runtimeIntegrateTool) Call(ctx context.Context, args json.RawMessage) (
 		return "", errors.New("agent runtime unavailable")
 	}
 	if id, ok := t.caller(ctx); !ok || id != "" {
-		return "", errors.New("agent.integrate is lead-only: agents cannot integrate revisions, whatever their capabilities")
+		return "", Refuse("agent.integrate is lead-only: agents cannot integrate revisions, whatever their capabilities", LeadOnlyNextStep)
 	}
 	if err := RequireWritable(ctx); err != nil {
 		return "", fmt.Errorf("agent.integrate needs writable tools (not available in read-only or plan mode): %w", err)
@@ -462,10 +462,10 @@ func (t *agentSuggestTool) Assess(json.RawMessage) (Risk, string) {
 
 func (t *agentSuggestTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	if t.a.Caller == nil {
-		return "", errors.New("agent.suggest is lead-only: the caller could not be resolved")
+		return "", Refuse("agent.suggest is lead-only: the caller could not be resolved", LeadOnlyNextStep)
 	}
 	if id, ok := t.a.Caller(ctx); !ok || id != "" {
-		return "", errors.New("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents")
+		return "", Refuse("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents", LeadOnlyNextStep)
 	}
 	if t.a.Suggest == nil {
 		return "", errors.New("agent runtime unavailable")
@@ -572,7 +572,7 @@ func ParsePlanProposal(args json.RawMessage) (PlanProposal, error) {
 		return PlanProposal{}, err
 	}
 	if len(a.Agents) < 1 || len(a.Agents) > MaxPlanAgents {
-		return PlanProposal{}, fmt.Errorf("a plan has 1 to %d agents, got %d", MaxPlanAgents, len(a.Agents))
+		return PlanProposal{}, Refuse(fmt.Sprintf("a plan has 1 to %d agents, got %d", MaxPlanAgents, len(a.Agents)), fmt.Sprintf("Propose a plan with 1 to %d agents.", MaxPlanAgents))
 	}
 	var p PlanProposal
 	seen := map[string]bool{}
@@ -642,10 +642,10 @@ func ParsePlanProposal(args json.RawMessage) (PlanProposal, error) {
 
 func (t *agentProposePlanTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
 	if t.a.Caller == nil {
-		return "", errors.New("agent.propose_plan is lead-only: the caller could not be resolved")
+		return "", Refuse("agent.propose_plan is lead-only: the caller could not be resolved", LeadOnlyNextStep)
 	}
 	if id, ok := t.a.Caller(ctx); !ok || id != "" {
-		return "", errors.New("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities")
+		return "", Refuse("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities", LeadOnlyNextStep)
 	}
 	if err := RequireWritable(ctx); err != nil {
 		return "", fmt.Errorf("agent.propose_plan needs writable tools (not available in read-only or plan mode): %w", err)

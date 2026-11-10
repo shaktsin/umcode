@@ -52,7 +52,7 @@ type agentPlanWait struct {
 // are the clamped grant, so approving never grants more than the card shows.
 func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (string, error) {
 	if id, ok := runtimeCaller(ctx); !ok || id != "" {
-		return "", errors.New("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities")
+		return "", tools.Refuse("agent.propose_plan is lead-only: agents and child tasks cannot propose plans, whatever their capabilities", tools.LeadOnlyNextStep)
 	}
 	if e.AgentRuntime == nil {
 		return "", errors.New("agent.propose_plan refused: the agent runtime is unavailable")
@@ -75,7 +75,7 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 		return "", errors.New("agent.propose_plan refused: it needs a running turn of the task's chat")
 	}
 	if len(p.Agents) < 1 || len(p.Agents) > tools.MaxPlanAgents {
-		return "", fmt.Errorf("a plan has 1 to %d agents, got %d", tools.MaxPlanAgents, len(p.Agents))
+		return "", tools.Refuse(fmt.Sprintf("a plan has 1 to %d agents, got %d", tools.MaxPlanAgents, len(p.Agents)), fmt.Sprintf("Propose a plan with 1 to %d agents.", tools.MaxPlanAgents))
 	}
 	p.Limits = p.Limits.Normalized()
 	if p.Limits.Network {
