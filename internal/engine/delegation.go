@@ -111,6 +111,11 @@ func (e *Engine) PrepareDelegation(ctx context.Context, threadID string) (protoc
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return protocol.DelegationEnableResult{}, err
 	}
+	// The user enabled agents themselves: an earlier declined agent.suggest
+	// no longer suppresses suggestions in this chat.
+	if err = e.Store.ClearThreadDeclines(ctx, base.ThreadID); err != nil {
+		return protocol.DelegationEnableResult{}, err
+	}
 	var bytes [32]byte
 	if _, err = rand.Read(bytes[:]); err != nil {
 		return protocol.DelegationEnableResult{}, err

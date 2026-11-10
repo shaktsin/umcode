@@ -291,6 +291,9 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	// Likewise regardless of the flag: settle accepts a crash left between
 	// "intent recorded" and "apply finished". Never applies anything.
 	e.reconcileRuntimeIntegrations(ctx)
+	// Likewise regardless of the flag: a pending agent.suggest card does not
+	// survive a restart. Logged, never fatal.
+	e.expireAgentSuggestions(ctx)
 	if n, err := o.Store.MarkStaleTurns(ctx); err != nil {
 		return nil, err
 	} else if n > 0 {

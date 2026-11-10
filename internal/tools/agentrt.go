@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/shaktsin/umcode/internal/agentrt"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -392,4 +393,74 @@ func (t *runtimeIntegrateTool) Call(ctx context.Context, args json.RawMessage) (
 	}
 	out, err := json.Marshal(result)
 	return string(out), err
+}
+
+// RuntimeActivation holds the engine hooks of the lead's activation tools.
+// Suggest records an agent.suggest card and returns the result to show the
+// model. Caller resolves the calling agent like NewRuntimeAgentTools: only
+// ("", true), the lead, may use these tools.
+type RuntimeActivation struct {
+	Suggest func(ctx context.Context, reason string) (string, error)
+	Caller  func(context.Context) (string, bool)
+}
+
+// maxSuggestReason bounds agent.suggest's reason, in characters.
+const maxSuggestReason = 280
+
+// NewRuntimeActivationTools returns the lead-only tools that ask the user to
+// activate agents. They carry no authority: a suggestion only records a
+// request, and delegation is still enabled by the app (delegation/enable or
+// agent/suggestion/respond) before a new turn starts. They are never granted
+// through capabilities (agentrt.AllowedTools).
+func NewRuntimeActivationTools(a RuntimeActivation) []Tool {
+	return []Tool{&agentSuggestTool{a: a}}
+}
+
+type agentSuggestTool struct{ a RuntimeActivation }
+
+func (t *agentSuggestTool) SelectionMetadata() (string, string) { return "core", "engine" }
+func (t *agentSuggestTool) Name() string                        { return "agent.suggest" }
+func (t *agentSuggestTool) Description() string {
+	return "Lead only. Ask the user to enable agents for this task, with a short reason. " +
+		"Suggest only for work that clearly benefits from parallel or independent agents (for example several separable parts, or an independent review); never for small or sequential work. " +
+		"It grants nothing: it shows the user a card to enable agents or continue without them. After calling it, stop and end your turn. " +
+		"At most once per user message, only in a committed Git project, and not again in this chat after the user declined unless they enable agents themselves."
+}
+
+func (t *agentSuggestTool) Schema() json.RawMessage {
+	return schema(`{"type":"object","additionalProperties":false,"required":["reason"],"properties":{` +
+		`"reason":{"type":"string","minLength":1,"maxLength":280,"description":"Why agents would help, shown to the user."}}}`)
+}
+
+func (t *agentSuggestTool) Assess(json.RawMessage) (Risk, string) {
+	return RiskGreen, "Suggest enabling agents"
+}
+
+func (t *agentSuggestTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
+	if t.a.Caller == nil {
+		return "", errors.New("agent.suggest is lead-only: the caller could not be resolved")
+	}
+	if id, ok := t.a.Caller(ctx); !ok || id != "" {
+		return "", errors.New("agent.suggest is lead-only: agents and child tasks cannot suggest enabling agents")
+	}
+	if t.a.Suggest == nil {
+		return "", errors.New("agent runtime unavailable")
+	}
+	var a struct {
+		Reason *string `json:"reason"`
+	}
+	if err := decodeStrict(args, &a); err != nil {
+		return "", err
+	}
+	if a.Reason == nil {
+		return "", errors.New("reason required")
+	}
+	reason := strings.TrimSpace(*a.Reason)
+	if reason == "" {
+		return "", errors.New("reason required")
+	}
+	if n := utf8.RuneCountInString(reason); n > maxSuggestReason {
+		return "", fmt.Errorf("reason is %d characters; at most %d", n, maxSuggestReason)
+	}
+	return t.a.Suggest(ctx, reason)
 }

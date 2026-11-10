@@ -1593,7 +1593,9 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	if childPolicyErr != nil {
 		return e.selectionFailure(sctx, turn, call, name, childPolicyErr.Error())
 	}
-	if isDelegationTool(name) {
+	// agent.suggest (runtime on) is for turns that are not admitted; its own
+	// rules, lead-only first, are enforced by suggestAgents.
+	if isDelegationTool(name) && !e.suggestOnlyTool(name) {
 		if _, err := e.authorizeDelegationTool(ctx); err != nil {
 			return e.selectionFailure(sctx, turn, call, name, err.Error())
 		}
