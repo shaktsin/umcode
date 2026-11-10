@@ -117,8 +117,40 @@ type DelegationUpdated struct {
 	Child    AgentChild     `json:"child,omitzero"`
 	Task     *AgentTask     `json:"task,omitempty"`
 	Workflow *AgentWorkflow `json:"workflow,omitempty"`
-	Error    string         `json:"error,omitempty"`
-	Sequence int64          `json:"sequence,omitempty"`
+	// Agent is a runtime agent's current state (runtime tasks only). Order
+	// updates of one agent by Agent.Version.
+	Agent *RuntimeAgent `json:"agent,omitempty"`
+	// Integration is the task's runtime integration status after a change.
+	Integration *AgentIntegrationStatus `json:"integration,omitempty"`
+	Error       string                  `json:"error,omitempty"`
+	Sequence    int64                   `json:"sequence,omitempty"`
+}
+
+// AgentIntegrationStatus is the read model of a runtime task's integration:
+// what agent.integrate status reports. HeadTree is the integrated tree (empty
+// before anything was submitted or applied), AppliedCount how many revisions
+// moved it and Verified whether the lead's checks all passed for HeadTree.
+type AgentIntegrationStatus struct {
+	HeadTree     string              `json:"headTree"`
+	AppliedCount int                 `json:"appliedCount"`
+	Verified     bool                `json:"verified"`
+	Revisions    []AgentRevisionView `json:"revisions,omitempty"`
+	// Amendments counts the lead's amends of the integrated head; HeadTree
+	// then also holds the lead's own staged fixes. AmendReason is the latest.
+	Amendments  int    `json:"amendments,omitempty"`
+	AmendReason string `json:"amendReason,omitempty"`
+	// Blocked explains an integration that cannot be read or an interrupted
+	// apply that was not settled.
+	Blocked string `json:"blocked,omitempty"`
+}
+
+// AgentRevisionView is one runtime agent's revision: State is submitted,
+// applying, applied, conflict or dropped; Conflict lists the conflicting
+// paths (comma separated) of a conflicted revision.
+type AgentRevisionView struct {
+	AgentID  string `json:"agentId"`
+	State    string `json:"state"`
+	Conflict string `json:"conflict,omitempty"`
 }
 
 const NotifyDelegationUpdated = "delegation/updated"
@@ -193,6 +225,12 @@ type AgentSnapshot struct {
 	Usage           UsageTotals       `json:"usage"`
 	BudgetAvailable bool              `json:"budgetAvailable"`
 	StopReason      string            `json:"stopReason,omitempty"`
+	// Agents, Plan and Integration are set for tasks of the agent runtime:
+	// its agents in creation order, the approved plan and the integration
+	// status. Legacy tasks leave them empty.
+	Agents      []RuntimeAgent          `json:"agents,omitempty"`
+	Plan        *AgentPlan              `json:"plan,omitempty"`
+	Integration *AgentIntegrationStatus `json:"integration,omitempty"`
 }
 type DelegationListParams struct {
 	ThreadID string `json:"threadId"`

@@ -73,6 +73,9 @@ func (e *Engine) ListDelegation(ctx context.Context, p protocol.DelegationListPa
 			snapshot.StopReason = stop
 			snapshot.BudgetAvailable = true
 		}
+		if err = e.fillRuntimeSnapshot(ctx, task, &snapshot); err != nil {
+			return result, err
+		}
 		result.Tasks = append(result.Tasks, snapshot)
 	}
 	return result, nil

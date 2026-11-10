@@ -43,7 +43,10 @@ type Coordinator struct {
 	slots       map[string]*childRun
 	changed     map[string]chan struct{}
 	sequences   map[string]int64
-	sequence    int64
+	// seqMu guards sequence, the per-process counter every delegation/updated
+	// event of this engine is stamped with (NextSequence).
+	seqMu    sync.Mutex
+	sequence int64
 }
 
 func NewCoordinator(base context.Context, s TaskStore, options ...CoordinatorOption) *Coordinator {

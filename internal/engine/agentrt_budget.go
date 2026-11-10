@@ -148,11 +148,13 @@ func (e *Engine) releaseRuntimeAgentBudget(taskID, id string) {
 }
 
 // runtimeAgentEvent drops a terminal agent's budget entry, including one
-// cancelled before its runner ever started.
+// cancelled before its runner ever started, and announces the change to the
+// task's chat.
 func (e *Engine) runtimeAgentEvent(a protocol.RuntimeAgent) {
 	if agentrt.IsTerminal(a.State) {
 		e.releaseRuntimeAgentBudget(a.TaskID, a.ID)
 	}
+	e.publishRuntimeAgent(a.TaskID, a.ID)
 }
 
 // runtimeAgentOptions are the engine's agent runtime options.

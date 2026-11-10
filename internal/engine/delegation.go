@@ -323,6 +323,10 @@ func (e *Engine) CancelDelegation(ctx context.Context, p protocol.DelegationCanc
 	if err == nil {
 		e.Bus.Publish(task.ThreadID, protocol.NotifyDelegationUpdated, protocol.DelegationUpdated{ThreadID: task.ThreadID, TaskID: task.ID, Task: &result.Task})
 	}
+	if result.Integration != nil {
+		// What the cancel left integrated, for clients showing the task.
+		e.publishRuntimeIntegration(task.ID)
+	}
 	return result, errors.Join(cancelErr, err)
 }
 
