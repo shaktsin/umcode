@@ -247,11 +247,12 @@ func New(ctx context.Context, o Options) (*Engine, error) {
 	if err := o.Store.ReconcileAgentChildren(ctx); err != nil {
 		return nil, err
 	}
-	if e.AgentRuntime != nil {
-		// Like ReconcileAgentChildren: reconcile stored statuses only, never run agents.
-		if err := e.AgentRuntime.Recover(ctx); err != nil {
-			return nil, err
-		}
+	// Like ReconcileAgentChildren: reconcile stored runtime agent statuses only,
+	// never run agents. Store-only and cheap, so it runs whether or not
+	// agents.runtime_v2 is on (agents left by an earlier flag-on run are still
+	// interrupted); it is what AgentRuntime.Recover does.
+	if err := o.Store.ReconcileRuntimeAgents(ctx); err != nil {
+		return nil, err
 	}
 	if n, err := o.Store.MarkStaleTurns(ctx); err != nil {
 		return nil, err
