@@ -104,6 +104,50 @@ func (e *Engine) rememberRuntimeBudget(taskID string, b *delegation.Budget) {
 
 func (e *Engine) forgetRuntimeBudget(taskID string) { e.runtimeBudgets.Delete(taskID) }
 
+// runtimeBudgetPoll is how often a closed task's budget entry checks whether
+// its runtime agents have all stopped.
+const runtimeBudgetPoll = 100 * time.Millisecond
+
+// trackRuntimeBudget registers the task's budget and drops it once the task's
+// owner context is done AND none of its runtime agents is still live, so a
+// running runner never loses its budget and finished tasks do not leak.
+func (e *Engine) trackRuntimeBudget(taskID string, owned context.Context, b *delegation.Budget) {
+	e.rememberRuntimeBudget(taskID, b)
+	if owned != nil {
+		context.AfterFunc(owned, func() { go e.forgetRuntimeBudgetWhenIdle(taskID) })
+	}
+}
+
+func (e *Engine) forgetRuntimeBudgetWhenIdle(taskID string) {
+	for e.runtimeAgentsLive(taskID) {
+		select {
+		case <-e.baseCtx.Done():
+			e.forgetRuntimeBudget(taskID)
+			return
+		case <-time.After(runtimeBudgetPoll):
+		}
+	}
+	e.forgetRuntimeBudget(taskID)
+}
+
+// runtimeAgentsLive reports whether any runtime agent of the task is queued or
+// running. An unreadable list counts as live (retry later).
+func (e *Engine) runtimeAgentsLive(taskID string) bool {
+	if e.AgentRuntime == nil {
+		return false
+	}
+	agents, err := e.Store.RuntimeAgents(context.WithoutCancel(e.baseCtx), taskID)
+	if err != nil {
+		return true
+	}
+	for _, a := range agents {
+		if a.State == protocol.AgentStateQueued || a.State == protocol.AgentStateRunning {
+			return true
+		}
+	}
+	return false
+}
+
 // runtimeTaskBudget returns the shared budget a runtime agent of the task
 // slices: the one on ctx if any, else the one its lead turn registered.
 func (e *Engine) runtimeTaskBudget(ctx context.Context, taskID string) *delegation.Budget {
