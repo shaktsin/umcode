@@ -3,7 +3,7 @@
   import { app } from '$lib/stores/app.svelte';
   import { workbench } from '$lib/workbench/store.svelte';
   import { workbenchAssistant } from '$lib/workbench/assistantStore.svelte';
-  import { previewProposal, type WorkbenchProposal } from '$lib/workbench/assistant';
+  import { previewWorkbenchProposal, type WorkbenchProposal } from '$lib/workbench/assistant';
   import { shapeLabel } from '$lib/workbench/graph';
 
   let { proposal }: { proposal: WorkbenchProposal } = $props();
@@ -13,7 +13,7 @@
   const applied = $derived(workbenchAssistant.wasApplied(proposal));
   const details = $derived.by(() => {
     if (!matches) return null;
-    try { return { preview: previewProposal(workbench.draft, proposal), error: '' }; }
+    try { return { preview: previewWorkbenchProposal(workbench.draft, proposal), error: '' }; }
     catch (error) { return { preview: null, error: (error as Error).message }; }
   });
   async function show() {
@@ -33,12 +33,16 @@
   {#if details?.preview}
     {@const p = details.preview}
     <ul>{#each p.changes as change}<li>{change}</li>{/each}</ul>
+    {#if p.type === 'imported'}
+    <p>{p.before.retained.length} → {p.after.retained.length} layers with original tensor mappings. Weight values are not loaded.</p>
+    {:else}
     <p class="parameter-change">{p.before.parameters.toLocaleString()} → {p.after.parameters.toLocaleString()} parameters</p>
     <details><summary>Shapes and validation</summary>
       {#each p.affectedNodeIds as id}<p class="shape-change"><strong>{id}</strong><br />{shapeLabel(p.before.shapes[id])} → {shapeLabel(p.after.shapes[id])}</p>{/each}
       <p>{p.before.errors.length} → {p.after.errors.length} issues</p>
       {#if p.after.errors.length}<ul class="proposal-warning">{#each p.after.errors as issue}<li>{issue.message}</li>{/each}</ul>{:else}<p>Layer sizes match.</p>{/if}
     </details>
+    {/if}
   {:else if details?.error}<p class="proposal-error" role="status">This suggestion cannot be applied: {details.error}</p>
   {:else if applied}<p class="proposal-status">Applied earlier. Undo can restore the previous draft.</p>
   {:else if !workbenchAssistant.current || workbenchAssistant.current.modelId !== proposal.modelId || workbenchAssistant.current.projectId !== proposal.projectId}<p class="proposal-warning">Open {proposal.modelName} in its project to review this suggestion.</p>

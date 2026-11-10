@@ -241,3 +241,10 @@ describe('workbench state', () => {
     expect(state.busy).toBe(false);
   });
 });
+
+it('adopts an imported saved model only in its original project and keeps existing drafts', async()=>{
+ const state=new WorkbenchState(basicCall,memoryStorage());await state.activate('a',true);await state.open('one');state.draft='{"existingDraft":true}';
+ const imported={...bundle('imported'),graph:{version:1,format:'umcode.imported.v1',nodes:[],edges:[]}};
+ expect(state.acceptImport('a',imported)).toBe(true);expect(state.selected?.model.id).toBe('imported');expect(state.tab).toBe('Build');expect(state.dirty).toBe(false);expect(state.hasModelDraft('one')).toBe(true);
+ await state.activate('b',true);expect(state.acceptImport('a',imported)).toBe(false);expect(state.projectId).toBe('b');
+});

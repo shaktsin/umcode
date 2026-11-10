@@ -201,12 +201,17 @@ func Open(projectRoot, id string) (OpenResult, error) {
 	if model.ID != id || model.SchemaVersion != 1 || !validateTask(model.Task) {
 		return OpenResult{}, errors.New("invalid model metadata")
 	}
-	graph, err := readBundleFile(projectRoot, dir, "graph.json", maxGraphBytes)
+	graph, err := readBundleFile(projectRoot, dir, "graph.json", maxImportedGraphBytes)
 	if err != nil {
 		return OpenResult{}, err
 	}
 	if err := validateGraph(graph); err != nil {
 		return OpenResult{}, err
+	}
+	if IsImportedGraph(graph) {
+		if err := verifyImportedSource(projectRoot, dir, graph); err != nil {
+			return OpenResult{}, err
+		}
 	}
 	return OpenResult{Model: model, Graph: graph}, nil
 }
@@ -253,6 +258,9 @@ func readBundleFile(projectRoot, dir, name string, limit int64) ([]byte, error) 
 }
 
 func validateGraph(data []byte) error {
+	if IsImportedGraph(data) {
+		return ValidateImportedGraph(data)
+	}
 	if len(data) == 0 || len(data) > maxGraphBytes {
 		return errors.New("graph must be 1 byte to 1 MiB")
 	}
@@ -282,16 +290,33 @@ func SaveGraph(projectRoot, id string, graph json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if _, err := Open(projectRoot, id); err != nil {
+	previous, err := Open(projectRoot, id)
+	if err != nil {
 		return err
 	}
+	if IsImportedGraph(previous.Graph) != IsImportedGraph(graph) {
+		return errors.New("use Import model to create an imported architecture; source format cannot be replaced by Save")
+	}
+	if IsImportedGraph(graph) {
+		if err = verifyImportedSource(projectRoot, dir, graph); err != nil {
+			return err
+		}
+	}
 	var pretty bytes.Buffer
-	if err := json.Indent(&pretty, graph, "", "  "); err != nil {
+	if IsImportedGraph(graph) {
+		if err := json.Compact(&pretty, graph); err != nil {
+			return err
+		}
+	} else if err := json.Indent(&pretty, graph, "", "  "); err != nil {
 		return err
 	}
 	pretty.WriteByte('\n')
-	if pretty.Len() > maxGraphBytes {
-		return errors.New("formatted graph exceeds 1 MiB")
+	limit := maxGraphBytes
+	if IsImportedGraph(graph) {
+		limit = maxImportedGraphBytes
+	}
+	if pretty.Len() > limit {
+		return fmt.Errorf("formatted graph exceeds %d bytes", limit)
 	}
 	f, err := os.CreateTemp(dir, ".graph-*")
 	if err != nil {

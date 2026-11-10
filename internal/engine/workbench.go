@@ -105,12 +105,18 @@ func (e *Engine) DeleteWorkbenchModel(ctx context.Context, p protocol.WorkbenchM
 	if _, err := matchingWorkbenchModel(project.Root, p.ModelID, p.ModelCreatedAt); err != nil {
 		return nil, err
 	}
+	e.trainingRunner().CancelModel(project.Root, p.ModelID, p.ModelCreatedAt)
+	e.importedRunner().CancelModel(project.Root, p.ModelID)
 	trashPath, err := workbench.Delete(project.Root, p.ModelID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, protocol.Errorf(protocol.CodeNotFound, "model bundle %q is unavailable", p.ModelID)
 		}
 		return nil, protocol.Errorf(protocol.CodeInvalidParams, "move model to project Trash: %v", err)
+	}
+	e.inferenceRunner().Unload(inferencePrefix(protocol.WorkbenchInferenceParams{ProjectID: p.ProjectID, ModelID: p.ModelID, ModelCreatedAt: p.ModelCreatedAt}))
+	if err := e.removeWorkbenchPromotion(ctx, p.ProjectID, p.ModelID, p.ModelCreatedAt); err != nil {
+		e.Log.Warn("remove deleted model from local chat catalog", "err", err)
 	}
 	_ = e.Store.Audit(ctx, "workbench.model.delete", map[string]any{"projectId": project.ID, "modelId": p.ModelID, "trashPath": trashPath})
 	return struct {

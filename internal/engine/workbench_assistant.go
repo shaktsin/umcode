@@ -49,6 +49,25 @@ func validateWorkbenchSnapshot(c *protocol.WorkbenchTurnContext) error {
 	if c.Revision != revision {
 		return errors.New("workbench snapshot revision does not match its architecture")
 	}
+	if workbench.IsImportedGraph([]byte(c.GraphJSON)) {
+		if err := workbench.ValidateImportedGraph(json.RawMessage(c.GraphJSON)); err != nil {
+			return fmt.Errorf("invalid imported architecture: %w", err)
+		}
+		var graph workbench.ImportedGraph
+		if err := json.Unmarshal([]byte(c.GraphJSON), &graph); err != nil {
+			return err
+		}
+		if c.SelectedNodeID != "" {
+			found := false
+			for _, node := range graph.Nodes {
+				found = found || node.ID == c.SelectedNodeID
+			}
+			if !found {
+				return errors.New("selected layer is not in the submitted architecture")
+			}
+		}
+		return nil
+	}
 	var graph struct {
 		Version int    `json:"version"`
 		Format  string `json:"format"`
@@ -112,6 +131,11 @@ func (e *Engine) admitWorkbenchContext(ctx context.Context, th protocol.Thread, 
 	if err != nil {
 		return nil, fmt.Errorf("workbench model is unavailable: %w", err)
 	}
+	savedImported := workbench.IsImportedGraph(model.Graph)
+	snapshotImported := workbench.IsImportedGraph([]byte(c.GraphJSON))
+	if savedImported != snapshotImported || (savedImported && !workbench.SameImportedSource(model.Graph, []byte(c.GraphJSON))) {
+		return nil, errors.New("workbench architecture format or imported source does not match the saved model")
+	}
 	c.ModelName = model.Model.Name
 	return &c, nil
 }
@@ -124,6 +148,7 @@ When a change would help, use workbench.propose_edit with supported layer operat
 The user previews and applies it to their draft, then saves separately. Never claim a suggestion was applied, saved, trained or tested.
 Use exact existing node/edge IDs, and new ref names for added layers. Include explicit disconnect/connect operations when inserting a layer.
 Only the proposal tool is available in this turn. Do not use file, shell, plugin, browser or delegation actions.
+Imported architectures are metadata only; pretrained weights are not loaded for inference or training. A missing original layer may be restored only from the immutable source baseline using restore with its original nodeId. Restore does not reconnect edges: propose explicit connect operations. Never invent missing source layers or weights. Imported node and edge IDs may include hyphens and other characters; copy exact IDs. Imported additions must use the palette for the source family. All changes require preview, apply, and a separate save.
 `
 
 type workbenchProposalTool struct{}
@@ -137,7 +162,7 @@ func (*workbenchProposalTool) Assess(json.RawMessage) (tools.Risk, string) {
 	return tools.RiskGreen, "Suggest an architecture change"
 }
 func (*workbenchProposalTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["explanation","operations"],"properties":{"explanation":{"type":"string","minLength":1,"maxLength":2048},"operations":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"type":{"type":"string","enum":["update","add","remove","connect","disconnect"]},"nodeId":{"type":"string"},"config":{"type":"object","additionalProperties":{"type":["string","number","boolean"]}},"ref":{"type":"string"},"kind":{"type":"string","enum":["input","embedding","position","linear","attention","transformer","layernorm","gelu","relu","dropout","meanpool","output","conv2d","batchnorm2d","maxpool2d","avgpool2d","globalpool2d","flatten","patchembedding"]},"source":{"type":"string"},"target":{"type":"string"},"edgeId":{"type":"string"}},"required":["type"],"additionalProperties":false}}}}`)
+	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["explanation","operations"],"properties":{"explanation":{"type":"string","minLength":1,"maxLength":2048},"operations":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"type":{"type":"string","enum":["update","add","remove","connect","disconnect","restore"]},"nodeId":{"type":"string"},"config":{"type":"object","additionalProperties":{"type":["string","number","boolean"]}},"ref":{"type":"string"},"kind":{"type":"string","enum":["input","embedding","position","linear","attention","transformer","layernorm","gelu","relu","dropout","meanpool","output","conv2d","batchnorm2d","maxpool2d","avgpool2d","globalpool2d","flatten","patchembedding","normalization","pool","cnnblock"]},"source":{"type":"string"},"target":{"type":"string"},"edgeId":{"type":"string"}},"required":["type"],"additionalProperties":false}}}}`)
 }
 
 func (*workbenchProposalTool) Call(ctx context.Context, args json.RawMessage) (string, error) {
@@ -162,6 +187,18 @@ func (*workbenchProposalTool) Call(ctx context.Context, args json.RawMessage) (s
 	if strings.TrimSpace(request.Explanation) == "" || len(request.Explanation) > 2048 || len(request.Operations) < 1 || len(request.Operations) > 32 {
 		return "", errors.New("proposal requires an explanation and 1–32 operations")
 	}
+	imported := workbench.IsImportedGraph([]byte(c.GraphJSON))
+	var graph workbench.ImportedGraph
+	if imported {
+		if err := json.Unmarshal([]byte(c.GraphJSON), &graph); err != nil {
+			return "", err
+		}
+		switch graph.Source.Family {
+		case "gpt2", "llama", "mistral", "qwen2", "bert", "vit", "resnet", "convnext":
+		default:
+			return "", errors.New("unsupported imported family for edits")
+		}
+	}
 	for _, raw := range request.Operations {
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(raw, &fields) != nil || fields == nil {
@@ -171,7 +208,10 @@ func (*workbenchProposalTool) Call(ctx context.Context, args json.RawMessage) (s
 		if json.Unmarshal(fields["type"], &kind) != nil {
 			return "", errors.New("operation type is required")
 		}
-		allowed := map[string][]string{"update": {"type", "nodeId", "config"}, "add": {"type", "ref", "kind", "config"}, "remove": {"type", "nodeId"}, "connect": {"type", "source", "target"}, "disconnect": {"type", "edgeId"}}[kind]
+		allowed := map[string][]string{"update": {"type", "nodeId", "config"}, "add": {"type", "ref", "kind", "config"}, "remove": {"type", "nodeId"}, "connect": {"type", "source", "target"}, "disconnect": {"type", "edgeId"}, "restore": {"type", "nodeId"}}[kind]
+		if kind == "restore" && !imported {
+			return "", errors.New("restore requires an imported model")
+		}
 		if allowed == nil {
 			return "", errors.New("unsupported architecture operation")
 		}
@@ -196,7 +236,14 @@ func (*workbenchProposalTool) Call(ctx context.Context, args json.RawMessage) (s
 		for _, key := range []string{"nodeId", "ref", "source", "target", "edgeId"} {
 			if raw, ok := fields[key]; ok {
 				var value string
-				if json.Unmarshal(raw, &value) != nil || !assistantID.MatchString(value) {
+				if json.Unmarshal(raw, &value) != nil {
+					return "", errors.New("invalid architecture reference")
+				}
+				valid := assistantID.MatchString(value)
+				if imported && key != "ref" {
+					valid = len(value) > 0 && len(value) <= 128 && !strings.ContainsFunc(value, func(r rune) bool { return r < 32 || r == 127 })
+				}
+				if !valid {
 					return "", errors.New("invalid architecture reference")
 				}
 			}
@@ -204,8 +251,40 @@ func (*workbenchProposalTool) Call(ctx context.Context, args json.RawMessage) (s
 		if raw, ok := fields["kind"]; ok {
 			var value string
 			_ = json.Unmarshal(raw, &value)
-			if !assistantKinds[value] {
+			valid := assistantKinds[value]
+			if imported {
+				valid = value == "linear" || value == "normalization"
+				if graph.Source.Family == "resnet" || graph.Source.Family == "convnext" {
+					valid = valid || value == "conv2d" || value == "cnnblock" || value == "pool"
+				} else {
+					valid = valid || value == "embedding" || value == "transformer"
+				}
+			}
+			if !valid {
 				return "", errors.New("unsupported layer kind")
+			}
+		}
+		if kind == "restore" {
+			var id string
+			_ = json.Unmarshal(fields["nodeId"], &id)
+			found := false
+			for _, n := range graph.Source.BaselineNodes {
+				if n.ID == id {
+					found = true
+				}
+			}
+			for _, n := range graph.Nodes {
+				if n.ID == id {
+					found = false
+				}
+				for _, b := range graph.Source.BaselineNodes {
+					if b.ID == id && b.SourceKey != "" && n.SourceKey == b.SourceKey {
+						found = false
+					}
+				}
+			}
+			if !found {
+				return "", errors.New("restore requires an absent original baseline layer")
 			}
 		}
 		if raw, ok := fields["config"]; ok {

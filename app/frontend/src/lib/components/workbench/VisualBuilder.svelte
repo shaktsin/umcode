@@ -20,7 +20,7 @@
   onMount(() => workbenchAssistant.bind(apply));
   onDestroy(() => { alive = false; });
   $effect(() => { editor.sync(text); });
-  const preview = $derived(workbenchAssistant.preview);
+  const preview = $derived(workbenchAssistant.preview?.type === 'native' ? workbenchAssistant.preview : null);
   $effect(() => { if (preview) { properties = false; showCode = false; void tick().then(() => canvas?.fit()); } });
   $effect(() => { if (selected && !editor.graph?.nodes.some(node => node.id === selected)) { selected = null; workbenchAssistant.selectedNodeId = null; } });
   const analysis = $derived(editor.graph ? analyzeGraph(editor.graph) : { errors: [], shapes: {}, parameters: 0, order: [] });

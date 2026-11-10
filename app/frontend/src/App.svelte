@@ -52,7 +52,7 @@
   $effect(() => {
     if (!app.catalogReady || firstRunHandled) return;
     firstRunHandled = true;
-    if (app.view !== 'workbench' && shouldRedirectToProviders({ conn: app.conn, catalogReady: app.catalogReady, hasEnabledCredential: app.hasEnabledCredential })) app.view = 'settings';
+    if (app.view !== 'workbench' && shouldRedirectToProviders({ conn: app.conn, catalogReady: app.catalogReady, hasEnabledCredential: app.hasEnabledCredential, hasLocalModel: app.models.some(m => m.provider === 'workbench_local' && !m.hidden) })) app.view = 'settings';
   });
   $effect(() => { try { localStorage.setItem('umcode.railCollapsed',railCollapsedPreference?'1':'0'); } catch { /* optional */ } });
   function showPanel(panel:Auxiliary) { activeAuxiliary=panel; void tick().then(()=>document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus()); }
