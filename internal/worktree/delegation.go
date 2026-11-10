@@ -438,7 +438,9 @@ func ParentStateForRuntime(ctx context.Context, parent, base, headTree string) e
 	// when a tracked file was only touched. Staged entries (the integrated
 	// head) were checked above; only the worktree column and untracked
 	// entries matter here.
-	status, err := hardenedNULList(ctx, canonical, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none")
+	// The user's own global excludes file is honoured (userExcludesArgs);
+	// no other global configuration is loaded.
+	status, err := hardenedNULList(ctx, canonical, append(userExcludesArgs(ctx), "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none")...)
 	if err != nil {
 		return err
 	}

@@ -384,9 +384,9 @@ type runtimeSpawnGate struct {
 func (g runtimeSpawnGate) Spawn(ctx context.Context, req agentrt.SpawnRequest) (agentrt.SpawnResult, error) {
 	if req.TaskID != "" && req.CallID != "" {
 		if _, err := g.e.Store.RuntimeAgentForCall(ctx, req.TaskID, req.CallID); errors.Is(err, store.ErrNotFound) {
-			if applying, err := g.e.runtimeIntegrationApplying(ctx, req.TaskID); err != nil {
+			if applying, found, err := g.e.runtimeIntegrationApplying(ctx, req.TaskID); err != nil {
 				return agentrt.SpawnResult{}, err
-			} else if applying != "" {
+			} else if found {
 				return agentrt.SpawnResult{}, errors.New("spawn refused: " + delegation.IntegrationApplyingAdvice(applying))
 			}
 		}
@@ -394,17 +394,17 @@ func (g runtimeSpawnGate) Spawn(ctx context.Context, req agentrt.SpawnRequest) (
 	return g.Service.Spawn(ctx, req)
 }
 
-// runtimeIntegrationApplying returns the agent whose revision is being
-// applied to the project checkout, or "".
-func (e *Engine) runtimeIntegrationApplying(ctx context.Context, taskID string) (string, error) {
+// runtimeIntegrationApplying returns the revision being applied to the
+// project checkout, if any.
+func (e *Engine) runtimeIntegrationApplying(ctx context.Context, taskID string) (store.AgentRevision, bool, error) {
 	revs, err := e.Store.AgentRevisions(ctx, taskID)
 	if err != nil {
-		return "", err
+		return store.AgentRevision{}, false, err
 	}
 	for _, r := range revs {
 		if r.State == store.RevisionApplying {
-			return r.AgentID, nil
+			return r, true, nil
 		}
 	}
-	return "", nil
+	return store.AgentRevision{}, false, nil
 }
