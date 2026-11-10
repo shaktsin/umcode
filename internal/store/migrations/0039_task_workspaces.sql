@@ -1,4 +1,4 @@
-CREATE TABLE agent_task_workspaces (
+CREATE TABLE IF NOT EXISTS agent_task_workspaces (
  task_id TEXT PRIMARY KEY REFERENCES agent_tasks(id) ON DELETE CASCADE,
  source_root TEXT NOT NULL,
  execution_root TEXT NOT NULL,
@@ -8,4 +8,4 @@ CREATE TABLE agent_task_workspaces (
  state TEXT NOT NULL CHECK(state IN ('prepared','active','merged','conflict')),
  created_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX agent_task_workspaces_execution_root ON agent_task_workspaces(execution_root);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_task_workspaces_execution_root ON agent_task_workspaces(execution_root);
