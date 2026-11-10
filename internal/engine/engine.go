@@ -162,6 +162,9 @@ type Engine struct {
 	// decision is stored (committed=false) and after the waiter was woken
 	// (committed=true); an error is returned as the respond's error.
 	approvalDecideHook func(id string, committed bool) error
+	// planBindHook is a test seam run by bindApprovedPlan before it binds a
+	// plan; an error is returned as the bind's error. Set before use.
+	planBindHook func(planID string) error
 	// agentPlanWaits holds the decision wait of each plan card still blocking
 	// agent.propose_plan, by plan ID; in memory only (a restart expires every
 	// pending approval).

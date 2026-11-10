@@ -26,6 +26,11 @@ import (
 type delegationProvider struct {
 	mu       sync.Mutex
 	admitted []string
+	// hold, when set, makes the next admitted call wait for it to close (or
+	// for the turn to end), keeping the admitted turn running; entered is
+	// signalled when that call starts (liveAdmittedTurn).
+	hold    chan struct{}
+	entered chan struct{}
 }
 
 func (*delegationProvider) ID() string { return "claude" }
@@ -43,8 +48,25 @@ func (p *delegationProvider) Stream(ctx context.Context, _ llm.Credential, req l
 	}
 	p.mu.Lock()
 	p.admitted = append(p.admitted, id)
+	hold, entered := p.hold, p.entered
+	if ok && hold != nil {
+		p.hold, p.entered = nil, nil
+	}
 	p.mu.Unlock()
 	ch := make(chan llm.Event, 2)
+	if ok && hold != nil {
+		entered <- struct{}{}
+		go func() {
+			select {
+			case <-hold:
+			case <-ctx.Done():
+			}
+			ch <- llm.Event{Type: llm.EventTextDelta, Text: "Done."}
+			ch <- llm.Event{Type: llm.EventDone}
+			close(ch)
+		}()
+		return ch, nil
+	}
 	ch <- llm.Event{Type: llm.EventTextDelta, Text: "Done."}
 	ch <- llm.Event{Type: llm.EventDone}
 	close(ch)
@@ -135,6 +157,49 @@ func delegationTurn(t *testing.T, e *Engine, p protocol.TurnStartParams) protoco
 		t.Fatal("turn timeout")
 	}
 	return tr
+}
+
+// liveAdmittedTurn starts the turn that p (an activation token or task ID)
+// admits and keeps it running, its model call waiting, until finish is
+// called or the test ends. Tests then play the lead's tool calls inside the
+// activated turn, as in production: an admitted turn that ends without a
+// plan closes its empty runtime task. finish ends the turn and waits for it.
+func liveAdmittedTurn(t *testing.T, e *Engine, p protocol.TurnStartParams) (protocol.Turn, func()) {
+	t.Helper()
+	prov, _ := e.LLMs.Get("claude")
+	dp, ok := prov.(*delegationProvider)
+	if !ok {
+		t.Fatalf("liveAdmittedTurn needs the delegation test provider, got %T", prov)
+	}
+	hold, entered := make(chan struct{}), make(chan struct{}, 1)
+	dp.mu.Lock()
+	dp.hold, dp.entered = hold, entered
+	dp.mu.Unlock()
+	wait := make(chan protocol.Turn, 1)
+	tr, err := e.startTurn(t.Context(), turnRequest{TurnStartParams: p, wait: wait})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case done := <-wait:
+		t.Fatalf("admitted turn ended before its model call: %+v", done)
+	case <-time.After(10 * time.Second):
+		t.Fatal("admitted turn did not reach its model call")
+	}
+	var once sync.Once
+	finish := func() {
+		once.Do(func() {
+			close(hold)
+			select {
+			case <-wait:
+			case <-time.After(30 * time.Second):
+				t.Error("admitted turn did not finish")
+			}
+		})
+	}
+	t.Cleanup(finish)
+	return tr, finish
 }
 
 // Removing explicit request validation, token consumption or runtime context propagation must fail this test.

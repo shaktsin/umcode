@@ -473,7 +473,15 @@ func childExecutionTask(t *testing.T, e *Engine, th protocol.Thread) protocol.Ag
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: "parent private unrelated transcript", DelegationActivationToken: token.ActivationToken})
+	params := protocol.TurnStartParams{ThreadID: th.ID, Text: "parent private unrelated transcript", DelegationActivationToken: token.ActivationToken}
+	var tr protocol.Turn
+	if e.AgentRuntime != nil {
+		// The agent runtime closes a task whose admitted turn ends without a
+		// plan: the test's plan and agents belong to the live admitted turn.
+		tr, _ = liveAdmittedTurn(t, e, params)
+	} else {
+		tr = delegationTurn(t, e, params)
+	}
 	task, err := e.Store.AgentTaskForRootTurn(t.Context(), th.ID, tr.ID)
 	if err != nil {
 		t.Fatal(err)

@@ -194,10 +194,22 @@ func TestSuggestRefusedWhileDelegationTaskActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delegationTurn(t, env.e, protocol.TurnStartParams{ThreadID: env.th.ID, Text: "implement", DelegationActivationToken: activation.ActivationToken})
-	if env.p.last() == "" {
+	// The admitted turn gets an approved plan, so its task stays active
+	// after the turn ends (a turn ending without a plan closes it).
+	_, finish := liveAdmittedTurn(t, env.e, protocol.TurnStartParams{ThreadID: env.th.ID, Text: "implement", DelegationActivationToken: activation.ActivationToken})
+	taskID := env.p.last()
+	if taskID == "" {
 		t.Fatal("task not admitted")
 	}
+	plan := protocol.AgentPlan{ID: "plan-active", ThreadID: env.th.ID, Limits: protocol.DefaultPlanLimits(),
+		Agents: []protocol.PlanAgent{{Name: "worker", Purpose: "investigate", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone}}}}
+	if err = env.e.Store.SaveAgentPlan(t.Context(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if err = env.e.Store.ApproveAgentPlan(t.Context(), plan.ID, taskID); err != nil {
+		t.Fatal(err)
+	}
+	finish()
 	_, err = env.suggest(t, env.leadTurn(t))
 	requireRefused(t, err, "active delegation task")
 }

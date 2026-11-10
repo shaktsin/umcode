@@ -80,6 +80,33 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 	return string(out), err
 }
 
+// closeUnproposedActivation runs when a root turn admitted for delegation
+// ends: a runtime task that never got a plan (no plan card waiting, no
+// proposed or approved plan, no agents, no revisions) is completed, so an
+// activation whose turn never called agent.propose_plan does not block
+// delegation/enable or agent.suggest later in the chat. It reports whether
+// the task was closed; it shares closeEmptyRuntimeTask's checks and locks.
+func (e *Engine) closeUnproposedActivation(ctx context.Context, taskID string) bool {
+	return e.closeEmptyRuntimeTaskIf(ctx, taskID, true)
+}
+
+// endAdmittedTurn is called by finishTurn for every turn: only a root turn
+// (not an agent or child) of a task admitted with the agent runtime on is
+// considered for closeUnproposedActivation.
+func (e *Engine) endAdmittedTurn(ctx context.Context) {
+	if e.AgentRuntime == nil || delegationChild(ctx) || childExecutionFrom(ctx) != nil {
+		return
+	}
+	if id, ok := runtimeAgentFrom(ctx); ok && id != "" {
+		return
+	}
+	task, ok := DelegationTaskFromContext(ctx)
+	if !ok || task.ID == "" {
+		return
+	}
+	e.closeUnproposedActivation(context.WithoutCancel(ctx), task.ID)
+}
+
 // RespondAgentSuggestion records the user's answer to a suggestion card
 // (agent/suggestion/respond; the server allows it for app connections only).
 // enable prepares delegation exactly as delegation/enable does and returns
