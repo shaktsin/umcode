@@ -595,3 +595,28 @@ func TestRuntimeAgentPromptHasNoRoleNames(t *testing.T) {
 		}
 	}
 }
+
+func TestSliceExhaustedOnlyForSliceLimit(t *testing.T) {
+	spend := func(b *delegation.Budget, tokens int64) {
+		settle, err := b.Reserve(t.Context(), "r", protocol.UsageTotals{InputTokens: tokens})
+		if err != nil {
+			t.Fatal(err)
+		}
+		settle(protocol.UsageTotals{InputTokens: tokens})
+	}
+	parent := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100}, protocol.UsageTotals{}, nil)
+	slice := parent.Slice(0.1)
+	if sliceExhausted(slice, parent, "provider unavailable") {
+		t.Fatal("unrelated provider error labelled slice exhaustion")
+	}
+	spend(slice, 10)
+	if !sliceExhausted(slice, parent, "") {
+		t.Fatal("slice at its own limit not reported")
+	}
+	parent2 := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100}, protocol.UsageTotals{}, nil)
+	slice2 := parent2.Slice(0.5)
+	spend(parent2, 100)
+	if sliceExhausted(slice2, parent2, "shared task request admission: insufficient shared task token allowance") {
+		t.Fatal("exhausted shared task budget labelled slice exhaustion")
+	}
+}
