@@ -242,7 +242,6 @@ func (e *Engine) runtimeModelPool(ctx context.Context, scope store.AgentModelSco
 		m := modelRoute{ID: c.ID, Provider: c.Provider, Model: c.Model, Tools: e.Catalog.Lookup(ctx, c.Provider, c.Model).Tools}
 		plan, err := e.Router.Plan(ctx, router.Request{
 			Pinned:     protocol.ModelSelection{Provider: c.Provider, Model: c.Model, CredentialID: scope.CredentialID},
-			Level:      protocol.ComplexityStandard,
 			Candidates: []protocol.ConfiguredModel{c},
 			Strategy:   protocol.PoolPriority,
 			Need:       router.Capabilities{Tools: needs.Tools},
