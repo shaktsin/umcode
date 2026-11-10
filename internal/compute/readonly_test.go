@@ -15,6 +15,11 @@ func TestComputeRequestReadOnlyRoot(t *testing.T) {
 	if !req.RootReadOnly {
 		t.Fatalf("RootReadOnly was dropped: %#v", req)
 	}
+	// Mounts() is the spec the libkrun call is driven from (see
+	// workspaceReadOnly); only a real VM run proves the guest enforces it.
+	if !req.workspaceReadOnly() {
+		t.Error("the value handed to libkrun must come from the workspace mount")
+	}
 	mounts := req.Mounts()
 	var ws, scratch *GuestMount
 	for i := range mounts {
@@ -42,7 +47,7 @@ func TestComputeRequestReadOnlyRoot(t *testing.T) {
 	}
 }
 
-// A single virtiofs share cannot express a read-only .git inside a writable
+// Mounts() describes the one workspace share the guest gets. A single virtiofs share cannot express a read-only .git inside a writable
 // root. Until a second share is added, the guest root is either wholly
 // read-only or wholly writable.
 func TestComputeCannotProtectDotGitInWritableRoot(t *testing.T) {

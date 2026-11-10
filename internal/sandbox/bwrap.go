@@ -54,7 +54,7 @@ func bwrapArgs(p Policy, dir string) []string {
 			args = append(args, "--ro-bind", "/dev/null", d)
 		}
 	}
-	for _, ro := range p.ReadOnlyInRoot {
+	for _, ro := range append(append([]string{}, p.ReadOnlyPaths...), p.ReadOnlyInRoot...) {
 		if exists(ro) {
 			args = append(args, "--ro-bind", ro, ro)
 		}

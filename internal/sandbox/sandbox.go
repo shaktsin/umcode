@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Policy describes what a sandboxed command may do.
@@ -33,6 +34,10 @@ type Policy struct {
 	// RootReadOnly mounts/allows Root read-only. Writable entries stay
 	// writable; nothing under Root can be created, changed or removed.
 	RootReadOnly bool
+	// ReadOnlyPaths are read-only locations that may lie outside Root (a git
+	// worktree's gitdir and its common dir). They are mounted/denied after the
+	// writable locations; callers also list them in Readable.
+	ReadOnlyPaths []string
 }
 
 // Sandbox rewrites a prepared command so it runs confined.
@@ -244,14 +249,53 @@ func IsolatedChildPolicy(root string, network bool, temporary string) Policy {
 	return p
 }
 
-// gitDirReadOnly lists the whole repository metadata directory so an agent
-// cannot commit, rewrite config/hooks or delete refs. Agent policies only; the
-// lead keeps the narrower .git/hooks and .git/config rules.
-func gitDirReadOnly(root string) []string {
-	if d := filepath.Join(root, ".git"); exists(d) {
-		return []string{realPathOrSelf(d)}
+// protectGit makes the repository metadata of an agent checkout read-only so
+// an agent cannot commit, rewrite config/hooks or delete refs. Agent policies
+// only; the lead keeps the narrower .git/hooks and .git/config rules.
+//   - .git directory: the whole directory.
+//   - .git file (linked worktree): the pointer file, plus the gitdir it names
+//     and that gitdir's commondir (the main repository's .git), which live
+//     outside root; those are also made readable so git log/diff keep working.
+//   - no .git: <root>/.git is still listed. Seatbelt denies it even though it
+//     does not exist (no `git init`); bwrap skips missing paths, so there an
+//     agent could still run `git init` in a root that has no .git at all.
+func protectGit(p *Policy) {
+	dotgit := filepath.Join(p.Root, ".git")
+	p.ReadOnlyInRoot = []string{dotgit}
+	st, err := os.Lstat(dotgit)
+	if err != nil || st.IsDir() {
+		if err == nil {
+			p.ReadOnlyInRoot = []string{realPathOrSelf(dotgit)}
+		}
+		return
 	}
-	return nil
+	data, err := os.ReadFile(dotgit)
+	if err != nil {
+		return
+	}
+	ptr, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if !ok {
+		return
+	}
+	ptr = strings.TrimSpace(ptr)
+	if !filepath.IsAbs(ptr) {
+		ptr = filepath.Join(p.Root, ptr)
+	}
+	dirs := []string{realPath(ptr)}
+	if cd, err := os.ReadFile(filepath.Join(dirs[0], "commondir")); err == nil {
+		c := strings.TrimSpace(string(cd))
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(dirs[0], c)
+		}
+		dirs = append(dirs, realPath(c))
+	}
+	for _, d := range dirs {
+		if isDir(d) {
+			p.ReadOnlyPaths = append(p.ReadOnlyPaths, d)
+			p.Readable = append(p.Readable, d)
+		}
+	}
+	p.Readable = dedupe(p.Readable)
 }
 
 // ReadOnlyChildPolicy is IsolatedChildPolicy with the whole project root
@@ -260,7 +304,7 @@ func gitDirReadOnly(root string) []string {
 func ReadOnlyChildPolicy(root string, network bool, temporary string) Policy {
 	p := IsolatedChildPolicy(root, network, temporary)
 	p.RootReadOnly = true
-	p.ReadOnlyInRoot = gitDirReadOnly(p.Root)
+	protectGit(&p)
 	return p
 }
 
@@ -268,7 +312,7 @@ func ReadOnlyChildPolicy(root string, network bool, temporary string) Policy {
 // checkout is writable except for the whole .git directory.
 func AgentWritePolicy(root string, network bool, temporary string) Policy {
 	p := IsolatedChildPolicy(root, network, temporary)
-	p.ReadOnlyInRoot = gitDirReadOnly(p.Root)
+	protectGit(&p)
 	return p
 }
 

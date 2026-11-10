@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -288,5 +289,100 @@ func TestAgentWritePolicyProtectsWholeDotGit(t *testing.T) {
 func TestSelfCheckReadOnlyRequiresSandbox(t *testing.T) {
 	if err := SelfCheckReadOnly(nil, t.TempDir()); err == nil {
 		t.Fatal("nil sandbox must fail the self-check")
+	}
+}
+
+// worktreeFixture creates a repository with a linked worktree, like an agent
+// checkout: <wt>/.git is a file pointing outside the root.
+func worktreeFixture(t *testing.T) (main, wt string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	main = realPath(t.TempDir())
+	wt = filepath.Join(realPath(t.TempDir()), "wt")
+	for _, a := range [][]string{{"init", "-q"}, {"-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "x"}, {"worktree", "add", "-q", wt}} {
+		c := exec.Command("git", a...)
+		c.Dir = main
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", a, err, out)
+		}
+	}
+	return main, wt
+}
+
+func TestAgentPoliciesProtectWorktreeGitdirAndCommondir(t *testing.T) {
+	main, wt := worktreeFixture(t)
+	tmp := t.TempDir()
+	gitdir, _ := filepath.EvalSymlinks(filepath.Join(main, ".git", "worktrees", "wt"))
+	common := filepath.Join(main, ".git")
+	for name, p := range map[string]Policy{"write": AgentWritePolicy(wt, false, tmp), "readonly": ReadOnlyChildPolicy(wt, false, tmp)} {
+		has := func(list []string, s string) bool {
+			for _, x := range list {
+				if x == s {
+					return true
+				}
+			}
+			return false
+		}
+		for _, d := range []string{gitdir, common} {
+			if !has(p.ReadOnlyPaths, d) || !has(p.Readable, d) {
+				t.Errorf("%s: %s must be readable and read-only: ro=%v readable=%v", name, d, p.ReadOnlyPaths, p.Readable)
+			}
+		}
+		if !has(p.ReadOnlyInRoot, filepath.Join(wt, ".git")) {
+			t.Errorf("%s: .git pointer file must be read-only: %v", name, p.ReadOnlyInRoot)
+		}
+		args := bwrapArgs(p, wt)
+		joined := strings.Join(args, " ")
+		last := -1
+		for i, a := range args {
+			if a == "--bind" && args[i+1] == p.Root {
+				last = i
+			}
+		}
+		for _, d := range []string{gitdir, common} {
+			at := strings.LastIndex(joined, "--ro-bind "+d+" "+d)
+			if at < 0 {
+				t.Errorf("%s: bwrap lacks ro-bind of %s: %s", name, d, joined)
+			} else if last >= 0 && at < strings.Index(joined, "--bind "+p.Root+" "+p.Root) {
+				t.Errorf("%s: %s must be bound after the writable root", name, d)
+			}
+			if strings.Contains(joined, "--bind "+d+" "+d) && !strings.Contains(joined, "--ro-bind "+d+" "+d) {
+				t.Errorf("%s: %s bound writable", name, d)
+			}
+		}
+		prof, err := seatbeltProfile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range []string{gitdir, common} {
+			deny := `(deny file-write* (subpath "` + d + `"))`
+			if !strings.Contains(prof, deny) || strings.Index(prof, deny) < strings.Index(prof, "(allow file-write*") {
+				t.Errorf("%s: seatbelt must deny writes to %s after the allow:\n%s", name, d, prof)
+			}
+			if !strings.Contains(prof, `(subpath "`+d+`")`) {
+				t.Errorf("%s: seatbelt lacks %s", name, d)
+			}
+		}
+	}
+}
+
+func TestAgentWritePolicyMissingGitDeniedInSeatbelt(t *testing.T) {
+	root := t.TempDir()
+	p := AgentWritePolicy(root, false, t.TempDir())
+	want := filepath.Join(realPath(root), ".git")
+	if len(p.ReadOnlyInRoot) != 1 || p.ReadOnlyInRoot[0] != want {
+		t.Fatalf("missing .git must still be listed: %v", p.ReadOnlyInRoot)
+	}
+	prof, err := seatbeltProfile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prof, `(deny file-write* (subpath "`+want+`"))`) {
+		t.Errorf("seatbelt must deny a missing .git:\n%s", prof)
+	}
+	if strings.Contains(strings.Join(bwrapArgs(p, root), " "), want) {
+		t.Error("bwrap cannot mount a missing path; it must be skipped")
 	}
 }
