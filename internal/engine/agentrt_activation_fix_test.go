@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -176,5 +177,45 @@ func TestAgentPlanGetAfterRestart(t *testing.T) {
 	}
 	if r.Plan.State != protocol.PlanProposed || r.ApprovalStatus != "expired" || r.ApprovalID != a.ID || r.Card == nil {
 		t.Fatalf("plan after restart = %+v", r)
+	}
+}
+
+// Final review m4: an edited approve announces approval/resolved with the
+// edited card, and the approved plan is announced exactly once.
+func TestPlanApproveEventsCarryEditedCardOnce(t *testing.T) {
+	x := newActivationE2E(t, runtimeV2On)
+	sub := &recordingSub{}
+	x.e.Bus.Add(sub)
+	defer x.e.Bus.Remove(sub.ID())
+	token := x.enable(t, x.suggestTurn(t))
+	_, wait := x.proposeTurn(t, token, `{"agents":[`+planEntry("worker", "change A", "read-write", "claude/deterministic")+`]}`)
+	a, card := x.pendingCard(t, x.e)
+	if _, err := x.e.RespondAgentPlan(t.Context(), protocol.AgentPlanRespondParams{PlanID: card.PlanID, Decision: protocol.PlanDecisionApprove, Models: map[string]string{"worker": "second"}}); err != nil {
+		t.Fatal(err)
+	}
+	waitTurnDone(t, wait, protocol.TurnCompleted)
+	time.Sleep(200 * time.Millisecond) // let late publishers run
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	resolved, approved := 0, 0
+	for _, ev := range sub.events {
+		switch p := ev.params.(type) {
+		case protocol.ApprovalEvent:
+			if ev.method != protocol.NotifyApprovalResolved || p.Approval.ID != a.ID {
+				continue
+			}
+			resolved++
+			var got protocol.PlanCard
+			if err := json.Unmarshal(p.Approval.Args, &got); err != nil || len(got.Agents) != 1 || got.Agents[0].Model != "claude/second" {
+				t.Fatalf("approval/resolved card = %s (%v), want the edited model", p.Approval.Args, err)
+			}
+		case protocol.AgentPlanUpdated:
+			if ev.method == protocol.NotifyAgentPlanUpdated && p.Plan.ID == card.PlanID && p.Plan.State == protocol.PlanApproved {
+				approved++
+			}
+		}
+	}
+	if resolved != 1 || approved != 1 {
+		t.Fatalf("approval/resolved events %d, approved plan events %d; want 1 and 1", resolved, approved)
 	}
 }
