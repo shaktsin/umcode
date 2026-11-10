@@ -258,8 +258,23 @@ func (e *Engine) updateRuntimeAgent(ctx context.Context, taskID, id string, muta
 	return store.ErrAgentConflict
 }
 
+// enabledModelScope is the task's frozen model scope with only its enabled
+// candidates: the pool a plan card offers (planModelPool) and the pool the
+// runner selects from and fails over to are the same.
+func enabledModelScope(scope store.AgentModelScope) store.AgentModelScope {
+	enabled := scope
+	enabled.Candidates = nil
+	for _, c := range scope.Candidates {
+		if c.Enabled {
+			enabled.Candidates = append(enabled.Candidates, c)
+		}
+	}
+	return enabled
+}
+
 // runtimeModelPool turns the task's frozen approved models into the pool an
 // agent may run on, marking models no approved key can route right now.
+// Callers pass enabledModelScope(scope).
 func (e *Engine) runtimeModelPool(ctx context.Context, scope store.AgentModelScope, needs agentNeeds) []modelRoute {
 	candidates := scope.Candidates
 	if len(candidates) == 0 && scope.Model != "" {
@@ -454,6 +469,8 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 	if err != nil {
 		return result, err
 	}
+	// The same pool the plan card offered: enabled candidates only.
+	modelScope = enabledModelScope(modelScope)
 	needs := agentNeedsFor(a.Capabilities)
 	pool := e.runtimeModelPool(ctx, modelScope, needs)
 	actual, trail, chooseErr := chooseRuntimeModel(a.ModelRequested, pool, needs)
