@@ -3,6 +3,7 @@ package server_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/client"
 	"github.com/shaktsin/umcode/internal/config"
@@ -41,5 +42,23 @@ func TestPlanRespondAdminOnly(t *testing.T) {
 	}
 	if got, _ = h.eng.Store.AgentPlan(h.ctx, plan.ID); got.State != protocol.PlanProposed {
 		t.Fatalf("plan without a card approved: %+v", got)
+	}
+	// approval/respond on the plan's card is admin-only too.
+	now := time.Now().UTC()
+	card := protocol.Approval{ID: "apr-plan-admin", Kind: "agent_plan", NodeID: plan.ID, ThreadID: th.ID, Tool: "agent.propose_plan", Args: []byte(`{}`), Status: "pending", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if err = h.eng.Store.CreateApproval(h.ctx, card); err != nil {
+		t.Fatal(err)
+	}
+	for _, approve := range []bool{true, false} {
+		err := nonadmin.Call(h.ctx, protocol.MethodApprovalRespond, protocol.ApprovalRespondParams{ApprovalID: card.ID, Approve: approve, Remember: true}, nil)
+		if err == nil || !strings.Contains(err.Error(), "only admin clients") {
+			t.Fatalf("non-admin approval/respond approve=%v: %v", approve, err)
+		}
+	}
+	if a, _ := h.eng.Store.GetApproval(h.ctx, card.ID); a.Status != "pending" {
+		t.Fatalf("non-admin decided the card: %q", a.Status)
+	}
+	if got, _ = h.eng.Store.AgentPlan(h.ctx, plan.ID); got.State != protocol.PlanProposed {
+		t.Fatalf("plan approved by a non-admin: %+v", got)
 	}
 }
