@@ -879,7 +879,7 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			if hint := instructionPathHint(call.Args); hint != "" {
 				instructionHint = hint
 			}
-			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: toolResult.ModelOutput, IsError: isErr})
+			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: boundedModelToolOutput(toolResult.ModelOutput, toolResult.SourceItemID), IsError: isErr})
 			if reductions != nil && toolResult.Reduction.Strategy != "" && toolResult.Reduction.OriginalTokens > toolResult.Reduction.SentTokens {
 				reductions[key] = toolResult.Reduction
 			}
@@ -1549,6 +1549,7 @@ type turnTool struct {
 type toolRunResult struct {
 	Output          string
 	ModelOutput     string
+	SourceItemID    string
 	Reduction       toolreduce.Report
 	IsError         bool
 	HookContext     []string
@@ -1698,6 +1699,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		name = tool.Name()
 	}
 	invocation := hooks.Invocation{ProjectID: th.ProjectID, ThreadID: th.ID, TurnID: turn.ID, ToolName: name, ToolArgs: call.Args}
+	var sourceItemID string
 	result := func(output string, isError bool, contextValues ...string) toolRunResult {
 		model, reduction := e.reduceToolResultFor(ctx, name, call.Args, output, isError)
 		var failure *protocol.ActionFailure
@@ -1725,7 +1727,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 			model = string(raw)
 		}
 
-		return toolRunResult{Output: output, ModelOutput: model, Reduction: reduction, IsError: isError, HookContext: contextValues, WorkflowAction: workflowActionKey(ctx, name, call.Args), ActionFailure: failure}
+		return toolRunResult{Output: output, ModelOutput: model, SourceItemID: sourceItemID, Reduction: reduction, IsError: isError, HookContext: contextValues, WorkflowAction: workflowActionKey(ctx, name, call.Args), ActionFailure: failure}
 	}
 	var assessedRisk tools.Risk
 	var assessedSummary string
@@ -1771,6 +1773,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		return result("internal error: "+err.Error(), true)
 	}
 	it.Tool = &protocol.ToolCallData{CallID: call.ID, Name: name, Args: call.Args}
+	sourceItemID = it.ID
 	source := ""
 	if tools.IsFileMutationSource(tool) {
 		source = "builtin_file_mutation"

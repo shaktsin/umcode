@@ -114,11 +114,21 @@ func TestSmallContextContinuation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(h.ws, "large.txt"), []byte(strings.Repeat("नमस्ते context ", 20000)), 0644); err != nil {
 		t.Fatal(err)
 	}
+	var sourceID string
 	h.fake.push(toolReply("file__read", `{"path":"large.txt"}`), func(req llm.Request, _ string) ([]llm.Event, error) {
 		found := false
 		for _, m := range req.Messages {
 			if m.Role == llm.RoleTool {
 				found = strings.Contains(m.Result, "task.context")
+				if _, ref, ok := strings.Cut(m.Result, "task.context "); ok {
+					var page struct {
+						ItemID string `json:"item_id"`
+					}
+					if err := json.NewDecoder(strings.NewReader(ref)).Decode(&page); err != nil {
+						t.Error(err)
+					}
+					sourceID = page.ItemID
+				}
 				if len(m.Result) > 4096 {
 					t.Error("newest result unbounded")
 				}
@@ -136,6 +146,17 @@ func TestSmallContextContinuation(t *testing.T) {
 	turn, _, _ := h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { return true })
 	if turn.Status != protocol.TurnCompleted {
 		t.Fatal(turn.Error)
+	}
+	var transcript protocol.ThreadReadResult
+	h.call(protocol.MethodThreadRead, protocol.ThreadIDParams{ThreadID: th.ID}, &transcript)
+	archived := false
+	for _, item := range transcript.Items {
+		if item.ID == sourceID && item.Tool != nil {
+			archived = len(item.Tool.Output) > 4096 && strings.Contains(item.Tool.Output, strings.Repeat("नमस्ते context ", 100))
+		}
+	}
+	if !archived {
+		t.Fatal("bounded excerpt did not reference its full stored output")
 	}
 	h.fake.push(textReply("Continuing from recorded state."))
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "resume now"}, &started)

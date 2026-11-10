@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+	"github.com/shaktsin/umcode/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,7 +66,16 @@ func TestDelegationDuplicateGlobalSkillIdentity(t *testing.T) {
 		"/superpowers:subagent-driven-development implement", // canonical no longer resolves with duplicate sources
 		"Mention /" + qualified[0] + " in prose",
 	} {
-		delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: text})
+		tr := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: th.ID, Text: text})
+		snapshot, err := e.Plugins.Acquire(t.Context(), th.ProjectID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requested, err := e.userRequestedAgents(skills.WithSnapshot(t.Context(), snapshot.SkillSnapshot()), tr)
+		snapshot.Release()
+		if err != nil || requested {
+			t.Fatalf("untrusted invocation authorized agents: %s %v", text, err)
+		}
 		if p.last() != "" {
 			t.Fatalf("untrusted suffix/prose/unresolved identity activated: %s", text)
 		}
@@ -76,8 +87,18 @@ func TestDelegationDuplicateGlobalSkillIdentity(t *testing.T) {
 		}
 		tr := delegationTurn(t, e, protocol.TurnStartParams{ThreadID: parent.ID, Text: "/" + name + " implement"})
 		task, err := e.Store.AgentTaskForRootTurn(t.Context(), parent.ID, tr.ID)
-		if err != nil || task.Activation != protocol.AgentActivationInstalledSkill || p.last() != task.ID {
-			t.Errorf("actual installed picker identity failed activation %s: %+v %v", name, task, err)
+		if !errors.Is(err, store.ErrNotFound) || task.ID != "" || p.last() != "" {
+			t.Fatalf("skill bypassed prompt-first plan admission: %+v %v", task, err)
+		}
+		snapshot, err := e.Plugins.Acquire(t.Context(), th.ProjectID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := skills.WithSnapshot(t.Context(), snapshot.SkillSnapshot())
+		requested, err := e.userRequestedAgents(ctx, tr)
+		snapshot.Release()
+		if err != nil || !requested {
+			t.Errorf("installed picker identity lost the explicit agent request %s: %v", name, err)
 		}
 	}
 }

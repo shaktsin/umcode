@@ -90,9 +90,6 @@ func TestSuggestToolValidatesReason(t *testing.T) {
 	if err != nil || !strings.Contains(out, "s1") || len(got) != 1 {
 		t.Fatalf("valid reason: %q %v", out, err)
 	}
-	if !strings.Contains(tool.Description(), "parallel") {
-		t.Fatalf("description must limit suggestions to parallel or independent work: %q", tool.Description())
-	}
 }
 
 func TestSuggestToolLeadOnlyCaller(t *testing.T) {

@@ -22,7 +22,14 @@ func explicitAgentRequest(text string) bool {
 		return false
 	}
 	text = agentRequestLead.ReplaceAllString(text, "")
-	return agentRequestAction.MatchString(text) || strings.HasPrefix(strings.ToLower(text), "/superpowers:subagent-driven-development")
+	return agentRequestAction.MatchString(text)
+}
+
+func (e *Engine) agentRequest(ctx context.Context, text string) bool {
+	if agentRequestProhibition.MatchString(text) {
+		return false
+	}
+	return explicitAgentRequest(text) || e.submittedDelegationSkill(ctx, text)
 }
 
 func isAgentConfirmation(text string) bool {
@@ -45,7 +52,7 @@ func (e *Engine) userRequestedAgents(ctx context.Context, turn protocol.Turn) (b
 		return false, err
 	}
 	submitted = strings.TrimSpace(submitted)
-	if explicitAgentRequest(submitted) {
+	if e.agentRequest(ctx, submitted) {
 		return true, nil
 	}
 	if !isAgentConfirmation(submitted) {
@@ -62,7 +69,7 @@ func (e *Engine) userRequestedAgents(ctx context.Context, turn protocol.Turn) (b
 		if err := rows.Scan(&previous); err != nil {
 			return false, err
 		}
-		if explicitAgentRequest(previous) {
+		if e.agentRequest(ctx, previous) {
 			return true, nil
 		}
 		if !isAgentConfirmation(previous) {

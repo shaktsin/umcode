@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/llm"
@@ -150,10 +151,20 @@ func TestWorkbenchAssistantReviewTypedSkillDoesNotActivateDelegation(t *testing.
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: message}, &started)
 	h.waitTurn(started.Turn.ID, nil)
 	tasks, err = h.eng.Store.AgentTasksForThread(h.ctx, th.ID)
-	if err != nil || len(tasks) != 1 {
-		t.Fatalf("ordinary explicit skill activation changed: %+v %v", tasks, err)
+	if err != nil || len(tasks) != 0 {
+		t.Fatalf("ordinary skill bypassed prompt-first admission: %+v %v", tasks, err)
 	}
-	if _, err = h.eng.Store.AgentModelScope(h.ctx, tasks[0].ID); err != nil {
-		t.Fatal("ordinary activation has no model scope", err)
+	h.fake.mu.Lock()
+	req := h.fake.calls[len(h.fake.calls)-1]
+	h.fake.mu.Unlock()
+	if !strings.Contains(req.System, "Use subagents.") {
+		t.Fatal("ordinary chat lost its explicit skill instructions")
+	}
+	planTool := false
+	for _, tool := range req.Tools {
+		planTool = planTool || tool.Name == "agent__propose_plan"
+	}
+	if !planTool {
+		t.Fatal("ordinary skill cannot propose an agent plan")
 	}
 }

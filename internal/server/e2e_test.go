@@ -275,7 +275,7 @@ func TestChatWithApprovedShellTool(t *testing.T) {
 	h.fake.push(toolReply("shell__run", `{"command":"echo hello-from-shell > /dev/stderr; echo hello-from-shell"}`), textReply("The command printed hello."))
 
 	var th protocol.Thread
-	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID}, &th)
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{Channel: "listener", ProjectID: h.proj.ID}, &th)
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "run echo please",
 		Override: protocol.ModelSelection{Model: "claude-sonnet-4-6", Complexity: protocol.ComplexityHigh}}, &res)
@@ -354,7 +354,7 @@ func TestDeniedToolAndHistory(t *testing.T) {
 	h.addKey("claude", "k", "sk-1")
 	h.fake.push(toolReply("shell__run", `{"command":"rm -rf /tmp/x"}`), textReply("Okay, I will not."))
 	var th protocol.Thread
-	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{ProjectID: h.proj.ID, Title: "cleanup"}, &th)
+	h.call(protocol.MethodThreadStart, protocol.ThreadStartParams{Channel: "listener", ProjectID: h.proj.ID, Title: "cleanup"}, &th)
 	var res protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "delete it"}, &res)
 	turn, _, tools := h.waitTurn(res.Turn.ID, func(protocol.Approval) bool { return false })

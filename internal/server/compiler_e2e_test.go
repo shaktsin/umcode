@@ -126,7 +126,7 @@ func TestDesignedWorkflowFlagOffCompatibility(t *testing.T) {
 	for _, tool := range req.Tools {
 		names = append(names, tool.Name)
 	}
-	wantNames := []string{"agent__suggest", "browser__verify", "exec__start", "exec__stop", "exec__write", "file__edit", "file__list", "file__read", "file__search", "file__write", "preview__start", "preview__stop", "shell__run", "skill__get_instructions", "skill__run_script", "task__cancel", "task__context", "task__create", "task__list", "task__propose", "verification__plan", "verification__run", "visual__act", "visual__inspect", "visual__start", "visual__stop", "web__fetch", "web__search"}
+	wantNames := []string{"agent__propose_plan", "browser__verify", "exec__start", "exec__stop", "exec__write", "file__edit", "file__list", "file__read", "file__search", "file__write", "preview__start", "preview__stop", "shell__run", "skill__get_instructions", "skill__run_script", "task__cancel", "task__context", "task__create", "task__list", "task__propose", "verification__plan", "verification__run", "visual__act", "visual__inspect", "visual__start", "visual__stop", "web__fetch", "web__search"}
 	if !slices.Equal(names, wantNames) {
 		t.Fatalf("legacy tool list=%q want=%q", names, wantNames)
 	}
@@ -147,7 +147,7 @@ func TestDesignedWorkflowFlagOffCompatibility(t *testing.T) {
 		t.Fatalf("request accounting=%+v", breakdowns)
 	}
 	b := breakdowns[0]
-	if b.ToolCount != 28 || b.ToolSpecTokens <= 2734 || b.Layers["task_state"] == 0 || b.Layers["core"] != 968 || b.Layers["notice"] != 44 || b.ConversationTokens != 5 || b.ToolResultTokens != 0 || b.WorkPacketTokens != 0 || b.EvidencePacketTokens != 0 || b.P0PacketTokens != 0 || b.P1PacketTokens != 0 || b.WorkUpdateSpecTokens != 0 || b.WorkUpdateCallTokens != 0 || b.WorkUpdateResultTokens != 0 || b.TotalTokens != b.SystemTokens+b.ToolSpecTokens+5 {
+	if b.ToolCount != 28 || b.ToolSpecTokens <= 2734 || b.Layers["task_state"] == 0 || b.Layers["core"] != 996 || b.Layers["notice"] != 44 || b.ConversationTokens != 5 || b.ToolResultTokens != 0 || b.WorkPacketTokens != 0 || b.EvidencePacketTokens != 0 || b.P0PacketTokens != 0 || b.P1PacketTokens != 0 || b.WorkUpdateSpecTokens != 0 || b.WorkUpdateCallTokens != 0 || b.WorkUpdateResultTokens != 0 || b.TotalTokens != b.SystemTokens+b.ToolSpecTokens+5 {
 		t.Fatalf("legacy accounting=%+v", b)
 	}
 	var read protocol.ThreadReadResult

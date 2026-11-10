@@ -38,8 +38,26 @@ type Manager struct {
 
 // New creates a manager rooted under appDataDir/worktrees.
 func New(appDataDir string) *Manager {
-	if canonical, err := filepath.EvalSymlinks(appDataDir); err == nil {
-		appDataDir = canonical
+	// The application data directory may not exist on first launch. Resolve
+	// its existing ancestor as well, so macOS aliases such as /var do not
+	// become a different path once the workspace is created.
+	ancestor := filepath.Clean(appDataDir)
+	var missing []string
+	for {
+		canonical, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				canonical = filepath.Join(canonical, missing[i])
+			}
+			appDataDir = canonical
+			break
+		}
+		parent := filepath.Dir(ancestor)
+		if !errors.Is(err, os.ErrNotExist) || parent == ancestor {
+			break
+		}
+		missing = append(missing, filepath.Base(ancestor))
+		ancestor = parent
 	}
 	return &Manager{root: filepath.Join(appDataDir, "worktrees")}
 }

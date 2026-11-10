@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/shaktsin/umcode/internal/client"
@@ -85,8 +86,21 @@ func TestDelegationSubmittedInstalledSkill(t *testing.T) {
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "/superpowers:subagent-driven-development implement"}, &started)
 	h.waitTurn(started.Turn.ID, nil)
 	task, err := h.eng.Store.AgentTaskForRootTurn(h.ctx, th.ID, started.Turn.ID)
-	if err != nil || task.Activation != protocol.AgentActivationInstalledSkill {
-		t.Fatalf("submitted installed skill not admitted: %+v %v", task, err)
+	if !errors.Is(err, store.ErrNotFound) || task.ID != "" {
+		t.Fatalf("submitted skill bypassed prompt-first plan admission: %+v %v", task, err)
+	}
+	h.fake.mu.Lock()
+	req := h.fake.calls[len(h.fake.calls)-1]
+	h.fake.mu.Unlock()
+	if !strings.Contains(req.System, "Use subagents.") {
+		t.Fatal("submitted skill instructions missing")
+	}
+	planTool := false
+	for _, tool := range req.Tools {
+		planTool = planTool || tool.Name == "agent__propose_plan"
+	}
+	if !planTool {
+		t.Fatal("installed skill cannot propose an agent plan")
 	}
 }
 
