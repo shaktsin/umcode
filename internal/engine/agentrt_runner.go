@@ -361,7 +361,12 @@ func (r runtimeRunner) Run(ctx context.Context, a protocol.RuntimeAgent) (result
 	writable := a.Capabilities.Files == protocol.FilesReadWrite
 	ws, err := resolver.ResolveRuntime(ctx, task, a, writable)
 	if err != nil {
-		return result, err
+		name := a.Name
+		if name == "" {
+			name = a.ID
+		}
+		// The scheduler records this error as the agent's blocker.
+		return result, fmt.Errorf("agent %s: workspace not created: %w", name, err)
 	}
 	// Every agent works in its own checkout; a writer's confinement relies on it.
 	if !isolatedChildRoot(task, ws.ID, ws.Root) {

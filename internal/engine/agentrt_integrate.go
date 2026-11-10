@@ -387,7 +387,7 @@ func (g runtimeSpawnGate) Spawn(ctx context.Context, req agentrt.SpawnRequest) (
 			if applying, err := g.e.runtimeIntegrationApplying(ctx, req.TaskID); err != nil {
 				return agentrt.SpawnResult{}, err
 			} else if applying != "" {
-				return agentrt.SpawnResult{}, fmt.Errorf("spawn refused: %s (agent %s's revision is applying to the project checkout)", errRuntimeIntegrationApplying, applying)
+				return agentrt.SpawnResult{}, errors.New("spawn refused: " + delegation.IntegrationApplyingAdvice(applying))
 			}
 		}
 	}
