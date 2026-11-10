@@ -123,9 +123,9 @@ func (e *Engine) prepareDelegationToken(ctx context.Context, threadID string) (p
 	if err != nil {
 		return protocol.DelegationEnableResult{}, err
 	}
-	if _, err = e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil {
+	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil && !e.replaceEmptyActivation(ctx, task.ID) {
 		return protocol.DelegationEnableResult{}, protocol.Errorf(protocol.CodeConflict, "this chat already has an unfinished delegation task; continue it with its task ID")
-	} else if !errors.Is(err, store.ErrNotFound) {
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return protocol.DelegationEnableResult{}, err
 	}
 	var bytes [32]byte
@@ -246,9 +246,10 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 	if token.ThreadID != "" && (token.ProjectID != base.ProjectID || token.Root != base.Root || token.ParentRoot != base.ParentRoot || token.Revision != base.Revision) {
 		return nil, protocol.Errorf(protocol.CodeConflict, "delegation activation project or revision changed; enable again")
 	}
-	if _, err = e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil {
+	// The user's activation token replaces an empty active task.
+	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil && (p.DelegationActivationToken == "" || !e.replaceEmptyActivation(ctx, task.ID)) {
 		return nil, protocol.Errorf(protocol.CodeConflict, "this chat already has an unfinished delegation task")
-	} else if !errors.Is(err, store.ErrNotFound) {
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
 	activation := protocol.AgentActivationExplicitUser

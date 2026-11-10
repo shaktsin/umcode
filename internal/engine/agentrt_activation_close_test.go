@@ -10,10 +10,11 @@ import (
 	"github.com/shaktsin/umcode/internal/protocol"
 )
 
-// Plan 5 Task 2: a turn admitted for delegation that ends without ever
-// proposing a plan closes its empty task, so it never blocks enabling agents
-// or agent.suggest later in the chat; a task with a plan card still waiting,
-// a revised (still proposed) plan or an approved plan is kept.
+// A turn admitted for delegation that ends without ever proposing a plan
+// keeps its (empty) task, so the follow-up turn is admitted by its ID; an
+// explicit enable or agent.suggest replaces such an empty task instead of
+// refusing. A task with a plan card still waiting, a revised (still proposed)
+// plan or an approved plan is never replaced.
 
 // latestTask returns the newest delegation task of the chat, whatever its
 // state.
@@ -30,7 +31,7 @@ func (x *activationE2E) latestTask(t *testing.T) protocol.AgentTask {
 	return task
 }
 
-func TestAdmittedTurnWithoutPlanClosesTask(t *testing.T) {
+func TestAdmittedTurnWithoutPlanKeepsReplaceableTask(t *testing.T) {
 	x := newActivationE2E(t, nil)
 	token := x.enable(t, x.suggestTurn(t))
 	// The admitted turn: the lead answers without agent.propose_plan.
@@ -38,13 +39,13 @@ func TestAdmittedTurnWithoutPlanClosesTask(t *testing.T) {
 	x.turn(t, protocol.TurnStartParams{Text: "just answer", DelegationActivationToken: token,
 		Override: protocol.ModelSelection{Provider: protocol.PoolProvider, Model: "e2e-pool", Complexity: protocol.ComplexityHigh}})
 	task := x.latestTask(t)
-	if task.State != protocol.AgentStateCompleted {
-		t.Fatalf("task after an admitted turn without a plan = %s, want completed", task.State)
+	if !unfinishedDelegation(task.State) {
+		t.Fatalf("task after an admitted turn without a plan = %s, want active", task.State)
 	}
-	// Nothing blocks the chat: the lead may suggest again and agents can be
-	// enabled.
+	// Nothing blocks the chat: the lead may suggest again (replacing the
+	// empty task) and agents can be enabled.
 	if id := x.suggestTurn(t); id == "" {
-		t.Fatal("no suggestion after the closed task")
+		t.Fatal("no suggestion with the empty task")
 	}
 	if _, err := x.e.PrepareDelegation(t.Context(), x.th.ID); err != nil {
 		t.Fatalf("delegation/enable after the unproposed activation: %v", err)
@@ -57,9 +58,9 @@ func TestAdmittedTurnWithPendingPlanKeepsTask(t *testing.T) {
 	_, wait := x.proposeTurn(t, token, `{"agents":[`+planEntry("worker", "read A", "read", "")+`]}`)
 	_, card := x.pendingCard(t, x.e)
 	x.admitted(t)
-	// While the card waits for a decision the turn-end close refuses.
-	if x.e.closeUnproposedActivation(t.Context(), x.task.ID) {
-		t.Fatal("a task whose plan card is waiting was closed")
+	// While the card waits for a decision the task is not replaceable.
+	if x.e.replaceEmptyActivation(t.Context(), x.task.ID) {
+		t.Fatal("a task whose plan card is waiting was replaced")
 	}
 	if task, _ := x.e.Store.AgentTask(t.Context(), x.task.ID); !unfinishedDelegation(task.State) {
 		t.Fatalf("task with a pending card = %s, want active", task.State)
@@ -87,6 +88,10 @@ func TestRevisedPlanTurnEndKeepsTask(t *testing.T) {
 	waitTurnDone(t, wait, protocol.TurnCompleted)
 	if task, _ := x.e.Store.AgentTask(t.Context(), x.task.ID); !unfinishedDelegation(task.State) {
 		t.Fatalf("task with a revised plan = %s after its turn, want active", task.State)
+	}
+	// A revised (still proposed) plan is not empty: enabling again refuses.
+	if _, err := x.e.PrepareDelegation(t.Context(), x.th.ID); err == nil || !strings.Contains(err.Error(), "already has an unfinished delegation task") {
+		t.Fatalf("enable with a proposed plan: %v, want the unfinished-task refusal", err)
 	}
 }
 

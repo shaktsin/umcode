@@ -2166,8 +2166,6 @@ func (e *Engine) finishTurn(ctx context.Context, th protocol.Thread, turn protoc
 		completedID, _ := e.Work.End(ctx, th.ID, turn.Status, paused, scopeRoot(ctx))
 		e.promoteMemory(ctx, th, turn, completedID)
 	}
-	// Before the chat is released: the next turn sees the closed task.
-	e.endAdmittedTurn(ctx)
 	release()
 	e.publishTurnEvent(ctx, th.ID, protocol.NotifyTurnCompleted, protocol.TurnEvent{Turn: turn})
 	e.mu.Lock()

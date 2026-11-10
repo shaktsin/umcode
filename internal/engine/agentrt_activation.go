@@ -54,9 +54,9 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("agent.suggest refused: agents need a committed Git project (%v)", err)
 	}
-	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil {
+	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil && !e.replaceEmptyActivation(ctx, task.ID) {
 		return "", fmt.Errorf("agent.suggest refused: this chat already has an active delegation task (%s); it continues with its task ID", task.ID)
-	} else if !errors.Is(err, store.ErrNotFound) {
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}
 	if last, err := e.Store.LatestAgentSuggestion(ctx, turn.ThreadID); err == nil && last.TurnID == turn.ID {
@@ -84,31 +84,29 @@ func (e *Engine) suggestAgents(ctx context.Context, reason string) (string, erro
 	return string(out), err
 }
 
-// closeUnproposedActivation runs when a root turn admitted for delegation
-// ends: a runtime task that never got a plan (no plan card waiting, no
-// proposed or approved plan, no agents, no revisions) is completed, so an
-// activation whose turn never called agent.propose_plan does not block
-// delegation/enable or agent.suggest later in the chat. It reports whether
-// the task was closed; it shares closeEmptyRuntimeTask's checks and locks.
-func (e *Engine) closeUnproposedActivation(ctx context.Context, taskID string) bool {
-	return e.closeEmptyRuntimeTaskIf(ctx, taskID, true)
-}
-
-// endAdmittedTurn is called by finishTurn for every turn: only a root turn
-// (not an agent or child) of a task admitted with the agent runtime on is
-// considered for closeUnproposedActivation.
-func (e *Engine) endAdmittedTurn(ctx context.Context) {
-	if e.AgentRuntime == nil || delegationChild(ctx) || childExecutionFrom(ctx) != nil {
-		return
+// replaceEmptyActivation completes the chat's active runtime task when it is
+// EMPTY (no plan card waiting, no proposed or approved plan, no agents, no
+// revisions) and no running turn holds it, so an explicit enable
+// (delegation/enable, an enabled suggestion, an activation token) or
+// agent.suggest can proceed instead of refusing. It reports whether the task
+// was completed; a task with any delegated work is never replaced. It shares
+// closeEmptyRuntimeTask's checks and locks (delegationWorkflowMu ->
+// agentPlanMu). An empty task is otherwise kept, so a lead that asks the user
+// a question in the admitted turn can still propose in the follow-up turn
+// admitted by the task's ID.
+func (e *Engine) replaceEmptyActivation(ctx context.Context, taskID string) bool {
+	if e.AgentRuntime == nil {
+		return false
 	}
-	if id, ok := runtimeAgentFrom(ctx); ok && id != "" {
-		return
+	e.mu.Lock()
+	for _, at := range e.activeTurns {
+		if at.taskID == taskID {
+			e.mu.Unlock()
+			return false
+		}
 	}
-	task, ok := DelegationTaskFromContext(ctx)
-	if !ok || task.ID == "" {
-		return
-	}
-	e.closeUnproposedActivation(context.WithoutCancel(ctx), task.ID)
+	e.mu.Unlock()
+	return e.closeEmptyRuntimeTaskIf(context.WithoutCancel(ctx), taskID, true)
 }
 
 // RespondAgentSuggestion records the user's answer to a suggestion card
