@@ -355,7 +355,11 @@ func resolvePath(ctx context.Context, ws *Workspaces, name, path string, op Oper
 		if name != "" && name != "project" {
 			return "", fmt.Errorf("this chat works in the project %s; %q is not one of its folders", scope.ProjectName, name)
 		}
-		return scope.Resolve(path)
+		abs, err := scope.Resolve(path)
+		if err == nil && op != OpRead && scope.RuntimeAgent && inGitMetadata(scope, abs) {
+			return "", errors.New("the repository metadata (.git) is read-only for agents")
+		}
+		return abs, err
 	}
 	if op != OpRead {
 		return "", ErrNoProject
@@ -365,6 +369,12 @@ func resolvePath(ctx context.Context, ws *Workspaces, name, path string, op Oper
 		return "", err
 	}
 	return w.Resolve(path, op)
+}
+
+// inGitMetadata reports whether abs is the root's .git entry or inside it.
+func inGitMetadata(scope *Scope, abs string) bool {
+	first, _, _ := strings.Cut(scope.Rel(abs), "/")
+	return strings.EqualFold(first, ".git")
 }
 
 // ---- file.read ----

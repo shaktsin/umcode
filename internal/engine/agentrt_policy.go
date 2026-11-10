@@ -32,7 +32,12 @@ func runtimeScope(base *tools.Scope, caps protocol.AgentCapabilities, conf tools
 	s.RestrictedChild = true
 	s.RuntimeAgent = true
 	s.ReadOnly = caps.Files != protocol.FilesReadWrite
-	s.ShellReadOnly = caps.Shell == protocol.ShellReadOnly
+	// Defence in depth: only a read-write shell with read-write files may
+	// change the workspace (admission already clamps it).
+	s.ShellReadOnly = caps.Shell != protocol.ShellReadWrite || caps.Files != protocol.FilesReadWrite
+	// The lead's mode is read live through modeFn; a copied stale mode must
+	// never make TrustedAutonomy true for an agent.
+	s.ApprovalMode = ""
 	s.AllowNet = caps.Network
 	s.Confined = conf != tools.ConfNone && caps.Shell != protocol.ShellNone && caps.Shell != ""
 	s.ApprovalModeFn = modeFn

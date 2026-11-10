@@ -118,7 +118,7 @@ func (e *Engine) resolveSelection(ctx context.Context, th protocol.Thread, o pro
 		Candidates: candidates,
 		Strategy:   strategy,
 		Need: router.Capabilities{
-			Tools:  true,
+			Tools:  childNeedsTools(ctx),
 			Images: attachments > 0,
 		},
 	})
@@ -277,6 +277,9 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 		tctx = delegation.InheritRunnerContext(tctx, ctx)
 		if x := childExecutionFrom(ctx); x != nil {
 			tctx = withChildExecution(store.WithInternalThreads(tctx), x)
+		}
+		if id, ok := runtimeAgentFrom(ctx); ok {
+			tctx = withRuntimeAgent(tctx, id)
 		}
 		if err := registerExecutionCancellation(tctx, cancel); err != nil {
 			cancel()
@@ -573,10 +576,13 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			ComputeDiskMiB:   intOr(p.Tools.ComputeDiskMiB, 0),
 			ApprovalMode:     normalizedApprovalMode(th.ApprovalMode),
 			RestrictedChild:  childExecutionFrom(ctx) != nil,
-			ReadOnly:         childExecutionFrom(ctx) != nil && childExecutionFrom(ctx).child.Role == protocol.AgentRoleReviewer,
+			ReadOnly:         childExecutionFrom(ctx) != nil && childExecutionFrom(ctx).runtime == nil && childExecutionFrom(ctx).child.Role == protocol.AgentRoleReviewer,
 			Record: func(c context.Context, abs string, before *string, deleted bool) {
 				rec.Record(sctx, abs, before, deleted)
 			},
+		}
+		if x := childExecutionFrom(ctx); x != nil && x.runtime != nil {
+			scope = e.runtimeAgentScope(scope, x)
 		}
 		ctx = tools.WithScope(ctx, scope)
 		sctx = tools.WithScope(sctx, scope)
@@ -1570,7 +1576,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 	var taskOperation protocol.TaskOperation
 	var taskFailure *protocol.ActionFailure
 	if !childToolAllowed(ctx, name) {
-		return e.selectionFailure(sctx, turn, call, name, childPolicyError(name).Error())
+		return e.selectionFailure(sctx, turn, call, name, childToolRefusal(ctx, name).Error())
 	}
 	var childPolicyErr error
 	ctx, th, childPolicyErr = e.narrowChildToolAuthority(ctx, th)

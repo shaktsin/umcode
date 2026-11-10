@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -41,6 +40,9 @@ type ChildWorkspaceFinalizer interface {
 }
 
 type childExecution struct {
+	// runtime is set for a runtime agent's execution; its authority comes
+	// only from the agent's capabilities, never from child.Role.
+	runtime       *runtimeExecution
 	task          protocol.AgentTask
 	child         protocol.AgentChild
 	workspace     ChildWorkspace
@@ -72,7 +74,7 @@ func (r childRunner) Run(ctx context.Context, task protocol.AgentTask, child pro
 	if err != nil {
 		return result, err
 	}
-	if ws.ID == "" || !filepath.IsAbs(ws.Root) || pathutil.Within(task.BaseRoot, ws.Root) || pathutil.Within(ws.Root, task.BaseRoot) || (task.ParentRoot != "" && (pathutil.Within(task.ParentRoot, ws.Root) || pathutil.Within(ws.Root, task.ParentRoot))) {
+	if !isolatedChildRoot(task, ws.ID, ws.Root) {
 		return result, errors.New("child workspace must be an isolated owned checkout outside the parent")
 	}
 	ws.Root = pathutil.Resolved(ws.Root)
@@ -301,6 +303,9 @@ func (e *Engine) updateChildExecution(ctx context.Context, taskID, childID strin
 }
 
 func (e *Engine) setChildApprovalState(ctx context.Context, x *childExecution, waiting bool) error {
+	if x.runtime != nil {
+		return e.setRuntimeApprovalState(ctx, x, waiting)
+	}
 	return e.updateChildExecution(ctx, x.task.ID, x.child.ID, func(c *protocol.AgentChild) {
 		// A late approval response must never resurrect a cancelled child or
 		// replace the concurrent correction ledger/results read on this CAS attempt.
@@ -314,6 +319,9 @@ func (e *Engine) setChildApprovalState(ctx context.Context, x *childExecution, w
 }
 
 func (e *Engine) recordChildModel(ctx context.Context, x *childExecution, model protocol.ModelSelection) error {
+	if x.runtime != nil {
+		return e.recordRuntimeModel(ctx, x, model)
+	}
 	if err := e.Store.UpdateAgentExecutionModel(ctx, x.task.ID, x.child.ID, model); err != nil {
 		return err
 	}
@@ -333,6 +341,9 @@ func messageText(msgs []llm.Message) string {
 // consumeChildFollowups is called only outside a provider stream/tool action.
 // The deterministic item identity makes persist-before-ack retries idempotent.
 func (e *Engine) consumeChildFollowups(ctx, sctx context.Context, turn protocol.Turn, msgs []llm.Message) ([]llm.Message, bool, error) {
+	if x := childExecutionFrom(ctx); x != nil && x.runtime != nil {
+		return e.consumeAgentMessages(ctx, sctx, turn, msgs, x)
+	}
 	queue := delegation.FollowupsFromContext(ctx)
 	if queue == nil {
 		return msgs, false, nil

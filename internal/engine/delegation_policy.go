@@ -18,6 +18,9 @@ func childToolAllowed(ctx context.Context, name string) bool {
 	if x == nil {
 		return true
 	}
+	if x.runtime != nil {
+		return runtimeToolAllowed(x.runtime.agent.Capabilities, name)
+	}
 	safe := []string{"file.read", "file.list", "file.search", "skill.get_instructions", "task.context"}
 	if x.child.Role == "reviewer" {
 		safe = append(safe, "agent.review_report")
@@ -90,7 +93,20 @@ func (e *Engine) narrowChildToolAuthority(ctx context.Context, th protocol.Threa
 	}
 	th.ApprovalMode = narrowed.ApprovalMode
 	th.Channel = parent.Channel
+	if x.runtime != nil {
+		// Re-derive from capabilities with the live project confinement.
+		return tools.WithScope(ctx, e.runtimeAgentScope(&narrowed, x)), th, nil
+	}
 	return tools.WithScope(ctx, &narrowed), th, nil
+}
+
+// childToolRefusal explains a refused tool call: a runtime agent's authority
+// is its capabilities; a legacy child's is the scoped built-in allowlist.
+func childToolRefusal(ctx context.Context, name string) error {
+	if x := childExecutionFrom(ctx); x != nil && x.runtime != nil {
+		return fmt.Errorf("tool %s blocked: it is not granted by this agent's capabilities", name)
+	}
+	return childPolicyError(name)
 }
 func childPolicyError(name string) error {
 	return fmt.Errorf("child tool %s blocked: only scoped built-ins are permitted; reviewer command/script/plugin execution requires an enforceable read-only sandbox", name)
