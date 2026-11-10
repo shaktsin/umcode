@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/store"
@@ -233,4 +235,75 @@ func TestEmptyTaskNotReplacedWhileItsTurnRuns(t *testing.T) {
 	if _, err := x.e.PrepareDelegation(t.Context(), x.th.ID); err != nil {
 		t.Fatalf("enable once the turn ended: %v", err)
 	}
+}
+
+// M2: the empty task is completed only once the turn is admitted; a turn/start
+// that fails a later check (here an unknown model) leaves it active.
+func TestEmptyTaskKeptWhenTurnStartFailsLater(t *testing.T) {
+	bad := protocol.ModelSelection{Provider: "no-such-provider", Model: "nope"}
+	for name, prepare := range map[string]func(x *activationE2E, old protocol.AgentTask) protocol.TurnStartParams{
+		"new token": func(x *activationE2E, old protocol.AgentTask) protocol.TurnStartParams {
+			res, err := x.tokenBesideTask(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return protocol.TurnStartParams{Text: "again", DelegationActivationToken: res}
+		},
+		"moved revision": func(x *activationE2E, old protocol.AgentTask) protocol.TurnStartParams {
+			if err := os.WriteFile(filepath.Join(x.root, "c.txt"), []byte("c\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			delegationGit(t, x.root, "add", ".")
+			delegationGit(t, x.root, "commit", "-m", "c")
+			return protocol.TurnStartParams{Text: "again", DelegationTaskID: old.ID}
+		},
+		"dirty checkout": func(x *activationE2E, old protocol.AgentTask) protocol.TurnStartParams {
+			if err := os.WriteFile(filepath.Join(x.root, "draft.txt"), []byte("d\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return protocol.TurnStartParams{Text: "again", DelegationTaskID: old.ID}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := newActivationE2E(t, nil)
+			token := x.enable(t, x.suggestTurn(t))
+			old := x.askTurn(t, token)
+			p := prepare(x, old)
+			p.ThreadID, p.Override = x.th.ID, bad
+			if _, err := x.e.startTurn(t.Context(), turnRequest{TurnStartParams: p}); err == nil {
+				t.Fatal("turn/start with an unknown model succeeded")
+			}
+			if got, _ := x.e.Store.AgentTask(t.Context(), old.ID); !unfinishedDelegation(got.State) {
+				t.Fatalf("empty task after a failed turn/start = %s, want active", got.State)
+			}
+		})
+	}
+}
+
+// M2: only "the project cannot be admitted" ends an empty task on a
+// follow-up; other errors (a store or project lookup failing) are returned.
+func TestOnlyInadmissibleProjectEndsEmptyTask(t *testing.T) {
+	if !delegationInadmissible(notAdmissible(errors.New("delegation requires a clean committed checkout"))) {
+		t.Fatal("an inadmissible project was not recognised")
+	}
+	for _, err := range []error{errors.New("database is locked"), store.ErrNotFound, errors.New("delegation requires a clean committed checkout")} {
+		if delegationInadmissible(err) {
+			t.Fatalf("%v treated as an inadmissible project", err)
+		}
+	}
+}
+
+// tokenBesideTask mints an activation token for the chat while its empty task
+// stays active (delegation/enable would replace the task itself).
+func (x *activationE2E) tokenBesideTask(t *testing.T) (string, error) {
+	t.Helper()
+	base, err := x.e.delegationBase(t.Context(), x.th.ID)
+	if err != nil {
+		return "", err
+	}
+	base.ExpiresAt = time.Now().Add(time.Minute)
+	x.e.mu.Lock()
+	x.e.delegationTokens["tok-beside"] = base
+	x.e.mu.Unlock()
+	return "tok-beside", nil
 }

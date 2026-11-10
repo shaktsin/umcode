@@ -26,7 +26,31 @@ type delegationAdmission struct {
 	delegationToken
 	Activation protocol.AgentActivation
 	Task       protocol.AgentTask
+	// Replace is an EMPTY active task of the chat that startTurn completes
+	// once the turn is admitted (after its remaining checks), before the new
+	// task is created. With Plain the turn then runs without delegation.
+	Replace string
+	Plain   bool
 }
+
+// inadmissibleError marks a delegationBase failure of the project itself
+// (no project, folder missing, not a clean committed Git root): enabling
+// cannot succeed until the project changes. Lookup or store failures are
+// returned unmarked.
+type inadmissibleError struct{ err error }
+
+func (e *inadmissibleError) Error() string { return e.err.Error() }
+func (e *inadmissibleError) Unwrap() error { return e.err }
+
+func notAdmissible(err error) error { return &inadmissibleError{err: err} }
+
+// delegationInadmissible reports a delegationBase failure of the project
+// itself.
+func delegationInadmissible(err error) bool {
+	var ia *inadmissibleError
+	return errors.As(err, &ia)
+}
+
 type delegationAuthorizationKey struct{}
 type delegationTaskKey struct{}
 type delegationChildKey struct{}
@@ -60,25 +84,25 @@ func (e *Engine) delegationBase(ctx context.Context, threadID string) (delegatio
 		return delegationToken{}, err
 	}
 	if th.ProjectID == "" {
-		return delegationToken{}, protocol.Errorf(protocol.CodeInvalidParams, "delegation requires a committed Git project")
+		return delegationToken{}, notAdmissible(protocol.Errorf(protocol.CodeInvalidParams, "delegation requires a committed Git project"))
 	}
 	proj, err := e.Projects.Get(ctx, th.ProjectID)
 	if err != nil {
 		return delegationToken{}, err
 	}
 	if proj.Missing {
-		return delegationToken{}, protocol.Errorf(protocol.CodeInvalidParams, "delegation project folder is missing")
+		return delegationToken{}, notAdmissible(protocol.Errorf(protocol.CodeInvalidParams, "delegation project folder is missing"))
 	}
 	root, err := e.activeDelegationParent(ctx, th, proj.Root)
 	if err != nil {
-		return delegationToken{}, err
+		return delegationToken{}, notAdmissible(err)
 	}
 	if err = worktree.ValidateCommitted(ctx, root, ""); err != nil {
-		return delegationToken{}, err
+		return delegationToken{}, notAdmissible(err)
 	}
 	revision, err := privateParentRevision(ctx, root)
 	if err != nil {
-		return delegationToken{}, err
+		return delegationToken{}, notAdmissible(err)
 	}
 	return delegationToken{ThreadID: th.ID, ProjectID: th.ProjectID, Root: pathutil.Resolved(proj.Root), ParentRoot: root, Revision: revision}, nil
 }
@@ -223,10 +247,11 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 	base, err := e.delegationBase(ctx, p.ThreadID)
 	if err != nil && p.DelegationTaskID != "" {
 		// The project is no longer admissible (for example the checkout is
-		// not clean any more): an EMPTY task of this chat is completed and
-		// the message runs as a plain turn, so the chat is not stuck.
-		if task, ok := e.ownedActiveTask(ctx, p.ThreadID, p.DelegationTaskID); ok && e.replaceEmptyActivation(ctx, task.ID) {
-			return nil, nil
+		// not clean any more): an EMPTY task of this chat is completed once
+		// the turn is admitted and the message runs as a plain turn, so the
+		// chat is not stuck. Other errors are returned.
+		if task, ok := e.ownedActiveTask(ctx, p.ThreadID, p.DelegationTaskID); ok && delegationInadmissible(err) && e.replaceableActivation(ctx, task.ID) {
+			return &delegationAdmission{Replace: task.ID, Plain: true}, nil
 		}
 	}
 	if err != nil {
@@ -243,11 +268,12 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 		if !unfinishedDelegation(task.State) {
 			return nil, protocol.Errorf(protocol.CodeInvalidParams, "delegation task is finished or interrupted; explicitly enable a new task")
 		}
-		if (task.BaseRoot != base.Root || task.ParentRoot != base.ParentRoot || task.BaseRevision != base.Revision) && e.replaceEmptyActivation(ctx, task.ID) {
+		if (task.BaseRoot != base.Root || task.ParentRoot != base.ParentRoot || task.BaseRevision != base.Revision) && e.replaceableActivation(ctx, task.ID) {
 			// An EMPTY task holds nothing bound to its old root or revision:
 			// the user's activation continues as a fresh task at the current
-			// one. A task with delegated work still refuses below.
-			return &delegationAdmission{delegationToken: base, Activation: task.Activation}, nil
+			// one (the old one is completed once the turn is admitted). A task
+			// with delegated work still refuses below.
+			return &delegationAdmission{delegationToken: base, Activation: task.Activation, Replace: task.ID}, nil
 		}
 		if task.BaseRoot != base.Root || task.ParentRoot != base.ParentRoot {
 			return nil, protocol.Errorf(protocol.CodeConflict, "delegation project root changed")
@@ -260,17 +286,22 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 	if token.ThreadID != "" && (token.ProjectID != base.ProjectID || token.Root != base.Root || token.ParentRoot != base.ParentRoot || token.Revision != base.Revision) {
 		return nil, protocol.Errorf(protocol.CodeConflict, "delegation activation project or revision changed; enable again")
 	}
-	// The user's activation token replaces an empty active task.
-	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil && (p.DelegationActivationToken == "" || !e.replaceEmptyActivation(ctx, task.ID)) {
-		return nil, protocol.Errorf(protocol.CodeConflict, "this chat already has an unfinished delegation task")
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+	// The user's activation token replaces an empty active task, once the
+	// turn is admitted.
+	replace := ""
+	if task, err := e.Store.ActiveAgentTask(ctx, base.ThreadID, base.ProjectID); err == nil {
+		if p.DelegationActivationToken == "" || !e.replaceableActivation(ctx, task.ID) {
+			return nil, protocol.Errorf(protocol.CodeConflict, "this chat already has an unfinished delegation task")
+		}
+		replace = task.ID
+	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
 	activation := protocol.AgentActivationExplicitUser
 	if skill {
 		activation = protocol.AgentActivationInstalledSkill
 	}
-	return &delegationAdmission{delegationToken: base, Activation: activation}, nil
+	return &delegationAdmission{delegationToken: base, Activation: activation, Replace: replace}, nil
 }
 
 // ownedActiveTask returns the delegation task named by id when it is an

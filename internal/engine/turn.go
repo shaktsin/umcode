@@ -370,6 +370,16 @@ func (e *Engine) startTurn(ctx context.Context, p turnRequest) (protocol.Turn, e
 
 	// Persist delegation permission last: failed user-item persistence cannot
 	// strand an active task that then needs a separate fallible rollback.
+	// An empty task this admission replaces is completed only now, after
+	// every other turn/start check passed (startTurn still holds
+	// delegationMu, so nothing changed it since admission checked it).
+	if admission != nil && admission.Replace != "" && !e.replaceEmptyActivation(ctx, admission.Replace) {
+		release()
+		return protocol.Turn{}, abort(protocol.Errorf(protocol.CodeConflict, "this chat already has an unfinished delegation task"))
+	}
+	if admission != nil && admission.Plain {
+		admission = nil
+	}
 	if admission != nil {
 		task := admission.Task
 		if task.ID == "" {
