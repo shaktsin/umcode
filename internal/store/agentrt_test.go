@@ -521,3 +521,37 @@ func TestSaveAgentPlanNormalisesZeroLimits(t *testing.T) {
 		t.Fatalf("limits = %+v, want %+v", got.Limits, want)
 	}
 }
+
+func TestSupersedeProposedAgentPlans(t *testing.T) {
+	s, task := runtimeFixture(t)
+	addTasks(t, s, task.ThreadID, "T2")
+	save := func(id, taskID string) {
+		t.Helper()
+		if err := s.SaveAgentPlan(t.Context(), protocol.AgentPlan{ID: id, ThreadID: task.ThreadID, TaskID: taskID, Agents: []protocol.PlanAgent{{Name: "w"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("A", task.ID)
+	save("B", task.ID)
+	save("other", "T2")
+	save("C", task.ID)
+	if err := s.ApproveAgentPlan(t.Context(), "B", task.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SupersedeProposedAgentPlans(t.Context(), task.ID, "C")
+	if err != nil || len(got) != 1 || got[0] != "A" {
+		t.Fatalf("superseded = %v, %v; want [A]", got, err)
+	}
+	for id, want := range map[string]protocol.PlanState{"A": protocol.PlanSuperseded, "B": protocol.PlanApproved, "C": protocol.PlanProposed, "other": protocol.PlanProposed} {
+		p, err := s.AgentPlan(t.Context(), id)
+		if err != nil || p.State != want {
+			t.Fatalf("%s: state %q err %v, want %q", id, p.State, err, want)
+		}
+	}
+	if err := s.ApproveAgentPlan(t.Context(), "A", task.ID); !errors.Is(err, ErrAgentTransition) {
+		t.Fatalf("approving a superseded plan: %v", err)
+	}
+	if _, err := s.AgentPlan(t.Context(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing plan: %v", err)
+	}
+}
