@@ -36,6 +36,8 @@ type WorkspaceService struct {
 	ValidateParent ParentValidator
 	Eligibility    IntegrationEligibility
 	mu             sync.Mutex
+	// taskLocks serialises runtime integration per task (guarded by mu).
+	taskLocks map[string]*taskLock
 }
 
 func NewWorkspaceService(s *store.Store, m *worktree.Manager, parent ParentValidator, eligible IntegrationEligibility) *WorkspaceService {
@@ -452,6 +454,16 @@ func (s *WorkspaceService) integrationAuthority(ctx context.Context, t protocol.
 	if latest.State != protocol.AgentStateCompleted || latest.Revision != w.ResultRevision || latest.WorkspaceID != w.ID {
 		return errors.New("integration child submission changed")
 	}
+	if err = s.parentAuthority(ctx, t); err != nil {
+		return err
+	}
+	return s.Eligibility(ctx, current, latest, w.ResultRevision)
+}
+
+// parentAuthority is the storage-only part of integrationAuthority that does
+// not depend on the integrated agent: the task's thread, project and parent
+// workspace mode still admit its parent checkout. Shared by runtime agents.
+func (s *WorkspaceService) parentAuthority(ctx context.Context, t protocol.AgentTask) error {
 	th, err := s.Store.GetThread(ctx, t.ThreadID)
 	if err != nil {
 		return err
@@ -480,7 +492,7 @@ func (s *WorkspaceService) integrationAuthority(ctx context.Context, t protocol.
 			return errors.New("integration project root changed")
 		}
 	}
-	return s.Eligibility(ctx, current, latest, w.ResultRevision)
+	return nil
 }
 
 func (s *WorkspaceService) verifyApplied(ctx context.Context, t protocol.AgentTask, w store.AgentWorkspace) error {
