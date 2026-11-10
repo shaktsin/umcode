@@ -28,6 +28,13 @@ func (env rvEnv) unmarkApplying(t *testing.T, agentID string) {
 	}
 }
 
+// applyingRefusal reports whether err refuses because agentID's revision is
+// applying and tells the lead to accept it again (not merely to retry).
+func applyingRefusal(err error, agentID string) bool {
+	return err != nil && strings.Contains(err.Error(), "an integration is being applied") &&
+		strings.Contains(err.Error(), "accept agent "+agentID+" again") && !strings.Contains(err.Error(), "try again")
+}
+
 const spawnWorker = `{"planEntry":"worker","assignment":{"prompt":"look"}}`
 
 func TestSpawnDuringApplyingRefused(t *testing.T) {
@@ -35,7 +42,7 @@ func TestSpawnDuringApplyingRefused(t *testing.T) {
 	a := env.writer(t, "a", "a.txt", "from a\n")
 	env.markApplying(t, a.ID)
 	_, err := callAgentTool(t, env.e, env.ctx, "agent.spawn", "during-apply", spawnWorker)
-	if err == nil || !strings.Contains(err.Error(), "an integration is being applied; try again") {
+	if !applyingRefusal(err, a.ID) {
 		t.Fatalf("spawn while applying: %v", err)
 	}
 	if agents, _ := env.e.Store.RuntimeAgents(t.Context(), env.task.ID); len(agents) != 1 {
@@ -43,13 +50,13 @@ func TestSpawnDuringApplyingRefused(t *testing.T) {
 	}
 	// The agent's own workspace preparation refuses as well.
 	late := env.liveAgent(t, "late", readOnlyCaps)
-	if _, err = env.e.DelegationWorkspaceService.PrepareRuntime(t.Context(), env.task, late, false); err == nil || !strings.Contains(err.Error(), "an integration is being applied; try again") {
+	if _, err = env.e.DelegationWorkspaceService.PrepareRuntime(t.Context(), env.task, late, false); !applyingRefusal(err, a.ID) {
 		t.Fatalf("prepare while applying: %v", err)
 	}
 	shared := delegation.NewBudget(protocol.ExecutionLimits{MaxTokens: 100000, MaxCostUSD: 100, MaxDurationMinutes: 10}, protocol.UsageTotals{}, nil)
 	ctx, cancel := context.WithTimeout(delegation.WithBudget(t.Context(), shared), 20*time.Second)
 	defer cancel()
-	if _, err = (runtimeRunner{engine: env.e}).Run(ctx, late); err == nil || !strings.Contains(err.Error(), "an integration is being applied; try again") {
+	if _, err = (runtimeRunner{engine: env.e}).Run(ctx, late); !applyingRefusal(err, a.ID) || !strings.Contains(err.Error(), "agent late: workspace not created: ") {
 		t.Fatalf("runner while applying: %v", err)
 	}
 	env.unmarkApplying(t, a.ID)
