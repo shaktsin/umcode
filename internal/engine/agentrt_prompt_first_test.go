@@ -45,6 +45,16 @@ func TestExplicitAgentProhibitionIsRefused(t *testing.T) {
 	}
 }
 
+func TestQuotedAgentInstructionIsNotARequest(t *testing.T) {
+	env := suggestFixture(t)
+	turn := delegationTurn(t, env.e, protocol.TurnStartParams{ThreadID: env.th.ID, Text: `What does "use two agents" mean in the docs?`})
+	lead := tools.WithScope(context.WithValue(t.Context(), executionTurnKey{}, turn), &tools.Scope{ThreadID: env.th.ID, ProjectID: env.th.ProjectID, Root: env.root})
+	tool, _ := env.e.Tools.Get("agent.propose_plan")
+	if _, err := tool.Call(lead, json.RawMessage(onePlan)); err == nil {
+		t.Fatal("quoted agent instruction activated a plan")
+	}
+}
+
 func TestAgentRequestSurvivesConfirmationTurn(t *testing.T) {
 	env := suggestFixture(t)
 	_ = requestedAgentLeadTurn(t, env)
@@ -53,6 +63,28 @@ func TestAgentRequestSurvivesConfirmationTurn(t *testing.T) {
 	tool, _ := env.e.Tools.Get("agent.propose_plan")
 	if _, err := tool.Call(lead, json.RawMessage(onePlan)); err != nil {
 		t.Fatalf("confirmation lost the agent request: %v", err)
+	}
+}
+
+func TestAgentRequestWithResumePrefixStarts(t *testing.T) {
+	env := suggestFixture(t)
+	turn := delegationTurn(t, env.e, protocol.TurnStartParams{ThreadID: env.th.ID, Text: "resume - Use two agents for this small coding task. Have one implement IsEven and the second review it."})
+	lead := tools.WithScope(context.WithValue(t.Context(), executionTurnKey{}, turn), &tools.Scope{ThreadID: env.th.ID, ProjectID: env.th.ProjectID, Root: env.root})
+	tool, _ := env.e.Tools.Get("agent.propose_plan")
+	if _, err := tool.Call(lead, json.RawMessage(onePlan)); err != nil {
+		t.Fatalf("explicit resumed agent request was refused: %v", err)
+	}
+}
+
+func TestAgentRequestSurvivesSeveralShortContinuations(t *testing.T) {
+	env := suggestFixture(t)
+	_ = requestedAgentLeadTurn(t, env)
+	_ = delegationTurn(t, env.e, protocol.TurnStartParams{ThreadID: env.th.ID, Text: "yes"})
+	turn := delegationTurn(t, env.e, protocol.TurnStartParams{ThreadID: env.th.ID, Text: "resume"})
+	lead := tools.WithScope(context.WithValue(t.Context(), executionTurnKey{}, turn), &tools.Scope{ThreadID: env.th.ID, ProjectID: env.th.ProjectID, Root: env.root})
+	tool, _ := env.e.Tools.Get("agent.propose_plan")
+	if _, err := tool.Call(lead, json.RawMessage(onePlan)); err != nil {
+		t.Fatalf("agent request was lost across short continuations: %v", err)
 	}
 }
 
