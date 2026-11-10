@@ -362,6 +362,10 @@ func (e *Engine) authorizeDelegationTool(ctx context.Context) (protocol.AgentTas
 		return e.authorizeRuntimeAgentTool(ctx, id)
 	}
 	admitted, ok := DelegationTaskFromContext(ctx)
+	if !ok && e.AgentRuntime != nil && !delegationChild(ctx) && childExecutionFrom(ctx) == nil {
+		// The lead's turn is not admitted: tell it how agents get enabled.
+		return protocol.AgentTask{}, errAgentsNotEnabled
+	}
 	scope := tools.ScopeFrom(ctx)
 	if !ok || scope == nil || scope.ThreadID != admitted.ThreadID || scope.ProjectID != admitted.ProjectID {
 		return protocol.AgentTask{}, errors.New("delegation requires an admitted parent task")

@@ -1651,7 +1651,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		model, reduction := e.reduceToolResultFor(ctx, name, call.Args, output, isError)
 		var failure *protocol.ActionFailure
 		if isError && (taskOperation.ID != "" || taskFailure != nil) {
-			f := classifyActionFailure(taskOperation.ID, errors.New(output))
+			f := classifyToolFailure(taskOperation.ID, name, errors.New(output))
 			if taskFailure != nil {
 				f = *taskFailure
 				if taskOperation.ID != "" {
@@ -2062,7 +2062,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		err = &taskActionError{Failure: protocol.ActionFailure{Category: "outcome_unknown", OperationID: taskOperation.ID, Message: "The action was interrupted after it started; its effects are uncertain.", NextStep: "Inspect the actual effects before any further mutation; do not replay it."}}
 	}
 	if err != nil && taskOperation.ID != "" {
-		f := classifyActionFailure(taskOperation.ID, err)
+		f := classifyToolFailure(taskOperation.ID, name, err)
 		f.Advisory = f.Advisory || workflowDiscoveryTool(name) && f.Retryable
 		f = e.taskReadbackFailure(ctx, taskOperation, f)
 		taskFailure = &f

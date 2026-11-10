@@ -201,7 +201,7 @@ func TestProposePlanLeadOnly(t *testing.T) {
 	// A turn that is not admitted for delegation is refused.
 	plain := tools.WithScope(context.WithValue(t.Context(), executionTurnKey{}, env.turn), &tools.Scope{ThreadID: env.th.ID, ProjectID: env.th.ProjectID, Root: env.root})
 	_, err = tool.Call(plain, json.RawMessage(onePlan))
-	requireRefused(t, err, "admitted")
+	requireRefused(t, err, "approves an agent plan")
 	if p := env.e.permittedToolFor(plain, turnTool{tool: tool}, nil); p {
 		t.Fatal("agent.propose_plan offered without admission")
 	}

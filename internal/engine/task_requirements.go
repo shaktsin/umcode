@@ -158,7 +158,7 @@ func (e *Engine) recoverLegacyTask(ctx context.Context, th protocol.Thread, user
 			if item.Status == protocol.ItemDenied {
 				op.Status = "blocked"
 			}
-			f := classifyActionFailure("", errors.New(item.Tool.Error))
+			f := classifyToolFailure("", op.Tool, errors.New(item.Tool.Error))
 			f.Advisory = workflowDiscoveryTool(op.Tool) && f.Retryable
 			op.Failure = &f
 			if f.Category == "outcome_unknown" {

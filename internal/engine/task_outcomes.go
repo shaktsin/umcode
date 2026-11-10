@@ -188,7 +188,7 @@ func (e *Engine) recordTaskOutcome(ctx context.Context, id string, item protocol
 	}
 	d := taskItemMetadata(item)
 	if item.Tool != nil && item.Tool.Error != "" {
-		f := classifyActionFailure(op.ID, errors.New(item.Tool.Error))
+		f := classifyToolFailure(op.ID, op.Tool, errors.New(item.Tool.Error))
 		if d.ActionFailure != nil {
 			f = *d.ActionFailure
 		}

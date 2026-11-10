@@ -61,6 +61,9 @@ func (e *Engine) proposeAgentPlan(ctx context.Context, p tools.PlanProposal) (st
 		return "", fmt.Errorf("agent.propose_plan needs writable tools (not available in read-only or plan mode): %w", err)
 	}
 	task, err := e.authorizeDelegationTool(ctx)
+	if errors.Is(err, errAgentsNotEnabled) {
+		return "", err
+	}
 	if err != nil {
 		return "", fmt.Errorf("agent.propose_plan needs a turn admitted for delegation: %w", err)
 	}
