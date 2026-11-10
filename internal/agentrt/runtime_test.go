@@ -936,3 +936,39 @@ func TestRuntimeResolveOptionsAreComputedPerTask(t *testing.T) {
 		t.Fatalf("replay called the provider: %v %v", seen, err)
 	}
 }
+
+// WithAdmitted sees each newly created agent once, before its runner starts,
+// with the spawn caller's context; a replay does not call it.
+func TestAdmittedHookRunsBeforeRunnerOncePerAgent(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	r := newFakeRunner()
+	type key struct{}
+	var mu sync.Mutex
+	var seen []string
+	rt := newTestRuntime(t, s, r, WithAdmitted(func(ctx context.Context, a protocol.RuntimeAgent) {
+		if ctx.Value(key{}) != "lead" {
+			t.Errorf("hook did not get the caller's context")
+		}
+		if calls := r.Calls(); len(calls) != 0 {
+			t.Errorf("runner started before the hook: %v", calls)
+		}
+		mu.Lock()
+		seen = append(seen, a.ID)
+		mu.Unlock()
+	}))
+	ctx := context.WithValue(t.Context(), key{}, "lead")
+	res, err := rt.Spawn(ctx, spawnReq(task, "c1", "a", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStarted(t, r, "a")
+	if _, err = rt.Spawn(ctx, spawnReq(task, "c1", "a", 0.25)); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || seen[0] != res.Agent.ID {
+		t.Fatalf("hook saw %v, want once for %s", seen, res.Agent.ID)
+	}
+}

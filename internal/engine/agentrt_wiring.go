@@ -31,8 +31,7 @@ func runtimeCloseBudget(ctx context.Context) time.Duration {
 // model-facing tools in place of the legacy delegation agent tools. The lead
 // keeps the default RootCapabilities authority (agentrt.WithLeadCapabilities).
 func (e *Engine) registerAgentRuntime(reg *tools.Registry, base context.Context) {
-	e.AgentRuntime = agentrt.NewRuntime(e.Store, runtimeRunner{engine: e}, base,
-		agentrt.WithResolveOptionsFunc(e.runtimeResolveOptions))
+	e.AgentRuntime = agentrt.NewRuntime(e.Store, runtimeRunner{engine: e}, base, e.runtimeAgentOptions()...)
 	for _, tool := range tools.NewRuntimeAgentTools(e.AgentRuntime, e.authorizeDelegationTool, runtimeCaller) {
 		reg.Add(tool)
 	}
@@ -121,6 +120,9 @@ func (e *Engine) rememberRuntimeBudget(taskID string, b *delegation.Budget) {
 // (the one that raced in, or a new one) so it cannot leak either.
 func (e *Engine) forgetRuntimeBudget(taskID string, b *delegation.Budget) {
 	e.runtimeBudgetTrackers.Delete(taskID)
+	// The task has no live agent left: drop any agent slices it still holds
+	// (a backstop; each is normally removed when its agent is terminal).
+	e.runtimeAgentBudgets.dropTask(taskID)
 	if e.runtimeBudgets.CompareAndDelete(taskID, b) {
 		return
 	}

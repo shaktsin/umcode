@@ -74,6 +74,9 @@ func NewScheduler(s AgentStore, r Runner, base context.Context, onChange func(pr
 	return &Scheduler{store: s, runner: r, base: base, onChange: onChange, tasks: map[string]*taskSched{}}
 }
 
+// IsTerminal reports whether st is a final agent state.
+func IsTerminal(st protocol.AgentState) bool { return isTerminal(st) }
+
 func isTerminal(st protocol.AgentState) bool {
 	switch st {
 	case protocol.AgentStateCompleted, protocol.AgentStateFailed, protocol.AgentStateCancelled, protocol.AgentStateInterrupted:
