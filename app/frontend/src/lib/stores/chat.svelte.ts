@@ -34,6 +34,8 @@ export class ThreadView {
   compaction = $state<CompactionState|null>(null);
   delegation = new DelegationState();
   cards = new AgentCards();
+  /** Follow-up text for an answered suggestion, waiting for the suggesting turn to finish. */
+  queuedFollowUp = $state<string | null>(null);
   id = $state<string | null>(null);
   thread = $state<Thread | null>(null);
   turns = $state<Turn[]>([]);
@@ -116,6 +118,7 @@ export class ThreadView {
     if (i >= 0) this.turns[i] = t;
     else this.turns = [...this.turns, t];
     if (t.status !== 'running') this.sending = this.turns.some((x) => x.status === 'running');
+    if (t.status !== 'running' && this.queuedFollowUp && !this.running) { const text = this.queuedFollowUp; this.queuedFollowUp = null; void this.submitFollowUp(text); }
   }
 
   applyItem(it: Item) {
@@ -138,7 +141,7 @@ export class ThreadView {
   }
 
   async send(text: string, attachments: Attachment[] = [], start?: () => Promise<Thread>, workbench?: WorkbenchContext) {
-    if (this.delegation.pending) return;
+    if (this.delegation.pending) { app.toast('error', 'Agents are being prepared. Try again in a moment.'); return; }
     text = text.trim();
     if (!text && attachments.length === 0) return;
     this.sending = true;
@@ -152,7 +155,15 @@ export class ThreadView {
         this.items = [];
       }
       if (!workbench && (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId)) await this.delegation.bind(this.id, this.thread?.projectId);
-      await app.call('turn/start', { threadId: this.id, text, attachments, ...(workbench ? { workbench } : this.delegation.submission()) });
+      const held = workbench ? undefined : this.delegation.token;
+      const submission = workbench ? { workbench } : this.delegation.submission();
+      try {
+        await app.call('turn/start', { threadId: this.id, text, attachments, ...submission });
+      } catch (e) {
+        // A turn that never started must not spend the activation.
+        if (held && 'delegationActivationToken' in submission && submission.delegationActivationToken && Date.parse(held.expiresAt) > Date.now()) this.delegation.token = held;
+        throw e;
+      }
       if (!workbench) void this.delegation.hydrate();
     } catch (e) {
       this.sending = false;
@@ -171,10 +182,17 @@ export class ThreadView {
       // Bind first: binding a different chat clears the token.
       if (this.delegation.threadId !== this.id || this.delegation.projectId !== this.thread?.projectId) await this.delegation.bind(this.id, this.thread?.projectId);
       this.delegation.adopt({ activationToken: r.activationToken, expiresAt: r.expiresAt });
-      await this.send('Agents are enabled for this task. Please continue.');
+      await this.submitFollowUp('Agents are enabled for this task. Please continue.');
     } else {
-      await this.send('Continue without agents.');
+      await this.submitFollowUp('Continue without agents.');
     }
+  }
+
+  /** Starts the follow-up turn now, or queues it while the suggesting turn is still running (the token stays held). */
+  async submitFollowUp(text: string) {
+    if (this.running) { this.queuedFollowUp = text; return; }
+    this.queuedFollowUp = null;
+    await this.send(text);
   }
 
   async interrupt() {

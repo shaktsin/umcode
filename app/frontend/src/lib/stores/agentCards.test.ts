@@ -28,7 +28,7 @@ it('suggestions come from get/respond and keep the activation token', async () =
   call.mockResolvedValueOnce({ suggestion: { ...sug, state: 'enabled' }, activationToken: 'tok', expiresAt: '2030-01-01T00:00:00Z' });
   await c.respondSuggestion('s', 'enable');
   expect(call).toHaveBeenLastCalledWith('agent/suggestion/respond', { suggestionId: 's', decision: 'enable' });
-  expect(c.suggestion('s')?.state).toBe('enabled'); expect(c.activation?.activationToken).toBe('tok');
+  expect(c.suggestion('s')?.state).toBe('enabled');
 });
 
 it('actionable only for a proposed plan with a pending approval; a missing status never keeps stale pending', async () => {

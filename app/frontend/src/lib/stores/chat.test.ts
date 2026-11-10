@@ -1,6 +1,6 @@
 import {beforeAll,beforeEach,expect,it,vi} from 'vitest';
-const {call,handlers}=vi.hoisted(()=>({call:vi.fn(),handlers:new Map<string,(p:any)=>void>()}));
-vi.mock('./app.svelte',()=>({app:{call,try:call,toast(){},onConnected(){},rpc:{on(n:string,f:(p:any)=>void){handlers.set(n,f)}}}}));
+const {call,handlers,toast}=vi.hoisted(()=>({call:vi.fn(),handlers:new Map<string,(p:any)=>void>(),toast:vi.fn()}));
+vi.mock('./app.svelte',()=>({app:{call,try:call,toast,onConnected(){},rpc:{on(n:string,f:(p:any)=>void){handlers.set(n,f)}}}}));
 let ThreadView:typeof import('./chat.svelte').ThreadView;
 beforeAll(async()=>{vi.stubGlobal('window',{addEventListener(){}});({ThreadView}=await import('./chat.svelte'));});
 const state={id:'a',threadId:'main',turnId:'t',sequence:2,status:'summarizing',startedAt:'2026-10-20T00:00:00Z',updatedAt:'2026-10-20T00:00:01Z'};
@@ -69,4 +69,31 @@ it('agent/plan/updated without a status reads the plan back for the matching cha
  expect(call).toHaveBeenCalledWith('agent/plan/get',{planId:'pl'});
  call.mockClear();handlers.get('agent/plan/updated')!({threadId:'other',plan});
  expect(call).not.toHaveBeenCalledWith('agent/plan/get',expect.anything());
+});
+
+const enableReply=async(method:string)=>method==='agent/suggestion/respond'?{suggestion:{id:'s1',state:'enabled'},activationToken:'tok',expiresAt:'2999-01-01T00:00:00Z'}:{tasks:[]};
+it('enable while the suggesting turn runs keeps the token, queues the follow-up and submits it when the turn completes',async()=>{
+ call.mockClear();call.mockImplementation(enableReply);
+ const v=new ThreadView();v.id='main';v.thread={id:'main',settings:{}} as any;v.applyTurn({id:'t1',threadId:'main',status:'running'} as any);
+ await v.answerSuggestion('s1','enable');
+ expect(call.mock.calls.some(c=>c[0]==='turn/start')).toBe(false);
+ expect(v.queuedFollowUp).toMatch(/Agents are enabled/);expect(v.delegation.token?.activationToken).toBe('tok');
+ v.applyTurn({id:'t1',threadId:'main',status:'completed'} as any);
+ await vi.waitFor(()=>expect(call.mock.calls.some(c=>c[0]==='turn/start')).toBe(true));
+ expect(call.mock.calls.find(c=>c[0]==='turn/start')![1]).toMatchObject({delegationActivationToken:'tok'});
+ expect(v.queuedFollowUp).toBeNull();
+});
+it('a failed turn/start gives the token back',async()=>{
+ call.mockClear();toast.mockClear();call.mockImplementation(async(m:string)=>{if(m==='turn/start')throw new Error('still running');return enableReply(m);});
+ const v=new ThreadView();v.id='main';v.thread={id:'main',settings:{}} as any;
+ await v.answerSuggestion('s1','enable');
+ expect(v.delegation.token?.activationToken).toBe('tok');expect(toast).toHaveBeenCalledWith('error',expect.stringMatching(/still running/));
+});
+it('send returns visibly, not silently, while delegation is pending and the token stays held',async()=>{
+ call.mockClear();toast.mockClear();call.mockImplementation(enableReply);
+ const v=new ThreadView();v.id='main';v.thread={id:'main',settings:{}} as any;
+ await v.delegation.bind('main',undefined);v.delegation.pending=true;
+ await v.answerSuggestion('s1','enable');
+ expect(toast).toHaveBeenCalledWith('error',expect.stringMatching(/Agents are being prepared/));
+ expect(call.mock.calls.some(c=>c[0]==='turn/start')).toBe(false);expect(v.delegation.token?.activationToken).toBe('tok');
 });

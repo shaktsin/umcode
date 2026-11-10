@@ -6,7 +6,7 @@
   import { parseSuggestionResult } from '$lib/agentPlanCard';
   import { errMsg } from '$lib/format';
 
-  let { item, view }: { item: Item; view: Pick<ThreadView, 'cards' | 'answerSuggestion'> } = $props();
+  let { item, view }: { item: Item; view: Pick<ThreadView, 'cards' | 'answerSuggestion' | 'queuedFollowUp'> } = $props();
   const suggestionId = $derived(parseSuggestionResult(item.tool?.output)?.suggestionId ?? '');
   const reason = $derived((item.tool?.args as { reason?: string } | null)?.reason ?? '');
   const sug = $derived(suggestionId ? view.cards.suggestion(suggestionId) : undefined);
@@ -27,7 +27,7 @@
 
 <section class="rounded-lg border {actionable ? 'border-clay/40 bg-clay-soft/20' : 'border-line bg-surface/60'} px-3 py-2 text-xs" aria-label="Agent suggestion">
   <div class="flex items-center gap-2">
-    <Users class="w-3.5 h-3.5 text-clay" />
+    <Users class="w-3.5 h-3.5 text-clay" aria-hidden="true" />
     <span class="font-medium text-ink">Suggestion: use agents for this message</span>
     {#if stateLabel && !actionable}<span class="pill bg-raised text-muted ml-auto">{stateLabel}</span>{/if}
   </div>
@@ -38,5 +38,6 @@
       <button class="btn-primary btn-sm" disabled={busy} onclick={() => answer('enable')}>Enable agents for this message</button>
     </div>
   {/if}
+  {#if view.queuedFollowUp}<p class="mt-1.5 text-muted" role="status">Waiting for the current turn to finish, then agents continue.</p>{/if}
   {#if error || view.cards.error}<p class="mt-1.5 text-rust" role="alert">{error || view.cards.error}</p>{/if}
 </section>

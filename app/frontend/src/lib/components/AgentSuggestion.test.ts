@@ -4,9 +4,9 @@ vi.mock('$lib/stores/app.svelte', () => ({ app: { approvals: [] } }));
 import AgentSuggestion from './AgentSuggestion.svelte';
 
 const item = (output = '{"suggestionId":"s1","state":"pending","message":"Stop now"}') => ({ id: 'i', kind: 'toolCall', tool: { name: 'agent.suggest', args: { reason: 'Three independent modules' }, output } }) as any;
-const view = (state: string | null, error = '') => ({
+const view = (state: string | null, error = '', queued: string | null = null) => ({
   cards: { suggestion: () => (state ? { id: 's1', state } : undefined), suggestionActionable: () => state === 'pending', error },
-  answerSuggestion: vi.fn(),
+  answerSuggestion: vi.fn(), queuedFollowUp: queued,
 }) as any;
 
 it('offers both buttons and the reason only while the engine says pending', () => {
@@ -27,4 +27,9 @@ it('offers nothing before the get RPC has answered, whatever the result text say
 });
 it('shows a refresh error', () => {
   expect(render(AgentSuggestion, { props: { item: item(), view: view(null, 'boom') } }).body).toContain('boom');
+});
+it('shows a visible waiting state while the follow-up is queued behind the running turn', () => {
+  const body = render(AgentSuggestion, { props: { item: item(), view: view('enabled', '', 'Agents are enabled') } }).body;
+  expect(body).toContain('Waiting for the current turn to finish');
+  expect(render(AgentSuggestion, { props: { item: item(), view: view('enabled') } }).body).not.toContain('Waiting for the current turn');
 });

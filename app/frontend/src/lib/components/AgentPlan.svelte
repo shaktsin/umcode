@@ -5,7 +5,7 @@
   import { app } from '$lib/stores/app.svelte';
   import type { ThreadView } from '$lib/stores/chat.svelte';
   import { capabilityChips } from '$lib/agentTree';
-  import { approveParams, canApprove, declineParams, draftOf, kept, modelUsable, noEdits, parsePlanResult, planIdForItem, reviseParams, type PlanEdits } from '$lib/agentPlanCard';
+  import { applyLimit, approveParams, canApprove, declineParams, draftOf, kept, limitsError, modelOutsidePool, modelUsable, noEdits, PLAN_CEILINGS, parsePlanResult, planIdForItem, reviseParams, type PlanEdits } from '$lib/agentPlanCard';
   import { errMsg } from '$lib/format';
 
   let { item, view }: { item: Item; view: Pick<ThreadView, 'cards' | 'delegation'> } = $props();
@@ -41,12 +41,17 @@
   }
   const setModel = (name: string, v: string) => (edits = { ...edits, models: { ...edits.models, [name]: v } });
   const toggleDrop = (name: string) => (edits = { ...edits, dropped: edits.dropped.includes(name) ? edits.dropped.filter(n => n !== name) : [...edits.dropped, name] });
-  const setLimit = (k: 'maxConcurrent' | 'maxDepth' | 'maxTotal' | 'sliceShare', v: number) => (edits = { ...edits, limits: { ...edits.limits, [k]: v } });
+  // The field always shows what is sent: clamped, and an empty or invalid entry keeps the last valid value.
+  function setLimit(k: 'maxConcurrent' | 'maxDepth' | 'maxTotal' | 'sliceShare', el: HTMLInputElement) {
+    edits = applyLimit(edits, k, el.valueAsNumber);
+    el.value = String(draftOf(card!, edits).limits[k]);
+  }
+  const limitsProblem = $derived(card && draft ? limitsError(card, draft) : '');
 </script>
 
 <section class="rounded-lg border {actionable ? 'border-clay/40' : 'border-line'} bg-surface/60 px-3 py-2 text-xs" aria-label="Agent plan">
   <div class="flex items-center gap-2">
-    <Users class="w-3.5 h-3.5 text-clay" />
+    <Users class="w-3.5 h-3.5 text-clay" aria-hidden="true" />
     <span class="font-medium text-ink">Agent plan</span>
     {#if status && !actionable}<span class="pill bg-raised text-muted ml-auto">{status}</span>{/if}
   </div>
@@ -69,7 +74,7 @@
               <span class="pill {c.prominent ? 'bg-rust-soft text-rust' : 'bg-raised text-muted'}" data-prominent={c.prominent}>{c.label}</span>
             {/each}
             {#if actionable}
-              <button class="btn-ghost btn-sm ml-auto" aria-pressed={dropped} onclick={() => toggleDrop(a.name)}>{dropped ? 'Keep' : 'Drop'}</button>
+              <button class="btn-ghost btn-sm ml-auto" aria-label="{dropped ? 'Keep' : 'Drop'} {a.name}" aria-pressed={dropped} onclick={() => toggleDrop(a.name)}>{dropped ? 'Keep' : 'Drop'}</button>
             {:else if dropped}<span class="ml-auto text-faint">Dropped</span>{/if}
           </div>
           {#if a.purpose}<p class="mt-1 text-ink-soft selectable">{a.purpose}</p>{/if}
@@ -78,7 +83,8 @@
           {#if actionable && !dropped}
             <label class="mt-1.5 flex items-center gap-2 text-muted">Model
               <select class="select" value={draft.models[a.name]} onchange={(e) => setModel(a.name, e.currentTarget.value)}>
-                <option value="">Chat model (default)</option>
+                {#if !a.model}<option value="">Chat model (default)</option>{/if}
+                {#if modelOutsidePool(card, a)}<option value={a.model} disabled>{a.model} (not in pool)</option>{/if}
                 {#each card.models ?? [] as m}
                   <option value={m.name} disabled={!modelUsable(m)}>{m.name}{modelUsable(m) ? '' : ` (unavailable${m.why ? `: ${m.why}` : ''})`}</option>
                 {/each}
@@ -92,18 +98,20 @@
     {#if actionable}
       <fieldset class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <legend class="sr-only">Limits</legend>
-        <label class="label">Max concurrent (up to {card.limits.maxConcurrent})
-          <input class="input" type="number" min="1" max={card.limits.maxConcurrent} value={draft.limits.maxConcurrent} onchange={(e) => setLimit('maxConcurrent', e.currentTarget.valueAsNumber)} /></label>
-        <label class="label">Max depth (up to {card.limits.maxDepth})
-          <input class="input" type="number" min="1" max={card.limits.maxDepth} value={draft.limits.maxDepth} onchange={(e) => setLimit('maxDepth', e.currentTarget.valueAsNumber)} /></label>
-        <label class="label">Max agents (up to {card.limits.maxTotal})
-          <input class="input" type="number" min="1" max={card.limits.maxTotal} value={draft.limits.maxTotal} onchange={(e) => setLimit('maxTotal', e.currentTarget.valueAsNumber)} /></label>
-        <label class="label">Budget share (up to {card.limits.sliceShare})
-          <input class="input" type="number" min="0.01" max={card.limits.sliceShare} step="0.01" value={draft.limits.sliceShare} onchange={(e) => setLimit('sliceShare', e.currentTarget.valueAsNumber)} /></label>
+        <label class="label">Max concurrent (max {PLAN_CEILINGS.maxConcurrent})
+          <input class="input" type="number" min="1" max={PLAN_CEILINGS.maxConcurrent} value={draft.limits.maxConcurrent} onchange={(e) => setLimit('maxConcurrent', e.currentTarget)} /></label>
+        <label class="label">Max depth (max {PLAN_CEILINGS.maxDepth})
+          <input class="input" type="number" min="1" max={PLAN_CEILINGS.maxDepth} value={draft.limits.maxDepth} onchange={(e) => setLimit('maxDepth', e.currentTarget)} /></label>
+        <label class="label">Max agents (max {PLAN_CEILINGS.maxTotal})
+          <input class="input" type="number" min="1" max={PLAN_CEILINGS.maxTotal} value={draft.limits.maxTotal} onchange={(e) => setLimit('maxTotal', e.currentTarget)} /></label>
+        <label class="label">Budget share (max {PLAN_CEILINGS.sliceShare})
+          <input class="input" type="number" min="0.01" max={PLAN_CEILINGS.sliceShare} step="0.01" value={draft.limits.sliceShare} onchange={(e) => setLimit('sliceShare', e.currentTarget)} /></label>
+        <!-- The card does not say whether the project allows network, so this can only lower a plan that already has it. -->
         {#if card.limits.network}
           <label class="flex items-center gap-2 text-muted col-span-2"><input type="checkbox" checked={draft.limits.network} onchange={(e) => (edits = { ...edits, limits: { ...edits.limits, network: e.currentTarget.checked } })} /> Allow network for agents</label>
         {/if}
       </fieldset>
+      {#if limitsProblem}<p class="mt-1.5 text-rust" role="alert">{limitsProblem}</p>{/if}
       <label class="label mt-2">Feedback (required to revise)
         <textarea class="input" rows="2" bind:value={feedback} placeholder="What should change?"></textarea></label>
       <div class="mt-2 flex flex-wrap justify-end gap-2">

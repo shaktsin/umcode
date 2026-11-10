@@ -11,8 +11,6 @@ const STATE_RANK: Record<PlanState, number> = { proposed: 0, approved: 1, supers
 export class AgentCards {
   private suggestions = $state<Record<string, AgentSuggestion>>({});
   private plans = $state<Record<string, AgentPlanGetResult>>({});
-  /** Activation token of the last enable, for the follow-up turn/start. */
-  activation = $state<{ activationToken: string; expiresAt: string } | null>(null);
   error = $state('');
   suggestion(id: string): AgentSuggestion | undefined { return this.suggestions[id]; }
   plan(planId: string): AgentPlanGetResult | undefined { return this.plans[planId]; }
@@ -38,7 +36,6 @@ export class AgentCards {
   async respondSuggestion(id: string, decision: 'enable' | 'decline') {
     const r = await app.call<AgentSuggestionRespondResult>('agent/suggestion/respond', { suggestionId: id, decision });
     this.setSuggestion(id, r.suggestion);
-    if (r.activationToken && r.expiresAt) this.activation = { activationToken: r.activationToken, expiresAt: r.expiresAt };
     return r;
   }
   async respondPlan(params: AgentPlanRespondParams) {

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { approveParams, canApprove, clampLimits, declineParams, defaultModel, draftOf, noEdits, parsePlanResult, parseSuggestionResult, planIdForItem, reviseParams } from './agentPlanCard';
+import { applyLimit, approveParams, canApprove, clampLimits, limitsError, modelOutsidePool, declineParams, defaultModel, draftOf, noEdits, parsePlanResult, parseSuggestionResult, planIdForItem, reviseParams } from './agentPlanCard';
 
 const caps = { files: 'read' as const, shell: 'none' as const, network: false, spawnMax: 0 };
 const limits = { maxConcurrent: 4, maxDepth: 2, maxTotal: 10, sliceShare: 0.5, network: false };
@@ -26,9 +26,36 @@ it('previous assignment preselects the model when the entry has none; unusable m
   expect(defaultModel(card, card.agents[1])).toBe('b/two');
   expect(defaultModel(card, card.agents[0])).toBe('a/one');
   expect(defaultModel({ ...card, previous: [{ planId: 'p0', name: 'Writer', model: 'c/bad' }] }, card.agents[1])).toBe('');
+  expect(defaultModel(card, { ...card.agents[0], model: 'c/bad' })).toBe('c/bad');
 });
-it('limits are bounded by the ceilings', () => {
-  expect(clampLimits({ maxConcurrent: 99, maxDepth: 0, maxTotal: 11, sliceShare: 0.9, network: true }, limits)).toEqual({ maxConcurrent: 4, maxDepth: 1, maxTotal: 10, sliceShare: 0.5, network: false });
+it('limits are bounded by the protocol ceilings, not the proposal', () => {
+  expect(clampLimits({ maxConcurrent: 99, maxDepth: 0, maxTotal: 99, sliceShare: 0.9, network: true }, false)).toEqual({ maxConcurrent: 8, maxDepth: 1, maxTotal: 40, sliceShare: 0.5, network: false });
+  // above the proposal but within the ceilings is allowed
+  expect(draftOf(card, { ...noEdits(), limits: { maxConcurrent: 8, sliceShare: 0.5, maxTotal: 40 } }).limits).toMatchObject({ maxConcurrent: 8, maxTotal: 40, sliceShare: 0.5 });
+  // network can be lowered, never raised
+  expect(draftOf({ ...card, limits: { ...limits, network: true } }, { ...noEdits(), limits: { network: false } }).limits.network).toBe(false);
+  expect(draftOf(card, { ...noEdits(), limits: { network: true } }).limits.network).toBe(false);
+});
+it('an empty or invalid field keeps the last valid value', () => {
+  const e1 = applyLimit(noEdits(), 'maxConcurrent', 3);
+  expect(draftOf(card, e1).limits.maxConcurrent).toBe(3);
+  const e2 = applyLimit(e1, 'maxConcurrent', NaN);
+  expect(draftOf(card, e2).limits.maxConcurrent).toBe(3);
+  expect(draftOf(card, applyLimit(noEdits(), 'maxTotal', NaN)).limits.maxTotal).toBe(10);
+  expect(draftOf(card, applyLimit(noEdits(), 'maxTotal', 99)).limits.maxTotal).toBe(40);
+});
+it('maxTotal below the kept agents is flagged and blocks Approve', () => {
+  const d = draftOf(card, applyLimit(noEdits(), 'maxTotal', 1));
+  expect(limitsError(card, d)).toMatch(/below the 2 kept/); expect(canApprove(card, d)).toBe(false);
+  expect(canApprove(card, draftOf(card, { ...applyLimit(noEdits(), 'maxTotal', 1), dropped: ['Writer'] }))).toBe(true);
+});
+it('the select shows what Approve keeps: an unusable or out-of-pool own model is selected and sent as is', () => {
+  const c = { ...card, agents: [{ ...card.agents[0], model: 'z/gone' }, { ...card.agents[1], model: 'c/bad' }] };
+  const d = draftOf(c, noEdits());
+  expect(d.models).toEqual({ Reviewer: 'z/gone', Writer: 'c/bad' });
+  expect(modelOutsidePool(c, c.agents[0])).toBe(true); expect(modelOutsidePool(c, c.agents[1])).toBe(false);
+  expect(approveParams(c, d).models).toBeUndefined(); // nothing edited: the engine keeps exactly what is shown
+  expect(approveParams(c, draftOf(c, { ...noEdits(), models: { Reviewer: 'b/two' } })).models).toEqual({ Reviewer: 'b/two' });
 });
 it('approve sends only edited models, dropped names and changed limits', () => {
   const d = draftOf(card, { models: { Reviewer: 'b/two' }, dropped: ['Writer'], limits: { maxConcurrent: 2 } });
