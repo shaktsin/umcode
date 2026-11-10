@@ -161,6 +161,7 @@ func savePlan(t *testing.T, s *Store, id, threadID string) protocol.AgentPlan {
 
 func TestApproveAgentPlanSupersedesPreviousAndBindsTask(t *testing.T) {
 	s, task := runtimeFixture(t)
+	addTasks(t, s, task.ThreadID, "T", "T2")
 	savePlan(t, s, "A", task.ThreadID)
 	savePlan(t, s, "B", task.ThreadID)
 	if err := s.ApproveAgentPlan(t.Context(), "A", "T"); err != nil {
@@ -192,7 +193,10 @@ func TestApproveAgentPlanSupersedesPreviousAndBindsTask(t *testing.T) {
 
 func TestProposedPlanIsNotReturnedAsApproved(t *testing.T) {
 	s, task := runtimeFixture(t)
-	savePlan(t, s, "P", task.ThreadID)
+	// TaskID is set so the task getter's state filter is what excludes it.
+	if err := s.SaveAgentPlan(t.Context(), protocol.AgentPlan{ID: "P", ThreadID: task.ThreadID, TaskID: task.ID, Agents: []protocol.PlanAgent{{Name: "w"}}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.ApprovedAgentPlanForTask(t.Context(), task.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("task getter: %v", err)
 	}
@@ -241,12 +245,16 @@ func TestAgentMessagesDeliverOnceInOrder(t *testing.T) {
 
 func TestApproveAgentPlanStateGuards(t *testing.T) {
 	s, task := runtimeFixture(t)
+	addTasks(t, s, task.ThreadID, "T", "T2", "T9")
 	savePlan(t, s, "A", task.ThreadID)
 	savePlan(t, s, "B", task.ThreadID)
 	if err := s.ApproveAgentPlan(t.Context(), "A", "T"); err != nil {
 		t.Fatal(err)
 	}
-	first, _ := s.ApprovedAgentPlanForTask(t.Context(), "T")
+	first, err := s.ApprovedAgentPlanForTask(t.Context(), "T")
+	if err != nil || first.ApprovedAt == nil {
+		t.Fatalf("first: %+v %v", first, err)
+	}
 	// idempotent repeat for the same task
 	if err := s.ApproveAgentPlan(t.Context(), "A", "T"); err != nil {
 		t.Fatalf("repeat: %v", err)
@@ -302,5 +310,118 @@ func TestAgentMessagesAckScopedToTaskAndStableOrder(t *testing.T) {
 	got, _ = s.PendingAgentMessages(t.Context(), task.ID, "X")
 	if len(got) != 2 {
 		t.Fatalf("foreign ack delivered message: %+v", got)
+	}
+}
+
+// addTasks inserts finished tasks with the given IDs on threadID (directly,
+// since CreateAgentTask refuses while the fixture's task is active), so plans
+// can be bound to real tasks of that thread.
+func addTasks(t *testing.T, s *Store, threadID string, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		turn := protocol.Turn{ID: "turn-" + id, ThreadID: threadID, Status: protocol.TurnCompleted, StartedAt: time.Now()}
+		if err := s.CreateTurn(t.Context(), turn); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DB.ExecContext(t.Context(), `INSERT INTO agent_tasks (`+agentTaskCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			id, threadID, turn.ID, protocol.AgentActivationExplicitUser, protocol.AgentStateCompleted, "base", "", "", Now(), Now(), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRuntimeAgentPersistsPlanEntryAndRejected(t *testing.T) {
+	s, task := runtimeFixture(t)
+	in := newRuntimeAgent(task, "one")
+	in.PlanEntry = "worker"
+	in.Rejected = []protocol.CapabilityRejection{{Field: "capabilities.network", Reason: "off"}}
+	a, err := s.CreateRuntimeAgent(t.Context(), in, "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range func() []protocol.RuntimeAgent {
+		one, err := s.RuntimeAgent(t.Context(), task.ID, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byCall, err := s.RuntimeAgentForCall(t.Context(), task.ID, "c1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.RuntimeAgents(t.Context(), task.ID)
+		if err != nil || len(all) != 1 {
+			t.Fatalf("all=%v err=%v", all, err)
+		}
+		return []protocol.RuntimeAgent{a, one, byCall, all[0]}
+	}() {
+		if got.PlanEntry != "worker" || len(got.Rejected) != 1 || got.Rejected[0] != in.Rejected[0] {
+			t.Fatalf("plan entry / rejected lost: %+v", got)
+		}
+	}
+	plain, err := s.CreateRuntimeAgent(t.Context(), newRuntimeAgent(task, "two"), "c2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.RuntimeAgent(t.Context(), task.ID, plain.ID)
+	if err != nil || got.Rejected == nil || len(got.Rejected) != 0 {
+		t.Fatalf("default rejected = %#v err=%v", got.Rejected, err)
+	}
+}
+
+func TestEnqueueAgentMessageIsIdempotentByCallID(t *testing.T) {
+	s, task := runtimeFixture(t)
+	first, err := s.EnqueueAgentMessage(t.Context(), protocol.AgentMessage{TaskID: task.ID, ToAgentID: "X", Body: "hello", CallID: "c1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.EnqueueAgentMessage(t.Context(), protocol.AgentMessage{TaskID: task.ID, ToAgentID: "X", Body: "hello", CallID: "c1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == "" || again.ID != first.ID || !again.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("retry created a new message: %+v vs %+v", first, again)
+	}
+	// Messages without a call ID are never deduplicated.
+	for range 2 {
+		if _, err := s.EnqueueAgentMessage(t.Context(), protocol.AgentMessage{TaskID: task.ID, ToAgentID: "X", Body: "plain"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.PendingAgentMessages(t.Context(), task.ID, "X")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("pending=%+v err=%v", got, err)
+	}
+	// A retry after delivery still returns the original, not a new message.
+	if err := s.AcknowledgeAgentMessage(t.Context(), task.ID, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.EnqueueAgentMessage(t.Context(), protocol.AgentMessage{TaskID: task.ID, ToAgentID: "X", Body: "hello", CallID: "c1"}); err != nil || m.ID != first.ID {
+		t.Fatalf("retry after delivery: %+v %v", m, err)
+	}
+	if got, _ := s.PendingAgentMessages(t.Context(), task.ID, "X"); len(got) != 2 {
+		t.Fatalf("retry after delivery re-queued: %+v", got)
+	}
+}
+
+func TestRuntimeAgentsAndMessagesOrderByInsertion(t *testing.T) {
+	s, task := runtimeFixture(t)
+	for i, id := range []string{"m-late", "m-early"} {
+		ts := []string{"2026-02-01T00:00:00Z", "2026-01-01T00:00:00Z"}[i]
+		if _, err := s.DB.ExecContext(t.Context(), `INSERT INTO agent_messages (id,task_id,from_agent_id,to_agent_id,body,created_at) VALUES(?,?,?,?,?,?)`,
+			id, task.ID, "", "X", id, ts); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DB.ExecContext(t.Context(), `INSERT INTO agents (id,task_id,call_id,name,state,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+			"a-"+id, task.ID, "call-"+id, id, "queued", 1, ts, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msgs, err := s.PendingAgentMessages(t.Context(), task.ID, "X")
+	if err != nil || len(msgs) != 2 || msgs[0].ID != "m-late" {
+		t.Fatalf("messages not in insertion order: %+v %v", msgs, err)
+	}
+	agents, err := s.RuntimeAgents(t.Context(), task.ID)
+	if err != nil || len(agents) != 2 || agents[0].ID != "a-m-late" {
+		t.Fatalf("agents not in insertion order: %+v %v", agents, err)
 	}
 }

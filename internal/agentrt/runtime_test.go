@@ -3,6 +3,7 @@ package agentrt
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -347,7 +348,7 @@ func TestMessageDeliversToMailbox(t *testing.T) {
 		agents = append(agents, res.Agent)
 	}
 	a, b, c := agents[0], agents[1], agents[2]
-	m, err := rt.Message(t.Context(), task.ID, a.ID, b.ID, "hello")
+	m, err := rt.Message(t.Context(), task.ID, a.ID, b.ID, "hello", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,16 +359,16 @@ func TestMessageDeliversToMailbox(t *testing.T) {
 	if len(pending) != 1 || pending[0].ID != m.ID || pending[0].Body != "hello" || pending[0].FromAgentID != a.ID {
 		t.Fatalf("pending %+v", pending)
 	}
-	if _, err := rt.Message(t.Context(), task.ID, "", b.ID, "from lead"); err != nil {
+	if _, err := rt.Message(t.Context(), task.ID, "", b.ID, "from lead", ""); err != nil {
 		t.Fatalf("lead message: %v", err)
 	}
-	if _, err := rt.Message(t.Context(), task.ID, a.ID, "nope", "x"); err == nil {
+	if _, err := rt.Message(t.Context(), task.ID, a.ID, "nope", "x", ""); err == nil {
 		t.Fatal("unknown target accepted")
 	}
 	waitStarted(t, r, "a", "b", "c")
 	r.finish("c", protocol.AgentResult{Summary: "done"}, nil)
 	waitRuntimeState(t, rt, task.ID, c.ID, protocol.AgentStateCompleted)
-	if _, err := rt.Message(t.Context(), task.ID, a.ID, c.ID, "too late"); err == nil {
+	if _, err := rt.Message(t.Context(), task.ID, a.ID, c.ID, "too late", ""); err == nil {
 		t.Fatal("message to completed agent accepted")
 	}
 }
@@ -490,8 +491,41 @@ func TestSpawnReplayReturnsSameGrant(t *testing.T) {
 	if again.Agent.ID != first.Agent.ID || again.Granted != first.Granted {
 		t.Fatalf("replay differs: %+v vs %+v", again.Granted, first.Granted)
 	}
-	if len(again.Rejected) != 0 {
-		t.Fatalf("replay rejected %v", again.Rejected)
+	if len(first.Rejected) == 0 || !slices.Equal(again.Rejected, first.Rejected) {
+		t.Fatalf("replay rejected %v, first %v", again.Rejected, first.Rejected)
+	}
+	stored, err := s.RuntimeAgent(t.Context(), task.ID, first.Agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.PlanEntry != "worker" || !slices.Equal(stored.Rejected, first.Rejected) {
+		t.Fatalf("stored plan entry %q rejected %v", stored.PlanEntry, stored.Rejected)
+	}
+}
+
+func TestMessageIsIdempotentByCallID(t *testing.T) {
+	s, task := runtimeFixture(t)
+	savePlan(t, s, task, protocol.DefaultPlanLimits(), true)
+	r := newFakeRunner()
+	rt := newTestRuntime(t, s, r)
+	a, err := rt.Spawn(t.Context(), spawnReq(task, "call-a", "a", 0.25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := rt.Message(t.Context(), task.ID, "", a.Agent.ID, "hello", "msg-call-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := rt.Message(t.Context(), task.ID, "", a.Agent.ID, "hello", "msg-call-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == "" || again.ID != first.ID {
+		t.Fatalf("retry queued a new message: %q vs %q", first.ID, again.ID)
+	}
+	pending, err := s.PendingAgentMessages(t.Context(), task.ID, a.Agent.ID)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending=%+v err=%v", pending, err)
 	}
 }
 

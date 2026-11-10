@@ -51,6 +51,26 @@ func DefaultPlanLimits() PlanLimits {
 	return PlanLimits{MaxConcurrent: 8, MaxDepth: 3, MaxTotal: 40, SliceShare: 0.25, Network: false}
 }
 
+// Normalized fills zero or negative numeric limits from DefaultPlanLimits, so a
+// plan that sets only some limits (propose_plan carries maxConcurrent,
+// sliceShare and network) never disables a rail. Network is kept as given.
+func (l PlanLimits) Normalized() PlanLimits {
+	def := DefaultPlanLimits()
+	if l.MaxConcurrent <= 0 {
+		l.MaxConcurrent = def.MaxConcurrent
+	}
+	if l.MaxDepth <= 0 {
+		l.MaxDepth = def.MaxDepth
+	}
+	if l.MaxTotal <= 0 {
+		l.MaxTotal = def.MaxTotal
+	}
+	if !(l.SliceShare > 0) {
+		l.SliceShare = def.SliceShare
+	}
+	return l
+}
+
 // PlanState is the approval lifecycle of an AgentPlan.
 type PlanState string
 
@@ -74,37 +94,45 @@ type AgentPlan struct {
 
 // RuntimeAgent is a persisted agent of the agent runtime.
 type RuntimeAgent struct {
-	ID             string            `json:"id"`
-	TaskID         string            `json:"taskId"`
-	ParentAgentID  string            `json:"parentAgentId,omitempty"`
-	Name           string            `json:"name"`
-	Purpose        string            `json:"purpose"`
-	PlanID         string            `json:"planId,omitempty"`
-	Assignment     AgentAssignment   `json:"assignment"`
-	Capabilities   AgentCapabilities `json:"capabilities"`
-	ModelRequested string            `json:"modelRequested,omitempty"`
-	ModelActual    string            `json:"modelActual,omitempty"`
-	RouteTrail     []string          `json:"routeTrail,omitempty"`
-	BudgetShare    float64           `json:"budgetShare"`
-	Depth          int               `json:"depth"`
-	ContextMode    string            `json:"contextMode,omitempty"`
-	WorkspaceID    string            `json:"workspaceId,omitempty"`
-	Revision       string            `json:"revision,omitempty"`
-	State          AgentState        `json:"state"`
-	Result         AgentResult       `json:"result"`
-	Usage          UsageTotals       `json:"usage"`
-	Version        int64             `json:"version"`
-	CreatedAt      time.Time         `json:"createdAt"`
-	UpdatedAt      time.Time         `json:"updatedAt"`
+	ID            string            `json:"id"`
+	TaskID        string            `json:"taskId"`
+	ParentAgentID string            `json:"parentAgentId,omitempty"`
+	Name          string            `json:"name"`
+	Purpose       string            `json:"purpose"`
+	PlanID        string            `json:"planId,omitempty"`
+	PlanEntry     string            `json:"planEntry,omitempty"`
+	Assignment    AgentAssignment   `json:"assignment"`
+	Capabilities  AgentCapabilities `json:"capabilities"`
+	// Rejected is admission's list of requested capabilities that were not
+	// granted, kept so an idempotent spawn replay reports it again.
+	Rejected       []CapabilityRejection `json:"rejected,omitempty"`
+	ModelRequested string                `json:"modelRequested,omitempty"`
+	ModelActual    string                `json:"modelActual,omitempty"`
+	RouteTrail     []string              `json:"routeTrail,omitempty"`
+	BudgetShare    float64               `json:"budgetShare"`
+	Depth          int                   `json:"depth"`
+	ContextMode    string                `json:"contextMode,omitempty"`
+	WorkspaceID    string                `json:"workspaceId,omitempty"`
+	Revision       string                `json:"revision,omitempty"`
+	State          AgentState            `json:"state"`
+	Result         AgentResult           `json:"result"`
+	Usage          UsageTotals           `json:"usage"`
+	Version        int64                 `json:"version"`
+	CreatedAt      time.Time             `json:"createdAt"`
+	UpdatedAt      time.Time             `json:"updatedAt"`
 }
 
 // AgentMessage is a message between runtime agents.
 type AgentMessage struct {
-	ID          string     `json:"id"`
-	TaskID      string     `json:"taskId"`
-	FromAgentID string     `json:"fromAgentId"`
-	ToAgentID   string     `json:"toAgentId"`
-	Body        string     `json:"body"`
+	ID          string `json:"id"`
+	TaskID      string `json:"taskId"`
+	FromAgentID string `json:"fromAgentId"`
+	ToAgentID   string `json:"toAgentId"`
+	Body        string `json:"body"`
+	// CallID is the sender's tool call identity; a repeated (task, call ID)
+	// returns the stored message instead of queuing a duplicate. Empty means
+	// no deduplication.
+	CallID      string     `json:"-"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	DeliveredAt *time.Time `json:"deliveredAt,omitempty"`
 }

@@ -22,6 +22,7 @@ type fakeRT struct {
 	msgFrom   string
 	msgTo     string
 	msgBody   string
+	msgCall   string
 	cancelID  string
 }
 
@@ -40,8 +41,8 @@ func (f *fakeRT) Wait(_ context.Context, _ string, ids []string, m agentrt.WaitM
 	f.waitIDs, f.waitMode = ids, m
 	return []protocol.RuntimeAgent{{ID: ids[0]}}, nil
 }
-func (f *fakeRT) Message(_ context.Context, task, from, to, body string) (protocol.AgentMessage, error) {
-	f.msgTask, f.msgFrom, f.msgTo, f.msgBody = task, from, to, body
+func (f *fakeRT) Message(_ context.Context, task, from, to, body, callID string) (protocol.AgentMessage, error) {
+	f.msgTask, f.msgFrom, f.msgTo, f.msgBody, f.msgCall = task, from, to, body, callID
 	return protocol.AgentMessage{ID: "m1", ToAgentID: to}, nil
 }
 func (f *fakeRT) Cancel(_ context.Context, _, id string) error { f.cancelID = id; return nil }
@@ -200,10 +201,10 @@ func TestRuntimeAgentListStatusMessageCancel(t *testing.T) {
 	if out, err := m["agent.status"].Call(ctx, json.RawMessage(`{"id":"a2"}`)); err != nil || !strings.Contains(out, "a2") {
 		t.Fatalf("%v %s", err, out)
 	}
-	if _, err := m["agent.message"].Call(ctx, json.RawMessage(`{"to":"a2","message":"hi"}`)); err != nil {
+	if _, err := m["agent.message"].Call(WithAgentCallID(ctx, "mc1"), json.RawMessage(`{"to":"a2","message":"hi"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if f.msgTask != "task1" || f.msgFrom != "caller1" || f.msgTo != "a2" || f.msgBody != "hi" {
+	if f.msgTask != "task1" || f.msgFrom != "caller1" || f.msgTo != "a2" || f.msgBody != "hi" || f.msgCall != "mc1" {
 		t.Fatalf("%+v", f)
 	}
 	if _, err := m["agent.cancel"].Call(ctx, json.RawMessage(`{"id":"a3"}`)); err != nil || f.cancelID != "a3" {
