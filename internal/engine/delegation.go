@@ -273,8 +273,8 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 	return &delegationAdmission{delegationToken: base, Activation: activation}, nil
 }
 
-// ownedActiveTask returns the delegation task id when it is an active task of
-// the chat (same thread and the thread's current project).
+// ownedActiveTask returns the delegation task named by id when it is an
+// active task of the chat (same thread and the thread's current project).
 func (e *Engine) ownedActiveTask(ctx context.Context, threadID, id string) (protocol.AgentTask, bool) {
 	task, err := e.Store.AgentTask(ctx, id)
 	if err != nil || task.ThreadID != threadID || !unfinishedDelegation(task.State) {
