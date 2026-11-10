@@ -2,7 +2,7 @@ import { app } from './app.svelte';
 import { errMsg } from '$lib/format';
 import { agentActive, type AgentSnapshot, type DelegationUpdated } from '$lib/delegation';
 
-type Snapshot = AgentSnapshot & { childErrors: Record<string, string>; childSequences: Record<string, number> };
+type Snapshot = AgentSnapshot & { childErrors: Record<string, string>; childSequences: Record<string, number>; agentSequences: Record<string, number>; integrationSequence?: number };
 // Go emits RFC3339 timestamps with variable fractional precision. Compare exact
 // instants, keeping nanoseconds that Date.parse would truncate to milliseconds.
 function timestamp(value: string): bigint | null {
@@ -52,6 +52,9 @@ export class DelegationState {
         const current = this.tasks.find(t => t.task.id === s.task.id);
         if (!current) continue;
         current.usage = s.usage; current.budgetAvailable = s.budgetAvailable; current.stopReason = s.stopReason;
+        if (s.plan) current.plan = s.plan;
+        for (const agent of s.agents ?? []) this.merge({ threadId: id, taskId: s.task.id, agent }, true);
+        if (s.integration) this.merge({ threadId: id, taskId: s.task.id, integration: s.integration }, true);
         for (const child of s.children ?? []) this.merge({ threadId: id, taskId: s.task.id, child, sequence: s.childSequences?.[child.id], error: s.childErrors?.[child.id] }, true);
       }
       this.error = '';
@@ -69,10 +72,11 @@ export class DelegationState {
     let s = this.tasks.find(s => s.task.id === event.taskId);
     if (!s) {
       if (!event.task || event.task.threadId !== this.threadId) return;
-      s = { task: event.task, children: [], childErrors: {}, childSequences: {} }; this.tasks = [...this.tasks, s];
+      s = { task: event.task, children: [], childErrors: {}, childSequences: {}, agentSequences: {}, agents: [] }; this.tasks = [...this.tasks, s];
     }
     const current = timestamp(s.task.updatedAt);
     if (event.task && incoming !== null && current !== null && incoming >= current) { s.task = event.task; if (durable && event.workflow) s.workflow = event.workflow; }
+    this.mergeRuntime(s, event, durable);
     const child = event.child;
     if (!child?.id || child.taskId !== event.taskId) return;
     const old = s.children.find(c => c.id === child.id), sequence = event.sequence ?? 0, previous = s.childSequences[child.id] ?? 0;
@@ -80,6 +84,24 @@ export class DelegationState {
     s.children = old ? s.children.map(c => c.id === child.id ? child : c) : [...s.children, child];
     s.childSequences[child.id] = old?.version === child.version ? Math.max(sequence, previous) : sequence;
     if (event.error) s.childErrors[child.id] = event.error; else delete s.childErrors[child.id];
+  }
+  /** Runtime agents merge by id (newer version, or same version with a newer sequence); siblings are untouched. */
+  private mergeRuntime(s: Snapshot, event: DelegationUpdated, durable: boolean) {
+    const sequence = event.sequence ?? 0, agent = event.agent;
+    if (agent?.id && agent.taskId === event.taskId) {
+      const agents = s.agents ?? [], old = agents.find(a => a.id === agent.id), previous = s.agentSequences[agent.id] ?? 0;
+      if (!(old && (agent.version < old.version || agent.version === old.version && sequence <= previous && !durable))) {
+        s.agents = old ? agents.map(a => a.id === agent.id ? agent : a) : [...agents, agent];
+        s.agentSequences[agent.id] = old?.version === agent.version ? Math.max(sequence, previous) : sequence;
+      }
+    }
+    if (event.integration) {
+      const previous = s.integrationSequence;
+      // Integration has no version: order by event sequence. Durable (listed) state fills only a gap.
+      if (durable ? previous === undefined : previous === undefined || sequence > previous) {
+        s.integration = event.integration; s.integrationSequence = sequence;
+      }
+    }
   }
   async enable() {
     if (!this.threadId || this.pending || this.active) return;

@@ -1,7 +1,8 @@
 import { defaultApprovalMode } from '$lib/approvalModes';
 import { applyCompactionUpdate,compactionActive } from '$lib/compaction';
-import type { CompactionState } from '$lib/types';
+import type { AgentPlanUpdated, CompactionState } from '$lib/types';
 import { DelegationState } from './delegation.svelte';
+import { AgentCards } from './agentCards.svelte';
 import type { DelegationUpdated } from '$lib/delegation';
 import { app } from './app.svelte';
 import { projects } from './projects.svelte';
@@ -32,6 +33,7 @@ function isSideChat(t: Thread): boolean {
 export class ThreadView {
   compaction = $state<CompactionState|null>(null);
   delegation = new DelegationState();
+  cards = new AgentCards();
   id = $state<string | null>(null);
   thread = $state<Thread | null>(null);
   turns = $state<Turn[]>([]);
@@ -206,6 +208,7 @@ class ChatState {
   constructor() {
     const r = app.rpc;
     r.on('delegation/updated', (p: DelegationUpdated) => this.each(v => v.delegation.apply(p)));
+    r.on('agent/plan/updated', (p: AgentPlanUpdated) => this.each(v => { if (v.id === p.threadId) v.cards.applyPlanUpdate(p.plan.id, p.plan, p.approvalStatus); }));
     r.on('thread/compactionUpdated',(state:CompactionState)=>this.each(v=>v.applyCompaction(state)));
     r.on('thread/updated', (p: { thread: Thread }) => this.upsertThread(p.thread));
     r.on('turn/started', (p: { turn: Turn }) => {
