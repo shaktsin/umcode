@@ -299,3 +299,105 @@ func TestPlanRespondRaces(t *testing.T) {
 		}
 	})
 }
+
+// N3: when the card cannot be re-read after the decision was stored, the
+// edited plan is kept and ends approved; the original is never restored.
+func TestPlanRespondUnreadableCardAfterDecision(t *testing.T) {
+	env := planFixture(t)
+	ch, _, card := env.proposeCard(t, twoPlan)
+	env.e.approvalDecideHook = func(id string, committed bool) error {
+		if committed {
+			// The card row vanishes: every re-read of it fails.
+			if _, err := env.e.Store.DB.Exec(`DELETE FROM approvals WHERE id=?`, id); err != nil {
+				return err
+			}
+			return errors.New("injected: approval not found after decision")
+		}
+		return nil
+	}
+	_, _ = env.respond(t, protocol.AgentPlanRespondParams{PlanID: card.PlanID, Decision: protocol.PlanDecisionApprove, Drop: []string{"writer"}})
+	env.e.approvalDecideHook = nil
+	r := recv(t, ch)
+	got := env.storedPlan(t, card.PlanID)
+	if len(got.Agents) != 1 || got.Agents[0].Name != "reviewer" {
+		t.Fatalf("original plan restored after a stored decision: %+v", got.Agents)
+	}
+	if got.State != protocol.PlanApproved || r.err != nil || strings.Contains(r.out, `"writer"`) {
+		t.Fatalf("plan %q, lead told %q %v", got.State, r.out, r.err)
+	}
+}
+
+// N2: model edits whose names differ only by case are refused, whatever
+// the map order.
+func TestPlanRespondCaseVariantModelKeysRefused(t *testing.T) {
+	env := planFixture(t)
+	twoModelPool(env, t)
+	ch, a, card := env.proposeCard(t, onePlan)
+	before := env.storedPlan(t, card.PlanID)
+	for i := 0; i < 5; i++ {
+		_, err := env.respond(t, protocol.AgentPlanRespondParams{PlanID: card.PlanID, Decision: protocol.PlanDecisionApprove, Models: map[string]string{"worker": "second", "Worker": "deterministic"}})
+		requireRefusal(t, err, "worker", "more than once")
+		env.requireUntouched(t, card, a, before)
+	}
+	if _, err := env.respond(t, protocol.AgentPlanRespondParams{PlanID: card.PlanID, Decision: protocol.PlanDecisionApprove, Models: map[string]string{"worker": "second"}}); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, ch)
+	for i := 0; i < 5; i++ {
+		_, err := env.respond(t, protocol.AgentPlanRespondParams{PlanID: card.PlanID, Decision: protocol.PlanDecisionApprove, Models: map[string]string{"worker": "second", "WORKER": "second"}})
+		requireRefusal(t, err, "more than once")
+	}
+	if !strings.HasPrefix(planEditsKey(nil, protocol.AgentPlanRespondParams{Models: map[string]string{"b": "x", "a": "y"}}), planEditsKey(nil, protocol.AgentPlanRespondParams{Models: map[string]string{"a": "y", "b": "x"}})) {
+		t.Fatal("edits key depends on map order")
+	}
+}
+
+// fastDecliner declines every plan card the moment its approval request is
+// published, and records the plan events in order.
+type fastDecliner struct {
+	e      *Engine
+	thread string
+	mu     sync.Mutex
+	events []protocol.AgentPlanUpdated
+}
+
+func (*fastDecliner) ID() string            { return "fast-decliner" }
+func (*fastDecliner) IsAdmin() bool         { return true }
+func (s *fastDecliner) Wants(t string) bool { return t == s.thread }
+func (s *fastDecliner) Notify(method string, params any) {
+	switch method {
+	case protocol.NotifyApprovalRequest:
+		ev, ok := params.(protocol.ApprovalEvent)
+		if ok && ev.Approval.Kind == "agent_plan" {
+			go s.e.RespondAgentPlan(context.Background(), protocol.AgentPlanRespondParams{PlanID: ev.Approval.NodeID, Decision: protocol.PlanDecisionDecline})
+		}
+	case protocol.NotifyAgentPlanUpdated:
+		if ev, ok := params.(protocol.AgentPlanUpdated); ok {
+			s.mu.Lock()
+			s.events = append(s.events, ev)
+			s.mu.Unlock()
+		}
+	}
+}
+
+// N1: the proposal event precedes the approval request, so a decision made
+// on the request is never followed by a stale proposed event.
+func TestPlanProposalEventPrecedesApprovalRequest(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		env := planFixture(t)
+		sub := &fastDecliner{e: env.e, thread: env.th.ID}
+		env.e.Bus.Add(sub)
+		ch := env.proposeAsync(t, env.lead, onePlan)
+		r := recv(t, ch)
+		if r.err != nil || !strings.Contains(r.out, `"declined"`) {
+			t.Fatalf("proposal = %q %v", r.out, r.err)
+		}
+		time.Sleep(50 * time.Millisecond)
+		sub.mu.Lock()
+		events := append([]protocol.AgentPlanUpdated(nil), sub.events...)
+		sub.mu.Unlock()
+		if len(events) < 2 || events[0].ApprovalStatus != "pending" || events[len(events)-1].ApprovalStatus != "denied" {
+			t.Fatalf("round %d events %+v: want proposed/pending first and denied last", i, events)
+		}
+	}
+}

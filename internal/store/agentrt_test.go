@@ -575,3 +575,28 @@ func TestLatestApprovalForNode(t *testing.T) {
 		t.Fatalf("latest = %+v %v", a, err)
 	}
 }
+
+func TestUpdateApprovalArgsOnlyPlanCards(t *testing.T) {
+	s, task := runtimeFixture(t)
+	now := time.Now().UTC()
+	for _, a := range []protocol.Approval{
+		{ID: "apr-plan", Kind: "agent_plan", NodeID: "p", ThreadID: task.ThreadID, Args: []byte(`{"old":1}`), Status: "approved", CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+		{ID: "apr-tool", Kind: "tool", ThreadID: task.ThreadID, Tool: "shell", Args: []byte(`{"cmd":"ls"}`), Status: "pending", CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+	} {
+		if err := s.CreateApproval(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.UpdateApprovalArgs(t.Context(), "apr-plan", []byte(`{"new":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := s.GetApproval(t.Context(), "apr-plan"); string(a.Args) != `{"new":1}` {
+		t.Fatalf("plan card args %s", a.Args)
+	}
+	if err := s.UpdateApprovalArgs(t.Context(), "apr-tool", []byte(`{"cmd":"rm -rf /"}`)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("tool approval rewritten: %v", err)
+	}
+	if a, _ := s.GetApproval(t.Context(), "apr-tool"); string(a.Args) != `{"cmd":"ls"}` {
+		t.Fatalf("tool approval args %s", a.Args)
+	}
+}
