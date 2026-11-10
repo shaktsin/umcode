@@ -576,6 +576,85 @@ func TestLatestApprovalForNode(t *testing.T) {
 	}
 }
 
+func TestPlanApprovalAdmissionAtomicAndReplay(t *testing.T) {
+	s, _ := runtimeFixture(t)
+	th, err := s.CreateThread(t.Context(), protocol.Thread{Title: "prompt first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := protocol.Turn{ID: "prompt-root", ThreadID: th.ID, Status: protocol.TurnCompleted, StartedAt: time.Now()}
+	if err := s.CreateTurn(t.Context(), turn); err != nil {
+		t.Fatal(err)
+	}
+	plan := protocol.AgentPlan{ID: "unbound", ThreadID: th.ID, State: protocol.PlanProposed, Agents: []protocol.PlanAgent{{Name: "worker", Purpose: "test"}}, CreatedAt: time.Now()}
+	if err := s.SaveAgentPlan(t.Context(), plan); err != nil {
+		t.Fatal(err)
+	}
+	approvalID := "approval-unbound"
+	if err := s.CreateApproval(t.Context(), protocol.Approval{ID: approvalID, Kind: "agent_plan", NodeID: plan.ID, ThreadID: th.ID, TurnID: turn.ID, Status: "pending", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	task := protocol.AgentTask{ID: "approved-task", ThreadID: th.ID, RootTurnID: turn.ID, Activation: protocol.AgentActivationPlanApproval, State: protocol.AgentStateRunning, BaseRevision: "snapshot", BaseRoot: "/source", ParentRoot: "/private", CreatedAt: time.Now()}
+	workspace := AgentTaskWorkspace{TaskID: task.ID, SourceRoot: "/source", ExecutionRoot: "/private", SourceHead: "source-head", SnapshotCommit: "snapshot", Manifest: []byte(`{"head":"source-head"}`), State: "active"}
+	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{Provider: "claude", Model: "test"}, approvalID, "app"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.AgentPlan(t.Context(), plan.ID)
+	if err != nil || stored.State != protocol.PlanApproved || stored.TaskID != task.ID {
+		t.Fatalf("plan = %+v, %v", stored, err)
+	}
+	if got, err := s.AgentTaskWorkspace(t.Context(), task.ID); err != nil || got.ExecutionRoot != workspace.ExecutionRoot {
+		t.Fatalf("workspace = %+v, %v", got, err)
+	}
+	if a, err := s.GetApproval(t.Context(), approvalID); err != nil || a.Status != "approved" || a.AgentTaskID != task.ID {
+		t.Fatalf("approval = %+v, %v", a, err)
+	}
+	if scope, err := s.AgentModelScope(t.Context(), task.ID); err != nil || scope.Model != "test" {
+		t.Fatalf("model scope = %+v, %v", scope, err)
+	}
+	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{Provider: "claude", Model: "test"}, approvalID, "app"); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	var n int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM agent_tasks WHERE thread_id=?`, th.ID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("tasks = %d, %v", n, err)
+	}
+}
+
+func TestPlanApprovalAdmissionRollsBackOnWorkspaceFailure(t *testing.T) {
+	s, _ := runtimeFixture(t)
+	th, err := s.CreateThread(t.Context(), protocol.Thread{Title: "approval rollback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := protocol.Turn{ID: "rollback-root", ThreadID: th.ID, Status: protocol.TurnCompleted, StartedAt: time.Now()}
+	if err := s.CreateTurn(t.Context(), turn); err != nil {
+		t.Fatal(err)
+	}
+	plan := protocol.AgentPlan{ID: "rollback-plan", ThreadID: th.ID, State: protocol.PlanProposed, Agents: []protocol.PlanAgent{{Name: "worker", Purpose: "test"}}, CreatedAt: time.Now()}
+	if err := s.SaveAgentPlan(t.Context(), plan); err != nil {
+		t.Fatal(err)
+	}
+	approvalID := "approval-rollback"
+	if err := s.CreateApproval(t.Context(), protocol.Approval{ID: approvalID, Kind: "agent_plan", NodeID: plan.ID, ThreadID: th.ID, TurnID: turn.ID, Status: "pending", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	task := protocol.AgentTask{ID: "rollback-task", ThreadID: th.ID, RootTurnID: turn.ID, Activation: protocol.AgentActivationPlanApproval, State: protocol.AgentStateRunning, BaseRevision: "snapshot", BaseRoot: "/source", ParentRoot: "/private", CreatedAt: time.Now()}
+	workspace := AgentTaskWorkspace{TaskID: task.ID, SourceRoot: "/source", ExecutionRoot: "/private", SourceHead: "head", SnapshotCommit: "snapshot", Manifest: []byte(`{"head":"head"}`), State: "active"}
+	if _, err := s.DB.Exec(`CREATE TRIGGER refuse_workspace BEFORE INSERT ON agent_task_workspaces BEGIN SELECT RAISE(ABORT, 'workspace failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApproveAgentPlanWithTask(t.Context(), plan.ID, task, workspace, AgentModelScope{}, approvalID, "app"); err == nil {
+		t.Fatal("approval succeeded despite failed workspace insert")
+	}
+	if _, err := s.AgentTask(t.Context(), task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("task persisted: %v", err)
+	}
+	if got, err := s.AgentPlan(t.Context(), plan.ID); err != nil || got.State != protocol.PlanProposed || got.TaskID != "" {
+		t.Fatalf("plan = %+v, %v", got, err)
+	}
+}
+
 func TestUpdateApprovalArgsOnlyPlanCards(t *testing.T) {
 	s, task := runtimeFixture(t)
 	now := time.Now().UTC()

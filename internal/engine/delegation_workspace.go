@@ -49,6 +49,21 @@ func (e *Engine) validateDelegationParent(ctx context.Context, t protocol.AgentT
 	if err != nil {
 		return err
 	}
+	if t.Activation == protocol.AgentActivationPlanApproval {
+		workspace, err := e.Store.AgentTaskWorkspace(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		if workspace.SourceRoot != root || workspace.ExecutionRoot != t.ParentRoot ||
+			workspace.SnapshotCommit != t.BaseRevision || workspace.State != "active" ||
+			pathutil.Within(root, t.ParentRoot) || pathutil.Within(t.ParentRoot, root) {
+			return errors.New("delegation private parent identity changed")
+		}
+		if head, err := privateParentRevision(ctx, t.ParentRoot); err != nil || head != t.BaseRevision {
+			return errors.New("delegation private parent revision changed")
+		}
+		return nil
+	}
 	if root != t.ParentRoot {
 		return errors.New("delegation active parent checkout or workspace mode changed")
 	}

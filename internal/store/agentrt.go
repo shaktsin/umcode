@@ -310,6 +310,100 @@ func (s *Store) ApproveAgentPlan(ctx context.Context, planID, taskID string) err
 	return tx.Commit()
 }
 
+// ApproveAgentPlanWithTask is the admission boundary for a plan proposed by an
+// ordinary turn. The task, its private workspace identity and the plan grant
+// become visible together. A repeated approval of the same plan/task is safe.
+func (s *Store) ApproveAgentPlanWithTask(ctx context.Context, planID string, task protocol.AgentTask, workspace AgentTaskWorkspace, modelScope AgentModelScope, approvalID, decidedBy string) error {
+	if planID == "" || approvalID == "" || decidedBy == "" || task.ID == "" || task.ThreadID == "" || task.RootTurnID == "" || task.Activation != protocol.AgentActivationPlanApproval ||
+		task.State != protocol.AgentStateRunning || task.BaseRevision == "" || task.BaseRoot == "" || task.ParentRoot == "" ||
+		workspace.TaskID != task.ID || workspace.SourceRoot == "" || workspace.ExecutionRoot != task.ParentRoot ||
+		workspace.SnapshotCommit != task.BaseRevision || workspace.SourceHead == "" {
+		return fmt.Errorf("%w: invalid plan-approved task workspace", ErrAgentTransition)
+	}
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = time.Now().UTC()
+	}
+	task.UpdatedAt = task.CreatedAt
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var threadID, boundTask string
+	var state protocol.PlanState
+	if err = tx.QueryRowContext(ctx, `SELECT thread_id,state,task_id FROM agent_plans WHERE id=?`, planID).Scan(&threadID, &state, &boundTask); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if state == protocol.PlanApproved && boundTask == task.ID {
+		return nil
+	}
+	if state != protocol.PlanProposed || boundTask != "" || threadID != task.ThreadID {
+		return fmt.Errorf("%w: plan is not an unbound proposal of this chat", ErrAgentConflict)
+	}
+	var approvalThread, approvalTurn, approvalNode, approvalKind, approvalStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT thread_id,turn_id,node_id,kind,status FROM approvals WHERE id=?`, approvalID).Scan(&approvalThread, &approvalTurn, &approvalNode, &approvalKind, &approvalStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if approvalThread != task.ThreadID || approvalTurn != task.RootTurnID || approvalNode != planID || approvalKind != "agent_plan" || approvalStatus != "pending" {
+		return fmt.Errorf("%w: plan card no longer belongs to the pending proposal", ErrAgentConflict)
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO agent_tasks (`+agentTaskCols+`)
+  SELECT ?,?,?,?,?,?,?,?,?,?,? FROM threads th JOIN turns tr ON tr.thread_id=th.id
+  WHERE th.id=? AND tr.id=? AND th.project_id=?
+ AND NOT EXISTS (SELECT 1 FROM agent_tasks active WHERE active.thread_id=th.id AND active.state IN ('queued','running','waiting_approval'))`,
+		task.ID, task.ThreadID, task.RootTurnID, task.Activation, task.State, task.BaseRevision, task.BaseRoot, task.ProjectID, FormatTime(task.CreatedAt), FormatTime(task.UpdatedAt), task.ParentRoot,
+		task.ThreadID, task.RootTurnID, task.ProjectID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: task turn/project changed or another task is active", ErrAgentConflict)
+	}
+	if err := s.SaveAgentTaskWorkspaceTx(ctx, tx, workspace); err != nil {
+		return err
+	}
+	scopeJSON, err := json.Marshal(modelScope)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_model_scopes(task_id,scope_json) VALUES(?,?)`, task.ID, string(scopeJSON)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agent_plans SET state=? WHERE thread_id=? AND id<>? AND state=?`, protocol.PlanSuperseded, threadID, planID, protocol.PlanApproved); err != nil {
+		return err
+	}
+	res, err = tx.ExecContext(ctx, `UPDATE agent_plans SET state=?,task_id=?,approved_at=? WHERE id=? AND state=? AND task_id=''`, protocol.PlanApproved, task.ID, Now(), planID, protocol.PlanProposed)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: plan changed while approving", ErrAgentConflict)
+	}
+	res, err = tx.ExecContext(ctx, `UPDATE approvals SET status='approved',decided_by=?,decided_at=?,agent_task_id=? WHERE id=? AND status='pending'`, decidedBy, Now(), task.ID, approvalID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: plan card changed while approving", ErrAgentConflict)
+	}
+	return tx.Commit()
+}
+
 // ApprovedAgentPlanForTask returns the approved plan bound to a task.
 func (s *Store) ApprovedAgentPlanForTask(ctx context.Context, taskID string) (protocol.AgentPlan, error) {
 	return scanAgentPlan(s.DB.QueryRowContext(ctx, `SELECT `+agentPlanCols+` FROM agent_plans WHERE task_id=? AND state=? ORDER BY approved_at DESC,rowid DESC LIMIT 1`, taskID, protocol.PlanApproved))

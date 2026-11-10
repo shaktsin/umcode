@@ -20,6 +20,7 @@ type WorkspaceSnapshot struct {
 	ResultRevision string
 	ChangedPaths   []string
 }
+
 // ParentValidator checks live project membership and the already existing
 // active parent checkout; it must never create or retarget a checkout.
 type ParentValidator func(context.Context, protocol.AgentTask) error
@@ -114,6 +115,7 @@ func (s *WorkspaceService) task(ctx context.Context, supplied protocol.AgentTask
 	}
 	return t, err
 }
+
 // ownedCheckout loads (or first records) the planned workspace w, attaches it
 // to its owner and ensures its private checkout of the task's base revision
 // with ensure. The checkout must lie outside the parent and registered
@@ -220,6 +222,7 @@ func nulPaths(s string) []string {
 	}
 	return out
 }
+
 // parentAuthority is the storage-only part of integrationAuthority that does
 // not depend on the integrated agent: the task's thread, project and parent
 // workspace mode still admit its parent checkout. Shared by runtime agents.
@@ -230,6 +233,38 @@ func (s *WorkspaceService) parentAuthority(ctx context.Context, t protocol.Agent
 	}
 	if th.ProjectID != t.ProjectID {
 		return errors.New("integration parent project changed")
+	}
+	if t.Activation == protocol.AgentActivationPlanApproval {
+		workspace, err := s.Store.AgentTaskWorkspace(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		if workspace.ExecutionRoot != t.ParentRoot || workspace.SnapshotCommit != t.BaseRevision || workspace.State != "active" || workspace.SourceRoot == "" ||
+			pathutil.Within(workspace.SourceRoot, t.ParentRoot) || pathutil.Within(t.ParentRoot, workspace.SourceRoot) {
+			return errors.New("integration private parent identity changed")
+		}
+		switch th.WorkspaceMode {
+		case "", "local":
+			if workspace.SourceRoot != t.BaseRoot {
+				return errors.New("integration source checkout changed")
+			}
+		case "worktree":
+			if workspace.SourceRoot != s.Manager.Path(th.ID) {
+				return errors.New("integration source worktree changed")
+			}
+		default:
+			return errors.New("integration source workspace mode unsupported")
+		}
+		if t.ProjectID != "" {
+			p, err := s.Store.GetProject(ctx, t.ProjectID)
+			if err != nil {
+				return err
+			}
+			if pathutil.Resolved(p.Root) != t.BaseRoot {
+				return errors.New("integration project root changed")
+			}
+		}
+		return nil
 	}
 	switch th.WorkspaceMode {
 	case "", "local":

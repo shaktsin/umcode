@@ -199,6 +199,27 @@ func (e *Engine) prepareDelegationAdmission(ctx context.Context, p protocol.Turn
 	if p.DelegationTaskID == "" && p.DelegationActivationToken == "" && !skill {
 		return nil, nil
 	}
+	// A plan-approved task executes in its recorded private parent. Its source
+	// checkout may be dirty or gain unrelated edits while agents are working,
+	// so the old clean-parent token check must not run on continuation.
+	if p.DelegationTaskID != "" {
+		task, err := e.Store.AgentTask(ctx, p.DelegationTaskID)
+		if err != nil {
+			return nil, err
+		}
+		if task.Activation == protocol.AgentActivationPlanApproval {
+			if task.ThreadID != p.ThreadID || !unfinishedDelegation(task.State) {
+				return nil, protocol.Errorf(protocol.CodeInvalidParams, "delegation task does not belong to this chat or is finished")
+			}
+			if err := e.validateDelegationParent(ctx, task); err != nil {
+				return nil, err
+			}
+			return &delegationAdmission{delegationToken: delegationToken{
+				ThreadID: task.ThreadID, ProjectID: task.ProjectID, Root: task.BaseRoot,
+				ParentRoot: task.ParentRoot, Revision: task.BaseRevision,
+			}, Task: task}, nil
+		}
+	}
 	base, err := e.delegationBase(ctx, p.ThreadID)
 	if err != nil {
 		return nil, err

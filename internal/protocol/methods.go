@@ -318,10 +318,11 @@ type AgentPlanGetParams struct {
 // A superseded plan has State superseded; its card reads expired (or denied
 // when it was answered before the newer proposal).
 type AgentPlanGetResult struct {
-	Plan           AgentPlan `json:"plan"`
-	Card           *PlanCard `json:"card,omitempty"`
-	ApprovalID     string    `json:"approvalId,omitempty"`
-	ApprovalStatus string    `json:"approvalStatus,omitempty"`
+	Plan               AgentPlan `json:"plan"`
+	Card               *PlanCard `json:"card,omitempty"`
+	ApprovalID         string    `json:"approvalId,omitempty"`
+	ApprovalStatus     string    `json:"approvalStatus,omitempty"`
+	ContinuationNeeded bool      `json:"continuationNeeded,omitempty"`
 }
 
 // MethodAgentPlanRespond is the app's answer to an agent.propose_plan card
@@ -356,8 +357,10 @@ type AgentPlanRespondParams struct {
 // AgentPlanRespondResult is the stored plan after the decision and the
 // status of its card's approval (approved, denied, expired or pending).
 type AgentPlanRespondResult struct {
-	Plan           AgentPlan `json:"plan"`
-	ApprovalStatus string    `json:"approvalStatus"`
+	Plan               AgentPlan `json:"plan"`
+	ApprovalStatus     string    `json:"approvalStatus"`
+	TaskID             string    `json:"taskId,omitempty"`
+	ContinuationNeeded bool      `json:"continuationNeeded,omitempty"`
 }
 
 // AgentPlanUpdated is the agent/plan/updated payload.

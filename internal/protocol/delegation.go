@@ -9,6 +9,7 @@ type AgentActivation string
 const (
 	AgentActivationExplicitUser   AgentActivation = "explicit_user"
 	AgentActivationInstalledSkill AgentActivation = "installed_skill"
+	AgentActivationPlanApproval   AgentActivation = "plan_approval"
 )
 
 // AgentState is the durable lifecycle of a delegation task or child.
