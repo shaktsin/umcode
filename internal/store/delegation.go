@@ -209,8 +209,12 @@ func (s *Store) CreateAgentChild(ctx context.Context, child protocol.AgentChild,
 
 // AgentChild deliberately requires both identities; foreign children are absent.
 func (s *Store) AgentChild(ctx context.Context, taskID, childID string) (protocol.AgentChild, error) {
-	return scanAgentChild(s.DB.QueryRowContext(ctx, `SELECT `+agentChildCols+` FROM agent_children WHERE task_id=? AND id=?`, taskID, childID))
+	return scanAgentChild(s.DB.QueryRowContext(ctx, `SELECT `+agentChildCols+` FROM agent_children WHERE task_id=? AND id=?`+legacyChildOnly, taskID, childID))
 }
+
+// legacyChildOnly hides the inert mirror rows of runtime agents (see
+// EnsureRuntimeAgentExecution) from the legacy delegation reads.
+const legacyChildOnly = ` AND NOT EXISTS (SELECT 1 FROM agents rt WHERE rt.id=agent_children.id)`
 
 // AgentChildren returns children in stable creation order, or ErrNotFound for
 // an unknown task. An existing task with no children returns an empty slice.
@@ -218,7 +222,7 @@ func (s *Store) AgentChildren(ctx context.Context, taskID string) ([]protocol.Ag
 	if _, err := s.AgentTask(ctx, taskID); err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+agentChildCols+` FROM agent_children WHERE task_id=? ORDER BY created_at,id`, taskID)
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+agentChildCols+` FROM agent_children WHERE task_id=?`+legacyChildOnly+` ORDER BY created_at,id`, taskID)
 	if err != nil {
 		return nil, err
 	}

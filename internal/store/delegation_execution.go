@@ -91,17 +91,7 @@ func (s *Store) EnsureAgentExecution(ctx context.Context, task protocol.AgentTas
 		return AgentExecution{}, err
 	}
 	defer tx.Rollback()
-	id := NewID("thr")
-	now := Now()
-	result, err := tx.ExecContext(ctx, `INSERT INTO threads (`+threadCols+`,internal_child_id) SELECT ?,?,th.project_id,'local',th.channel,0,0,?,?,?,?,th.approval_mode,'',?,?,c.id FROM threads th JOIN agent_tasks t ON t.thread_id=th.id JOIN agent_children c ON c.task_id=t.id WHERE t.id=? AND c.id=? AND th.id=? AND th.internal_child_id=''`, id, "Agent execution", parent.Settings.Provider, parent.Settings.Model, string(parent.Settings.Complexity), parent.Settings.CredentialID, now, now, task.ID, child.ID, parent.ID)
-	if err != nil {
-		return AgentExecution{}, err
-	}
-	n, _ := result.RowsAffected()
-	if n != 1 {
-		return AgentExecution{}, ErrNotFound
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO agent_executions(child_id,task_id,thread_id,context_json) VALUES(?,?,?,?)`, child.ID, task.ID, id, string(data))
+	id, err := insertAgentExecution(ctx, tx, task.ID, child.ID, parent, string(data))
 	if err != nil {
 		return AgentExecution{}, err
 	}
@@ -134,4 +124,23 @@ func (s *Store) IsInternalThread(ctx context.Context, id string) (bool, error) {
 		return false, ErrNotFound
 	}
 	return child != "", err
+}
+
+// insertAgentExecution creates the internal execution thread for an existing
+// agent_children row and its agent_executions record in tx.
+func insertAgentExecution(ctx context.Context, tx *sql.Tx, taskID, childID string, parent protocol.Thread, contextJSON string) (string, error) {
+	id := NewID("thr")
+	now := Now()
+	result, err := tx.ExecContext(ctx, `INSERT INTO threads (`+threadCols+`,internal_child_id) SELECT ?,?,th.project_id,'local',th.channel,0,0,?,?,?,?,th.approval_mode,'',?,?,c.id FROM threads th JOIN agent_tasks t ON t.thread_id=th.id JOIN agent_children c ON c.task_id=t.id WHERE t.id=? AND c.id=? AND th.id=? AND th.internal_child_id=''`, id, "Agent execution", parent.Settings.Provider, parent.Settings.Model, string(parent.Settings.Complexity), parent.Settings.CredentialID, now, now, taskID, childID, parent.ID)
+	if err != nil {
+		return "", err
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return "", ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO agent_executions(child_id,task_id,thread_id,context_json) VALUES(?,?,?,?)`, childID, taskID, id, contextJSON); err != nil {
+		return "", err
+	}
+	return id, nil
 }

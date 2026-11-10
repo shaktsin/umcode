@@ -170,6 +170,10 @@ func (s *Store) UpdateRuntimeAgent(ctx context.Context, a protocol.RuntimeAgent,
 	if n != 1 {
 		return ErrAgentConflict
 	}
+	// Keep the inert execution mirror row (if any) in step with the agent.
+	if _, err = tx.ExecContext(ctx, `UPDATE agent_children SET state=?,version=version+1,updated_at=? WHERE task_id=? AND id=? AND call_id=?`, a.State, Now(), a.TaskID, a.ID, runtimeMirrorCallID(a.ID)); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
