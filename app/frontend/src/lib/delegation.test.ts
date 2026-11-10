@@ -201,3 +201,14 @@ it('hydrate takes a forward plan state but never regresses the same plan', async
   call.mockResolvedValueOnce({ tasks: [{ task, children: [], plan: { id: 'p2', state: 'proposed' } }] }); await s.hydrate();
   expect(s.tasks[0].plan?.id).toBe('p2');
 });
+it('keeps the cancel integration report per task and leaves unchanged agents identical on a sibling update', async () => {
+  const s = new DelegationState(); await s.bind('parent', 'project'); s.apply({ threadId: 'parent', taskId: 'task', task });
+  const ag = (id: string, version: number, state = 'running') => ({ id, taskId: 'task', name: id, version, state, createdAt: '', result: { summary: '' } }) as any;
+  s.apply({ threadId: 'parent', taskId: 'task', agent: ag('a', 1), sequence: 1 }); s.apply({ threadId: 'parent', taskId: 'task', agent: ag('b', 1), sequence: 2 });
+  const [a0] = s.tasks[0].agents!; s.apply({ threadId: 'parent', taskId: 'task', agent: ag('b', 2, 'completed'), sequence: 3 });
+  expect(s.tasks[0].agents![0]).toBe(a0); expect(s.tasks[0].agents![1].state).toBe('completed');
+  const report = { headTree: 'h', appliedCount: 2, verified: true, unintegrated: ['a'], message: 'ok' };
+  call.mockImplementation(async (m: string) => m === 'delegation/cancel' ? { task: { ...task, state: 'cancelled', updatedAt: '2026-10-15T12:05:00Z' }, children: [], integration: report } : { tasks: [] });
+  await s.cancel('task'); expect(s.reports.task).toEqual(report);
+  await s.bind('other', 'project'); expect(s.reports).toEqual({});
+});

@@ -1,6 +1,7 @@
 import { app } from './app.svelte';
 import { errMsg } from '$lib/format';
 import { agentActive, type AgentSnapshot, type DelegationUpdated } from '$lib/delegation';
+import type { AgentIntegrationReport } from '$lib/types';
 
 const PLAN_RANK = { proposed: 0, approved: 1, superseded: 2 } as const;
 type Snapshot = AgentSnapshot & { childErrors: Record<string, string>; childSequences: Record<string, number>; agentSequences: Record<string, number>; integrationSequence?: number };
@@ -26,6 +27,8 @@ export class DelegationState {
   projectId = $state<string | undefined>();
   tasks = $state<Snapshot[]>([]);
   token = $state<{ activationToken: string; expiresAt: string } | null>(null);
+  /** What the lead integrated when a task was cancelled, by task id. Session-only: the server does not list it. */
+  reports = $state<Record<string, AgentIntegrationReport>>({});
   pending = $state(false);
   error = $state('');
   private generation = 0;
@@ -35,7 +38,7 @@ export class DelegationState {
   async bind(threadId: string | null, projectId?: string, preservePending = false) {
     if (threadId === null || this.threadId !== threadId || this.projectId !== projectId) {
       this.generation++; this.request++; this.threadId = threadId; this.projectId = projectId;
-      this.tasks = []; this.token = null; this.pending = preservePending; this.error = '';
+      this.tasks = []; this.reports = {}; this.token = null; this.pending = preservePending; this.error = '';
     }
     if (threadId) await this.hydrate();
   }
@@ -127,8 +130,9 @@ export class DelegationState {
     if (!this.threadId || this.pending) return;
     const generation = this.generation; this.pending = true; this.error = '';
     try {
-      const r = await app.call<AgentSnapshot>('delegation/cancel', { threadId: this.threadId, taskId, ...(childId ? { childId } : {}) });
+      const r = await app.call<Omit<AgentSnapshot, 'integration'> & { integration?: AgentIntegrationReport }>('delegation/cancel', { threadId: this.threadId, taskId, ...(childId ? { childId } : {}) });
       if (generation !== this.generation) return;
+      if (r.integration) this.reports = { ...this.reports, [taskId]: r.integration };
       this.apply({ threadId: this.threadId!, taskId, task: r.task });
       // Hydration includes retained finalization errors; the cancellation reply
       // alone is not authority to clear their same-version partial outcomes.

@@ -5,15 +5,26 @@
   import { inspector } from '$lib/stores/inspector.svelte';
   import { fmtUsd } from '$lib/format';
   import ApprovalCard from './ApprovalCard.svelte';
-  let { state, threadId, projectId }: { state: DelegationState; threadId: string; projectId?: string } = $props();
+  import AgentRow from './AgentRow.svelte';
+  import IntegrationStrip from './IntegrationStrip.svelte';
+  import { buildAgentTree } from '$lib/agentTree';
+  import { agentsSummary, flattenTree } from '$lib/agentRuntime';
+  let { state, threadId, projectId, onsend }: { state: DelegationState; threadId: string; projectId?: string; onsend?: (text: string) => void } = $props();
+  const count = $derived(state.tasks.reduce((n, task) => n + (task.agents?.length ? task.agents.length : task.children.length), 0));
+  const allAgents = $derived(state.tasks.flatMap(t => t.agents ?? []));
+  const summary = $derived(agentsSummary(allAgents));
+  const activeTask = $derived(state.tasks.find(s => agentActive(s.task.state)));
+  // Keep an open agent tab current as updates arrive.
+  $effect(() => { for (const a of allAgents) inspector.syncAgent(a, threadId, projectId); });
 </script>
 
 {#if state.tasks.length}
   <details class="mx-3 mb-3 rounded-lg border border-line bg-surface text-xs" data-agents>
-    <summary class="cursor-pointer px-3 py-2 select-none text-ink-soft">Agents · {state.tasks.reduce((n, task) => n + task.children.length, 0)}
+    <summary class="cursor-pointer px-3 py-2 select-none text-ink-soft">Agents · {count}{#if summary.models} <span class="ml-2 text-muted break-all">{summary.models}</span>{/if}
       {#if state.tasks.some(s => agentActive(s.task.state))}<span class="ml-2 text-muted">Active</span>{/if}
       {#if app.approvals.some(a => a.threadId === threadId && a.agentChildId)}<span class="ml-2 text-amber-warm">Approval needed</span>{/if}
       {#if state.tasks.some(s => Object.keys(s.childErrors).length)}<span class="ml-2 text-rust">Saving needs attention</span>{/if}
+      {#if activeTask}<button class="btn-ghost btn-sm float-right -my-1" disabled={state.pending} onclick={(e) => { e.preventDefault(); e.stopPropagation(); state.cancel(activeTask.task.id); }}>Cancel task</button>{/if}
     </summary>
     <div class="border-t border-line divide-y divide-line max-h-80 overflow-y-auto">
       {#each state.tasks as snapshot (snapshot.task.id)}
@@ -24,6 +35,16 @@
             {#if agentActive(snapshot.task.state)}<button class="btn-ghost btn-sm ml-auto" disabled={state.pending} onclick={() => state.cancel(snapshot.task.id)}>Cancel task</button>{/if}
           </div>
           {#if snapshot.stopReason}<p class="text-rust whitespace-pre-wrap break-words" role="status">{snapshot.stopReason}</p>{/if}
+          {#if snapshot.agents?.length}
+            <ul class="space-y-1.5" aria-label="Agents">
+              {#each flattenTree(buildAgentTree(snapshot.agents)) as row (row.agent.id)}
+                <AgentRow agent={row.agent} depth={row.depth} selected={inspector.active?.kind === 'agent' && inspector.active.agent?.id === row.agent.id} pending={state.pending} onselect={() => inspector.openAgent(row.agent, threadId, projectId)} oncancel={() => state.cancel(snapshot.task.id, row.agent.id)} />
+              {/each}
+            </ul>
+          {/if}
+          {#if snapshot.integration || state.reports[snapshot.task.id]}
+            <IntegrationStrip integration={snapshot.integration} report={state.reports[snapshot.task.id]} agents={snapshot.agents ?? []} canResolve={agentActive(snapshot.task.state) && !!onsend} onresolve={(text) => onsend?.(text)} />
+          {/if}
           {#each snapshot.children as child (child.id)}
             <article class="rounded-md border border-line p-2.5 min-w-0">
               <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
