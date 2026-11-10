@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -634,12 +635,66 @@ func (s *WorkspaceService) ValidateRuntimeHead(ctx context.Context, taskID, head
 	if err != nil {
 		return err
 	}
+	_, err = s.validateHeadLocked(ctx, t, headTree)
+	return err
+}
+
+// validateHeadLocked is ValidateRuntimeHead for a caller holding the task
+// lock; it returns the head it validated.
+func (s *WorkspaceService) validateHeadLocked(ctx context.Context, t protocol.AgentTask, headTree string) (store.AgentIntegrationHead, error) {
 	h, err := s.head(ctx, t, false)
+	if err != nil {
+		return h, err
+	}
+	if h.HeadTree != headTree {
+		return h, fmt.Errorf("integration head is %s, not %s", h.HeadTree, headTree)
+	}
+	return h, s.Manager.CheckParentState(ctx, t.ParentRoot, t.BaseRevision, headTree)
+}
+
+// UpdateRuntimeWorkflow replaces the verification workflow stored in the
+// task's integration head. Under the task lock (so it never races
+// advanceHead's version-checked write) it requires an active task, a recorded
+// head whose tree is headTree and a parent checkout that is exactly that tree
+// (ValidateRuntimeHead's rule); update receives the stored workflow and must
+// return one for headTree. If the version-checked write still loses to a
+// writer outside the lock, everything is reloaded and rechecked once.
+func (s *WorkspaceService) UpdateRuntimeWorkflow(ctx context.Context, taskID, headTree string, update func(store.RuntimeWorkflow) (store.RuntimeWorkflow, error)) error {
+	defer s.lockTask(taskID)()
+	for attempt := 0; ; attempt++ {
+		err := s.updateWorkflowLocked(ctx, taskID, headTree, update)
+		if attempt == 0 && errors.Is(err, store.ErrAgentConflict) {
+			continue
+		}
+		return err
+	}
+}
+
+func (s *WorkspaceService) updateWorkflowLocked(ctx context.Context, taskID, headTree string, update func(store.RuntimeWorkflow) (store.RuntimeWorkflow, error)) error {
+	t, err := s.loadTask(ctx, taskID, true)
 	if err != nil {
 		return err
 	}
-	if h.HeadTree != headTree {
-		return fmt.Errorf("integration head is %s, not %s", h.HeadTree, headTree)
+	h, err := s.validateHeadLocked(ctx, t, headTree)
+	if err != nil {
+		return err
 	}
-	return s.Manager.CheckParentState(ctx, t.ParentRoot, t.BaseRevision, headTree)
+	if h.Version == 0 {
+		return errors.New("no integrated head to verify; accept a revision first")
+	}
+	current, err := store.DecodeRuntimeWorkflow(h.Workflow)
+	if err != nil {
+		return err
+	}
+	next, err := update(current)
+	if err != nil {
+		return err
+	}
+	if next.HeadTree != headTree {
+		return fmt.Errorf("workflow is for %s, not the integration head %s", next.HeadTree, headTree)
+	}
+	if h.Workflow, err = json.Marshal(next); err != nil {
+		return err
+	}
+	return s.Store.SetAgentIntegrationHead(ctx, h, h.Version)
 }

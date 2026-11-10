@@ -334,6 +334,8 @@ func TestVerificationIgnoresModelClaims(t *testing.T) {
 func TestVerifiedMeansAllRequiredPassed(t *testing.T) {
 	env := runtimeVerificationEnv(t)
 	a := env.writer(t, "a", "a.txt", "from a\n")
+	// Writers are prepared from a clean parent, so before the first accept.
+	b := env.writer(t, "b", "b.txt", "from b\n")
 	env.accept(t, a.ID)
 	for _, statuses := range [][]string{{"failed", "passed"}, {"passed", "blocked"}, {"not_run", "passed"}} {
 		env.runner.set(runResults(statuses...))
@@ -353,7 +355,6 @@ func TestVerifiedMeansAllRequiredPassed(t *testing.T) {
 	}
 
 	// Required visual QA is planned blocked and keeps the head unverified.
-	b := env.writer(t, "b", "b.txt", "from b\n")
 	env.planner.set(`{"checks":[{"label":"unit","command":"go test ./...","kind":"test","reason":"r"}],"visual_qa":"required: page changed"}`)
 	w := env.accept(t, b.ID)
 	if len(w.Checks) != 2 || w.Checks[1].Kind != "visual" || w.Checks[1].Status != "blocked" {
