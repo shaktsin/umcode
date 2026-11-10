@@ -525,11 +525,16 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 			if err != nil {
 				return err
 			}
+			if _, err := foldedModelEdits(p.Models); err != nil {
+				return err
+			}
 			if planEditsKey(pool, p) == rec.edits {
 				return nil
 			}
 		} else if !edits {
 			return nil
+		} else if _, err := foldedModelEdits(p.Models); err != nil {
+			return err
 		}
 		return protocol.Errorf(protocol.CodeConflict, "plan %s: %s with different edits; the approved plan is unchanged", plan.ID, planDecidedText)
 	}
@@ -607,14 +612,13 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 
 	if outcome != planApproved {
 		w.outcome, w.feedback = outcome, feedback
-		decided, err := e.respondApproval(sctx, approval.ID, false, false, by)
+		decided, committed, err := e.respondApprovalCommitted(sctx, approval.ID, false, false, by)
 		if err != nil {
-			cur, gerr := e.Store.GetApproval(sctx, approval.ID)
-			if gerr != nil || cur.Status != "denied" {
+			if !committed {
 				w.outcome, w.feedback = "", ""
 				return res, none, e.planCardRefusal(sctx, plan.ID, approval.ID, err)
 			}
-			decided = cur
+			decided = committedApproval(e, sctx, approval, "denied")
 		}
 		e.recordPlanDecision(plan.ID, planDecision{outcome: outcome})
 		e.publishAgentPlan(plan, decided.Status)
@@ -647,12 +651,12 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 		}
 	}
 	w.outcome, w.feedback = planApproved, ""
-	decided, err := e.respondApproval(sctx, approval.ID, true, false, by)
+	decided, committed, err := e.respondApprovalCommitted(sctx, approval.ID, true, false, by)
 	if err != nil {
-		// Restore only a card that was not approved: an approved card
-		// wakes the waiter, which binds the stored (edited) plan.
-		cur, gerr := e.Store.GetApproval(sctx, approval.ID)
-		if gerr != nil || cur.Status != "approved" {
+		// Restore only when the decision is known not to be stored: a
+		// stored approval has woken the waiter, which binds the stored
+		// (edited) plan, so the edited plan is what ends approved.
+		if !committed {
 			w.outcome = ""
 			if changed {
 				if rerr := e.Store.SaveAgentPlan(sctx, plan); rerr != nil {
@@ -661,8 +665,7 @@ func (e *Engine) respondAgentPlan(ctx context.Context, p protocol.AgentPlanRespo
 			}
 			return res, none, e.planCardRefusal(sctx, plan.ID, approval.ID, err)
 		}
-		decided = cur
-		e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: cur})
+		decided = committedApproval(e, sctx, approval, "approved")
 	}
 	e.recordPlanDecision(plan.ID, planDecision{outcome: planApproved, edits: key})
 	if err := e.bindApprovedPlan(sctx, plan.ID, task.ID); err != nil {
@@ -714,7 +717,8 @@ func planEditsKey(pool []modelRoute, p protocol.AgentPlanRespondParams) string {
 		Drop   []string             `json:"d,omitempty"`
 		Limits *protocol.PlanLimits `json:"l,omitempty"`
 	}
-	for name, ref := range p.Models {
+	folded, _ := foldedModelEdits(p.Models)
+	for name, ref := range folded {
 		if k.Models == nil {
 			k.Models = map[string]string{}
 		}
@@ -722,7 +726,7 @@ func planEditsKey(pool []modelRoute, p protocol.AgentPlanRespondParams) string {
 		if m == "" {
 			m = "?" + ref
 		}
-		k.Models[strings.ToLower(strings.TrimSpace(name))] = m
+		k.Models[name] = m
 	}
 	for _, name := range p.Drop {
 		n := strings.ToLower(strings.TrimSpace(name))
@@ -806,6 +810,9 @@ func (e *Engine) validatePlanApproval(ctx context.Context, plan protocol.AgentPl
 	}
 	pool, _, err := e.planModelPool(ctx, task.ID)
 	if err != nil {
+		return plan, err
+	}
+	if _, err := foldedModelEdits(p.Models); err != nil {
 		return plan, err
 	}
 	names := make([]string, 0, len(p.Models))
@@ -939,4 +946,37 @@ func (e *Engine) planCardRefusal(ctx context.Context, planID, approvalID string,
 // refresh the card.
 func (e *Engine) publishAgentPlan(plan protocol.AgentPlan, approvalStatus string) {
 	e.Bus.Publish(plan.ThreadID, protocol.NotifyAgentPlanUpdated, protocol.AgentPlanUpdated{ThreadID: plan.ThreadID, Plan: plan, ApprovalStatus: approvalStatus})
+}
+
+// committedApproval is the card after a stored decision whose respond then
+// failed: re-read when possible, else the known decided status; the
+// resolution is announced (respondApproval failed before it could).
+func committedApproval(e *Engine, ctx context.Context, card protocol.Approval, status string) protocol.Approval {
+	if cur, err := e.Store.GetApproval(ctx, card.ID); err == nil {
+		card = cur
+	} else {
+		card.Status = status
+	}
+	e.Bus.PublishAdmin(protocol.NotifyApprovalResolved, protocol.ApprovalEvent{Approval: card})
+	return card
+}
+
+// foldedModelEdits returns model edits keyed by case-folded agent name; two
+// names that fold to the same agent are refused, so no edit depends on map
+// order.
+func foldedModelEdits(models map[string]string) (map[string]string, error) {
+	names := make([]string, 0, len(models))
+	for name := range models {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	out := make(map[string]string, len(models))
+	for _, name := range names {
+		k := strings.ToLower(strings.TrimSpace(name))
+		if _, dup := out[k]; dup {
+			return nil, protocol.Errorf(protocol.CodeInvalidParams, "models names agent %q more than once (names differ only by case or spaces); give one model per agent", strings.TrimSpace(name))
+		}
+		out[k] = models[name]
+	}
+	return out, nil
 }
