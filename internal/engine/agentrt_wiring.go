@@ -177,6 +177,12 @@ func (e *Engine) cancelledIntegrationReport(ctx context.Context, taskID string) 
 		return report, nil
 	}
 	report.HeadTree, report.AppliedCount, report.Verified = st.HeadTree, st.AppliedCount, st.Verified
+	if st.Amendments > 0 {
+		report.Amendments = st.Amendments
+		if h, headErr := e.Store.AgentIntegrationHead(ctx, taskID); headErr == nil {
+			report.AmendReason = h.AmendReason
+		}
+	}
 	for _, r := range st.Revisions {
 		switch r.State {
 		case store.RevisionApplied:
@@ -206,6 +212,9 @@ func integrationReportMessage(r *protocol.AgentIntegrationReport) string {
 	default:
 		fmt.Fprintf(&b, "%d agent revision(s) (%s) stay applied (staged) in the project checkout; nothing was reverted. Their integrated result %s is not verified: its checks have not all passed, so review the staged changes before committing them.",
 			r.AppliedCount, strings.Join(r.Applied, ", "), r.HeadTree)
+	}
+	if r.Amendments > 0 {
+		fmt.Fprintf(&b, " The integrated result was amended %d time(s) by the lead (last: %s), so the staged changes also hold the lead's own edits, not only agent work.", r.Amendments, r.AmendReason)
 	}
 	if len(r.BlockedAgents) > 0 {
 		fmt.Fprintf(&b, " The project checkout may hold partly integrated, unverified work of %s, mixed with other edits: the apply was interrupted and could not be settled, and the cancelled task will not integrate it. Inspect the staged changes and restore or keep them yourself before committing.",
