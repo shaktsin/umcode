@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaktsin/umcode/internal/config"
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/tools"
@@ -20,12 +21,14 @@ import (
 // fakeStep is one scripted model call of the agent spawned from plan entry
 // Agent. Steps are consumed in order per agent; an agent past its steps
 // answers "done". A step calls Tool with Args, or answers Text, or (Block)
-// holds the provider call open until the agent's context ends.
+// holds the provider call open until the agent's context ends. Usage, when
+// Reported, is the usage the step's reply reports.
 type fakeStep struct {
 	Agent      string
 	Tool, Args string
 	Text       string
 	Block      bool
+	Usage      llm.Usage
 }
 
 // runtimeE2E drives the real Runtime, scheduler, runtimeRunner and engine
@@ -55,7 +58,29 @@ func newRuntimeE2E(t *testing.T, script ...fakeStep) *runtimeE2E {
 // to the project root before the base commit.
 func newRuntimeE2EWith(t *testing.T, base func(root string), script ...fakeStep) *runtimeE2E {
 	t.Helper()
-	e, th, root, _ := delegationFixtureWith(t, runtimeV2On)
+	return newRuntimeE2EOpts(t, runtimeE2EOpts{base: base}, script...)
+}
+
+// runtimeE2EOpts customizes newRuntimeE2EOpts: base adds files before the
+// base commit, configure adjusts the config (runtime_v2 is always on),
+// limits and entries replace the default plan (maxConcurrent 2; scout,
+// fixer, helper).
+type runtimeE2EOpts struct {
+	base      func(root string)
+	configure func(*config.Config)
+	limits    *protocol.PlanLimits
+	entries   []protocol.PlanAgent
+}
+
+func newRuntimeE2EOpts(t *testing.T, o runtimeE2EOpts, script ...fakeStep) *runtimeE2E {
+	t.Helper()
+	e, th, root, _ := delegationFixtureWith(t, func(c *config.Config) {
+		runtimeV2On(c)
+		if o.configure != nil {
+			o.configure(c)
+		}
+	})
+	base := o.base
 	if err := os.WriteFile(filepath.Join(root, "x.go"), []byte(e2eBase), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -71,11 +96,18 @@ func newRuntimeE2EWith(t *testing.T, base func(root string), script ...fakeStep)
 	env := runtimeRunnerEnv{e: e, th: th, parent: root, task: task, p: p}
 	limits := protocol.DefaultPlanLimits()
 	limits.MaxConcurrent = 2
-	env.approvePlan(t, limits,
-		protocol.PlanAgent{Name: "scout", Purpose: "read the code", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellReadOnly}},
-		protocol.PlanAgent{Name: "fixer", Purpose: "fix the code", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadWrite}},
-		protocol.PlanAgent{Name: "helper", Purpose: "wait around", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone}},
-	)
+	if o.limits != nil {
+		limits = *o.limits
+	}
+	entries := o.entries
+	if entries == nil {
+		entries = []protocol.PlanAgent{
+			{Name: "scout", Purpose: "read the code", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellReadOnly}},
+			{Name: "fixer", Purpose: "fix the code", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesReadWrite, Shell: protocol.ShellReadWrite}},
+			{Name: "helper", Purpose: "wait around", Capabilities: protocol.AgentCapabilities{Files: protocol.FilesRead, Shell: protocol.ShellNone}},
+		}
+	}
+	env.approvePlan(t, limits, entries...)
 	x := &runtimeE2E{runtimeRunnerEnv: env, entered: make(chan string, 8), calls: map[string]int{}}
 	x.lead = env.agentToolCtx(t, "")
 	byAgent := map[string][]fakeStep{}
@@ -96,16 +128,21 @@ func newRuntimeE2EWith(t *testing.T, base func(root string), script ...fakeStep)
 		if idx >= len(steps) {
 			return textReply("done")
 		}
+		var reply []llm.Event
 		switch step := steps[idx]; {
 		case step.Block:
 			x.entered <- a.PlanEntry
 			<-ctx.Done()
 			return []llm.Event{{Type: llm.EventError, Err: ctx.Err()}}
 		case step.Tool != "":
-			return toolReply(fmt.Sprintf("%s-%d", a.PlanEntry, idx), step.Tool, step.Args)
+			reply = toolReply(fmt.Sprintf("%s-%d", a.PlanEntry, idx), step.Tool, step.Args)
 		default:
-			return textReply(step.Text)
+			reply = textReply(step.Text)
 		}
+		if steps[idx].Usage.Reported {
+			reply[len(reply)-1].Usage = steps[idx].Usage
+		}
+		return reply
 	}
 	return x
 }
@@ -275,6 +312,25 @@ func TestE2EStopCancelsEverything(t *testing.T) {
 	x.mu.Unlock()
 	if ranHelper != 0 {
 		t.Fatal("the queued helper reached the model")
+	}
+}
+
+// waitAgentState polls the store until agent id reaches want.
+func waitAgentState(t *testing.T, e *Engine, taskID, id string, want protocol.AgentState) protocol.RuntimeAgent {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		a, err := e.Store.RuntimeAgent(t.Context(), taskID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.State == want {
+			return a
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agent %s is %s (%+v), want %s", a.Name, a.State, a.Result, want)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
