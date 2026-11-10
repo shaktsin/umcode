@@ -879,7 +879,11 @@ func (e *Engine) runTurn(ctx context.Context, th protocol.Thread, turn protocol.
 			if hint := instructionPathHint(call.Args); hint != "" {
 				instructionHint = hint
 			}
-			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: boundedModelToolOutput(toolResult.ModelOutput, toolResult.SourceItemID), IsError: isErr})
+			modelOutput := toolResult.ModelOutput
+			if e.optimizationPolicy(ctx).ToolResultReducers {
+				modelOutput = boundedModelToolOutput(modelOutput, toolResult.SourceItemID)
+			}
+			msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Result: modelOutput, IsError: isErr})
 			if reductions != nil && toolResult.Reduction.Strategy != "" && toolResult.Reduction.OriginalTokens > toolResult.Reduction.SentTokens {
 				reductions[key] = toolResult.Reduction
 			}
