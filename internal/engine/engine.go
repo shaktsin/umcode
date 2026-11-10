@@ -113,7 +113,7 @@ type Engine struct {
 	agentSandboxROCheck func(sandbox.Sandbox) error
 	agentVMROCheck      func(context.Context) error
 	agentCompute        compute.Runner
-	// shellChecks caches the self-check results for the process;
+	// shellChecks runs the self-checks and caches their passes for the process;
 	// shellDowngrades dedupes the downgrade log lines.
 	shellChecks     shellChecks
 	shellDowngrades sync.Map
