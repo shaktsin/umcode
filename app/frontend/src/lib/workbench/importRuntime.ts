@@ -1,5 +1,6 @@
+import type {DataSelection} from './dataTypes';
 export interface RuntimeStatus {ready:boolean;task:string;reason:string;labels?:string[];checkpoint?:string}
-export interface ImportJob {id:string;status:string;epoch:number;epochs:number;trainLoss?:number;validationLoss?:number;result?:Record<string,unknown>;error?:string}
+export interface ImportJob {id:string;status:string;epoch:number;epochs:number;trainLoss?:number;validationLoss?:number;result?:Record<string,unknown>;error?:string;data?:{datasetName:string;selection:DataSelection}}
 export type RuntimeCall=(method:string,params:Record<string,unknown>,timeout?:number)=>Promise<unknown>;
 export interface ModelAsset {name:string;file:File}
 // One instance per selected folder and saved architecture. Validation retries

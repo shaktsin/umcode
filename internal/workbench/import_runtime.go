@@ -29,14 +29,19 @@ type ImportRuntimeState struct {
 	Checkpoint string   `json:"checkpoint,omitempty"`
 }
 type ImportJob struct {
-	ID             string         `json:"id"`
-	Status         string         `json:"status"`
-	Epoch          int            `json:"epoch"`
-	Epochs         int            `json:"epochs"`
-	TrainLoss      *float64       `json:"trainLoss,omitempty"`
-	ValidationLoss *float64       `json:"validationLoss,omitempty"`
-	Result         map[string]any `json:"result,omitempty"`
-	Error          string         `json:"error,omitempty"`
+	ID             string              `json:"id"`
+	Status         string              `json:"status"`
+	Epoch          int                 `json:"epoch"`
+	Epochs         int                 `json:"epochs"`
+	TrainLoss      *float64            `json:"trainLoss,omitempty"`
+	ValidationLoss *float64            `json:"validationLoss,omitempty"`
+	Result         map[string]any      `json:"result,omitempty"`
+	Error          string              `json:"error,omitempty"`
+	Data           *ImportTrainingData `json:"data,omitempty"`
+}
+type ImportTrainingData struct {
+	DatasetName string        `json:"datasetName"`
+	Selection   DataSelection `json:"selection"`
 }
 type importedReceipt struct {
 	Fingerprint string             `json:"fingerprint"`
@@ -394,13 +399,20 @@ func (r *ImportedRuntime) Train(ctx context.Context, b BundleTarget, epochs int,
 	if selection.Counts.Train == 0 || selection.Counts.Validation == 0 || selection.Counts.Test == 0 {
 		return ImportJob{}, errors.New("Training requires nonempty training, validation and test splits.")
 	}
+	data, err := ReadData(b.ProjectRoot, b.ModelID, selection.DatasetID)
+	if err != nil {
+		return ImportJob{}, err
+	}
+	if data.Dataset == nil {
+		return ImportJob{}, errors.New("Saved training dataset is unavailable. Review Data preparation.")
+	}
 	r.mu.Lock()
 	if r.closed || r.cancel != nil {
 		r.mu.Unlock()
 		return ImportJob{}, errors.New("A training job is already running or the runtime is closed.")
 	}
 	id := fmt.Sprintf("%d", time.Now().UnixNano())
-	job := ImportJob{ID: id, Status: "running", Epochs: epochs}
+	job := ImportJob{ID: id, Status: "running", Epochs: epochs, Data: &ImportTrainingData{DatasetName: data.Dataset.Name, Selection: selection}}
 	r.job = &job
 	r.target = b
 	jobCtx, cancel := context.WithCancel(context.Background())

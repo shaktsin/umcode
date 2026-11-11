@@ -135,6 +135,16 @@ else:
 			if err != nil || started.Status != "running" {
 				t.Fatalf("train: %+v %v", started, err)
 			}
+			encodedJob, _ := json.Marshal(started)
+			var snapshot struct {
+				Data struct {
+					DatasetName string        `json:"datasetName"`
+					Selection   DataSelection `json:"selection"`
+				} `json:"data"`
+			}
+			if err = json.Unmarshal(encodedJob, &snapshot); err != nil || snapshot.Data.DatasetName != dataset.Name || snapshot.Data.Selection.DatasetID != dataset.ID || snapshot.Data.Selection.Counts.Train != 3 {
+				t.Fatalf("training job lost its dataset snapshot: %s (%v)", encodedJob, err)
+			}
 			deadline := time.Now().Add(time.Minute)
 			for time.Now().Before(deadline) {
 				job, err := runtime.Job(target)

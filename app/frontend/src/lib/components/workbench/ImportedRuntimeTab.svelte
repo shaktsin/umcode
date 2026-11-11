@@ -3,6 +3,8 @@
  import {app} from '$lib/stores/app.svelte';
  import type {Promotion} from '$lib/workbench/inferenceTypes';
  import ImportedChatActions from './ImportedChatActions.svelte';
+ import ImportedTrainingData from './ImportedTrainingData.svelte';
+ import type {DataState} from '$lib/workbench/dataTypes';
  import {modelAssets,importAvailability,uploadModelBundle,readRuntimeSnapshot,type RuntimeStatus,type ImportJob} from '$lib/workbench/importRuntime';
  import {parseImportedGraph} from '$lib/workbench/modelImport';
  import DataTab from './DataTab.svelte';
@@ -13,20 +15,22 @@
  let status=$state<RuntimeStatus|null>(null),job=$state<ImportJob|null>(null),busy=$state(''),error=$state(''),prompt=$state(''),imageBase64=$state(''),imageName=$state(''),response=$state(''),predictions=$state<{label:string;score:number}[]>([]),epochs=$state(1),learningRate=$state(.0001),maxTokens=$state(64),checkpoint=$state('');
  let folder=$state<HTMLInputElement>(),image=$state<HTMLInputElement>();let alive=true,epoch=0,polling=-1,timer:ReturnType<typeof setTimeout>|null=null;
  let promotion=$state<Promotion|null>(null),testId=$state(''),testedScope=$state(''),chatCompatible=$state<boolean|null>(null);
+ let trainingData=$state<DataState|null>(null),trainingDataError=$state('');
  const promptScope=()=>JSON.stringify([checkpoint,prompt,maxTokens]);
  function clearTest(){testId='';testedScope='';chatCompatible=null;}
  const family=$derived.by(()=>{try{return parseImportedGraph(graphText).source.family;}catch{return '';}});
  const imageModel=$derived(['resnet','convnext','vit'].includes(family));
  const context=()=>({projectId,modelId,modelCreatedAt});
  const call=(action:string,params:Record<string,unknown>={},timeout=300000)=>app.call('workbench/import/runtime',{...context(),action,...params},timeout);
- $effect(()=>{const key=projectId+'/'+modelId+'/'+modelCreatedAt+'/'+connected+'/'+dirty+'/'+(dirty?'':graphText);untrack(()=>{epoch++;if(timer)clearTimeout(timer);status=null;job=null;response='';prompt='';imageBase64='';imageName='';predictions=[];checkpoint='';promotion=null;clearTest();error='';busy='';if(connected&&!dirty)void refresh(epoch);});});
+ $effect(()=>{const key=projectId+'/'+modelId+'/'+modelCreatedAt+'/'+connected+'/'+dirty+'/'+(dirty?'':graphText);untrack(()=>{epoch++;if(timer)clearTimeout(timer);status=null;job=null;trainingData=null;trainingDataError='';response='';prompt='';imageBase64='';imageName='';predictions=[];checkpoint='';promotion=null;clearTest();error='';busy='';if(connected&&!dirty)void refresh(epoch);});});
+ $effect(()=>{if(tab==='Train'&&connected&&!dirty)untrack(()=>void refresh());});
  onDestroy(()=>{alive=false;epoch++;if(timer)clearTimeout(timer);});
  function current(ticket:number){return alive&&ticket===epoch&&connected;}
  async function refresh(ticket=epoch){
   if(polling===ticket)return;polling=ticket;
   const captured=context();
-  try{const [snapshot,saved]=await Promise.all([readRuntimeSnapshot(action=>app.call('workbench/import/runtime',{...captured,action},300000)),app.call('workbench/import/runtime',{...captured,action:'promotion'}) as Promise<{promotion:Promotion|null}>]);
-      if(current(ticket)){status=snapshot.status;job=snapshot.job;promotion=saved.promotion;}
+  try{const [snapshot,saved,data]=await Promise.all([readRuntimeSnapshot(action=>app.call('workbench/import/runtime',{...captured,action},300000)),app.call('workbench/import/runtime',{...captured,action:'promotion'}) as Promise<{promotion:Promotion|null}>,app.call('workbench/data/get',captured).then(value=>({state:value as DataState,error:''})).catch(e=>({state:null,error:(e as Error).message}))]);
+      if(current(ticket)){status=snapshot.status;job=snapshot.job;promotion=saved.promotion;trainingData=data.state;trainingDataError=data.error;}
   }catch(e){if(current(ticket))error=(e as Error).message;}
   finally{if(polling===ticket)polling=-1;if(current(ticket)&&job?.status==='running'){if(timer)clearTimeout(timer);timer=setTimeout(()=>void refresh(ticket),2000);}}
  }
@@ -62,6 +66,7 @@
  const gate=$derived(dirty?'Save or revert your Build changes before validating the imported weights.':status?.reason||'Checking imported model readiness…');
  const blocked=$derived(!connected||dirty||!status?.ready);
  const running=$derived(job?.status==='running');
+ const savedDatasetName=$derived(trainingData?.datasets.find(d=>d.id===trainingData?.selection?.datasetId)?.name??'');
  const canPromote=$derived(!blocked&&!busy&&!running&&!!testId&&chatCompatible===true&&testedScope===promptScope());
  const metrics=$derived.by(()=>{const m=job?.result?.metrics;if(!m||typeof m!=='object')return [];return Object.entries(m).filter(([,v])=>v&&typeof v==='object').map(([split,v])=>({split,values:Object.entries(v as Record<string,unknown>).filter(([,n])=>typeof n==='number')}));});
 </script>
@@ -99,11 +104,13 @@
   </section>
  {:else if tab==='Train'}
   <section class="card"><h3>{status?.task==='text-generation'?'Fine-tune with LoRA':'Fine-tune the classification head'}</h3>
+   <ImportedTrainingData selection={running?job?.data?.selection??null:trainingData?.selection??null} datasetName={running?job?.data?.datasetName??'':savedDatasetName} loading={!running&&!trainingData&&!trainingDataError} error={running&&!job?.data?'Dataset details were not recorded for this older run.':running?'':trainingDataError} title={running?'Dataset used by this run':'Training dataset · saved Data'} {onData}/>
    <p>{status?.task==='text-generation'?'Trains small attention adapters (rank 8) on CPU while the base weights stay frozen. Each run starts from your original imported weights. The best validation checkpoint is saved as a separate model with the adapters merged for Inference and Chat.':'Updates the classification head on CPU while the backbone stays frozen.'} Original source files are never overwritten.</p>
    {#if status?.task==='text-generation'}<p>For questions and answers, select both the prompt and response columns in Data, then click Save preparation again. Training uses the native chat format and learns from answers only. A text corpus trains continuation, not question answering. Start with one epoch; LoRA does not guarantee better answers.</p>{/if}
    <div class="settings"><label>Epochs<input class="input" type="number" min="1" max="10" bind:value={epochs} disabled={running} /></label><label>Learning rate<input class="input" type="number" min="0.0000001" max={status?.task==='text-generation'?0.001:0.1} step="0.00001" bind:value={learningRate} disabled={running} /></label></div>
-   <div class="actions"><button class="btn-primary" disabled={!!busy||running} onclick={train}>Start fine-tuning</button><button class="btn-outline" onclick={onData}>Review Data</button>{#if running}<button class="btn-outline" onclick={cancel}>Stop training</button>{/if}</div>
+   <div class="actions"><button class="btn-primary" disabled={!!busy||running||!trainingData?.selection||!!trainingDataError} onclick={train}>Start fine-tuning</button>{#if running}<button class="btn-outline" onclick={cancel}>Stop training</button>{/if}</div>
    {#if job}<h3 class="job-state">{job.status} · Epoch {job.epoch}/{job.epochs}</h3><progress max={job.epochs||1} value={job.epoch}></progress>
+    {#if job.data}<p>Run dataset: <strong>{job.data.datasetName}</strong> · preparation {job.data.selection.version.slice(0,12)}</p>{:else}<p>Dataset details were not recorded for this older run.</p>{/if}
     {#if job.trainLoss!==undefined}<p>Training loss: {job.trainLoss.toFixed(4)}{job.validationLoss!==undefined?' · Validation loss: '+job.validationLoss.toFixed(4):''}</p>{/if}
     {#if job.error}<p class="error">{job.error}</p>{/if}
     {#if job.status==='completed'}<p>Checkpoint saved separately from the original model.{#if typeof job.result?.bestEpoch==='number'} Selected epoch: {job.result.bestEpoch===0?'0 · original baseline':job.result.bestEpoch}.{/if}{#if typeof job.result?.trainableParameters==='number'} Trainable parameters: {job.result.trainableParameters.toLocaleString()}.{/if}</p>{#if typeof job.result?.metricsNote==='string'}<p class="feedback">{job.result.metricsNote}</p>{/if}<button class="btn-primary" onclick={()=>{checkpoint=status?.checkpoint??'';onInference();}}>Try checkpoint in Inference</button>{/if}
