@@ -26,7 +26,7 @@
     assets=[];savedBundle=null;completeImport=new CompleteModelImport();
     selection = files.length === 1 ? files[0].name : `${files.length} selected files`;
     const current = () => alive && generation === token && connected;
-    try { assets=modelAssets(files); const metadata = await readModelFiles(files, current); if (!current()) return; reading = false; await importer.inspect(metadata); if (current() && importer.inspection) name = `${importer.inspection.name || importer.inspection.family} editable copy`; }
+    try { assets=modelAssets(files,true); const metadata = await readModelFiles(files, current); if (!current()) return; reading = false; await importer.inspect(metadata); if (current() && importer.inspection) name = `${importer.inspection.name || importer.inspection.family} editable copy`; }
     catch (e) { if (current()) localError = e instanceof Error ? e.message : 'Unable to read model metadata.'; }
     finally { if (current()) reading = false; }
   }
@@ -52,7 +52,7 @@
     <div class="import-content">
       <div class="file-actions"><button class="btn-outline btn-sm" disabled={!connected || importer.busy || !!copying} onclick={() => folderInput.click()}><FolderOpen size={15} />Choose model folder</button><button class="btn-ghost btn-sm" disabled={!connected || importer.busy || !!copying} onclick={() => fileInput.click()}><FileUp size={15} />Choose files</button><span>{selection}</span></div>
       <input bind:this={folderInput} class="hidden-picker" aria-label="Select model folder" type="file" webkitdirectory multiple onchange={() => void choose(folderInput)} />
-      <input bind:this={fileInput} class="hidden-picker" aria-label="Select config and weight files" type="file" multiple accept=".json,.safetensors,.model,.txt" onchange={() => void choose(fileInput)} />
+      <input bind:this={fileInput} class="hidden-picker" aria-label="Select config and weight files" type="file" multiple accept=".json,.safetensors,.model,.txt,.jinja" onchange={() => void choose(fileInput)} />
       <p class="privacy">Choose <code>config.json</code> with <code>.safetensors</code> weights, or select the complete model folder once. Include every shard and its index. Complete folders are copied to this project on your Mac, never to a cloud service. Original files stay unchanged.</p>
       {#if !connected}<p class="error" role="alert">Connect to the engine to inspect or create a model.</p>{/if}
       {#if reading || importer.busy || copying}<p role="status" class="status">{copying || (reading ? 'Reading bounded model metadata…' : importer.stage)}</p>{/if}
@@ -67,7 +67,7 @@
           <details open={!preview.supported}><summary>{preview.supported ? 'Native architecture groups' : 'Tensor hierarchy'}</summary><ul class="groups">{#each preview.graph.nodes as node}<li><strong>{importedLayerTitle(node,preview.family)}</strong><span>{node.tensorNames?.length ?? 0} tensors · {node.kind}</span></li>{/each}</ul></details>
           <details><summary>Tensor metadata · {preview.tensorCount.toLocaleString()}</summary><input class="input tensor-search" aria-label="Search inspected tensors" placeholder="Search tensor names" bind:value={tensorSearch} /><div class="tensor-table"><table><thead><tr><th>Tensor</th><th>Shape</th><th>Dtype</th><th>Shard</th></tr></thead><tbody>{#each tensors.slice(0, 100) as tensor}<tr><td>{tensor.name}</td><td>[{tensor.shape.join(', ')}]</td><td>{tensor.dtype}</td><td>{tensor.file}</td></tr>{/each}</tbody></table></div>{#if tensors.length > 100}<p>Showing 100 of {tensors.length.toLocaleString()} matching tensors. Refine the search.</p>{/if}</details>
         </section>
-        <p class="runtime-note">{availability?.complete ? 'Complete model assets selected. Creating the copy also imports and validates weights and preprocessing for local Data, Train and Inference. Unsupported model tasks or modified architectures stay gated with a reason.' : 'Build and Ask are available. Data, Train and Inference remain gated until you add: '+(availability?.missing.join(', ')||'the complete model folder')+'.'}</p>
+        <p class="runtime-note">{availability?.complete ? 'Complete model assets selected. Creating the copy also imports and validates weights and preprocessing for local Data, Train and Inference. Local CPU execution supports up to one billion total parameters, including every MoE expert. Unsupported formats, oversized models and modified architectures stay gated with a reason.' : 'Build and Ask are available. Data, Train and Inference remain gated until you add: '+(availability?.missing.join(', ')||'the complete model folder')+'.'}</p>
         {#if preview.supported}<label class="model-name">Editable copy name<input class="input" maxlength="128" bind:value={name} disabled={importer.busy} /></label>{/if}
       {/if}
     </div>

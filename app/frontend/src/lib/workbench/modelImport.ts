@@ -1,4 +1,5 @@
 import type { ImportFile, ImportedGraph, ImportedNode, ImportedPaletteItem } from './modelImportTypes';
+import { moeFamilies } from './importedLayers';
 const MiB = 1024 * 1024;
 const jsonLimit = 2 * MiB, headerLimit = 8 * MiB, metadataLimit = 24 * MiB;
 const encoder = new TextEncoder();
@@ -11,7 +12,7 @@ function kindOf(name: string): ImportFile['kind'] | null {
   if (base === 'config.json') return 'config';
   if (base.endsWith('.safetensors.index.json')) return 'index';
   if (base.endsWith('.safetensors')) return 'weights';
-  if (['tokenizer.json', 'tokenizer_config.json', 'special_tokens_map.json', 'vocab.json', 'vocab.txt', 'merges.txt', 'added_tokens.json', 'sentencepiece.bpe.model', 'tokenizer.model'].includes(base)) return 'tokenizer';
+  if (['tokenizer.json', 'tokenizer_config.json', 'chat_template.jinja', 'special_tokens_map.json', 'vocab.json', 'vocab.txt', 'merges.txt', 'added_tokens.json', 'sentencepiece.bpe.model', 'tokenizer.model'].includes(base)) return 'tokenizer';
   if (['processor_config.json', 'preprocessor_config.json', 'feature_extractor_config.json'].includes(base)) return 'processor';
   return null;
 }
@@ -95,10 +96,10 @@ export function bindingSummary(graph: ImportedGraph) {
   }
   return { retained, needsWeights, unused: graph.source.tensors.filter(t => !used.has(t.name)).map(t => t.name) };
 }
-const displayNames: Record<string, string> = { gpt2: 'GPT-2', llama: 'Llama', mistral: 'Mistral', qwen2: 'Qwen2', bert: 'BERT', vit: 'ViT', resnet: 'ResNet', convnext: 'ConvNeXT' };
+const displayNames: Record<string, string> = { gpt2: 'GPT-2', llama: 'Llama', mistral: 'Mistral', qwen2: 'Qwen2', bert: 'BERT', vit: 'ViT', resnet: 'ResNet', convnext: 'ConvNeXT', mixtral:'Mixtral', granitemoe:'Granite MoE', qwen2_moe:'Qwen2 MoE', qwen3_moe:'Qwen3 MoE' };
 export function importedPalette(family: string, graph?: ImportedGraph): ImportedPaletteItem[] {
   const key = family.toLowerCase(), name = displayNames[key]; if (!name) return [];
-  const rms = ['llama', 'mistral', 'qwen2'].includes(key);
+  const moe = moeFamilies.includes(key), rms = moe || ['llama', 'mistral', 'qwen2'].includes(key);
   const palette: ImportedPaletteItem[] = key === 'resnet' || key === 'convnext' ? [
     { kind: 'conv2d', label: `${name} convolution`, description: 'Spatial convolution with explicit channels, kernel and stride.', config: { channels: 64, outChannels: 64, kernelSize: 3, stride: 1, padding: 1, bias: false } },
     { kind: 'cnnblock', label: `${name} block`, description: key === 'resnet' ? 'ResNet residual block, native BatchNorm, activation and shortcut semantics.' : 'ConvNeXT depthwise convolution, channels-last LayerNorm and channel MLP residual block.', config: key === 'resnet' ? { family: key, blockType: 'bottleneck', outChannels: 256, repeatCount: 1, normalization: 'BatchNorm2d', activation: 'relu', residual: true, downsampleInFirstStage: false, downsampleInBottleneck: false } : { family: key, outChannels: 96, depthwiseKernel: 7, mlpExpansion: 4, repeatCount: 1, normalization: 'channels-last LayerNorm', activation: 'gelu', layerScaleInit: 0.000001, residual: true } },
@@ -114,8 +115,8 @@ export function importedPalette(family: string, graph?: ImportedGraph): Imported
   // Use immutable native settings from this model as templates, never the smaller
   // executable builder palette. A new node has no source key or tensor bindings.
   return palette.map(entry => {
-    const item = entry.kind === 'transformer' && rms ? { ...entry, label: 'Transformer decoder layer' } : entry;
-    const baseline = graph?.source.baselineNodes?.find(node => node.kind === item.kind);
+    const item = entry.kind === 'transformer' && rms ? { ...entry, label: moe ? 'MoE transformer decoder layer' : 'Transformer decoder layer', ...(moe ? {description:'Attention, normalization, router and experts. Expand a layer to inspect its internals; edit the layer as a unit.',config:{...entry.config,mlp:'sparse MoE',expertCount:8,expertsPerToken:2,expertIntermediateSize:3072,headDimension:64,queryKeyNorm:key==='qwen3_moe',normalizeTopK:true,...(key==='qwen2_moe'?{sharedExpertIntermediateSize:3072}:{})}}:{}) } : entry;
+    const baseline = graph?.source.baselineNodes?.find(node => node.kind === item.kind && (!moe || item.kind !== 'transformer' || node.config.mlp === 'sparse MoE'));
     if (!baseline) return item;
     const config = { ...baseline.config };
     for (const key of ['layerStart', 'layerEnd', 'blockStart', 'blockEnd', 'stage']) delete config[key];
