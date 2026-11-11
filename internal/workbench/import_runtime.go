@@ -89,7 +89,7 @@ func importedTask(g ImportedGraph) (string, error) {
 		arch, _ = arches[0].(string)
 	}
 	switch g.Source.Family {
-	case "gpt2", "llama", "mistral", "qwen2":
+	case "gpt2", "llama", "mistral", "qwen2", "mixtral", "granitemoe", "qwen2_moe", "qwen3_moe":
 		if arch != "" && !strings.HasSuffix(arch, "ForCausalLM") && arch != "GPT2LMHeadModel" {
 			break
 		}
@@ -269,6 +269,15 @@ func (r *ImportedRuntime) Validate(ctx context.Context, b BundleTarget) (ImportR
 	return state, nil
 }
 func (r *ImportedRuntime) Infer(ctx context.Context, b BundleTarget, prompt, imageBase64, checkpoint string, maxTokens int) (map[string]any, error) {
+	return r.infer(ctx, b, prompt, imageBase64, checkpoint, maxTokens, nil)
+}
+func (r *ImportedRuntime) InferChat(ctx context.Context, b BundleTarget, messages []ChatMessage, checkpoint string, maxTokens int) (map[string]any, error) {
+	if len(messages) < 1 || len(messages) > 64 {
+		return nil, errors.New("chat requires 1–64 messages")
+	}
+	return r.infer(ctx, b, "", "", checkpoint, maxTokens, messages)
+}
+func (r *ImportedRuntime) infer(ctx context.Context, b BundleTarget, prompt, imageBase64, checkpoint string, maxTokens int, messages []ChatMessage) (map[string]any, error) {
 	if err := r.acquire(); err != nil {
 		return nil, err
 	}
@@ -279,6 +288,10 @@ func (r *ImportedRuntime) Infer(ctx context.Context, b BundleTarget, prompt, ima
 	}
 	if !state.Ready {
 		return nil, errors.New(state.Reason)
+	}
+	_, before, err := importedFingerprint(b)
+	if err != nil {
+		return nil, err
 	}
 	path, err := b.VerifiedPath()
 	if err != nil {
@@ -291,10 +304,11 @@ func (r *ImportedRuntime) Infer(ctx context.Context, b BundleTarget, prompt, ima
 		return nil, errors.New("Inference input exceeds limits.")
 	}
 	req := map[string]any{"action": "infer", "bundleDir": path, "task": state.Task, "prompt": prompt, "imageBase64": imageBase64, "maxNewTokens": maxTokens}
+	if messages != nil {
+		req["messages"] = messages
+		req["sequenceLength"] = 2048
+	}
 	if checkpoint != "" {
-		if checkpoint != state.Checkpoint {
-			return nil, errors.New("Unknown checkpoint.")
-		}
 		checkpointPath, e := verifiedImportedCheckpoint(b, checkpoint)
 		if e != nil {
 			return nil, e
@@ -305,8 +319,12 @@ func (r *ImportedRuntime) Infer(ctx context.Context, b BundleTarget, prompt, ima
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err = importedFingerprint(b); err != nil {
+	_, after, err := importedFingerprint(b)
+	if err != nil {
 		return nil, err
+	}
+	if before != after {
+		return nil, errors.New("model changed during inference; test again")
 	}
 	return result, nil
 }

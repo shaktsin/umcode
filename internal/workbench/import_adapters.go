@@ -13,7 +13,7 @@ func importFamily(config map[string]any) (string, bool) {
 	family, _ := config["model_type"].(string)
 	family = strings.ToLower(family)
 	switch family {
-	case "gpt2", "llama", "mistral", "qwen2", "bert", "vit", "resnet", "convnext":
+	case "gpt2", "llama", "mistral", "qwen2", "bert", "vit", "resnet", "convnext", "mixtral", "granitemoe", "qwen2_moe", "qwen3_moe":
 		return family, true
 	}
 	if family == "" {
@@ -28,7 +28,7 @@ func importDisplayName(config map[string]any, family string) string {
 			return parts[len(parts)-1]
 		}
 	}
-	name := map[string]string{"gpt2": "GPT-2", "llama": "Llama", "mistral": "Mistral", "qwen2": "Qwen2", "bert": "BERT", "vit": "ViT", "resnet": "ResNet", "convnext": "ConvNeXT", "unknown": "Imported model"}[family]
+	name := map[string]string{"gpt2": "GPT-2", "llama": "Llama", "mistral": "Mistral", "qwen2": "Qwen2", "bert": "BERT", "vit": "ViT", "resnet": "ResNet", "convnext": "ConvNeXT", "mixtral": "Mixtral", "granitemoe": "Granite MoE", "qwen2_moe": "Qwen2 MoE", "qwen3_moe": "Qwen3 MoE", "unknown": "Imported model"}[family]
 	if name == "" {
 		return "Imported model"
 	}
@@ -121,7 +121,7 @@ func importVariant(source ImportedSource) importTaskVariant {
 		}
 		variant = name
 	}
-	base := map[string]string{"gpt2": "GPT2Model", "llama": "LlamaModel", "mistral": "MistralModel", "qwen2": "Qwen2Model", "bert": "BertModel", "vit": "ViTModel", "resnet": "ResNetModel", "convnext": "ConvNextModel"}[family]
+	base := map[string]string{"gpt2": "GPT2Model", "llama": "LlamaModel", "mistral": "MistralModel", "qwen2": "Qwen2Model", "bert": "BertModel", "vit": "ViTModel", "resnet": "ResNetModel", "convnext": "ConvNextModel", "mixtral": "MixtralModel", "granitemoe": "GraniteMoeModel", "qwen2_moe": "Qwen2MoeModel", "qwen3_moe": "Qwen3MoeModel"}[family]
 	if variant == base && base != "" {
 		v := importTaskVariant{}
 		if family == "bert" {
@@ -146,7 +146,7 @@ func importVariant(source ImportedSource) importTaskVariant {
 		case "BertForQuestionAnswering":
 			return importTaskVariant{task: "questionAnswering", label: "BERT token start/end span projection", prefixes: []string{"qa_outputs."}}
 		}
-	} else if family == "gpt2" || family == "llama" || family == "mistral" || family == "qwen2" {
+	} else if family == "gpt2" || importRMSDecoder(family) {
 		stem := strings.TrimSuffix(base, "Model")
 		causal := stem + "ForCausalLM"
 		if family == "gpt2" {
@@ -173,7 +173,7 @@ func importVariant(source ImportedSource) importTaskVariant {
 		return importTaskVariant{boundary: "Architecture " + variant + " has an unhandled task variant; only the family backbone is represented."}
 	}
 	// Tensor evidence is used only when it unambiguously determines a task.
-	if (family == "gpt2" || family == "llama" || family == "mistral" || family == "qwen2") && evidence["lm_head."] && !evidence["score."] && !evidence["classifier."] {
+	if (family == "gpt2" || importRMSDecoder(family)) && evidence["lm_head."] && !evidence["score."] && !evidence["classifier."] {
 		return importTaskVariant{task: "causalLanguageModeling", label: importDisplayName(nil, family) + " vocabulary LM projection", prefixes: []string{"lm_head."}}
 	}
 	if family == "bert" && evidence["cls.predictions."] && !evidence["cls.seq_relationship."] && !evidence["classifier."] {
@@ -213,16 +213,22 @@ func makeImportedGraph(source ImportedSource) (ImportedGraph, error) {
 	if supported {
 		add("input", "input", "Model input", map[string]any{"family": family})
 		switch family {
-		case "gpt2", "llama", "mistral", "qwen2", "bert", "vit":
+		case "gpt2", "llama", "mistral", "qwen2", "bert", "vit", "mixtral", "granitemoe", "qwen2_moe", "qwen3_moe":
 			layerKey, hiddenKey, headKey, defaultLayers, defaultHidden, defaultHeads := "num_hidden_layers", "hidden_size", "num_attention_heads", 12, 768, 12
 			if family == "gpt2" {
 				layerKey, hiddenKey, headKey = "n_layer", "n_embd", "n_head"
 			}
-			if family == "llama" || family == "mistral" || family == "qwen2" {
+			if importRMSDecoder(family) {
 				defaultLayers, defaultHidden, defaultHeads = 32, 4096, 32
 			}
+			if family == "qwen2_moe" {
+				defaultLayers, defaultHidden, defaultHeads = 24, 2048, 16
+			}
+			if family == "qwen3_moe" {
+				defaultLayers, defaultHidden, defaultHeads = 24, 2048, 32
+			}
 			layers, e := importConfigInt(c, layerKey, defaultLayers)
-			if e != nil || layers > 100000 {
+			if e != nil || layers > 100000 || (importMoE(family) && layers > 128) {
 				return graph, errors.New("invalid transformer layer count")
 			}
 			hidden, e := importConfigInt(c, hiddenKey, defaultHidden)
@@ -230,7 +236,7 @@ func makeImportedGraph(source ImportedSource) (ImportedGraph, error) {
 				return graph, e
 			}
 			heads, e := importConfigInt(c, headKey, defaultHeads)
-			if e != nil || hidden%heads != 0 {
+			if e != nil || (hidden%heads != 0 && !(importMoE(family) && c["head_dim"] != nil)) {
 				return graph, errors.New("hidden size must be divisible by attention heads")
 			}
 			defaultIntermediate := hidden * 4
@@ -241,6 +247,14 @@ func makeImportedGraph(source ImportedSource) (ImportedGraph, error) {
 				defaultIntermediate = 14336
 			case "qwen2":
 				defaultIntermediate = 22016
+			case "mixtral":
+				defaultIntermediate = 14336
+			case "granitemoe":
+				defaultIntermediate = 11008
+			case "qwen2_moe":
+				defaultIntermediate = 5632
+			case "qwen3_moe":
+				defaultIntermediate = 6144
 			}
 			intermediate, e := importConfigInt(c, "intermediate_size", defaultIntermediate)
 			if e != nil {
@@ -266,17 +280,20 @@ func makeImportedGraph(source ImportedSource) (ImportedGraph, error) {
 				cfg["scaleAttentionWeights"] = importConfigValue(c, "scale_attn_weights", true)
 				cfg["scaleAttentionByInverseLayer"] = importConfigValue(c, "scale_attn_by_inverse_layer_idx", false)
 				cfg["reorderAndUpcastAttention"] = importConfigValue(c, "reorder_and_upcast_attn", false)
-			case "llama", "mistral", "qwen2":
+			case "llama", "mistral", "qwen2", "mixtral", "granitemoe", "qwen2_moe", "qwen3_moe":
 				defaultKV := heads
-				if family == "mistral" {
+				if family == "mistral" || family == "mixtral" {
 					defaultKV = 8
+				}
+				if family == "qwen3_moe" {
+					defaultKV = 4
 				}
 				kv, e := importConfigInt(c, "num_key_value_heads", defaultKV)
 				if e != nil || heads%kv != 0 {
 					return graph, errors.New("invalid grouped-query key/value head count")
 				}
 				defaultVocab := 32000
-				if family == "qwen2" {
+				if family == "qwen2" || family == "qwen2_moe" || family == "qwen3_moe" {
 					defaultVocab = 151936
 				}
 				add("embeddings.token", "embedding", importDisplayName(c, family)+" token embedding", map[string]any{"hiddenSize": hidden, "vocabSize": importConfigValue(c, "vocab_size", defaultVocab)}, "model.embed_tokens.", "embed_tokens.")
@@ -296,6 +313,11 @@ func makeImportedGraph(source ImportedSource) (ImportedGraph, error) {
 				if family == "qwen2" {
 					cfg["useSlidingWindow"] = importConfigValue(c, "use_sliding_window", false)
 					cfg["maxWindowLayers"] = importConfigValue(c, "max_window_layers", 28)
+				}
+				if importMoE(family) {
+					if err := configureImportMoE(c, cfg, family, layers, hidden, heads); err != nil {
+						return graph, err
+					}
 				}
 			case "bert":
 				add("embeddings", "embedding", "BERT word + position + token-type embeddings / LayerNorm", map[string]any{"hiddenSize": hidden, "positions": "learned absolute", "maxPositions": importConfigValue(c, "max_position_embeddings", 512), "typeVocabSize": importConfigValue(c, "type_vocab_size", 2)}, "bert.embeddings.", "embeddings.")
@@ -323,6 +345,9 @@ func makeImportedGraph(source ImportedSource) (ImportedGraph, error) {
 					end = layers
 				}
 				settings := cloneImportConfig(cfg)
+				if importMoE(family) && !importMoELayer(c, family, start) {
+					settings["mlp"] = "gated MLP (SwiGLU)"
+				}
 				settings["layerStart"] = start
 				settings["layerEnd"] = end - 1
 				settings["repeatCount"] = end - start
@@ -348,7 +373,7 @@ func makeImportedGraph(source ImportedSource) (ImportedGraph, error) {
 			switch family {
 			case "gpt2":
 				add("final_norm", "normalization", "GPT-2 final LayerNorm", map[string]any{"normalization": "LayerNorm", "hiddenSize": hidden}, "transformer.ln_f.", "ln_f.")
-			case "llama", "mistral", "qwen2":
+			case "llama", "mistral", "qwen2", "mixtral", "granitemoe", "qwen2_moe", "qwen3_moe":
 				add("final_norm", "normalization", importDisplayName(nil, family)+" final RMSNorm", map[string]any{"normalization": "RMSNorm", "hiddenSize": hidden}, "model.norm.", "norm.")
 			case "bert":
 				if variant.pooler {

@@ -9,6 +9,13 @@ const props = {
 };
 
 describe('imported model setup ownership', () => {
+  it.each(['Build','Data','Train','Inference'])('checks runtime readiness for MoE in %s instead of blocking the entire family', (tab) => {
+    const graphText=JSON.stringify({version:1,format:'umcode.imported.v1',source:{family:'mixtral',tensors:[]},nodes:[],edges:[]});
+    const {body}=render(ImportedRuntimeTab,{props:{...props,graphText,tab}});
+    expect(body).not.toContain('not available for these MoE families');
+    if(tab==='Build')expect(body).toContain('Validate local model');
+    else expect(body).toContain('Checking imported model readiness');
+  });
   it('offers model-folder setup in Build without blocking architecture inspection', () => {
     const { body } = render(ImportedRuntimeTab, { props: { ...props, tab: 'Build' } });
     expect(body).toContain('Add complete model folder');

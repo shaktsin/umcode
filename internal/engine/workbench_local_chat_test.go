@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -20,6 +21,34 @@ import (
 	"github.com/shaktsin/umcode/internal/teststore"
 	"github.com/shaktsin/umcode/internal/workbench"
 )
+
+func TestImportedLocalPromptPreservesRolesForNativeTemplate(t *testing.T) {
+	items := []protocol.Item{{TurnID: "old", Kind: protocol.ItemUserMessage, Status: protocol.ItemCompleted, Text: "hello"}, {TurnID: "old", Kind: protocol.ItemAgentMessage, Status: protocol.ItemCompleted, Text: "hi"}, {TurnID: "old", Kind: protocol.ItemToolCall, Status: protocol.ItemCompleted, Text: "private tool output"}}
+	prompt, omitted, err := workbenchLocalPromptFormat(items, "current", "again", 2048, 64, "imported-chat-v1")
+	if err != nil || omitted {
+		t.Fatalf("%v omitted=%v", err, omitted)
+	}
+	var messages []map[string]string
+	if json.Unmarshal([]byte(prompt), &messages) != nil || len(messages) != 3 || messages[0]["role"] != "user" || messages[1]["role"] != "assistant" || messages[2]["content"] != "again" {
+		t.Fatalf("lost conversation roles: %s", prompt)
+	}
+}
+
+func TestImportedLocalPromptSkipsUnansweredTurns(t *testing.T) {
+	items := []protocol.Item{{TurnID: "cancelled", Kind: protocol.ItemUserMessage, Status: protocol.ItemCompleted, Text: "cancelled question"}, {TurnID: "cancelled", Kind: protocol.ItemAgentMessage, Status: protocol.ItemCompleted, Text: ""}, {TurnID: "incomplete", Kind: protocol.ItemUserMessage, Status: protocol.ItemCompleted, Text: "orphan question"}}
+	prompt, _, err := workbenchLocalPromptFormat(items, "current", "hello", 2048, 64, "imported-chat-v1")
+	if err != nil || prompt != `[{"role":"user","content":"hello"}]` {
+		t.Fatalf("failed turns poisoned chat roles: %s %v", prompt, err)
+	}
+}
+
+func TestImportedLocalPromptCombinesAssistantSegments(t *testing.T) {
+	items := []protocol.Item{{TurnID: "old", Kind: protocol.ItemUserMessage, Status: protocol.ItemCompleted, Text: "hello"}, {TurnID: "old", Kind: protocol.ItemAgentMessage, Status: protocol.ItemCompleted, Text: "first"}, {TurnID: "old", Kind: protocol.ItemToolCall, Status: protocol.ItemCompleted, Text: "private"}, {TurnID: "old", Kind: protocol.ItemAgentMessage, Status: protocol.ItemCompleted, Text: "second"}}
+	prompt, _, err := workbenchLocalPromptFormat(items, "current", "again", 2048, 64, "imported-chat-v1")
+	if err != nil || prompt != `[{"role":"user","content":"hello"},{"role":"assistant","content":"first\nsecond"},{"role":"user","content":"again"}]` {
+		t.Fatalf("lost assistant continuation: %s %v", prompt, err)
+	}
+}
 
 // A local model selection must reach local validation before the credential and
 // tool-capability router. This catches accidental return to the cloud path.

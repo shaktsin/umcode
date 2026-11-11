@@ -13,7 +13,8 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 MAX_REQUEST = 64 * 1024 * 1024
 MAX_IMAGE = 8 * 1024 * 1024
-TASK_TYPES = {'text-generation': {'gpt2', 'llama', 'mistral', 'qwen2'},
+MOE_TYPES = {'mixtral', 'granitemoe', 'qwen2_moe', 'qwen3_moe'}
+TASK_TYPES = {'text-generation': {'gpt2', 'llama', 'mistral', 'qwen2'} | MOE_TYPES,
               'text-classification': {'bert'},
               'image-classification': {'vit', 'resnet', 'convnext'}}
 
@@ -23,13 +24,19 @@ def check_config_budget(config):
               'n_embd': 8192, 'intermediate_size': 65536, 'n_inner': 65536,
               'num_attention_heads': 128, 'n_head': 128, 'vocab_size': 256000,
               'num_labels': 10000, 'image_size': 512, 'embedding_size': 4096,
-              'max_position_embeddings': 131072, 'n_positions': 131072}
+              'max_position_embeddings': 131072, 'n_positions': 131072,
+              'num_local_experts': 512, 'num_experts': 512, 'num_experts_per_tok': 512,
+              'moe_intermediate_size': 65536, 'shared_expert_intermediate_size': 65536}
     for field, limit in limits.items():
         value = getattr(config, field, None)
         if value is not None:
             values = value if isinstance(value, (list, tuple)) else [value]
             if any(isinstance(v, bool) or not isinstance(v, int) or v < 1 or v > limit for v in values):
                 raise ValueError('Model config exceeds the local runtime budget: ' + field)
+    if config.model_type in MOE_TYPES:
+        experts = getattr(config, 'num_local_experts', getattr(config, 'num_experts', 0))
+        if not 1 <= config.num_experts_per_tok <= experts:
+            raise ValueError('MoE experts per token must be between one and the total expert count')
     for field, limit in [('depths', 48), ('hidden_sizes', 4096)]:
         values = getattr(config, field, None)
         if values is not None and (not isinstance(values, (list, tuple)) or not 1 <= len(values) <= 8 or
@@ -88,7 +95,7 @@ def load(request):
     with torch.device('meta'):
         skeleton = cls.from_config(config, trust_remote_code=False)
     if sum(p.numel() for p in skeleton.parameters()) > 1_000_000_000:
-        raise ValueError('Model exceeds the local one-billion-parameter budget')
+        raise ValueError('Model exceeds the local one-billion-total-parameter budget. All MoE experts must fit in memory, not only active experts. Use a smaller model; Build inspection remains available.')
     expected = {key: tuple(value.shape) for key, value in skeleton.state_dict().items()}
     present = {}
     for file in path.glob('*.safetensors'):
@@ -165,13 +172,33 @@ def target_index(value, model):
     return value
 
 
+def chat_inputs(processor, messages, capacity, maximum):
+    if not getattr(processor, 'chat_template', None):
+        raise ValueError('This tokenizer has no chat template; use completion inference instead')
+    if not isinstance(messages, list) or not 1 <= len(messages) <= 64:
+        raise ValueError('Chat requires 1 to 64 messages')
+    for index, message in enumerate(messages):
+        role = 'user' if index % 2 == 0 else 'assistant'
+        if not isinstance(message, dict) or message.get('role') != role:
+            raise ValueError('Chat roles must alternate user and assistant')
+        text_value(message.get('content'))
+    if messages[-1]['role'] != 'user':
+        raise ValueError('The last chat role must be user')
+    prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = processor(prompt, return_tensors='pt', add_special_tokens=False, truncation=False, return_token_type_ids=False)
+    if inputs['input_ids'].shape[1] + maximum > capacity:
+        raise ValueError('Conversation exceeds this local model context; start a new chat or shorten your message')
+    return inputs
+
+
 def inputs_for(row, task, processor, length, model, training=False):
     import torch
     if task == 'image-classification':
         inputs = dict(processor(images=image_from_base64(row.get('imageBase64')), return_tensors='pt'))
     else:
         text = text_value(row.get('text'))
-        inputs = dict(processor(text, return_tensors='pt', truncation=True, max_length=length))
+        options = {'return_token_type_ids': False} if task == 'text-generation' else {}
+        inputs = dict(processor(text, return_tensors='pt', truncation=True, max_length=length, **options))
     if training:
         if task == 'text-generation':
             labels = inputs['input_ids'].clone()
@@ -199,9 +226,10 @@ def run(request, progress=lambda _: None):
     capacity = getattr(model.config, 'max_position_embeddings', getattr(model.config, 'n_positions', 2048))
     if isinstance(capacity, int):
         length = min(length, capacity)
-    if task == 'text-generation' and length * model.config.vocab_size > 64_000_000:
+    if task == 'text-generation' and action != 'infer' and length * model.config.vocab_size > 64_000_000:
         raise ValueError('Sequence length exceeds the local output-memory budget; use fewer tokens')
     result = {'ok': True, 'task': task, 'parameterCount': sum(p.numel() for p in model.parameters())}
+    result['chatCompatible'] = task == 'text-generation' and bool(getattr(processor, 'chat_template', None))
     if task != 'text-generation':
         result['labels'] = [str(model.config.id2label.get(i, i)) for i in range(model.config.num_labels)]
     if action == 'validate':
@@ -209,12 +237,18 @@ def run(request, progress=lambda _: None):
     if action == 'infer':
         with torch.no_grad():
             if task == 'text-generation':
-                prompt = text_value(request.get('prompt'))
-                if getattr(processor, 'chat_template', None):
-                    prompt = processor.apply_chat_template([{'role': 'user', 'content': prompt}], tokenize=False, add_generation_prompt=True)
                 maximum = number(request.get('maxNewTokens'), 32, 1, 256, True)
                 maximum = min(maximum, max(1, capacity - 1))
-                inputs = processor(prompt, return_tensors='pt', truncation=True, max_length=min(length, capacity - maximum))
+                messages = request.get('messages')
+                if messages is not None:
+                    inputs = chat_inputs(processor, messages, min(length, capacity), maximum)
+                elif result['chatCompatible']:
+                    inputs = chat_inputs(processor, [{'role':'user','content':text_value(request.get('prompt'))}], min(2048, capacity), maximum)
+                else:
+                    prompt = text_value(request.get('prompt'))
+                    inputs = processor(prompt, return_tensors='pt', truncation=True, max_length=min(length, capacity - maximum), return_token_type_ids=False)
+                if (inputs['input_ids'].shape[1] + maximum) * model.config.vocab_size > 64_000_000:
+                    raise ValueError('Conversation exceeds the local output-memory budget; shorten it or start a new chat')
                 generated = model.generate(**inputs, max_new_tokens=maximum, do_sample=False, pad_token_id=processor.pad_token_id)
                 result['text'] = processor.decode(generated[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
             else:

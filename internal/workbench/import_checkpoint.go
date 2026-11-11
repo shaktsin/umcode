@@ -129,6 +129,9 @@ func verifiedImportedCheckpoint(b BundleTarget, id string) (string, error) {
 	if err = validateBundleManifest(manifest.Files); err != nil {
 		return "", err
 	}
+	if err = verifyBundleEntries(folder, manifest); err != nil {
+		return "", err
+	}
 	_, digests, err := bundleMetadata(folder, manifest)
 	if err != nil {
 		return "", err

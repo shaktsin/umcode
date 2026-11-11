@@ -572,6 +572,13 @@ func validateImportNodeConfig(config map[string]any) error {
 	if config == nil || len(config) > 100 {
 		return errors.New("invalid layer settings")
 	}
+	if family, _ := config["family"].(string); importMoE(family) && config["mlp"] == "sparse MoE" {
+		experts, err := importConfigInt(config, "expertCount", 0)
+		top, topErr := importConfigInt(config, "expertsPerToken", 0)
+		if err != nil || topErr != nil || experts < 1 || experts > 4096 || top < 1 || top > experts {
+			return errors.New("MoE experts per token must be a positive integer no greater than expert count")
+		}
+	}
 	for k, v := range config {
 		if k == "" || len(k) > 128 {
 			return errors.New("invalid setting key")

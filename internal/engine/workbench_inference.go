@@ -224,6 +224,9 @@ func (e *Engine) WorkbenchLocalPromotion(ctx context.Context, id string) (workbe
 			if err != nil {
 				return p, fmt.Errorf("promotion project is unavailable: %w", err)
 			}
+			if p.Runtime == "transformers" {
+				return p, e.validateImportedPromotion(project.Root, p)
+			}
 			snap, err := workbench.ReadCheckpoint(project.Root, p.ModelID, p.ModelCreatedAt, p.CheckpointID)
 			if err != nil {
 				return p, fmt.Errorf("promotion checkpoint is unavailable: %w", err)
@@ -252,6 +255,10 @@ func (e *Engine) LocalWorkbenchModels(ctx context.Context, provider string) ([]p
 		if _, err := e.WorkbenchLocalPromotion(ctx, p.ID); err != nil {
 			continue
 		}
+		if p.Runtime == "transformers" {
+			result = append(result, protocol.Model{Provider: "workbench_local", ID: p.ID, DisplayName: p.Name, ContextWindow: p.ContextWindow, Source: "workbench"})
+			continue
+		}
 		project, err := e.project(ctx, p.ProjectID)
 		if err != nil {
 			continue
@@ -275,6 +282,27 @@ func (e *Engine) GenerateWorkbenchLocal(ctx context.Context, id, prompt string, 
 	}
 	e.workbenchMu.Lock()
 	defer e.workbenchMu.Unlock()
+	if p.Runtime == "transformers" {
+		if len(prompt) > 1<<20 {
+			return workbench.Prediction{}, errors.New("Chat exceeds the local context limit. Start a new chat.")
+		}
+		var messages []workbench.ChatMessage
+		if err = json.Unmarshal([]byte(prompt), &messages); err != nil {
+			return workbench.Prediction{}, errors.New("Invalid imported chat messages.")
+		}
+		if err = e.validateImportedPromotion(project.Root, p); err != nil {
+			return workbench.Prediction{}, err
+		}
+		result, err := e.importedRunner().InferChat(ctx, workbench.BundleTarget{ProjectRoot: project.Root, ModelID: p.ModelID, CreatedAt: p.ModelCreatedAt}, messages, p.CheckpointID, maxTokens)
+		if err != nil {
+			return workbench.Prediction{}, err
+		}
+		if err = e.validateImportedPromotion(project.Root, p); err != nil {
+			return workbench.Prediction{}, err
+		}
+		text, _ := result["text"].(string)
+		return workbench.Prediction{CheckpointID: p.CheckpointID, Text: text, Device: "cpu"}, nil
+	}
 	snap, err := workbench.ReadCheckpoint(project.Root, p.ModelID, p.ModelCreatedAt, p.CheckpointID)
 	if err != nil {
 		return workbench.Prediction{}, err

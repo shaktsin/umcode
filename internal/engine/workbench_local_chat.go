@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,6 +26,37 @@ func workbenchLocalPrompt(items []protocol.Item, currentTurnID, text string, win
 func workbenchLocalPromptFormat(items []protocol.Item, currentTurnID, text string, window, maxOutput int, format string) (string, bool, error) {
 	if strings.TrimSpace(text) == "" || len(text) > 8192 {
 		return "", false, errors.New("enter a plain text message of at most 8,192 UTF-8 bytes")
+	}
+	if format == "imported-chat-v1" {
+		messages := []workbench.ChatMessage{}
+		var pending *workbench.ChatMessage
+		pendingTurn := ""
+		pairedTurn := ""
+		for _, it := range items {
+			if it.TurnID == currentTurnID || it.Status != protocol.ItemCompleted || strings.TrimSpace(it.Text) == "" {
+				continue
+			}
+			if it.Kind == protocol.ItemUserMessage {
+				pending = &workbench.ChatMessage{Role: "user", Content: it.Text}
+				pendingTurn = it.TurnID
+				pairedTurn = ""
+			}
+			if it.Kind == protocol.ItemAgentMessage && pending != nil && it.TurnID == pendingTurn {
+				messages = append(messages, *pending, workbench.ChatMessage{Role: "assistant", Content: it.Text})
+				pending = nil
+				pairedTurn = it.TurnID
+			} else if it.Kind == protocol.ItemAgentMessage && pairedTurn == it.TurnID && len(messages) > 0 {
+				messages[len(messages)-1].Content += "\n" + it.Text
+			}
+		}
+		messages = append(messages, workbench.ChatMessage{Role: "user", Content: text})
+		raw, err := json.Marshal(messages)
+		if len(messages) > 64 || len(raw) > 1<<20 {
+			return "", false, errors.New("conversation is too long; start a new chat")
+		}
+		// The imported tokenizer checks token capacity after applying its native
+		// chat template. Byte-token accounting is only correct for scratch models.
+		return string(raw), false, err
 	}
 	current := "User: " + text + "\nAssistant:"
 	switch format {
