@@ -144,13 +144,13 @@ class ProtocolTests(unittest.TestCase):
             rows = [{'text': 'hello world'}, {'text': 'world hello'}]
             trained = run({**common, 'action': 'train', 'outputDir': str(output), 'splits': {'train': rows, 'validation': rows, 'test': rows}})
             self.assertTrue(trained['ok'], trained)
-            self.assertEqual(trained['trainingMode'], 'output-head-only')
+            self.assertEqual(trained['trainingMode'], 'lora')
             import torch
             from safetensors.torch import load_file
             original = load_file(bundle / 'model.safetensors')
             updated = load_file(output / 'model.safetensors')
             for key, tensor in original.items():
-                if not key.startswith('lm_head.'):
+                if '.attn.c_attn.' not in key:
                     self.assertTrue(torch.equal(tensor, updated[key]), 'Frozen backbone changed: ' + key)
             self.assertTrue(run({**common, 'action': 'validate', 'checkpointDir': str(output)})['ok'])
             one = run({**common, 'action': 'train', 'outputDir': str(Path(tmp) / 'one'),

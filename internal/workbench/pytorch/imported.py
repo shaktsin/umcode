@@ -193,6 +193,8 @@ def chat_inputs(processor, messages, capacity, maximum):
 
 def inputs_for(row, task, processor, length, model, training=False):
     import torch
+    if training and task == 'text-generation':
+        return training_text_inputs(row, processor, length)
     if task == 'image-classification':
         inputs = dict(processor(images=image_from_base64(row.get('imageBase64')), return_tensors='pt'))
     else:
@@ -209,6 +211,53 @@ def inputs_for(row, task, processor, length, model, training=False):
         else:
             inputs['labels'] = torch.tensor([target_index(row.get('target'), model)])
     return inputs
+
+
+def training_text_inputs(row, processor, length):
+    """Train on the exact chat protocol used for inference, never on the question."""
+    import torch
+    text = text_value(row.get('text'))
+    prefix_ids = []
+    if 'response' in row:
+        answer = text_value(row['response'])
+        if not getattr(processor, 'chat_template', None):
+            raise ValueError('Question/response training requires a native chat template. Use a chat/instruct model, or select text corpus training in Data.')
+        messages = [{'role': 'user', 'content': text}]
+        prefix = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        full = processor.apply_chat_template(messages + [{'role': 'assistant', 'content': answer}],
+                                            tokenize=False, add_generation_prompt=False)
+        prefix_ids = processor(prefix, add_special_tokens=False)['input_ids']
+        ids = processor(full, add_special_tokens=False)['input_ids']
+        if ids[:len(prefix_ids)] != prefix_ids or len(ids) <= len(prefix_ids):
+            raise ValueError('This chat template cannot align question/response training safely.')
+    else:
+        ids = processor(text)['input_ids']
+    eos = processor.eos_token_id
+    if eos is not None and (not ids or ids[-1] != eos):
+        ids.append(eos)
+    if len(ids) > length:
+        raise ValueError(f'Training row needs {len(ids)} tokens but sequence length is {length}. Increase sequence length in Data and save preparation, or shorten the row; answers are never silently truncated.')
+    if len(ids) < 2:
+        raise ValueError('Training text must contain at least two tokens')
+    inputs = {'input_ids': torch.tensor([ids]), 'attention_mask': torch.ones((1, len(ids)), dtype=torch.long)}
+    labels = inputs['input_ids'].clone()
+    labels[:, :len(prefix_ids)] = -100
+    if not (labels[:, 1:] != -100).any():
+        raise ValueError('Training row contains no answer tokens')
+    inputs['labels'] = labels
+    return inputs
+
+
+def with_lora(model):
+    try:
+        from peft import LoraConfig, get_peft_model, TaskType
+    except ImportError as exc:
+        raise ValueError('LoRA training needs PEFT. Install requirements-imported.txt into the configured UMCode Python runtime.') from exc
+    gpt2 = model.config.model_type == 'gpt2'
+    targets = ['c_attn'] if gpt2 else ['q_proj', 'v_proj']
+    return get_peft_model(model, LoraConfig(task_type=TaskType.CAUSAL_LM, r=8, lora_alpha=16,
+                                          target_modules=targets, lora_dropout=0.05, bias='none',
+                                          fan_in_fan_out=gpt2))
 
 
 def run(request, progress=lambda _: None):
@@ -268,70 +317,137 @@ def run(request, progress=lambda _: None):
     if task == 'text-generation' and len(splits['train']) < 2:
         raise ValueError('Text generation training requires at least two rows')
     epochs = number(request.get('epochs'), 1, 1, 10, True)
-    rate = number(request.get('learningRate'), 0.0001, 0.0000001, 0.1)
+    rate = number(request.get('learningRate'), 0.0001, 0.0000001, 0.001 if task == 'text-generation' else 0.1)
     out = request.get('outputDir')
     if not isinstance(out, str) or not out or len(out) > 4096:
         raise ValueError('An output directory is required')
     output = Path(out).resolve()
     if output == path or path in output.parents or output in path.parents or output.exists():
         raise ValueError('Output directory must be new and separate from the source')
-    for param in model.parameters():
-        param.requires_grad = False
-    head = model.get_output_embeddings() if task == 'text-generation' else getattr(model, 'classifier', None)
-    if head is None:
-        raise ValueError('This model has no supported trainable output head')
-    # Tied token embeddings belong to the frozen backbone. Give the output
-    # head its own weights before enabling gradients.
-    if task == 'text-generation' and getattr(model.config, 'tie_word_embeddings', False):
-        import copy
-        head = copy.deepcopy(head)
-        model.config.tie_word_embeddings = False
-        model.set_output_embeddings(head)
-    for param in head.parameters():
-        param.requires_grad = True
-    optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=rate)
+    # Preflight every row before updates, including answer boundaries/lengths.
+    prepared = {}
+    for split, rows in splits.items():
+        if split not in ('train', 'validation', 'test'):
+            continue
+        prepared[split] = []
+        for index, row in enumerate(rows):
+            try:
+                inputs = inputs_for(row, task, processor, length, model, True)
+                # Do not retain decoded image tensors for the whole dataset.
+                prepared[split].append(row if task == 'image-classification' else inputs)
+            except ValueError as exc:
+                raise ValueError(f'{split} row {index + 1}: {exc}') from exc
+    causal = task == 'text-generation'
+    original_cache = getattr(model.config, 'use_cache', None)
+    if causal:
+        model = with_lora(model)
+        model.config.use_cache = False
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
+    else:
+        for param in model.parameters():
+            param.requires_grad = False
+        head = getattr(model, 'classifier', None)
+        if head is None:
+            raise ValueError('This model has no supported trainable output head')
+        for param in head.parameters():
+            param.requires_grad = True
+    trainable = {name: p for name, p in model.named_parameters() if p.requires_grad}
+    optimizer = torch.optim.AdamW(trainable.values(), lr=rate, weight_decay=0.01)
+    accumulation = min(4, len(prepared['train']))
+    steps_per_epoch = math.ceil(len(prepared['train']) / accumulation)
+    total_steps = epochs * steps_per_epoch
+    warmup = max(1, math.ceil(total_steps * 0.1))
+    step = 0
 
-    def evaluate(rows):
-        if not rows:
+    def ready(item):
+        return inputs_for(item, task, processor, length, model, True) if task == 'image-classification' else item
+
+    def evaluate(split):
+        if not prepared[split]:
             return None
         model.eval()
-        loss, correct = 0.0, 0
+        loss, correct, count = 0.0, 0, 0
         with torch.no_grad():
-            for row in rows:
-                output_data = model(**inputs_for(row, task, processor, length, model, True))
-                loss += float(output_data.loss)
-                if task != 'text-generation':
-                    correct += int(output_data.logits.argmax(-1).item() == target_index(row.get('target'), model))
-        metrics = {'loss': loss / len(rows), 'count': len(rows)}
-        if task != 'text-generation':
-            metrics['accuracy'] = correct / len(rows)
+            for item in prepared[split]:
+                inputs = ready(item)
+                output_data = model(**inputs)
+                if not torch.isfinite(output_data.loss):
+                    raise ValueError('Evaluation loss is not finite')
+                weight = int((inputs['labels'][:, 1:] != -100).sum()) if causal else 1
+                loss += float(output_data.loss) * weight
+                count += weight
+                if not causal:
+                    correct += int(output_data.logits.argmax(-1).item() == inputs['labels'].item())
+        metrics = {'loss': loss / count, 'count': len(prepared[split])}
+        if causal:
+            metrics['perplexity'] = math.exp(min(metrics['loss'], 80))
+        else:
+            metrics['accuracy'] = correct / count
         return metrics
 
+    baseline = evaluate('validation')
+    best_loss, best_epoch = (baseline['loss'] if baseline else math.inf), 0
+    best = {name: p.detach().clone() for name, p in trainable.items()}
+    import random
+    rng = random.Random(seed)
     for epoch in range(epochs):
         model.eval()
-        head.train()
-        total = 0.0
-        for row in splits['train']:
+        if causal:
+            model.train()
+        else:
+            head.train()
+        total, tokens = 0.0, 0
+        rows = list(prepared['train'])
+        rng.shuffle(rows)
+        for start in range(0, len(rows), accumulation):
+            batch = [ready(item) for item in rows[start:start + accumulation]]
             optimizer.zero_grad(set_to_none=True)
-            loss = model(**inputs_for(row, task, processor, length, model, True)).loss
-            if not torch.isfinite(loss):
-                raise ValueError('Training loss is not finite')
-            loss.backward()
+            weights = [int((item['labels'][:, 1:] != -100).sum()) if causal else 1 for item in batch]
+            for inputs, weight in zip(batch, weights):
+                loss = model(**inputs).loss
+                if not torch.isfinite(loss):
+                    raise ValueError('Training loss is not finite')
+                (loss * weight / sum(weights)).backward()
+                total += float(loss.detach()) * weight
+                tokens += weight
+            torch.nn.utils.clip_grad_norm_(trainable.values(), 1.0, error_if_nonfinite=True)
+            scale = min((step + 1) / warmup, (total_steps - step) / max(1, total_steps - warmup))
+            for group in optimizer.param_groups:
+                group['lr'] = rate * scale
             optimizer.step()
-            total += float(loss.detach())
-        validation = evaluate(splits['validation'])
-        event = {'event': 'progress', 'epoch': epoch + 1, 'epochs': epochs, 'trainLoss': total / len(splits['train'])}
+            step += 1
+        validation = evaluate('validation')
+        if validation is None or validation['loss'] < best_loss:
+            best_loss = validation['loss'] if validation else math.inf
+            best_epoch = epoch + 1
+            best = {name: p.detach().clone() for name, p in trainable.items()}
+        event = {'event': 'progress', 'epoch': epoch + 1, 'epochs': epochs, 'trainLoss': total / tokens}
         if validation is not None:
             event['validationLoss'] = validation['loss']
         progress(event)
-    result['metrics'] = {'validation': validation, 'test': evaluate(splits['test'])}
+    with torch.no_grad():
+        for name, p in trainable.items():
+            p.copy_(best[name])
+    model.eval()
+    result['baselineValidation'] = baseline
+    result['bestEpoch'] = best_epoch
+    result['trainableParameters'] = sum(p.numel() for p in trainable.values())
+    result['metrics'] = {'validation': evaluate('validation'), 'test': evaluate('test')}
     if not splits['validation'] or not splits['test']:
         result['metricsNote'] = 'Empty evaluation splits have no held-out metrics.'
+    elif best_epoch == 0:
+        result['metricsNote'] = 'Validation did not improve. The saved checkpoint retains the original model behavior; review your data before another run.'
+    if causal:
+        model.gradient_checkpointing_disable()
+        model = model.merge_and_unload(safe_merge=True)
+        model.config.use_cache = original_cache
     output.mkdir(parents=True)
     model.save_pretrained(str(output), safe_serialization=True)
     processor.save_pretrained(str(output))
     (output / 'mapping.json').write_text(json.dumps({'id2label': model.config.id2label}), encoding='utf-8')
-    result.update(checkpoint=str(output), trainingMode='output-head-only')
+    result.update(checkpoint=str(output), trainingMode='lora' if causal else 'output-head-only')
+    if causal:
+        result['lora'] = {'rank': 8, 'alpha': 16, 'targets': ['c_attn'] if model.config.model_type == 'gpt2' else ['q_proj', 'v_proj'], 'checkpointFormat': 'merged'}
     return result
 
 
