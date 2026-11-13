@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UMCode Build</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.node{position:relative;width:240px;height:40px;box-sizing:border-box;background:#fff;border:1px solid #c6ccd6;border-radius:8px;display:flex;align-items:center;gap:8px;padding:0 10px;font-size:13px;font-weight:600;color:#172033}
+.node i{width:6px;height:20px;border-radius:3px;flex:none}
+.node small{margin-left:auto;font:400 11px/16px 'SF Mono',ui-monospace,Menlo,monospace;color:#5b687c}
+.edge{position:relative;width:2px;height:20px;background:#9aa7bb;margin:0 auto;flex:none}
+.edge b{position:absolute;left:10px;top:2px;font:400 11px/16px 'SF Mono',ui-monospace,Menlo,monospace;color:#5b687c;white-space:nowrap}
+.col{display:flex;flex-direction:column;align-items:center}
+.pi{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;color:#344157;font-size:13px}
+.pi:hover{background:#eef1f5}
+.pi i{width:6px;height:14px;border-radius:3px;flex:none}
+.ph{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c;padding:12px 8px 4px}
+.fld{display:flex;align-items:center;justify-content:space-between;height:30px;font-size:12px;color:#344157}
+.fld span.v{box-sizing:border-box;width:120px;height:26px;border:1px solid #d9dee7;background:#fff;border-radius:6px;display:flex;align-items:center;padding:0 8px;font:400 12px/16px 'SF Mono',ui-monospace,Menlo,monospace;color:#172033}
+.code{font:400 10.5px/18px 'SF Mono',ui-monospace,Menlo,monospace;color:#172033;white-space:pre}
+.code .ln{display:inline-block;width:24px;color:#929caf;user-select:none}
+.code .hl{background:#dfe9ff;display:block;margin:0 -12px;padding:0 12px;border-left:2px solid #3569d4}
+.k{color:#6b4fbb}.f{color:#2454b5}.n2{color:#9a681e}.c{color:#5b687c}
+.chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:6px;background:#eef1f5;border:1px solid #d9dee7;font-size:12px;color:#344157}
+</style>
+</helmet>
+<div style="width:1440px;height:900px;display:flex;background:#f7f8fa;color:#172033;font:13px/20px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',system-ui,sans-serif;overflow:hidden;border-radius:12px;border:1px solid #c6ccd6;box-sizing:border-box">
+
+<!-- RAIL (collapsed) -->
+<aside style="width:64px;flex:none;background:#eef1f5;border-right:1px solid #d9dee7;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px">
+<div style="width:32px;height:32px;border-radius:8px;background:#3569d4;color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;margin-bottom:12px">UM</div>
+<button aria-label="Chat" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg></button>
+<button aria-label="Build" aria-current="page" style="width:40px;height:40px;border:0;border-radius:8px;background:#dfe9ff;color:#2454b5;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+<button aria-label="Approvals" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/></svg></button>
+<button aria-label="Plugins" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+<button aria-label="Periodic" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
+<div style="margin-top:auto"><button aria-label="Settings" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg></button></div>
+</aside>
+
+<!-- CHAT COLUMN -->
+<section style="width:360px;flex:none;display:flex;flex-direction:column;border-right:1px solid #d9dee7;background:#f7f8fa">
+<header style="height:44px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #d9dee7">
+<strong style="font-size:13px">umcode-ml</strong><span style="color:#5b687c">· GPT-2 finetune</span>
+</header>
+<div style="flex:1;min-height:0;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="align-self:flex-end;max-width:280px;background:#dfe9ff;color:#172033;border-radius:12px 12px 4px 12px;padding:8px 12px">Turn this into GPT-2 small and finetune it on the support-tickets index.</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div>I built a 12-block decoder on the canvas: <strong>124.4M parameters</strong>, and every tensor shape checks out. I linked it to <strong>support-tickets</strong> (48,210 documents, indexed).</div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<span class="chip" style="align-self:flex-start">Edited graph · added Repeat ×12</span>
+<span class="chip" style="align-self:flex-start">Indexed support-tickets · 48,210 docs</span>
+</div>
+</div>
+<div style="border:1px solid #d9dee7;background:#fff;border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px">
+<div style="font-weight:600">Ready to finetune</div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px;font-size:12px;color:#344157">
+<span>Base weights</span><span style="font-family:'SF Mono',ui-monospace,Menlo,monospace">gpt2 (124M)</span>
+<span>Batch size</span><span style="font-family:'SF Mono',ui-monospace,Menlo,monospace">16 × 512 tok</span>
+<span>Learning rate</span><span style="font-family:'SF Mono',ui-monospace,Menlo,monospace">3e-4, cosine</span>
+<span>Epochs</span><span style="font-family:'SF Mono',ui-monospace,Menlo,monospace">3</span>
+</div>
+<div style="display:flex;gap:8px"><button style="height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px">Edit settings</button></div>
+</div>
+<div>
+<div style="margin-bottom:8px">Your <strong>lab-a100</strong> machine has 3 free GPUs. Run there, or stay on this Mac?</div>
+<div style="display:flex;gap:8px"><button style="height:28px;padding:0 12px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:12px;font-weight:600">Use lab-a100</button><button style="height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px">This Mac (MPS)</button></div>
+</div>
+</div>
+<div style="padding:12px 16px 16px">
+<div style="border:1px solid #c6ccd6;background:#fff;border-radius:16px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+<span class="chip" style="align-self:flex-start;background:#dfe9ff;border-color:#b9cdf8;color:#2454b5">Canvas selection · MultiheadAttention</span>
+<span style="color:#5b687c">Ask about this layer, or tell me what to change…</span>
+</div>
+</div>
+</section>
+
+<!-- BUILD PANEL -->
+<section style="flex:1;min-width:0;display:flex;flex-direction:column;background:#f7f8fa">
+<header style="height:44px;box-sizing:border-box;padding:0 12px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #d9dee7;background:#f7f8fa">
+<div role="tablist" style="display:flex;background:#eef1f5;border-radius:8px;padding:2px;gap:2px">
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Data</button>
+<button role="tab" aria-selected="true" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:#fff;color:#172033;font-size:13px;font-weight:600;box-shadow:0 1px 2px rgba(23,32,51,.12)">Build</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Train</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Inference</button>
+</div>
+<span style="font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:12px;color:#344157">gpt2_support.model</span><span style="display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;background:#dfe9ff;color:#2454b5;font-size:11px;font-weight:600">Text generation</span>
+<span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#2f7a5c"><span style="width:7px;height:7px;border-radius:50%;background:#2f7a5c"></span>Canvas and code in sync</span>
+<div style="margin-left:auto;display:flex;gap:8px">
+<button style="height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px">Export .py</button>
+</div>
+</header>
+
+<div style="flex:1;min-height:0;display:flex">
+
+<!-- PALETTE -->
+<aside style="width:184px;flex:none;border-right:1px solid #d9dee7;background:#f7f8fa;padding:10px 8px;overflow:hidden">
+<div style="height:30px;box-sizing:border-box;border:1px solid #d9dee7;background:#fff;border-radius:8px;display:flex;align-items:center;padding:0 10px;color:#5b687c;font-size:12px;margin-bottom:2px">Search layers</div>
+<div class="ph">Core</div>
+<div class="pi"><i style="background:#3569d4"></i>Linear</div>
+<div class="pi"><i style="background:#3569d4"></i>Conv2d</div>
+<div class="pi"><i style="background:#3569d4"></i>Embedding</div>
+<div class="pi"><i style="background:#3569d4"></i>Dropout</div>
+<div class="ph">Attention</div>
+<div class="pi"><i style="background:#6b4fbb"></i>MultiheadAttention</div>
+<div class="pi"><i style="background:#6b4fbb"></i>Positional encoding</div>
+<div class="ph">Norm &amp; activation</div>
+<div class="pi"><i style="background:#2f7a5c"></i>LayerNorm</div>
+<div class="pi"><i style="background:#2f7a5c"></i>BatchNorm</div>
+<div class="pi"><i style="background:#2f7a5c"></i>GELU</div>
+<div class="pi"><i style="background:#2f7a5c"></i>ReLU</div>
+<div class="ph">Containers</div>
+<div class="pi"><i style="background:#9a681e"></i>Sequential</div>
+<div class="pi"><i style="background:#9a681e"></i>Residual</div>
+<div class="pi"><i style="background:#9a681e"></i>Repeat × N</div>
+<div class="ph">Heads &amp; loss</div>
+<div class="pi"><i style="background:#bd4b51"></i>LM head</div>
+<div class="pi"><i style="background:#bd4b51"></i>CrossEntropy</div>
+<div class="ph">Custom</div>
+<div class="pi" style="color:#2454b5">+ Write a layer in Python</div>
+</aside>
+
+<!-- CANVAS -->
+<div style="flex:1;min-width:0;position:relative;overflow:hidden;background-color:#f7f8fa;background-image:radial-gradient(#c6ccd6 1px,transparent 1px);background-size:20px 20px">
+
+<div role="toolbar" aria-label="Canvas view" style="position:absolute;left:12px;top:12px;display:flex;align-items:center;gap:2px;background:#fff;border:1px solid #d9dee7;border-radius:8px;padding:2px;height:32px;box-sizing:border-box;font-size:12px;color:#344157">
+<button aria-label="Undo" style="width:28px;height:26px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:14px">↶</button><button aria-label="Redo" style="width:28px;height:26px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:14px">↷</button><span style="width:1px;height:16px;background:#d9dee7;margin:0 2px"></span><button aria-label="Zoom out" style="width:28px;height:26px;border:0;border-radius:6px;background:transparent;color:#172033;font-size:16px">−</button><span style="min-width:40px;text-align:center;font-weight:600;color:#172033">100%</span><button aria-label="Zoom in" style="width:28px;height:26px;border:0;border-radius:6px;background:transparent;color:#172033;font-size:16px">+</button><span style="width:1px;height:16px;background:#d9dee7;margin:0 2px"></span><button aria-label="Fit model to view" style="height:26px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:12px">Fit</button>
+</div>
+<div style="position:absolute;right:12px;top:12px;background:#fff;border:1px solid #d9dee7;border-radius:8px;padding:0 10px;height:30px;box-sizing:border-box;display:flex;align-items:center;gap:10px;font-size:12px;color:#344157"><strong style="color:#172033">124.4M</strong> params</div>
+
+<div class="col" style="padding-top:64px">
+<div class="node"><i style="background:#68758a"></i>Input tokens<small>int64</small></div>
+<div class="edge"><b>[B, 512]</b></div>
+<div class="node"><i style="background:#3569d4"></i>Embedding<small>50257→768</small></div>
+<div class="edge"><b>[B, 512, 768]</b></div>
+
+<div style="position:relative;width:288px;box-sizing:border-box;border:1.5px dashed #3569d4;border-radius:12px;padding:30px 24px 14px;background:rgba(53,105,212,.05)">
+<span style="position:absolute;left:12px;top:7px;font-size:11px;font-weight:600;color:#2454b5">Block × 12</span>
+<div class="col">
+<div class="node"><i style="background:#2f7a5c"></i>LayerNorm<small>768</small></div>
+<div class="edge"></div>
+<div style="position:relative">
+<div class="node" style="border:2px solid #3569d4;box-shadow:0 0 0 4px #dfe9ff"><i style="background:#6b4fbb"></i>MultiheadAttention<small>12 heads</small></div>
+<span style="position:absolute;left:-4px;top:-4px;width:8px;height:8px;background:#fff;border:2px solid #3569d4;border-radius:2px"></span>
+<span style="position:absolute;right:-4px;top:-4px;width:8px;height:8px;background:#fff;border:2px solid #3569d4;border-radius:2px"></span>
+<span style="position:absolute;left:-4px;bottom:-4px;width:8px;height:8px;background:#fff;border:2px solid #3569d4;border-radius:2px"></span>
+<span style="position:absolute;right:-4px;bottom:-4px;width:8px;height:8px;background:#fff;border:2px solid #3569d4;border-radius:2px"></span>
+</div>
+<div class="edge"></div>
+<div class="node"><i style="background:#2f7a5c"></i>LayerNorm<small>768</small></div>
+<div class="edge"></div>
+<div class="node"><i style="background:#9a681e"></i>MLP (Linear·GELU·Linear)<small>×4</small></div>
+</div>
+<div style="position:absolute;left:266px;top:20px;width:16px;height:118px;box-sizing:border-box;border:1.5px solid #2f7a5c;border-left:0;border-radius:0 8px 8px 0"></div>
+<span style="position:absolute;left:268px;top:136px;font-size:11px;font-weight:700;color:#2f7a5c">+</span>
+<div style="position:absolute;left:266px;top:142px;width:16px;height:112px;box-sizing:border-box;border:1.5px solid #2f7a5c;border-left:0;border-radius:0 8px 8px 0"></div>
+</div>
+
+<div class="edge" style="background:#3569d4;width:3px"><b style="color:#2454b5;font-weight:600;left:auto;right:12px">Drop Dropout here</b><span style="position:absolute;left:-4px;top:-3px;width:11px;height:11px;border-radius:50%;background:#3569d4"></span><span style="position:absolute;left:-4px;bottom:-3px;width:11px;height:11px;border-radius:50%;background:#3569d4"></span></div>
+<div class="node"><i style="background:#2f7a5c"></i>LayerNorm (final)<small>768</small></div>
+<div class="edge"><b>[B, 512, 768]</b></div>
+<div class="node"><i style="background:#bd4b51"></i>LM head<small>768→50257</small></div>
+<div class="edge"><b>[B, 512, 50257]</b></div>
+<div class="node"><i style="background:#bd4b51"></i>CrossEntropy loss<small>scalar</small></div>
+</div>
+
+<!-- dragged ghost -->
+<div style="position:absolute;left:304px;top:440px;transform:rotate(-3deg);width:130px;height:36px;box-sizing:border-box;background:#fff;border:1px solid #3569d4;border-radius:8px;box-shadow:0 8px 20px rgba(23,32,51,.22);display:flex;align-items:center;gap:8px;padding:0 10px;font-size:13px;font-weight:600"><i style="width:6px;height:18px;border-radius:3px;background:#3569d4;display:block"></i>Dropout</div>
+
+<div style="position:absolute;left:12px;bottom:12px;font-size:11px;line-height:16px;color:#5b687c;width:150px">B = batch · T = 512<br>Scroll to zoom · drag to pan</div>
+<div role="group" aria-label="Pan" style="position:absolute;right:108px;bottom:12px;display:flex;align-items:center;gap:2px;background:#fff;border:1px solid #d9dee7;border-radius:8px;padding:2px;height:32px;box-sizing:border-box">
+<button aria-label="Pan left" style="width:30px;height:26px;border:0;border-radius:6px;background:transparent;color:#172033;font-size:14px">◀</button><button aria-label="Pan up" style="width:30px;height:26px;border:0;border-radius:6px;background:transparent;color:#172033;font-size:12px">▲</button><button aria-label="Pan down" style="width:30px;height:26px;border:0;border-radius:6px;background:transparent;color:#172033;font-size:12px">▼</button><button aria-label="Pan right" style="width:30px;height:26px;border:0;border-radius:6px;background:transparent;color:#172033;font-size:14px">▶</button>
+</div>
+<div aria-label="Minimap" role="img" style="position:absolute;right:12px;bottom:12px;width:84px;height:120px;box-sizing:border-box;background:#fff;border:1px solid #c6ccd6;border-radius:8px;overflow:hidden">
+<div style="position:absolute;left:22px;top:8px;width:40px;display:flex;flex-direction:column;gap:5px"><i style="height:6px;background:#929caf;border-radius:2px"></i><i style="height:6px;background:#929caf;border-radius:2px"></i><i style="height:48px;background:#b9cdf8;border-radius:3px"></i><i style="height:6px;background:#929caf;border-radius:2px"></i><i style="height:6px;background:#929caf;border-radius:2px"></i><i style="height:6px;background:#929caf;border-radius:2px"></i></div>
+<div style="position:absolute;left:6px;top:6px;width:72px;height:84px;box-sizing:border-box;border:1.5px solid #3569d4;background:rgba(53,105,212,.08);border-radius:4px"></div>
+</div>
+</div>
+
+<!-- RIGHT: PROPERTIES + CODE -->
+<aside style="width:372px;flex:none;border-left:1px solid #d9dee7;background:#f7f8fa;display:flex;flex-direction:column;min-height:0">
+<div style="padding:12px 14px 8px;border-bottom:1px solid #d9dee7">
+<div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c">Selected layer</div>
+<div style="font-weight:600;margin:2px 0 6px">MultiheadAttention</div>
+<div class="fld">embed_dim<span class="v">768</span></div>
+<div class="fld">num_heads<span class="v">12</span></div>
+<div class="fld">dropout<span class="v">0.1</span></div>
+<div class="fld">causal mask<span class="v" style="color:#2f7a5c">on</span></div>
+<div class="fld">output shape<span class="v" style="background:#eef1f5">[B, 512, 768]</span></div>
+</div>
+<div style="display:flex;gap:14px;padding:0 14px;height:36px;align-items:flex-end;border-bottom:1px solid #d9dee7;font-size:12px">
+<span style="padding-bottom:8px;border-bottom:2px solid #3569d4;color:#172033;font-weight:600">Code</span>
+<span style="padding-bottom:8px;color:#5b687c">Summary</span>
+<span style="padding-bottom:8px;color:#5b687c">Shapes</span>
+<span style="padding-bottom:8px;color:#5b687c;margin-left:auto">PyTorch 2.5</span>
+</div>
+<div style="flex:1;min-height:0;overflow:hidden;background:#fff;padding:10px 12px">
+<div class="code"><span class="ln">1</span><span class="k">class</span> <span class="f">Block</span>(nn.Module):
+<span class="ln">2</span>    <span class="k">def</span> <span class="f">__init__</span>(self, d=<span class="n2">768</span>, h=<span class="n2">12</span>):
+<span class="ln">3</span>        <span class="k">super</span>().__init__()
+<span class="ln">4</span>        self.ln1 = nn.LayerNorm(d)
+<span class="hl"><span class="ln">5</span>        self.attn = nn.MultiheadAttention(</span><span class="hl"><span class="ln">6</span>            d, h, dropout=<span class="n2">0.1</span>, batch_first=<span class="k">True</span>)</span><span class="ln">7</span>        self.ln2 = nn.LayerNorm(d)
+<span class="ln">8</span>        self.mlp = nn.Sequential(
+<span class="ln">9</span>            nn.Linear(d, <span class="n2">4</span>*d), nn.GELU(),
+<span class="ln">10</span>            nn.Linear(<span class="n2">4</span>*d, d))
+<span class="ln">11</span>
+<span class="ln">12</span>    <span class="k">def</span> <span class="f">forward</span>(self, x):
+<span class="hl"><span class="ln">13</span>        a, _ = self.attn(*[self.ln1(x)]*<span class="n2">3</span>,</span><span class="hl"><span class="ln">14</span>                         attn_mask=causal(x))</span><span class="ln">15</span>        x = x + a
+<span class="ln">16</span>        <span class="k">return</span> x + self.mlp(self.ln2(x))
+<span class="ln">17</span>
+<span class="ln">18</span><span class="k">class</span> <span class="f">GPT</span>(nn.Module):
+<span class="ln">19</span>    <span class="k">def</span> <span class="f">__init__</span>(self):
+<span class="ln">20</span>        super().__init__()
+<span class="ln">21</span>        self.tok = nn.Embedding(<span class="n2">50257</span>, <span class="n2">768</span>)
+<span class="ln">22</span>        self.blocks = nn.ModuleList(
+<span class="ln">23</span>            Block() <span class="k">for</span> _ <span class="k">in</span> range(<span class="n2">12</span>))
+<span class="ln">24</span>        self.ln_f = nn.LayerNorm(<span class="n2">768</span>)
+<span class="ln">25</span>        self.head = nn.Linear(<span class="n2">768</span>, <span class="n2">50257</span>, bias=<span class="k">False</span>)</div>
+</div>
+</aside>
+</div>
+
+<!-- STATUS / RUN BAR -->
+<footer style="height:52px;flex:none;box-sizing:border-box;border-top:1px solid #d9dee7;background:#eef1f5;padding:0 12px;display:flex;align-items:center;gap:10px">
+<span class="chip" style="background:#fff"><span style="width:7px;height:7px;border-radius:2px;background:#3569d4"></span>Data · support-tickets · 48,210 docs<span style="color:#5b687c">▾</span></span>
+<span class="chip" style="background:#fff"><span style="width:7px;height:7px;border-radius:50%;background:#2f7a5c"></span>Compute · lab-a100 · 4× A100 (3 free)<span style="color:#5b687c">▾</span></span>
+<span style="margin-left:auto;font-size:12px;color:#2f7a5c;font-weight:600">Shapes valid · fits in 40 GB</span>
+<button style="height:32px;padding:0 14px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:13px">Dry run</button>
+<button style="height:32px;padding:0 16px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:13px;font-weight:600">Finetune ▸</button>
+</footer>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

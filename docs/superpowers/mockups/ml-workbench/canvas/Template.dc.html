@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UMCode New model</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.mono{font-family:'SF Mono',ui-monospace,Menlo,monospace}
+.chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;background:#fff;border:1px solid #d9dee7;font-size:12px;color:#344157}
+.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c}
+.sub{font-size:12px;color:#5b687c}
+.btn{height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px}
+.tpl{flex:1;min-width:0;background:#fff;border:1px solid #d9dee7;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.tpl h3{margin:0;font-size:15px;line-height:22px}
+.io{display:flex;align-items:center;gap:6px;font:400 11.5px/16px 'SF Mono',ui-monospace,Menlo,monospace;color:#344157}
+.io span{padding:2px 8px;border-radius:6px;background:#eef1f5;border:1px solid #d9dee7}
+.box{background:#f7f8fa;border:1px solid #e3e7ed;border-radius:8px;padding:10px 12px;font-size:12px;line-height:18px;color:#344157}
+.bar{height:6px;border-radius:3px;background:#e3e7ed;overflow:hidden}
+.bar>div{height:100%;border-radius:3px;background:#3569d4}
+.eff{flex:1;min-width:0;background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:18px;color:#344157}
+.eff strong{font-size:13px;color:#172033}
+.lab{font-size:11px;color:#5b687c;margin:10px 0 3px}
+.in{box-sizing:border-box;height:32px;border:1px solid #d9dee7;background:#fff;border-radius:6px;display:flex;align-items:center;padding:0 10px;font-size:12px;color:#172033}
+.opt{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px solid #d9dee7;border-radius:8px;background:#fff;font-size:12px;line-height:16px;color:#344157;margin-bottom:6px}
+.dot{width:12px;height:12px;border-radius:50%;border:1.5px solid #929caf;flex:none;margin-top:2px;box-sizing:border-box}
+</style>
+</helmet>
+<div style="width:1440px;height:900px;display:flex;background:#f7f8fa;color:#172033;font:13px/20px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',system-ui,sans-serif;overflow:hidden;border-radius:12px;border:1px solid #c6ccd6;box-sizing:border-box">
+
+<aside style="width:64px;flex:none;background:#eef1f5;border-right:1px solid #d9dee7;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px">
+<div style="width:32px;height:32px;border-radius:8px;background:#3569d4;color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;margin-bottom:12px">UM</div>
+<button aria-label="Chat" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg></button>
+<button aria-label="Build" aria-current="page" style="width:40px;height:40px;border:0;border-radius:8px;background:#dfe9ff;color:#2454b5;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+<button aria-label="Approvals" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/></svg></button>
+<button aria-label="Plugins" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+<button aria-label="Periodic" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
+</aside>
+
+<section style="width:340px;flex:none;display:flex;flex-direction:column;border-right:1px solid #d9dee7">
+<header style="height:44px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #d9dee7"><strong>umcode-ml</strong><span class="sub">· new model</span></header>
+<div style="flex:1;min-height:0;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="display:flex;flex-direction:column;gap:8px">
+<div>What do you want to build? Pick a task on the right, or just tell me and I'll set it up.</div>
+<div class="sub">The task decides your starting graph, how training reads the data, and how you test the model later.</div>
+</div>
+<div style="align-self:flex-end;max-width:270px;background:#dfe9ff;border-radius:12px 12px 4px 12px;padding:8px 12px">Finetune GPT-2 to answer customer support tickets.</div>
+<div>That's <strong>Text generation</strong>. I've selected it and picked GPT-2 small as the starting point. Check the choices and create the model.</div>
+</div>
+<div style="padding:12px 16px 16px"><div style="border:1px solid #c6ccd6;background:#fff;border-radius:16px;padding:10px 12px"><span class="sub" style="font-size:13px">Describe the model you want…</span></div></div>
+</section>
+
+<section style="flex:1;min-width:0;display:flex;flex-direction:column">
+<header style="height:44px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #d9dee7">
+<strong style="font-size:14px">New model</strong>
+<span class="sub">Step 1 of 2 · Choose the task</span>
+</header>
+
+<div style="flex:1;min-height:0;display:flex">
+<div style="flex:1;min-width:0;padding:22px 24px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div>
+<div style="font-size:18px;line-height:26px;font-weight:600">What does this model do?</div>
+<div class="sub" style="font-size:13px;line-height:20px">You choose this once. It's saved with the model and used by Build, Train and Inference.</div>
+</div>
+
+<div style="display:flex;gap:14px">
+<div class="tpl" style="border:2px solid #3569d4;box-shadow:0 0 0 4px #dfe9ff">
+<div style="display:flex;align-items:center;gap:8px"><h3>Text generation</h3><span style="margin-left:auto;font-size:11px;font-weight:600;color:#2454b5">Selected</span></div>
+<div class="sub">Language models that continue or answer text.</div>
+<div class="io"><span>text</span>→<span>text</span></div>
+<div class="sub mono">metrics: loss, perplexity</div>
+<div class="box">Example: finetune GPT-2 on support tickets.</div>
+</div>
+<div class="tpl">
+<h3>Classification</h3>
+<div class="sub">Pick one label from a fixed set, with confidence.</div>
+<div class="io"><span>text or number</span>→<span>label</span></div>
+<div class="sub mono">metrics: accuracy, F1, loss</div>
+<div class="box" style="display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;justify-content:space-between"><span>Billing</span><span class="mono">0.81</span></div><div class="bar"><div style="width:81%"></div></div>
+<div style="display:flex;justify-content:space-between"><span>Login</span><span class="mono">0.12</span></div><div class="bar"><div style="width:12%"></div></div>
+</div>
+</div>
+<div class="tpl">
+<h3>Custom</h3>
+<div class="sub">Anything else. Starts with a blank adapter and the schema header.</div>
+<div class="io"><span>you declare</span>→<span>you declare</span></div>
+<div class="sub mono">metrics: pick from registry</div>
+<div class="box">Ask chat to write it, or edit the file yourself. Plugins can add more tasks.</div>
+</div>
+</div>
+
+<div class="h" style="margin-top:4px">What Text generation sets up</div>
+<div style="display:flex;gap:12px">
+<div class="eff"><strong>Build</strong>Starter graph: embedding, decoder blocks, LM head. Palette puts attention and norm layers first. A check warns if the output head doesn't fit the task.</div>
+<div class="eff"><strong>Train</strong>Next-token CrossEntropy loss. The data source's text column is used as input. Default metrics are loss and perplexity.</div>
+<div class="eff"><strong>Inference</strong>Prompt playground with sampling controls, base-versus-finetuned comparison, and an evaluate view. <span class="mono">adapter.py</span> is created now.</div>
+</div>
+</div>
+
+<aside style="width:310px;flex:none;border-left:1px solid #d9dee7;padding:16px 18px;display:flex;flex-direction:column;overflow:hidden">
+<div class="h">Step 2 · Set up</div>
+<div class="lab">Name</div>
+<div class="in mono">gpt2_support</div>
+<div class="lab">Start from</div>
+<div class="opt"><span class="dot"></span><span>Blank canvas</span></div>
+<div class="opt" style="border-color:#3569d4;background:#dfe9ff"><span class="dot" style="border-color:#3569d4;background:radial-gradient(#3569d4 45%,transparent 50%)"></span><span><strong style="color:#172033">Starter: GPT-2 small</strong><br>12 blocks · 124M parameters</span></div>
+<div class="opt"><span class="dot"></span><span>Pretrained weights<br><span class="sub">gpt2 from Hugging Face, to finetune</span></span></div>
+<div class="lab">Data source (optional)</div>
+<div class="in">support-tickets · 48,210 docs <span style="margin-left:auto;color:#5b687c">▾</span></div>
+<div class="lab">Compute (optional)</div>
+<div class="in">lab-a100 · 4× A100 <span style="margin-left:auto;color:#5b687c">▾</span></div>
+<div class="sub" style="margin-top:12px;line-height:18px">You can change data and compute any time. Changing the task later needs a new model or a rebuilt head.</div>
+<div style="margin-top:auto;display:flex;gap:8px"><button style="flex:1;height:34px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:13px;font-weight:600">Create model</button></div>
+</aside>
+</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
