@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dataCompatibility, recommendConfig, validateConfig, validateUploads } from './data';
+import { assistantProvenance, dataCompatibility, datasetOptionLabel, recommendConfig, validateConfig, validateUploads } from './data';
 import { starterGraph } from './graph';
 import type { Dataset } from './dataTypes';
 
@@ -105,5 +105,24 @@ describe('provided example mappings', () => {
     remote.columns[1].missing = 2;
     expect(dataMappingWarnings(remote, config).join(' ')).toContain('age');
     expect(dataMappingWarnings(remote, config).join(' ')).toContain('missing');
+  });
+});
+
+describe('assistant dataset provenance', () => {
+  const base = { id: 'a'.repeat(64), name: 'reviews', source: { kind: 'local', name: 'reviews' }, format: 'table', rowCount: 3, byteCount: 10, columns: [], preview: [], createdAt: 'now' } as unknown as Dataset;
+  const made = { ...base, id: 'b'.repeat(64), name: 'balanced', source: { kind: 'assistant', name: 'balanced' }, provenance: { createdBy: 'assistant', title: 'Balance reviews', script: 'print(1)', inputDatasetIds: ['a'.repeat(64), 'f'.repeat(64)], stdoutSummary: 'kept 3348 per class\nremoved 212 empty\nthird\nfourth\nfifth' } } as unknown as Dataset;
+  it('is absent for ordinary datasets', () => {
+    expect(assistantProvenance(base, [base])).toBeNull();
+  });
+  it('resolves input names, falls back to ids, and keeps the script and a short summary', () => {
+    const summary = assistantProvenance(made, [base, made]);
+    expect(summary?.title).toBe('Balance reviews');
+    expect(summary?.inputs).toEqual(['reviews', 'f'.repeat(64)]);
+    expect(summary?.script).toBe('print(1)');
+    expect(summary?.summaryLines).toEqual(['kept 3348 per class', 'removed 212 empty', 'third']);
+  });
+  it('labels assistant datasets in the picker', () => {
+    expect(datasetOptionLabel(base)).toBe('reviews · 3 rows');
+    expect(datasetOptionLabel(made)).toBe('balanced · 3 rows · Assistant');
   });
 });

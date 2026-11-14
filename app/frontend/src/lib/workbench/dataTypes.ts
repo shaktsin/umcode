@@ -1,9 +1,10 @@
 import type { WorkbenchTask } from './types';
 
 export interface DataFile { name: string; contentBase64: string }
-export interface DataSource { kind: 'local' | 'huggingface' | 'example'; name: string; repo?: string; revision?: string; files?: string[] }
+export interface DataSource { kind: 'local' | 'huggingface' | 'example' | 'assistant'; name: string; repo?: string; revision?: string; files?: string[] }
 export interface DataColumn { name: string; kind: 'number' | 'text' | 'image'; missing: number; uniqueCount: number; examples: string[] }
-export interface Dataset { id: string; name: string; source: DataSource; format: 'table' | 'text' | 'images'; rowCount: number; byteCount: number; columns: DataColumn[]; preview: Record<string, string>[]; createdAt: string }
+export interface DataProvenance { createdBy: string; title: string; script: string; inputDatasetIds: string[]; stdoutSummary: string }
+export interface Dataset { id: string; name: string; source: DataSource; format: 'table' | 'text' | 'images'; rowCount: number; byteCount: number; columns: DataColumn[]; preview: Record<string, string>[]; createdAt: string; provenance?: DataProvenance }
 export interface DataConfig {
   datasetId: string; mode: 'features' | 'text' | 'image'; purpose: 'classification' | 'text-generation' | 'regression';
   inputColumns: string[]; targetColumn: string; scale: 'none' | 'standard';

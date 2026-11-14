@@ -117,3 +117,20 @@ export function dataCompatibility(graphText: string, dataset: Dataset, config: D
 }
 
 export const dataSize = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB` : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${bytes} bytes`;
+
+export interface AssistantProvenance { title: string; inputs: string[]; script: string; summaryLines: string[] }
+
+/** What the Data tab shows about a dataset the assistant made; null for ordinary imports. */
+export function assistantProvenance(dataset: Dataset, all: Dataset[]): AssistantProvenance | null {
+  const prov = dataset.provenance;
+  if (!prov || prov.createdBy !== 'assistant') return null;
+  const names = new Map(all.map(item => [item.id, item.name]));
+  return {
+    title: prov.title,
+    inputs: prov.inputDatasetIds.map(id => names.get(id) ?? id),
+    script: prov.script,
+    summaryLines: prov.stdoutSummary.split('\n').map(line => line.trim()).filter(Boolean).slice(0, 3),
+  };
+}
+
+export const datasetOptionLabel = (dataset: Dataset) => `${dataset.name} · ${dataset.rowCount.toLocaleString()} rows${dataset.provenance?.createdBy === 'assistant' ? ' · Assistant' : ''}`;
