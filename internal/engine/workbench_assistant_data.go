@@ -55,7 +55,9 @@ func (e *Engine) workbenchImportDataAction(ctx context.Context, args json.RawMes
 	for _, source := range request.Sources {
 		results = append(results, e.workbenchImportOneSource(ctx, project, c, source))
 	}
-	encoded, _ := json.Marshal(map[string]any{"action": "import_data", "sources": results})
+	envelope := workbenchActionEnvelope(c, "import_data")
+	envelope["sources"] = results
+	encoded, _ := json.Marshal(envelope)
 	return string(encoded), nil
 }
 
@@ -119,6 +121,12 @@ func (e *Engine) workbenchInspectDataAction(ctx context.Context, args json.RawMe
 	return string(encoded), nil
 }
 
+// workbenchActionEnvelope is the identity every Workbench action result carries
+// so the app can match it to the open model before acting on it.
+func workbenchActionEnvelope(c *protocol.WorkbenchTurnContext, action string) map[string]any {
+	return map[string]any{"action": action, "projectId": c.ProjectID, "modelId": c.ModelID, "modelCreatedAt": c.ModelCreatedAt}
+}
+
 func tailBytes(value string, limit int) string {
 	if len(value) <= limit {
 		return value
@@ -169,7 +177,8 @@ func (e *Engine) workbenchRunDataScriptAction(ctx context.Context, args json.Raw
 	if err != nil {
 		return "", fmt.Errorf("%v\nstdout:\n%s\nstderr:\n%s", err, tailBytes(result.Stdout, 4096), tailBytes(result.Stderr, 4096))
 	}
-	response := map[string]any{"action": "run_data_script", "durationMs": result.DurationMS, "stdout": tailBytes(result.Stdout, 8192)}
+	response := workbenchActionEnvelope(c, "run_data_script")
+	response["durationMs"], response["stdout"] = result.DurationMS, tailBytes(result.Stdout, 8192)
 	audit := map[string]any{"projectId": c.ProjectID, "modelId": c.ModelID, "title": request.Title, "inputs": request.InputDatasetIDs, "scriptSha256": fmt.Sprintf("%x", sha256.Sum256([]byte(request.Script)))}
 	if result.Dataset != nil {
 		columns := make([]string, 0, len(result.Dataset.Columns))

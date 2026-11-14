@@ -36,8 +36,8 @@ func TestWorkbenchAssistantImportsLocalFile(t *testing.T) {
 	if item == nil || item.Status != protocol.ItemCompleted {
 		t.Fatalf("import item = %+v", item)
 	}
-	if !strings.Contains(item.Tool.Output, `"ok":true`) {
-		t.Fatalf("output = %s", item.Tool.Output)
+	if !strings.Contains(item.Tool.Output, `"ok":true`) || !strings.Contains(item.Tool.Output, `"modelId":"`+c.ModelID+`"`) || !strings.Contains(item.Tool.Output, `"modelCreatedAt"`) {
+		t.Fatalf("output must carry the model identity: %s", item.Tool.Output)
 	}
 	state, err := workbench.ReadData(h.ws, c.ModelID, "")
 	if err != nil {
