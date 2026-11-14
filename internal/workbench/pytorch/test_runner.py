@@ -246,5 +246,43 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(answer.get("text"), "\nHello! I am a tiny local model.", answer)
 
 
+
+class ElementLimitTests(unittest.TestCase):
+    """The activation element cap is 8M by default and scales only when the launcher passes a memory-derived value."""
+    PROBE = (
+        "import json,sys;sys.path.insert(0,%r);import runner;"
+        "g=json.loads(sys.stdin.read());\n"
+        "try:\n runner.analyze(g);print('OK',runner.MAX_ELEMENTS)\n"
+        "except runner.Invalid as e:\n print('ERR',runner.MAX_ELEMENTS,e)\n" % str(HERE))
+
+    def probe(self, value):
+        env = {k: v for k, v in os.environ.items() if k != "UMCODE_MAX_ELEMENTS"}
+        if value is not None:
+            env["UMCODE_MAX_ELEMENTS"] = value
+        wide = graph([("input", {"mode": "tokens", "sequence": 2000}), ("embedding", {"vocab": 32, "width": 8}),
+                      ("attention", {"heads": 4}), ("meanpool", {}), ("linear", {"outFeatures": 2}), ("output", {})])
+        done = subprocess.run([sys.executable, "-I", "-c", self.PROBE], input=json.dumps(wide), env=env,
+                              capture_output=True, text=True, timeout=60)
+        return done.stdout.strip()
+
+    def test_default_keeps_the_eight_million_cap(self):
+        self.assertTrue(self.probe(None).startswith("ERR 8000000 Attention exceeds the 8 million"), self.probe(None))
+
+    def test_launcher_value_raises_the_cap(self):
+        self.assertEqual(self.probe("32000000"), "OK 32000000")
+
+    def test_bad_or_too_small_values_fall_back_to_default(self):
+        for bad in ("abc", "-5", "1000", "7999999", ""):
+            self.assertTrue(self.probe(bad).startswith("ERR 8000000"), (bad, self.probe(bad)))
+
+    def test_value_is_clamped_to_the_hard_ceiling(self):
+        self.assertTrue(self.probe("99999999999").startswith("OK 128000000") or
+                        self.probe("99999999999").startswith("ERR 128000000"))
+
+    def test_message_names_the_active_cap(self):
+        out = self.probe("12000000")
+        self.assertIn("12 million", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -239,7 +239,7 @@ func (m *TrainingManager) process(job *trainingJob, snap TrainingSnapshot, publi
 	}
 	source := "import types,sys\nm=types.ModuleType('runner')\nexec(" + strconv.Quote(trustedInferenceRunner) + ",m.__dict__)\nsys.modules['runner']=m\n" + trustedTrainingRunner
 	cmd := exec.CommandContext(job.ctx, m.python, "-I", "-u", "-c", source)
-	cmd.Env = append(os.Environ(), "OMP_NUM_THREADS=1", "MKL_NUM_THREADS=1", "TOKENIZERS_PARALLELISM=false")
+	cmd.Env = workerEnv(TrainingAvailableMemory())
 	cmd.Stdin = bytes.NewReader(append(input, '\n'))
 	cmd.Stderr = io.Discard
 	stdout, err := cmd.StdoutPipe()

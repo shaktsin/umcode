@@ -13,7 +13,7 @@ import sys
 import torch
 from torch.nn import functional as F
 
-from runner import (Invalid, MAX_ELEMENTS, MAX_LINE, MAX_TENSORS, MAX_WEIGHTS, Model, analyze,
+from runner import (Invalid, MIN_ELEMENTS, MAX_LINE, MAX_TENSORS, MAX_WEIGHTS, Model, analyze,
                     integer, number, object_keys, parse_json, prepare_selection, require)
 
 MAX_PREPARED = 256 * 1024 * 1024
@@ -224,7 +224,7 @@ def train(request, emit):
         require(batch <= max_batch,
                 f"Batch size exceeds the current local memory or compute budget; use {max_batch} or less.")
     else:
-        require(activations*batch <= MAX_ELEMENTS,
+        require(activations*batch <= MIN_ELEMENTS,
                 "Training batch activations exceed the fallback 8 million element limit; reduce batch size or architecture size.")
     path = request.get("weightsPath")
     require(type(path) is str and 0 < len(path) <= 4096 and not os.path.lexists(path),
