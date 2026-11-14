@@ -13,7 +13,7 @@ export function approvalActions(approval: Approval) {
     return { canRemember: false, allowLabel: 'Approve solution', contextLabel: 'Workflow review' };
   }
   return {
-    canRemember: !approval.kind && Boolean(approval.threadId) && !approval.tool.startsWith('computer.') && approval.tool !== 'workbench.run_data_script',
+    canRemember: !approval.kind && Boolean(approval.threadId) && !approval.tool.startsWith('computer.') && approval.tool !== 'workbench.run_data_script' && approval.tool !== 'workbench.import_data',
     allowLabel: approval.kind ? 'Approve' : 'Allow once',
     contextLabel: approval.kind ? 'Review request' : approval.tool,
   };

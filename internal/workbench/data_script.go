@@ -1,7 +1,6 @@
 package workbench
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -119,6 +118,9 @@ func pythonReadRoots(python string) []string {
 		if filepath.Base(dir) == "bin" {
 			dir = filepath.Dir(dir)
 		}
+		if exposesHome(dir) {
+			return dir
+		}
 		roots = append(roots, dir)
 		return dir
 	}
@@ -161,11 +163,17 @@ func validateDataScriptRequest(req DataScriptRequest) error {
 }
 
 func collectDataScriptOutputs(outDir string) ([]DataFile, error) {
+	root, err := os.OpenRoot(outDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
 	entries, err := os.ReadDir(outDir)
 	if err != nil {
 		return nil, err
 	}
 	files := []DataFile{}
+	total := int64(0)
 	for _, entry := range entries {
 		if entry.IsDir() || !entry.Type().IsRegular() {
 			return nil, fmt.Errorf("out/%s must be a regular file", entry.Name())
@@ -174,7 +182,32 @@ func collectDataScriptOutputs(outDir string) ([]DataFile, error) {
 		if !dataScriptOutputExt[ext] {
 			return nil, fmt.Errorf("out/%s has unsupported format %s; write CSV, TSV, JSONL or TXT", entry.Name(), ext)
 		}
-		content, err := os.ReadFile(filepath.Join(outDir, entry.Name()))
+		// Open through the root so a symlink swapped in after the check cannot
+		// leave the folder, then judge the opened file, not the name.
+		file, err := root.Open(entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("out/%s could not be read safely: %v", entry.Name(), err)
+		}
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			file.Close()
+			return nil, fmt.Errorf("out/%s must be a regular file", entry.Name())
+		}
+		if nlink, ok := linkCount(info); ok && nlink > 1 {
+			file.Close()
+			return nil, fmt.Errorf("out/%s is a hard link and cannot be imported", entry.Name())
+		}
+		total += info.Size()
+		if info.Size() > maxDataBytes || total > maxDataBytes {
+			file.Close()
+			return nil, fmt.Errorf("script output is too large; keep out/ under %d MiB", maxDataBytes>>20)
+		}
+		content, err := io.ReadAll(io.LimitReader(file, maxDataBytes+1))
+		file.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -262,10 +295,11 @@ func RunDataScript(ctx context.Context, req DataScriptRequest) (DataScriptResult
 	cmd := exec.CommandContext(runCtx, req.Python, "-I", "-u", filepath.Join("job", "script.py"))
 	cmd.Dir = workspace
 	cmd.WaitDelay = 2 * time.Second
-	cmd.Env = append(os.Environ(), "OMP_NUM_THREADS=1", "MKL_NUM_THREADS=1", "TOKENIZERS_PARALLELISM=false")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Env = dataScriptEnv()
+	stdout := &cappedBuffer{limit: dataScriptCaptureCap}
+	stderr := &cappedBuffer{limit: dataScriptCaptureCap}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	policy := sandbox.EvaluationPolicy(workspace, nil)
 	policy.Readable = append(policy.Readable, pythonReadRoots(req.Python)...)
 	if err = confinement.Wrap(cmd, policy); err != nil {
@@ -296,4 +330,55 @@ func RunDataScript(ctx context.Context, req DataScriptRequest) (DataScriptResult
 	}
 	result.Dataset = &dataset
 	return result, nil
+}
+
+// dataScriptCaptureCap bounds how much of a script's stdout or stderr is kept
+// in memory; the tail is what gets reported.
+const dataScriptCaptureCap = 256 << 10
+
+// cappedBuffer keeps the last limit bytes written. Writes always succeed so a
+// chatty script is not killed by a broken pipe, but memory stays bounded.
+type cappedBuffer struct {
+	limit int
+	buf   []byte
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > b.limit {
+		b.buf = append([]byte(nil), b.buf[len(b.buf)-b.limit:]...)
+	}
+	return len(p), nil
+}
+
+func (b *cappedBuffer) Len() int       { return len(b.buf) }
+func (b *cappedBuffer) String() string { return string(b.buf) }
+
+// dataScriptEnv is the minimal environment a model-written script gets. The
+// server's own environment holds tokens and provider keys the script must not see.
+func dataScriptEnv() []string {
+	env := []string{"OMP_NUM_THREADS=1", "MKL_NUM_THREADS=1", "TOKENIZERS_PARALLELISM=false", "PYTHONNOUSERSITE=1"}
+	for _, key := range []string{"PATH", "LANG", "LC_ALL", "TMPDIR"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return env
+}
+
+// exposesHome reports whether making dir readable would expose the user's home
+// folder, which holds credentials. A shim like ~/bin/python3 must not widen the
+// sandbox to ~.
+func exposesHome(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	return dir == home || strings.HasPrefix(home, dir+string(os.PathSeparator))
 }

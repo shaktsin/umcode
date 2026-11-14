@@ -187,3 +187,74 @@ func TestRunDataScriptSandboxPolicy(t *testing.T) {
 		t.Fatalf("readable = %v, want the workspace", captured.Readable)
 	}
 }
+
+func TestCollectDataScriptOutputsRejectsHugeFileWithoutReading(t *testing.T) {
+	out := t.TempDir()
+	f, err := os.Create(filepath.Join(out, "big.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxDataBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := collectDataScriptOutputs(out); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("want too-large error, got %v", err)
+	}
+}
+
+func TestCollectDataScriptOutputsRejectsHardLinks(t *testing.T) {
+	out := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "secret.csv")
+	if err := os.WriteFile(secret, []byte("a\n1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(secret, filepath.Join(out, "x.csv")); err != nil {
+		t.Skip("hard links unsupported")
+	}
+	if _, err := collectDataScriptOutputs(out); err == nil || !strings.Contains(err.Error(), "hard link") {
+		t.Fatalf("want hard-link error, got %v", err)
+	}
+}
+
+func TestCappedBufferKeepsMemoryBounded(t *testing.T) {
+	b := &cappedBuffer{limit: 100}
+	for i := 0; i < 1000; i++ {
+		if n, err := b.Write([]byte(strings.Repeat("x", 100))); n != 100 || err != nil {
+			t.Fatalf("write must report success so the script is not killed: %d %v", n, err)
+		}
+	}
+	if b.Len() > 100 {
+		t.Fatalf("buffer grew to %d", b.Len())
+	}
+}
+
+func TestPythonReadRootsNeverIncludeHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	py := filepath.Join(home, "bin", "python3")
+	if err := os.WriteFile(py, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range pythonReadRoots(py) {
+		if root == home || strings.HasPrefix(home, root+string(os.PathSeparator)) {
+			t.Fatalf("root %s exposes the home folder", root)
+		}
+	}
+}
+
+func TestDataScriptEnvDropsSecrets(t *testing.T) {
+	t.Setenv("HF_TOKEN", "hf_secret")
+	t.Setenv("OPENAI_API_KEY", "sk-secret")
+	t.Setenv("PATH", "/usr/bin")
+	env := strings.Join(dataScriptEnv(), "\n")
+	if strings.Contains(env, "secret") || strings.Contains(env, "HF_TOKEN") {
+		t.Fatalf("secrets leaked: %s", env)
+	}
+	if !strings.Contains(env, "PATH=/usr/bin") || !strings.Contains(env, "OMP_NUM_THREADS=1") {
+		t.Fatalf("missing required vars: %s", env)
+	}
+}

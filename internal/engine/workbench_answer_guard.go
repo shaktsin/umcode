@@ -10,7 +10,7 @@ import (
 var workbenchRunID = regexp.MustCompile(`\btrain-[a-f0-9]{32}\b`)
 var claimedTrainingStart = regexp.MustCompile(`(?i)\b(?:i|we)\s+(?:have\s+|just\s+)?(?:started|launched|kicked off)\b|\bstarted (?:for real|training|a new training run)\b`)
 
-var claimedDatasetCreation = regexp.MustCompile(`(?i)\b(?:i|we)(?:'ve|\s+have|\s+just)?\s+(?:created|made|generated|built)\b[^.\n]{0,60}\bdataset\b`)
+var claimedDatasetCreation = regexp.MustCompile(`(?i)\b(?:i|we)(?:['’]ve|\s+have|\s+just)?\s+(?:created|made|generated|built)\s+(?:(?:a|an|the|new|your|balanced|training|prepared|cleaned|combined|merged)\s+){0,3}dataset\b`)
 
 const unverifiedDatasetAnswer = "I could not verify a new dataset. No script run is confirmed by a Workbench tool result. I need to run an approved data script and report the dataset it actually produced before saying one was created."
 

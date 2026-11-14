@@ -226,7 +226,7 @@ func (e *Engine) respondApprovalCommitted(ctx context.Context, id string, approv
 		}
 	}
 	decided, _ := e.Store.GetApproval(ctx, id)
-	if remember && decided.ID != "" && !isComputerUseTool(decided.Tool) {
+	if remember && decided.ID != "" && !neverRememberedTool(decided.Tool) {
 		if _, err := e.Store.GetThread(ctx, decided.ThreadID); err == nil {
 			decision := "deny"
 			if approve {
@@ -272,10 +272,11 @@ func workflowApprovalAudit(a protocol.Approval, status string) map[string]any {
 // whose actions must never be covered by a remembered "always allow"
 // decision (see requestApproval and RespondApproval).
 // neverRememberedTool reports tools whose approvals must always get a fresh
-// human decision: each Computer Use action and each assistant data script is
-// different, so a remembered "allow" would approve code nobody has read.
+// human decision: each Computer Use action, each assistant data script and each
+// import (its sources are not part of the approval signature) is different, so
+// a remembered "allow" would approve something nobody has read.
 func neverRememberedTool(tool string) bool {
-	return isComputerUseTool(tool) || tool == "workbench.run_data_script"
+	return isComputerUseTool(tool) || tool == "workbench.run_data_script" || tool == "workbench.import_data"
 }
 
 func isComputerUseTool(tool string) bool {
