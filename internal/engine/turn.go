@@ -1639,7 +1639,7 @@ func (e *Engine) runTool(ctx, sctx context.Context, th protocol.Thread, turn pro
 		switch tools.FromWire(call.Name) {
 		case "workbench.propose_edit":
 			return e.runWorkbenchProposal(ctx, sctx, turn, call)
-		case "workbench.save_build", "workbench.save_data", "workbench.train", "workbench.test_checkpoint":
+		case "workbench.save_build", "workbench.save_data", "workbench.train", "workbench.test_checkpoint", "workbench.import_data", "workbench.inspect_data":
 			return e.runWorkbenchAction(ctx, sctx, turn, call)
 		default:
 			return e.selectionFailure(sctx, turn, call, call.Name, "Only scoped Workbench actions are available in this turn. No action was executed.")

@@ -17,6 +17,8 @@ import (
 func workbenchActionSpecs() []llm.ToolSpec {
 	return []llm.ToolSpec{
 		{Name: tools.ToWire("workbench.save_build"), Description: "Apply supported changes to the current Build draft and save it in this model's project. An empty operations list saves the current draft. Use only when the user asks to make or save a change; use propose_edit for preview-only requests.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["operations"],"properties":{"operations":{"type":"array","maxItems":32,"items":{"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"type":"string","enum":["update","remove","connect","disconnect"]},"nodeId":{"type":"string"},"config":{"type":"object"},"source":{"type":"string"},"target":{"type":"string"},"edgeId":{"type":"string"}}}}}}`)},
+		{Name: tools.ToWire("workbench.import_data"), Description: "Import datasets for this Workbench model: project-relative local file paths and public or token-accessible Hugging Face repositories (pinned revision required). Several sources import in one call; each becomes its own dataset.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["sources"],"properties":{"sources":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"type":"string","enum":["local","huggingface"]},"path":{"type":"string"},"repo":{"type":"string"},"revision":{"type":"string"},"files":{"type":"array","items":{"type":"string"}}}}}}}`)},
+		{Name: tools.ToWire("workbench.inspect_data"), Description: "Read sample rows, column kinds, missing values, likely target distribution and shared columns across this model's imported datasets. Empty datasetIds inspects all of them.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"datasetIds":{"type":"array","items":{"type":"string"}},"sample":{"type":"integer","minimum":0,"maximum":20}}}`)},
 		{Name: tools.ToWire("workbench.save_data"), Description: "Save Data preparation for this model using the selected imported dataset. Supply the complete Data configuration from the saved status with requested changes. Recomputes train, validation and test splits.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["config"],"properties":{"config":{"type":"object"}}}`)},
 		{Name: tools.ToWire("workbench.train"), Description: "Start or stop a local training run for the selected Workbench model. Starting returns a running run ID, not a completed result. Supply training config when starting and runId when stopping.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["operation"],"properties":{"operation":{"type":"string","enum":["start","stop"]},"config":{"type":"object"},"runId":{"type":"string"}}}`)},
 		{Name: tools.ToWire("workbench.test_checkpoint"), Description: "Run local PyTorch inference for an existing checkpoint of this model and return the actual prediction. Supply prompt for text or numeric features for a feature model.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["checkpointId"],"properties":{"checkpointId":{"type":"string"},"prompt":{"type":"string"},"features":{"type":"object","additionalProperties":{"type":"number"}},"temperature":{"type":"number"},"maxNewTokens":{"type":"integer"}}}`)},
@@ -382,6 +384,10 @@ func (e *Engine) runWorkbenchAction(ctx, sctx context.Context, turn protocol.Tur
 	switch name {
 	case "workbench.save_build":
 		output, err = e.saveWorkbenchBuild(ctx, call.Args)
+	case "workbench.import_data":
+		output, err = e.workbenchImportDataAction(ctx, call.Args)
+	case "workbench.inspect_data":
+		output, err = e.workbenchInspectDataAction(ctx, call.Args)
 	case "workbench.save_data":
 		output, err = e.saveWorkbenchData(ctx, call.Args)
 	case "workbench.train":
