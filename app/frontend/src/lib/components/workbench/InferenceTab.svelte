@@ -5,11 +5,13 @@
   import { chat } from '$lib/stores/chat.svelte';
   import { WorkbenchInferenceState } from '$lib/workbench/inference.svelte';
   import { checkpointSize } from '$lib/workbench/inference';
+  import type { WorkbenchActionResult } from '$lib/workbench/actionResult';
   let { projectId, modelId, modelCreatedAt, name, connected, dirty, onBuild, onData, initialCheckpointId = '' }: { projectId: string; modelId: string; modelCreatedAt: string; name: string; connected: boolean; dirty: boolean; initialCheckpointId?: string; onBuild: () => void; onData: () => void } = $props();
   const inference = new WorkbenchInferenceState((m,p,t) => app.call(m,p,t), () => app.refreshCatalog());
   let weightsInput = $state<HTMLInputElement>(), imageInput = $state<HTMLInputElement>();
   let checkpointName = $state('');
   $effect(() => { const context = { projectId, modelId, modelCreatedAt }, online = connected, checkpointId = initialCheckpointId; untrack(() => { void inference.activate(context, online, checkpointId); }); });
+  $effect(() => { const id=projectId, model=modelId, version=modelCreatedAt; const changed=(event:Event) => { const result=(event as CustomEvent<WorkbenchActionResult>).detail; if (result?.projectId===id && result.modelId===model && result.modelCreatedAt===version && ['train','test_checkpoint'].includes(result.action)) void inference.refresh(); }; window.addEventListener('umcode:workbench-action',changed); return () => window.removeEventListener('umcode:workbench-action',changed); });
   onDestroy(() => inference.dispose());
   async function chooseWeights(event: Event) {
     const input = event.currentTarget as HTMLInputElement, file = input.files?.[0]; input.value = '';

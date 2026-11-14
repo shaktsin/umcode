@@ -199,6 +199,11 @@ func parseData(files []decodedDataFile) (string, []string, []dataRecord, error) 
 	if len(rows) == 0 {
 		return "", nil, nil, errors.New("dataset contains no rows")
 	}
+	if format == "table" {
+		if err := validateFiniteDataColumns(names, rows); err != nil {
+			return "", nil, nil, err
+		}
+	}
 	return format, names, rows, nil
 }
 
@@ -245,9 +250,6 @@ func parseDelimitedData(content []byte, tsv bool) ([]string, []dataRecord, error
 		}
 		row := dataRecord{}
 		for i, value := range values {
-			if nonfiniteDataValue(value) {
-				return nil, nil, errors.New("nonfinite numeric value")
-			}
 			row[names[i]] = value
 		}
 		rows = append(rows, row)
@@ -304,9 +306,6 @@ func parseJSONLinesData(content []byte) ([]string, []dataRecord, error) {
 			default:
 				return nil, nil, errors.New("nested JSONL values are unsupported")
 			}
-			if nonfiniteDataValue(cell) {
-				return nil, nil, errors.New("nonfinite numeric value")
-			}
 			row[key] = cell
 			keys[key] = true
 			if len(keys) > maxDataColumns {
@@ -359,9 +358,29 @@ func parseTextData(content []byte) ([]dataRecord, error) {
 	return rows, scanner.Err()
 }
 
-func nonfiniteDataValue(value string) bool {
-	v, _ := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	return math.IsNaN(v) || math.IsInf(v, 0)
+func validateFiniteDataColumns(names []string, rows []dataRecord) error {
+	for _, name := range names {
+		firstNonfinite := 0
+		numeric := true
+		for i, row := range rows {
+			value := strings.TrimSpace(row[name])
+			if value == "" {
+				continue
+			}
+			v, err := strconv.ParseFloat(value, 64)
+			if err != nil && !errors.Is(err, strconv.ErrRange) {
+				numeric = false
+				break
+			}
+			if firstNonfinite == 0 && (math.IsNaN(v) || math.IsInf(v, 0)) {
+				firstNonfinite = i + 1
+			}
+		}
+		if numeric && firstNonfinite != 0 {
+			return fmt.Errorf("nonfinite numeric value in column %q at data row %d", name, firstNonfinite)
+		}
+	}
+	return nil
 }
 
 func dataCellPreview(value string) string {

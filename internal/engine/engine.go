@@ -175,6 +175,8 @@ type Engine struct {
 	mu                sync.Mutex
 	trainingMu        sync.Mutex
 	trainingManager   *workbench.TrainingManager
+	runtimeMu         sync.Mutex
+	runtimeService    *workbench.RuntimeService
 	inferenceMu       sync.Mutex
 	inferenceManager  *workbench.InferenceManager
 	importedRuntime   *workbench.ImportedRuntime

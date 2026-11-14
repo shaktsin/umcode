@@ -60,6 +60,35 @@ func TestDataTextContainingInfinityIsNotANumericError(t *testing.T) {
 	}
 }
 
+func TestDataIdentifierThatLooksLikeOverflowingNumberImportsAsText(t *testing.T) {
+	for _, file := range []DataFile{
+		upload("train.csv", "id,text,model\n251e20802938,first,a\nabcd1234,second,b\n"),
+		upload("train.jsonl", "{\"id\":\"251e20802938\",\"text\":\"first\",\"model\":\"a\"}\n{\"id\":\"abcd1234\",\"text\":\"second\",\"model\":\"b\"}\n"),
+	} {
+		t.Run(file.Name, func(t *testing.T) {
+			root, id := dataFixture(t, "classification")
+			ds, err := ImportData(root, id, DataSource{Kind: "local"}, []DataFile{file})
+			if err != nil {
+				t.Fatalf("identifier rejected: %v", err)
+			}
+			if ds.Preview[0]["id"] != "251e20802938" || ds.Columns[0].Kind != "text" {
+				t.Fatalf("identifier changed or misclassified: %+v", ds)
+			}
+		})
+	}
+}
+
+func TestDataPlainTextNaNIsNotNumericData(t *testing.T) {
+	root, id := dataFixture(t, "text-generation")
+	ds, err := ImportData(root, id, DataSource{Kind: "local"}, []DataFile{upload("notes.txt", "NaN\n")})
+	if err != nil {
+		t.Fatalf("plain text rejected: %v", err)
+	}
+	if ds.Preview[0]["text"] != "NaN" {
+		t.Fatalf("plain text changed: %+v", ds.Preview)
+	}
+}
+
 func TestDataWarnsWhenStratificationLeavesRequestedHoldoutEmpty(t *testing.T) {
 	root, id := dataFixture(t, "classification")
 	var rows strings.Builder

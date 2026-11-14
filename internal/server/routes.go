@@ -158,8 +158,10 @@ func (s *Server) routes() map[string]handler {
 
 		// ML Workbench P0: project-scoped model bundle persistence.
 		"workbench/import/runtime": bind(func(ctx context.Context, c *conn, p protocol.ImportRuntimeParams) (any, error) {
-			if !c.IsAdmin() { return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use imported model runtimes") }
-			return e.WorkbenchImportRuntime(ctx,p)
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use imported model runtimes")
+			}
+			return e.WorkbenchImportRuntime(ctx, p)
 		}),
 		"workbench/import/inspect": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchImportParams) (any, error) {
 			if !c.IsAdmin() {
@@ -178,6 +180,24 @@ func (s *Server) routes() map[string]handler {
 				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can use local training")
 			}
 			return e.WorkbenchTraining(ctx, "get", p)
+		}),
+		"workbench/runtime/get": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchRuntimeParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can inspect local Python runtimes")
+			}
+			return e.WorkbenchRuntime(ctx, "get", p)
+		}),
+		"workbench/runtime/select": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchRuntimeParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can select local Python runtimes")
+			}
+			return e.WorkbenchRuntime(ctx, "select", p)
+		}),
+		"workbench/runtime/install": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchRuntimeParams) (any, error) {
+			if !c.IsAdmin() {
+				return nil, protocol.Errorf(protocol.CodeInvalidRequest, "only app clients can install local Python runtimes")
+			}
+			return e.WorkbenchRuntime(ctx, "install", p)
 		}),
 		"workbench/training/start": bind(func(ctx context.Context, c *conn, p protocol.WorkbenchTrainingParams) (any, error) {
 			if !c.IsAdmin() {

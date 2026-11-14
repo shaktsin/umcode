@@ -23,6 +23,7 @@ var trustedTrainingRunner string
 type TrainingPublisher func(context.Context, TrainingSnapshot, []byte, string) (Checkpoint, error)
 type trainingJob struct {
 	finalizing                bool
+	maxBatch                  int
 	key, root, model, version string
 	run                       TrainingRun
 	cancel                    context.CancelFunc
@@ -39,7 +40,17 @@ type TrainingManager struct {
 func NewTrainingManager(home string) *TrainingManager {
 	return &TrainingManager{python: NewInferenceManager(home).python}
 }
-func (m *TrainingManager) Available() bool { return m.python != "" }
+func (m *TrainingManager) Available() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.python != "" }
+func (m *TrainingManager) Busy() bool      { m.mu.Lock(); defer m.mu.Unlock(); return m.active != nil }
+func (m *TrainingManager) SetPython(python string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active != nil && m.python != python {
+		return errors.New("stop the active training run before changing Python")
+	}
+	m.python = python
+	return nil
+}
 func (m *TrainingManager) ActiveElsewhere(root, id, version string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -97,6 +108,13 @@ func (m *TrainingManager) Start(root, id, version string, config TrainingConfig,
 	if err != nil {
 		return TrainingRun{}, err
 	}
+	maxBatch, known := TrainingMaxBatchSize(snap.Graph, snap.Selection, TrainingAvailableMemory())
+	if known && config.BatchSize > maxBatch {
+		if maxBatch < 1 {
+			return TrainingRun{}, errors.New("this saved graph exceeds the current local memory or compute budget even at batch size 1; free memory or reduce the model")
+		}
+		return TrainingRun{}, fmt.Errorf("batch size %d exceeds the current local memory or compute budget; use %d or less", config.BatchSize, maxBatch)
+	}
 	runID, err := dataRandomName("train-")
 	if err != nil {
 		return TrainingRun{}, err
@@ -108,6 +126,9 @@ func (m *TrainingManager) Start(root, id, version string, config TrainingConfig,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	job := &trainingJob{key: trainingKey(root, id, version), root: root, model: id, version: version, run: run, cancel: cancel, ctx: ctx}
+	if known {
+		job.maxBatch = maxBatch
+	}
 	m.active = job
 	m.wg.Add(1)
 	go func() { defer m.wg.Done(); defer cancel(); m.execute(job, snap, publish) }()
@@ -212,7 +233,7 @@ func (m *TrainingManager) process(job *trainingJob, snap TrainingSnapshot, publi
 	// Drop copied split buffers after staging; the publisher only needs graph and preparation.
 	snap.Splits = nil
 	weightsPath := filepath.Join(dir, "trained.pt")
-	input, err := json.Marshal(map[string]any{"graph": snap.Graph, "selection": snap.Selection, "config": job.run.Config, "splitPaths": paths, "weightsPath": weightsPath})
+	input, err := json.Marshal(map[string]any{"graph": snap.Graph, "selection": snap.Selection, "config": job.run.Config, "splitPaths": paths, "weightsPath": weightsPath, "maxBatchSize": job.maxBatch})
 	if err != nil {
 		return err
 	}

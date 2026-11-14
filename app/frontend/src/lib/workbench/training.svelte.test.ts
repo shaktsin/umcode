@@ -10,6 +10,33 @@ function create(call: ConstructorParameters<typeof WorkbenchTrainingState>[0]) {
 afterEach(() => { states.splice(0).forEach(state => state.dispose()); vi.useRealTimers(); });
 
 describe('local training state', () => {
+  it('shows the assistant-started run even when an older run was selected', async () => {
+    let runs = [run('completed', 'old')];
+    const state = create(async () => ready(runs));
+    await state.activate(context, true, false);
+    expect(state.runId).toBe('old');
+    runs = [run('running', 'new'), ...runs];
+    await state.focusRun('new');
+    expect(state.runId).toBe('new');
+    expect(state.activeRun?.id).toBe('new');
+  });
+  it('blocks a batch above the saved graph limit and states the valid maximum', async () => {
+    const state = create(async () => ({ ...ready(), maxBatchSize: 3 }));
+    await state.activate(context, true, false);
+    expect(state.canStart).toBe(false);
+    expect(state.configError()).toContain('3');
+    state.config.batchSize = 3;
+    expect(state.canStart).toBe(true);
+  });
+  it('replays a refresh requested while a previous refresh is in flight', async () => {
+    const first = deferred<TrainingState>(); let calls = 0;
+    const state = create(async () => ++calls === 1 ? first.promise : ready([run()]));
+    const activating = state.activate(context, true, false);
+    await state.refresh();
+    first.resolve(ready()); await activating;
+    await Promise.resolve();
+    expect(calls).toBe(2); expect(state.run?.id).toBe('run1');
+  });
   // Removing request serialization would start two jobs; nesting config differently would break the real RPC.
   it('starts one run with the saved incarnation and flat config while rejecting duplicate clicks', async () => {
     const starting = deferred<TrainingRun>(); const requests: { method: string; params: Record<string, unknown> }[] = [];

@@ -5,6 +5,7 @@
   import { WorkbenchDataState, workbenchDataDrafts } from '$lib/workbench/data.svelte';
   import { dataCompatibility, dataExamples, dataMappingWarnings, dataSize } from '$lib/workbench/data';
   import type { DataConfig, DataSourceTab } from '$lib/workbench/dataTypes';
+  import type { WorkbenchActionResult } from '$lib/workbench/actionResult';
   import type { WorkbenchTask } from '$lib/workbench/types';
 
   let { projectId, modelId, modelCreatedAt, task, graphText, connected, onBuild, imported = false }: { projectId: string; modelId: string; modelCreatedAt: string; task: WorkbenchTask; graphText: string; connected: boolean; onBuild: () => void; imported?: boolean } = $props();
@@ -14,6 +15,7 @@
   const sources: { id: DataSourceTab; name: string }[] = [{ id: 'examples', name: 'Examples' }, { id: 'local', name: 'Local files' }, { id: 'huggingface', name: 'Hugging Face' }];
   $effect(() => { const context = { projectId, modelId, task, connected }; untrack(() => { token = ''; void data.activate(context.projectId, context.modelId, context.task, context.connected); }); });
   $effect(() => { const source = data.source; void projectId; void modelId; const online = connected; untrack(() => { token = ''; if (source === 'huggingface' && online) void data.accountAction('status'); }); });
+  $effect(() => { const id=projectId, model=modelId, version=modelCreatedAt; const changed=(event:Event) => { const result=(event as CustomEvent<WorkbenchActionResult>).detail; if (result?.projectId===id && result.modelId===model && result.modelCreatedAt===version && result.action==='save_data') void data.load(result.datasetId); }; window.addEventListener('umcode:workbench-action',changed); return () => window.removeEventListener('umcode:workbench-action',changed); });
   onDestroy(() => { token = ''; data.dispose(); });
   const dataset = $derived(data.dataset), config = $derived(data.config);
   const compatibility = $derived(dataset && config ? dataCompatibility(graphText, dataset, config, data.selection) : []);

@@ -8,6 +8,8 @@ import { app } from './app.svelte';
 import { projects } from './projects.svelte';
 import { errMsg } from '$lib/format';
 import type { WorkbenchContext } from '$lib/workbench/assistant';
+import { workbenchActionResult } from '$lib/workbench/actionResult';
+import { workbench } from '$lib/workbench/store.svelte';
 import { inspector } from './inspector.svelte';
 import type { Attachment, BrowserVerificationResult, Item, ModelRouteResult, ModelSelection, RouteChangedEvent, SearchHit, Thread, Turn } from '$lib/types';
 
@@ -287,6 +289,12 @@ class ChatState {
     });
     r.on('item/completed', (p: { item: Item }) => {
       this.each((v) => v.applyItem(p.item));
+      const action = workbenchActionResult(p.item);
+      if (action) {
+        if (action.action === 'save_build' && action.baseDraftRevision) void workbench.reconcileAssistantSave(action.projectId, action.modelId, action.modelCreatedAt, action.baseDraftRevision).catch((error) => app.toast('error', errMsg(error)));
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('umcode:workbench-action', { detail: action }));
+        if (action.action === 'train' && action.operation === 'start' && action.status === 'running' && workbench.projectId === action.projectId && workbench.selected?.model.id === action.modelId && workbench.selected.model.createdAt === action.modelCreatedAt) workbench.tab = 'Train';
+      }
       const role = verificationRole(p.item);
       if (!role) return;
       let report: BrowserVerificationResult | undefined;

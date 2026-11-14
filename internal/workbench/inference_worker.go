@@ -157,8 +157,24 @@ func (m *InferenceManager) release(w *pythonWorker) {
 	m.mu.Unlock()
 	w.close()
 }
-func (m *InferenceManager) Available() bool { return m.python != "" }
+func (m *InferenceManager) Available() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.python != "" }
+func (m *InferenceManager) SetPython(python string) {
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.python == python {
+		return
+	}
+	for k, w := range m.workers {
+		w.close()
+		delete(m.workers, k)
+	}
+	m.python = python
+}
 func (m *InferenceManager) Close() {
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closed = true
@@ -172,6 +188,8 @@ func (m *InferenceManager) Close() {
 	}
 }
 func (m *InferenceManager) Unload(prefix string) {
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for k, w := range m.workers {
@@ -223,6 +241,9 @@ func (m *InferenceManager) Shape(ctx context.Context, graph json.RawMessage) (Ar
 func (m *InferenceManager) Load(ctx context.Context, key string, snap CheckpointSnapshot) error {
 	m.loadMu.Lock()
 	defer m.loadMu.Unlock()
+	return m.loadCached(ctx, key, snap)
+}
+func (m *InferenceManager) loadCached(ctx context.Context, key string, snap CheckpointSnapshot) error {
 	m.mu.Lock()
 	if m.workers[key] != nil {
 		m.mu.Unlock()
@@ -256,7 +277,9 @@ func (m *InferenceManager) Load(ctx context.Context, key string, snap Checkpoint
 	return nil
 }
 func (m *InferenceManager) Predict(ctx context.Context, key string, snap CheckpointSnapshot, input map[string]any) (Prediction, error) {
-	if err := m.Load(ctx, key, snap); err != nil {
+	m.loadMu.Lock()
+	defer m.loadMu.Unlock()
+	if err := m.loadCached(ctx, key, snap); err != nil {
 		return Prediction{}, err
 	}
 	m.mu.Lock()

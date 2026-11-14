@@ -14,6 +14,7 @@ export class WorkbenchTrainingState {
   runs = $state<TrainingRun[]>([]);
   runId = $state('');
   runtimeAvailable = $state(false);
+  maxBatchSize = $state<number | null>(null);
   issues = $state<string[]>([]);
   config = $state<TrainingConfig>({ epochs: 20, batchSize: 16, learningRate: .003, seed: 17 });
   connected = $state(false);
@@ -24,6 +25,8 @@ export class WorkbenchTrainingState {
   private context: TrainingContext | null = null;
   private request = 0;
   private disposed = false;
+  private refreshQueued = false;
+  private pendingRunId = '';
   private timer: ReturnType<typeof setTimeout> | undefined;
   constructor(private call: TrainingCall) {}
   get run() { return this.runs.find(run => run.id === this.runId); }
@@ -33,12 +36,14 @@ export class WorkbenchTrainingState {
     const { epochs, batchSize, learningRate, seed } = this.config;
     if (!Number.isInteger(epochs) || epochs < 1 || epochs > 1000) return 'Epochs must be a whole number from 1 to 1,000.';
     if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 256) return 'Batch size must be a whole number from 1 to 256.';
+    if (this.maxBatchSize === 0) return 'This saved model exceeds the current memory or compute budget even at batch size 1. Free memory or reduce the model.';
+    if (this.maxBatchSize !== null && batchSize > this.maxBatchSize) return `Current memory and compute budget supports batch size ${this.maxBatchSize} or less.`;
     if (!Number.isFinite(learningRate) || learningRate < 0.000001 || learningRate > 1) return 'Learning rate must be between 0.000001 and 1.';
     if (!Number.isSafeInteger(seed) || seed < 0 || seed > 2147483647) return 'Seed must be a whole number from 0 to 2,147,483,647.';
     return '';
   }
   private clearTimer() { if (this.timer !== undefined) clearTimeout(this.timer); this.timer = undefined; }
-  private invalidate() { this.clearTimer(); this.request++; this.busy = false; this.stage = ''; this.error = ''; }
+  private invalidate() { this.clearTimer(); this.refreshQueued = false; this.pendingRunId = ''; this.request++; this.busy = false; this.stage = ''; this.error = ''; }
   private begin(stage: string): Ticket | null {
     if (!this.connected || !this.context || this.disposed || this.busy) return null;
     this.clearTimer(); this.busy = true; this.stage = stage; this.error = '';
@@ -46,12 +51,14 @@ export class WorkbenchTrainingState {
   }
   private current(ticket: Ticket) { return !this.disposed && this.connected && ticket.request === this.request && identity(ticket.context) === identity(this.context); }
   private schedule() { this.clearTimer(); if (!this.disposed && this.connected && this.activeRun) this.timer = setTimeout(() => { this.timer = undefined; void this.refresh(); }, 1000); }
-  private finish(ticket: Ticket) { if (this.current(ticket)) { this.busy = false; this.stage = ''; this.schedule(); } }
+  private finish(ticket: Ticket) { if (this.current(ticket)) { this.busy = false; this.stage = ''; if (this.refreshQueued) { this.refreshQueued = false; void this.refresh(); } else this.schedule(); } }
   private fail(ticket: Ticket, error: unknown) { if (this.current(ticket)) this.error = error instanceof Error ? error.message : 'Local training failed. Refresh and try again.'; }
   private apply(state: TrainingState) {
     this.runs = (state.runs ?? []).filter(run => run.modelCreatedAt === this.context?.modelCreatedAt);
     this.runtimeAvailable = state.runtimeAvailable; this.issues = state.issues ?? [];
+    this.maxBatchSize = Number.isInteger(state.maxBatchSize) ? state.maxBatchSize! : null;
     if (!this.runs.some(run => run.id === this.runId)) this.runId = this.runs[0]?.id ?? '';
+    if (this.pendingRunId && this.runs.some(run => run.id === this.pendingRunId)) { this.runId = this.pendingRunId; this.pendingRunId = ''; }
   }
   private upsert(run: TrainingRun, select = false) {
     if (run.modelCreatedAt !== this.context?.modelCreatedAt) throw new Error('The training run belongs to another model version. Refresh this model.');
@@ -65,15 +72,17 @@ export class WorkbenchTrainingState {
     const changed = identity(context) !== identity(this.context), reconnected = connected && !this.connected;
     if (!changed && connected === this.connected) return;
     this.invalidate(); this.context = { ...context }; this.connected = connected;
-    if (changed) { this.runs = []; this.runId = ''; this.issues = []; this.runtimeAvailable = false; }
+    if (changed) { this.runs = []; this.runId = ''; this.issues = []; this.runtimeAvailable = false; this.maxBatchSize = null; }
     if (connected && (changed || reconnected)) await this.refresh();
   }
   async refresh() {
+    if (this.busy) { this.refreshQueued = true; return; }
     const ticket = this.begin('Checking local runs…'); if (!ticket) return;
     try { const result = await this.call('workbench/training/get', { ...ticket.context }) as TrainingState; if (this.current(ticket)) this.apply(result); }
     catch (error) { this.fail(ticket, error); } finally { this.finish(ticket); }
   }
-  selectRun(id: string) { if (this.runs.some(run => run.id === id)) this.runId = id; }
+  selectRun(id: string) { this.pendingRunId = ''; if (this.runs.some(run => run.id === id)) this.runId = id; }
+  async focusRun(id: string) { if (!id) return; this.pendingRunId = id; await this.refresh(); }
   async start() {
     if (!this.canStart) return;
     const ticket = this.begin('Starting local training…'); if (!ticket) return;

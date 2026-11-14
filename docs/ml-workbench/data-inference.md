@@ -60,8 +60,45 @@ old drafts, checkpoints or promotions.
 
 ## Install the local runtime
 
-The app does not bundle or automatically install Python/PyTorch in this PR. With a
-supported Python environment, install into the default engine home's managed folder:
+The project Workbench assistant can read saved Data, Build, Train and Inference
+status, including the latest training failure. When asked, it can save supported
+native Build edits and Data preparation, start or stop a local run, and test a
+saved checkpoint. The Build action handles existing layer settings, removal and
+connections; adding layers and imported-model edits still use a proposal for
+review. A started run is reported as running until its saved run record says it
+completed. Assistant saves reject a model or saved preparation that changed
+while the chat turn was in progress. A newer unsaved Build draft stays in the
+editor when an assistant save completes.
+
+Build → Code is a generated preview of the current graph. Its heading says
+whether it shows the saved graph or an unsaved draft. The project `model.py`
+file is a placeholder and is not used by local Train. Train settings, including
+batch size, are separate from Build. For supported single-path native graphs,
+Train estimates peak training memory against a quarter of currently reclaimable
+system memory, reserving space for PyTorch, the dataset, parameters, gradients,
+optimizer state and activations. It also applies a separate per-batch CPU work
+limit. An oversized start is blocked before writing a failed run. If system
+memory cannot be read, Train falls back to the old 8 million element batch cap.
+The limit is recalculated when training starts because other apps can change
+available memory. The assistant receives the current limit with saved stage
+status so it can choose a valid batch when asked to retry.
+
+An assistant training start must produce a completed `workbench.train` tool
+result and a saved run record. Workbench replies are checked before display so
+an invented run ID or unsupported claim of a new start is not presented as an
+action. A successful assistant start opens Train, selects the new run, and
+polls its progress until it finishes or fails.
+
+In **Train → Python runtime → Set up runtime**, UMCode scans the project virtual
+environment, active Python environments, common system locations, and its managed
+environment. Select a ready interpreter or paste an absolute Python executable
+path. The selection is shared by Train and Inference and persists across restarts.
+If packages are missing, choose **Install in UMCode runtime**. UMCode creates or
+updates its isolated environment and installs the fixed dependencies from
+`internal/workbench/pytorch/requirements.txt`; it does not change an existing
+user environment. This requires network access and may take several minutes.
+
+For a manual install into the default engine home's managed folder:
 
 ```sh
 python3 -m venv ~/.umcode/runtimes/pytorch
@@ -75,8 +112,7 @@ Pillow and safetensors, never user model code.
 
 The runtime dropdown has no Auto option. llama.cpp, vLLM and SGLang are visible with
 compatibility explanations and disabled for these custom state_dict graphs. GGUF and
-general pretrained-model loading, runtime download/installers and remote compute are
-future work.
+general pretrained-model loading and remote compute are future work.
 
 ## Small trained samples
 
@@ -121,5 +157,5 @@ briefly stopped because the test hardcodes its port. The full suite is not claim
 Bundle mutations and inference are serialized by a model-operation lock. An unload or
 delete can wait for an in-flight request, bounded by the 90-second worker timeout.
 Chat Stop cancels the running request directly. The production build reports the
-existing Vite chunk-size warning. Native app packaging/signing was not rerun for this
-follow-up; the verified local browser build is the implementation exercised here.
+existing Vite chunk-size warning. The local macOS app bundle was rebuilt after
+the assistant action changes.
