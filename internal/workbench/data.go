@@ -7,6 +7,12 @@ import (
 )
 
 func ImportData(projectRoot, modelID string, source DataSource, files []DataFile) (Dataset, error) {
+	return ImportDataWithProvenance(projectRoot, modelID, source, files, nil)
+}
+
+// ImportDataWithProvenance imports files exactly like ImportData and records
+// how an assistant-made dataset was produced on its stored metadata.
+func ImportDataWithProvenance(projectRoot, modelID string, source DataSource, files []DataFile, prov *DataProvenance) (Dataset, error) {
 	dataMu.Lock()
 	defer dataMu.Unlock()
 	if _, err := Open(projectRoot, modelID); err != nil {
@@ -25,6 +31,7 @@ func ImportData(projectRoot, modelID string, source DataSource, files []DataFile
 		return Dataset{}, err
 	}
 	ds := describeData(id, source, format, names, rows, byteCount)
+	ds.Provenance = prov
 	root, _, err := openDataStorage(projectRoot, modelID, true)
 	if err != nil {
 		return Dataset{}, err
