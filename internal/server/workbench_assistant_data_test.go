@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shaktsin/umcode/internal/engine"
 	"github.com/shaktsin/umcode/internal/protocol"
 	"github.com/shaktsin/umcode/internal/workbench"
 )
@@ -30,7 +31,7 @@ func TestWorkbenchAssistantImportsLocalFile(t *testing.T) {
 	h.fake.push(toolReply("workbench__import_data", string(args)), textReply("Imported."))
 	var started protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Import reviews.csv", Workbench: &c}, &started)
-	_, _, items := h.waitTurn(started.Turn.ID, nil)
+	_, _, items := h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { return true })
 	item := assistantDataToolItem(items, "workbench.import_data")
 	if item == nil || item.Status != protocol.ItemCompleted {
 		t.Fatalf("import item = %+v", item)
@@ -60,7 +61,7 @@ func TestWorkbenchAssistantImportRejectsEscapeAndPartialFailure(t *testing.T) {
 	h.fake.push(toolReply("workbench__import_data", string(args)), textReply("Imported what I could."))
 	var started protocol.TurnStartResult
 	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Import files", Workbench: &c}, &started)
-	_, _, items := h.waitTurn(started.Turn.ID, nil)
+	_, _, items := h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { return true })
 	item := assistantDataToolItem(items, "workbench.import_data")
 	if item == nil || item.Status != protocol.ItemCompleted {
 		t.Fatalf("import item = %+v", item)
@@ -100,5 +101,93 @@ func TestWorkbenchAssistantInspectsData(t *testing.T) {
 	}
 	if !strings.Contains(item.Tool.Output, `"sharedColumns":["label","text"]`) {
 		t.Fatalf("output = %s", item.Tool.Output)
+	}
+}
+
+func TestWorkbenchAssistantImportAsksOneApprovalForAllSources(t *testing.T) {
+	h, th, c := assistantRPCFixture(t)
+	for _, name := range []string{"a.csv", "b.csv"} {
+		if err := os.WriteFile(filepath.Join(h.ws, name), []byte("x\n1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	args, _ := json.Marshal(map[string]any{"sources": []map[string]any{{"type": "local", "path": "a.csv"}, {"type": "local", "path": "b.csv"}}})
+	h.fake.push(toolReply("workbench__import_data", string(args)), textReply("Imported."))
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Import both", Workbench: &c}, &started)
+	asked := 0
+	h.waitTurn(started.Turn.ID, func(a protocol.Approval) bool {
+		if a.Tool == "workbench.import_data" {
+			asked++
+		}
+		return true
+	})
+	if asked != 1 {
+		t.Fatalf("import asked %d approvals, want exactly one card for the call", asked)
+	}
+}
+
+func TestWorkbenchAssistantImportDeniedReadsNothing(t *testing.T) {
+	h, th, c := assistantRPCFixture(t)
+	if err := os.WriteFile(filepath.Join(h.ws, "a.csv"), []byte("x\n1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{"sources": []map[string]any{{"type": "local", "path": "a.csv"}}})
+	h.fake.push(toolReply("workbench__import_data", string(args)), textReply("Understood."))
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Import a.csv", Workbench: &c}, &started)
+	h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { return false })
+	state, err := workbench.ReadData(h.ws, c.ModelID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Datasets) != 0 {
+		t.Fatalf("denied import still created datasets: %+v", state.Datasets)
+	}
+}
+
+const assistantScriptArgs = `{"title":"Balance reviews","inputDatasetIds":[],"outputName":"balanced","script":"open('out/b.csv','w').write('x\\n1\\n')","expectOutput":"dataset"}`
+
+func TestWorkbenchAssistantScriptRequiresApprovalAndHonorsDenial(t *testing.T) {
+	h, th, c := assistantRPCFixture(t)
+	h.fake.push(toolReply("workbench__run_data_script", assistantScriptArgs), textReply("Understood."))
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Balance the classes", Workbench: &c}, &started)
+	var seen []protocol.Approval
+	_, _, items := h.waitTurn(started.Turn.ID, func(a protocol.Approval) bool {
+		seen = append(seen, a)
+		return false
+	})
+	if len(seen) != 1 || seen[0].Tool != "workbench.run_data_script" || seen[0].Risk != "red" {
+		t.Fatalf("approvals = %+v, want one red workbench.run_data_script", seen)
+	}
+	if !strings.Contains(string(seen[0].Args), "Balance reviews") || !strings.Contains(string(seen[0].Args), "out/b.csv") {
+		t.Fatalf("approval does not show the script: %s", seen[0].Args)
+	}
+	item := assistantDataToolItem(items, "workbench.run_data_script")
+	if item == nil || item.Status == protocol.ItemCompleted || !strings.Contains(item.Tool.Error, "declined") {
+		t.Fatalf("denied script item = %+v", item)
+	}
+	state, err := workbench.ReadData(h.ws, c.ModelID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Datasets) != 0 {
+		t.Fatalf("denied script created datasets: %+v", state.Datasets)
+	}
+}
+
+func TestWorkbenchAssistantScriptIgnoresRememberedAllow(t *testing.T) {
+	h, th, c := assistantRPCFixture(t)
+	if err := h.eng.Store.RememberThreadDecision(h.ctx, th.ID, "workbench.run_data_script", engine.ApprovalSignature("workbench.run_data_script", json.RawMessage(assistantScriptArgs)), "allow"); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.push(toolReply("workbench__run_data_script", assistantScriptArgs), textReply("Understood."))
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Balance the classes", Workbench: &c}, &started)
+	asked := 0
+	h.waitTurn(started.Turn.ID, func(protocol.Approval) bool { asked++; return false })
+	if asked != 1 {
+		t.Fatalf("remembered allow skipped the approval card (asked %d)", asked)
 	}
 }

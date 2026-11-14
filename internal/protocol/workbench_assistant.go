@@ -17,6 +17,8 @@ type WorkbenchTurnContext struct {
 	DataVersion    string   `json:"-"`
 	BuildSaved     bool     `json:"-"`
 	StartedRunIDs  []string `json:"-"`
+	// Datasets the assistant actually created this turn, from completed script runs.
+	CreatedDatasetIDs []string `json:"-"`
 }
 
 type WorkbenchProposal struct {

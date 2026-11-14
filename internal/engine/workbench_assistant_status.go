@@ -40,7 +40,9 @@ func (e *Engine) workbenchStageSnapshot(ctx context.Context, c *protocol.Workben
 			for _, column := range dataset.Columns[:min(len(dataset.Columns), 32)] {
 				columns = append(columns, map[string]string{"name": column.Name, "kind": column.Kind})
 			}
-			datasets = append(datasets, map[string]any{"id": dataset.ID, "name": dataset.Name, "rows": dataset.RowCount, "format": dataset.Format, "columns": columns})
+			entry := workbenchDatasetStatus(dataset)
+			entry["columns"] = columns
+			datasets = append(datasets, entry)
 		}
 		stage := map[string]any{"datasetCount": len(data.Datasets), "datasets": datasets, "prepared": data.Selection != nil}
 		if data.Selection != nil {
@@ -94,4 +96,14 @@ func (e *Engine) workbenchStageSnapshot(ctx context.Context, c *protocol.Workben
 		}
 	}
 	return string(encoded)
+}
+
+// workbenchDatasetStatus is the per-dataset summary the assistant sees in saved
+// stage status; createdBy appears only for assistant-made datasets.
+func workbenchDatasetStatus(dataset workbench.Dataset) map[string]any {
+	entry := map[string]any{"id": dataset.ID, "name": dataset.Name, "rows": dataset.RowCount, "format": dataset.Format}
+	if dataset.Provenance != nil {
+		entry["createdBy"] = dataset.Provenance.CreatedBy
+	}
+	return entry
 }

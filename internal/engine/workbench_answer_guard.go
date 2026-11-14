@@ -10,6 +10,10 @@ import (
 var workbenchRunID = regexp.MustCompile(`\btrain-[a-f0-9]{32}\b`)
 var claimedTrainingStart = regexp.MustCompile(`(?i)\b(?:i|we)\s+(?:have\s+|just\s+)?(?:started|launched|kicked off)\b|\bstarted (?:for real|training|a new training run)\b`)
 
+var claimedDatasetCreation = regexp.MustCompile(`(?i)\b(?:i|we)(?:'ve|\s+have|\s+just)?\s+(?:created|made|generated|built)\b[^.\n]{0,60}\bdataset\b`)
+
+const unverifiedDatasetAnswer = "I could not verify a new dataset. No script run is confirmed by a Workbench tool result. I need to run an approved data script and report the dataset it actually produced before saying one was created."
+
 const unverifiedTrainingAnswer = "I could not verify a new training run. No start is confirmed by a Workbench tool result. I need to call the Train action and report its actual run ID before saying training started."
 
 // A Workbench answer cannot turn an invented run ID or a first-person claim
@@ -18,6 +22,9 @@ func (e *Engine) guardWorkbenchAnswer(ctx context.Context, answer string) string
 	c := workbenchContextFrom(ctx)
 	if c == nil || answer == "" {
 		return answer
+	}
+	if claimedDatasetCreation.MatchString(answer) && len(c.CreatedDatasetIDs) == 0 {
+		return unverifiedDatasetAnswer
 	}
 	if claimedTrainingStart.MatchString(answer) && len(c.StartedRunIDs) == 0 {
 		return unverifiedTrainingAnswer

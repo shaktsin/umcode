@@ -19,7 +19,8 @@ func workbenchActionSpecs() []llm.ToolSpec {
 		{Name: tools.ToWire("workbench.save_build"), Description: "Apply supported changes to the current Build draft and save it in this model's project. An empty operations list saves the current draft. Use only when the user asks to make or save a change; use propose_edit for preview-only requests.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["operations"],"properties":{"operations":{"type":"array","maxItems":32,"items":{"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"type":"string","enum":["update","remove","connect","disconnect"]},"nodeId":{"type":"string"},"config":{"type":"object"},"source":{"type":"string"},"target":{"type":"string"},"edgeId":{"type":"string"}}}}}}`)},
 		{Name: tools.ToWire("workbench.import_data"), Description: "Import datasets for this Workbench model: project-relative local file paths and public or token-accessible Hugging Face repositories (pinned revision required). Several sources import in one call; each becomes its own dataset.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["sources"],"properties":{"sources":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"type":"string","enum":["local","huggingface"]},"path":{"type":"string"},"repo":{"type":"string"},"revision":{"type":"string"},"files":{"type":"array","items":{"type":"string"}}}}}}}`)},
 		{Name: tools.ToWire("workbench.inspect_data"), Description: "Read sample rows, column kinds, missing values, likely target distribution and shared columns across this model's imported datasets. Empty datasetIds inspects all of them.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"datasetIds":{"type":"array","items":{"type":"string"}},"sample":{"type":"integer","minimum":0,"maximum":20}}}`)},
-		{Name: tools.ToWire("workbench.save_data"), Description: "Save Data preparation for this model using the selected imported dataset. Supply the complete Data configuration from the saved status with requested changes. Recomputes train, validation and test splits.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["config"],"properties":{"config":{"type":"object"}}}`)},
+		{Name: tools.ToWire("workbench.run_data_script"), Description: "Run a Python script that analyzes, transforms, merges, balances or generates data. The user must approve every run and sees the code first. The script runs sandboxed with no network, reads copies of the chosen imported datasets from inputs/<dataset name>/, writes CSV, TSV, JSONL or TXT files to out/, and prints findings to stdout. pandas is NOT installed; numpy, Pillow, torch and the standard library are. A 120 second limit applies. With expectOutput dataset, the files in out/ become one new imported dataset named outputName; with report, only stdout is returned. Existing datasets are never modified.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["title","outputName","script","expectOutput"],"properties":{"title":{"type":"string","maxLength":80},"inputDatasetIds":{"type":"array","maxItems":8,"items":{"type":"string"}},"outputName":{"type":"string","maxLength":256},"script":{"type":"string","maxLength":32768},"expectOutput":{"type":"string","enum":["dataset","report"]}}}`)},
+		{Name: tools.ToWire("workbench.save_data"), Description: "Save Data preparation for this model using the selected imported dataset (set config.datasetId to choose one, including assistant-made datasets). Supply the complete Data configuration from the saved status with requested changes. Recomputes train, validation and test splits.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["config"],"properties":{"config":{"type":"object"}}}`)},
 		{Name: tools.ToWire("workbench.train"), Description: "Start or stop a local training run for the selected Workbench model. Starting returns a running run ID, not a completed result. Supply training config when starting and runId when stopping.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["operation"],"properties":{"operation":{"type":"string","enum":["start","stop"]},"config":{"type":"object"},"runId":{"type":"string"}}}`)},
 		{Name: tools.ToWire("workbench.test_checkpoint"), Description: "Run local PyTorch inference for an existing checkpoint of this model and return the actual prediction. Supply prompt for text or numeric features for a feature model.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["checkpointId"],"properties":{"checkpointId":{"type":"string"},"prompt":{"type":"string"},"features":{"type":"object","additionalProperties":{"type":"number"}},"temperature":{"type":"number"},"maxNewTokens":{"type":"integer"}}}`)},
 	}
@@ -380,6 +381,20 @@ func (e *Engine) runWorkbenchAction(ctx, sctx context.Context, turn protocol.Tur
 	if err = e.saveAndPublish(sctx, it, protocol.NotifyItemStarted); err != nil {
 		return toolRunResult{Output: err.Error(), ModelOutput: err.Error(), IsError: true}
 	}
+	if name == "workbench.import_data" || name == "workbench.run_data_script" {
+		risk, reason, summary := e.workbenchActionApproval(ctx, name, call.Args)
+		it.Tool.Risk = string(risk)
+		approved, approvalErr := e.requestApproval(ctx, sctx, turn, it, name, call.Args, risk, reason, summary)
+		if approvalErr != nil || !approved {
+			message := "The user declined this action. Do not retry it unless the user asks."
+			if approvalErr != nil {
+				message = "Approval not granted: " + approvalErr.Error()
+			}
+			it.Status, it.Tool.Error = protocol.ItemDenied, message
+			_ = e.saveAndPublish(sctx, it, protocol.NotifyItemCompleted)
+			return toolRunResult{Output: message, ModelOutput: message, IsError: true}
+		}
+	}
 	var output string
 	switch name {
 	case "workbench.save_build":
@@ -388,6 +403,8 @@ func (e *Engine) runWorkbenchAction(ctx, sctx context.Context, turn protocol.Tur
 		output, err = e.workbenchImportDataAction(ctx, call.Args)
 	case "workbench.inspect_data":
 		output, err = e.workbenchInspectDataAction(ctx, call.Args)
+	case "workbench.run_data_script":
+		output, err = e.workbenchRunDataScriptAction(ctx, call.Args)
 	case "workbench.save_data":
 		output, err = e.saveWorkbenchData(ctx, call.Args)
 	case "workbench.train":
