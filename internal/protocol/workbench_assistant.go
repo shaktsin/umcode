@@ -11,6 +11,12 @@ type WorkbenchTurnContext struct {
 	Revision       string `json:"revision"`
 	SelectedNodeID string `json:"selectedNodeId,omitempty"`
 	Summary        string `json:"summary"`
+	// Captured by the engine at admission; never trusted from the client or sent to the model.
+	ModelCreatedAt string   `json:"-"`
+	SavedGraphHash string   `json:"-"`
+	DataVersion    string   `json:"-"`
+	BuildSaved     bool     `json:"-"`
+	StartedRunIDs  []string `json:"-"`
 }
 
 type WorkbenchProposal struct {

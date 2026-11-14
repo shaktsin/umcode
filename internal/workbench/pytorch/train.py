@@ -218,8 +218,14 @@ def train(request, emit):
             # MLP intermediates in every repeated block during backpropagation.
             activations += repeats*(shape[0]*shape[0]*c["heads"]*2 +
                                     math.prod(shape)*(9+2*c.get("expansion", 0)))
-    require(activations*batch <= MAX_ELEMENTS,
-            "Training batch activations exceed the 8 million element limit; reduce batch size or architecture size.")
+    max_batch = request.get("maxBatchSize", 0)
+    require(type(max_batch) is int and 0 <= max_batch <= 256, "Invalid training batch preflight limit.")
+    if max_batch:
+        require(batch <= max_batch,
+                f"Batch size exceeds the current local memory or compute budget; use {max_batch} or less.")
+    else:
+        require(activations*batch <= MAX_ELEMENTS,
+                "Training batch activations exceed the fallback 8 million element limit; reduce batch size or architecture size.")
     path = request.get("weightsPath")
     require(type(path) is str and 0 < len(path) <= 4096 and not os.path.lexists(path),
             "Training requires a new private checkpoint path.")

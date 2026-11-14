@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,6 +47,32 @@ func TestTrainingConfigRejectsUnsafeBounds(t *testing.T) {
 		if bad.Validate() == nil {
 			t.Fatalf("accepted %+v", bad)
 		}
+	}
+}
+
+func TestTrainingCompatibilityCatchesByteVocabularyMismatch(t *testing.T) {
+	graph := json.RawMessage(`{"version":1,"format":"umcode.layers.v1","nodes":[{"id":"input","kind":"input","config":{"mode":"tokens","sequence":128}},{"id":"embedding","kind":"embedding","config":{"vocab":32000,"width":128}}],"edges":[]}`)
+	selection := DataSelection{Config: DataConfig{Mode: "text", SequenceLength: 128}}
+	issues := TrainingCompatibilityIssues(graph, selection)
+	if len(issues) != 1 || !strings.Contains(issues[0], "259") {
+		t.Fatalf("issues=%v", issues)
+	}
+}
+
+func TestTrainingBatchLimitForSavedTextGraph(t *testing.T) {
+	graph := []byte(`{"version":1,"format":"umcode.layers.v1","nodes":[{"id":"input","kind":"input","config":{"mode":"tokens","sequence":512}},{"id":"embedding","kind":"embedding","config":{"width":32}},{"id":"position","kind":"position","config":{"length":512}},{"id":"transformer","kind":"transformer","config":{"width":32,"heads":4,"repeat":1,"expansion":2}},{"id":"meanpool","kind":"meanpool","config":{}},{"id":"linear","kind":"linear","config":{"outFeatures":18}},{"id":"output","kind":"output","config":{}}],"edges":[{"id":"a","source":"input","target":"embedding"},{"id":"b","source":"embedding","target":"position"},{"id":"c","source":"position","target":"transformer"},{"id":"d","source":"transformer","target":"meanpool"},{"id":"e","source":"meanpool","target":"linear"},{"id":"f","source":"linear","target":"output"}]}`)
+	selection := DataSelection{Config: DataConfig{Mode: "text", SequenceLength: 512}, Counts: DataCounts{Train: 1000, Validation: 100, Test: 100}}
+	large, ok := TrainingMaxBatchSize(graph, selection, 16<<30)
+	if !ok || large != 23 {
+		t.Fatalf("large-memory max batch = %d, known = %v", large, ok)
+	}
+	small, ok := TrainingMaxBatchSize(graph, selection, 2<<30)
+	if !ok || small < 1 || small >= large {
+		t.Fatalf("small-memory max batch = %d, known = %v", small, ok)
+	}
+	fallback, ok := TrainingMaxBatchSize(graph, selection, 0)
+	if !ok || fallback != 3 {
+		t.Fatalf("unavailable-memory fallback = %d, known = %v", fallback, ok)
 	}
 }
 

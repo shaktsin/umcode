@@ -28,6 +28,7 @@ func (e *Engine) inferenceRunner() *workbench.InferenceManager {
 	defer e.inferenceMu.Unlock()
 	if e.inferenceManager == nil {
 		e.inferenceManager = workbench.NewInferenceManager(e.Cfg.Home)
+		e.inferenceManager.SetPython(e.runtimeSetup().Selected(context.Background()))
 	}
 	return e.inferenceManager
 }
@@ -46,7 +47,7 @@ func (e *Engine) inferenceState(ctx context.Context, p protocol.WorkbenchInferen
 	}
 	state := workbench.InferenceState{Checkpoints: cps, Issues: []string{}, Runtimes: []workbench.RuntimeInfo{{ID: "pytorch", Name: "PyTorch", Available: e.inferenceRunner().Available()}}}
 	if !state.Runtimes[0].Available {
-		state.Runtimes[0].Reason = "Install torch, safetensors, Pillow and numpy in the managed PyTorch environment, or set UMCODE_WORKBENCH_PYTHON."
+		state.Runtimes[0].Reason = "Set up Python and PyTorch in the Train tab, then refresh Inference."
 	}
 	for _, cp := range cps {
 		if e.inferenceRunner().Loaded(inferencePrefix(p) + cp.ID) {

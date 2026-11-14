@@ -44,6 +44,9 @@ func SnapshotTraining(projectRoot, modelID, expected string) (TrainingSnapshot, 
 	if !dataDigest.MatchString(snap.Selection.Version) || snap.Selection.Version != preparedDataVersion(snap.Selection.Config) {
 		return snap, errors.New("saved preparation version is invalid; save preparation again")
 	}
+	if issues := TrainingCompatibilityIssues(snap.Graph, snap.Selection); len(issues) > 0 {
+		return snap, errors.New(issues[0])
+	}
 	if snap.Selection.Config.Mode != "features" && snap.Selection.Config.Mode != "text" {
 		return snap, errors.New("this first Train version supports numeric and text data; vision training is coming later")
 	}

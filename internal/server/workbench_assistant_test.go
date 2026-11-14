@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaktsin/umcode/internal/llm"
 	"github.com/shaktsin/umcode/internal/protocol"
@@ -104,13 +105,56 @@ func assistantRPCFixture(t *testing.T) (*harness, protocol.Thread, protocol.Work
 	return h, th, protocol.WorkbenchTurnContext{ProjectID: h.proj.ID, ModelID: model.ID, ModelName: "untrusted name", GraphJSON: assistantRPCGraph, Revision: fmt.Sprintf("%x", sha256.Sum256([]byte(assistantRPCGraph))), SelectedNodeID: "dense", Summary: `{"parameters":51}`}
 }
 
+func TestWorkbenchAssistantSeesFailedTrainingRun(t *testing.T) {
+	h, th, c := assistantRPCFixture(t)
+	opened, err := workbench.Open(h.ws, c.ModelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := opened.Model.CreatedAt.Format(time.RFC3339Nano)
+	run := workbench.TrainingRun{ID: "train-" + strings.Repeat("a", 32), ModelCreatedAt: version, Name: "Failed local run", Status: "failed", Error: "expected target class index below 18, got 24", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	if err = workbench.WriteTrainingRun(h.ws, c.ModelID, version, run); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.push(func(req llm.Request, key string) ([]llm.Event, error) {
+		var joined string
+		for _, message := range req.Messages {
+			joined += message.JoinedText()
+		}
+		if !strings.Contains(joined, "expected target class index below 18, got 24") || !strings.Contains(joined, `"status":"failed"`) {
+			t.Errorf("failed run missing from assistant context: %s", joined)
+		}
+		for _, stage := range []string{`"data":`, `"build":`, `"train":`, `"inference":`} {
+			if !strings.Contains(joined, stage) {
+				t.Errorf("missing %s stage", stage)
+			}
+		}
+		if !strings.Contains(req.System, "training run error") {
+			t.Error("assistant was not instructed to use run errors")
+		}
+		return textReply("The saved training run failed because the target class index exceeded the output width.")(req, key)
+	})
+	var started protocol.TurnStartResult
+	h.call(protocol.MethodTurnStart, protocol.TurnStartParams{ThreadID: th.ID, Text: "Why did training fail?", Workbench: &c}, &started)
+	turn, _, _ := h.waitTurn(started.Turn.ID, nil)
+	if turn.Status != protocol.TurnCompleted {
+		t.Fatalf("turn: %+v", turn)
+	}
+}
+
 func TestWorkbenchAssistantRPCContextAndProposal(t *testing.T) {
 	h, th, c := assistantRPCFixture(t)
 	disk := filepath.Join(h.ws, "models", c.ModelID, "graph.json")
 	before, _ := os.ReadFile(disk)
 	h.fake.push(func(req llm.Request, key string) ([]llm.Event, error) {
-		if len(req.Tools) != 1 || req.Tools[0].Name != "workbench__propose_edit" {
-			t.Errorf("unexpected tools: %+v", req.Tools)
+		names := map[string]bool{}
+		for _, tool := range req.Tools {
+			names[tool.Name] = true
+		}
+		for _, name := range []string{"workbench__propose_edit", "workbench__save_build", "workbench__save_data", "workbench__train", "workbench__test_checkpoint"} {
+			if !names[name] {
+				t.Errorf("missing Workbench tool %s", name)
+			}
 		}
 		if !strings.Contains(req.System, "workbench") {
 			t.Error("missing assistant instructions")
@@ -193,7 +237,7 @@ func TestWorkbenchAssistantRPCRejectsForeignContextAndOtherTools(t *testing.T) {
 	})
 	failed := false
 	for _, it := range items {
-		if it.Tool != nil && it.Tool.Name == "shell__run" && it.Status == protocol.ItemDenied && strings.Contains(it.Tool.Error, "Only architecture proposals") {
+		if it.Tool != nil && it.Tool.Name == "shell__run" && it.Status == protocol.ItemDenied && strings.Contains(it.Tool.Error, "Only scoped Workbench actions") {
 			failed = true
 		}
 	}
@@ -205,7 +249,7 @@ func TestWorkbenchAssistantRPCRejectsForeignContextAndOtherTools(t *testing.T) {
 	}
 	h.fake.push(func(req llm.Request, _ string) ([]llm.Event, error) {
 		for _, tool := range req.Tools {
-			if tool.Name == "workbench__propose_edit" {
+			if strings.HasPrefix(tool.Name, "workbench__") {
 				t.Error("workbench tool leaked into ordinary chat")
 			}
 		}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { WorkbenchState } from './state.svelte';
 import type { OpenWorkbenchModel, WorkbenchModel } from './types';
+import { graphRevision } from './assistant';
 
 const model = (id: string): WorkbenchModel => ({ id, name: id, task: 'custom', schemaVersion: 1, createdAt: '2026-10-30T00:00:00Z' });
 const bundle = (id: string): OpenWorkbenchModel => ({ model: model(id), graph: { version: 1, nodes: [], edges: [] } });
@@ -22,6 +23,22 @@ const basicCall = async (method: string, params: any) => {
 };
 
 describe('workbench state', () => {
+  it('shows an assistant-saved graph when the draft has not changed since the request', async () => {
+    const base='{"version":1,"nodes":[],"edges":[]}', saved='{"version":1,"nodes":[],"edges":[],"vocab":259}';
+    const state=new WorkbenchState(async (method,params:any)=>method==='workbench/model/open'?{...bundle(params.modelId),graphJson:params.modelId==='one'?saved:base}:basicCall(method,params));
+    await state.activate('a',true);await state.open('one');state.draft=base;
+    await state.reconcileAssistantSave('a','one',model('one').createdAt,await graphRevision(base));
+    expect(state.draft).toBe(saved);expect(state.dirty).toBe(false);
+  });
+  it('keeps newer user edits when an assistant save finishes', async () => {
+    const pending=deferred<OpenWorkbenchModel>();let reload=false;
+    const state=new WorkbenchState((method,params:any)=>reload&&method==='workbench/model/open'?pending.promise:basicCall(method,params));
+    await state.activate('a',true);await state.open('one');const base=state.draft;
+    reload=true;const sync=state.reconcileAssistantSave('a','one',model('one').createdAt,await graphRevision(base));
+    state.draft='{"version":1,"nodes":[],"edges":[],"newer":true}';
+    pending.resolve({...bundle('one'),graphJson:'{"version":1,"nodes":[],"edges":[],"assistant":true}'});await sync;
+    expect(state.draft).toContain('newer');expect(state.savedDraft).toContain('assistant');expect(state.dirty).toBe(true);
+  });
   it('keeps a replacement model and its draft when an older deletion finishes late', async () => {
     const pending = deferred<{ ok: boolean; trashPath: string }>();
     const old = model('one'), replacement = { ...model('one'), createdAt: '2026-10-31T01:00:00Z' };

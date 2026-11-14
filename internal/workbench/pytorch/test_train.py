@@ -164,6 +164,19 @@ class TrainTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "batch|activation"):
             self.trainer().train(request, lambda _: None)
 
+    def test_parent_memory_preflight_can_allow_batch_above_old_fixed_activation_cap(self):
+        g = graph([("input", {"mode": "tokens", "sequence": 512}),
+            ("embedding", {"vocab": 259, "width": 32}),
+            ("position", {"length": 512}),
+            ("transformer", {"width": 32, "heads": 4, "expansion": 2, "repeat": 1, "causal": False}),
+            ("meanpool", {}), ("linear", {"outFeatures": 2}), ("output", {})])
+        saved = selection(mode="text", purpose="classification", sequenceLength=512)
+        saved["classes"] = ["a", "b"]
+        request = self.request([], graph=g, selection=saved,
+            config={"epochs": 1, "batchSize": 16, "learningRate": .003, "seed": 17}, maxBatchSize=16)
+        with self.assertRaisesRegex(ValueError, "training split is empty"):
+            self.trainer().train(request, lambda _: None)
+
     def test_oversized_prepared_file_is_rejected_before_reading(self):
         request = self.request([{"inputs": [1], "target": 1}])
         with Path(request["splitPaths"]["train"]).open("wb") as stream:

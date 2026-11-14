@@ -1,5 +1,6 @@
 import { errMsg } from '$lib/format';
 import type { OpenWorkbenchModel, WorkbenchModel, WorkbenchTask } from './types';
+import { graphRevision } from './assistant';
 
 export type WorkbenchTab = 'Data' | 'Build' | 'Train' | 'Inference';
 type SelectionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -162,6 +163,20 @@ export class WorkbenchState {
     } catch (error) {
       if (this.valid(token)) this.error = errMsg(error);
     } finally { if (token === this.generation) this.busy = false; }
+  }
+
+  /** Reconcile a completed assistant save without losing edits made after the request. */
+  async reconcileAssistantSave(projectId: string, modelId: string, modelCreatedAt: string, baseDraftRevision: string) {
+    const session = this.projects[projectId], edit = session?.edits[modelId];
+    if (!edit || edit.bundle.model.createdAt !== modelCreatedAt || !this.connected) return;
+    const before = edit.draft, baseMatches = await graphRevision(before) === baseDraftRevision;
+    const bundle = await this.call('workbench/model/open', { projectId, modelId }) as OpenWorkbenchModel;
+    if (session.edits[modelId] !== edit || bundle.model.createdAt !== modelCreatedAt) return;
+    const saved = bundle.graphJson ?? JSON.stringify(bundle.graph, null, 2);
+    edit.bundle = bundle;
+    edit.saved = saved;
+    if (baseMatches && edit.draft === before) edit.draft = saved;
+    if (this.projectId === projectId && session.selectedId === modelId) this.notice = edit.draft === saved ? 'Assistant saved the model to your project.' : 'Assistant saved the model. Your newer draft edits are still unsaved.';
   }
 
   async deleteModel(modelId: string): Promise<boolean> {

@@ -32,6 +32,7 @@ describe('visual model architecture', () => {
     expect(result.shapes[graph.nodes.at(-1)!.id].dims).toEqual(['B', 8, 32]);
     expect(result.parameters).toBeGreaterThan(5000);
     const generated = generatePython(graph);
+    expect(generated.code).toContain('# Input: token IDs, sequence length 8');
     expect(generated.code).toContain('class Model(nn.Module)');
     expect(generated.code).toContain('def forward(self, x):');
     expect(generated.lineNodes).toContain(graph.nodes[1].id);

@@ -68,6 +68,7 @@ type TrainingState struct {
 	Runs             []TrainingRun `json:"runs"`
 	RuntimeAvailable bool          `json:"runtimeAvailable"`
 	Issues           []string      `json:"issues"`
+	MaxBatchSize     *int          `json:"maxBatchSize,omitempty"`
 }
 type TrainingSnapshot struct {
 	Graph     json.RawMessage
