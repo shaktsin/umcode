@@ -71,3 +71,20 @@ func TestIsComputerUseToolNeverRemembered(t *testing.T) {
 		}
 	}
 }
+
+func TestDataScriptApprovalsAreNeverRemembered(t *testing.T) {
+	if !neverRememberedTool("workbench.run_data_script") {
+		t.Fatal("a remembered allow would rubber-stamp every future script")
+	}
+	if !neverRememberedTool("computer.act") {
+		t.Fatal("Computer Use must stay unremembered")
+	}
+	if !neverRememberedTool("workbench.import_data") {
+		t.Fatal("import args are not part of the approval signature, so one allow would cover every later source")
+	}
+	for _, tool := range []string{"shell.run", "workbench.save_data"} {
+		if neverRememberedTool(tool) {
+			t.Fatalf("%s should stay rememberable", tool)
+		}
+	}
+}

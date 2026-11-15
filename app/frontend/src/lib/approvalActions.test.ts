@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvalActions } from './approvalActions';
+import { approvalActions, dataScriptReview } from './approvalActions';
 import type { Approval } from './types';
 const approval = (kind = '', tool = 'shell.run', args: unknown = {}): Approval => ({ id:'a', threadId:'t', turnId:'turn', itemId:'i', kind, tool, args, risk:'red', reason:'', actionSummary:'', status:'pending', createdAt:'', expiresAt:'' });
 describe('approval scope presentation', () => {
@@ -16,5 +16,19 @@ describe('approval scope presentation', () => {
     expect(approvalActions(approval()).canRemember).toBe(true);
     expect(approvalActions(approval()).allowLabel).toBe('Allow once');
     expect(approvalActions(approval('', 'computer.act')).canRemember).toBe(false);
+  });
+});
+
+describe('assistant data script approvals', () => {
+  const scriptArgs = { title: 'Balance reviews', inputDatasetIds: ['a'], outputName: 'balanced', script: "rows = load()\nprint('kept')", expectOutput: 'dataset' };
+  it('never offers to remember an allow, because each script is different code', () => {
+    expect(approvalActions(approval('', 'workbench.run_data_script', scriptArgs)).canRemember).toBe(false);
+    expect(approvalActions(approval('', 'workbench.import_data', {})).canRemember).toBe(false);
+  });
+  it('exposes the script as readable code, decoding string or object args', () => {
+    expect(dataScriptReview(approval('', 'workbench.run_data_script', scriptArgs))).toEqual({ title: 'Balance reviews', outputName: 'balanced', script: "rows = load()\nprint('kept')" });
+    expect(dataScriptReview(approval('', 'workbench.run_data_script', JSON.stringify(scriptArgs)))?.script).toBe("rows = load()\nprint('kept')");
+    expect(dataScriptReview(approval('', 'shell.run', scriptArgs))).toBeNull();
+    expect(dataScriptReview(approval('', 'workbench.run_data_script', '{broken'))).toBeNull();
   });
 });

@@ -3,7 +3,8 @@
   import { ArrowLeft, Check, Database, Download, FolderOpen, RefreshCw, Search, ShieldCheck, Sparkles, UploadCloud } from '@lucide/svelte';
   import { app } from '$lib/stores/app.svelte';
   import { WorkbenchDataState, workbenchDataDrafts } from '$lib/workbench/data.svelte';
-  import { dataCompatibility, dataExamples, dataMappingWarnings, dataSize } from '$lib/workbench/data';
+  import { assistantProvenance, dataCompatibility, dataExamples, dataMappingWarnings, dataSize, datasetOptionLabel } from '$lib/workbench/data';
+  import { assistantDatasetToShow } from '$lib/workbench/actionResult';
   import type { DataConfig, DataSourceTab } from '$lib/workbench/dataTypes';
   import type { WorkbenchActionResult } from '$lib/workbench/actionResult';
   import type { WorkbenchTask } from '$lib/workbench/types';
@@ -15,9 +16,10 @@
   const sources: { id: DataSourceTab; name: string }[] = [{ id: 'examples', name: 'Examples' }, { id: 'local', name: 'Local files' }, { id: 'huggingface', name: 'Hugging Face' }];
   $effect(() => { const context = { projectId, modelId, task, connected }; untrack(() => { token = ''; void data.activate(context.projectId, context.modelId, context.task, context.connected); }); });
   $effect(() => { const source = data.source; void projectId; void modelId; const online = connected; untrack(() => { token = ''; if (source === 'huggingface' && online) void data.accountAction('status'); }); });
-  $effect(() => { const id=projectId, model=modelId, version=modelCreatedAt; const changed=(event:Event) => { const result=(event as CustomEvent<WorkbenchActionResult>).detail; if (result?.projectId===id && result.modelId===model && result.modelCreatedAt===version && result.action==='save_data') void data.load(result.datasetId); }; window.addEventListener('umcode:workbench-action',changed); return () => window.removeEventListener('umcode:workbench-action',changed); });
+  $effect(() => { const id=projectId, model=modelId, version=modelCreatedAt; const changed=(event:Event) => { const result=(event as CustomEvent<WorkbenchActionResult>).detail; if (result?.projectId===id && result.modelId===model && result.modelCreatedAt===version) { const show=assistantDatasetToShow(result); if (show.refresh) void data.load(show.datasetId); } }; window.addEventListener('umcode:workbench-action',changed); return () => window.removeEventListener('umcode:workbench-action',changed); });
   onDestroy(() => { token = ''; data.dispose(); });
   const dataset = $derived(data.dataset), config = $derived(data.config);
+  const made = $derived(dataset ? assistantProvenance(dataset, data.datasets) : null);
   const compatibility = $derived(dataset && config ? dataCompatibility(graphText, dataset, config, data.selection) : []);
   const mappingWarnings = $derived(dataset && config ? dataMappingWarnings(dataset, config) : []);
   const numericColumns = $derived(dataset?.columns.filter(c => c.kind === 'number') ?? []);
@@ -79,14 +81,15 @@
   {#if data.stage}<div class="feedback loading" role="status"><RefreshCw size={13} class="spinner" />{data.stage}</div>{/if}
   {#if data.error}<div class="feedback error" role="alert">{data.error}</div>{/if}
   {#if data.notice}<div class="feedback" role="status">{data.notice}</div>{/if}
-  <div class="imported-row"><label for="imported-dataset">Imported datasets</label><select id="imported-dataset" class="select" value={dataset?.id ?? ''} disabled={!connected || data.busy || !data.datasets.length} onchange={(event) => void data.selectDataset(event.currentTarget.value)}><option value="">Choose an imported dataset</option>{#each data.datasets as imported}<option value={imported.id}>{imported.name} · {imported.rowCount.toLocaleString()} rows</option>{/each}</select><button class="icon-button" aria-label="Refresh imported datasets" disabled={!connected || data.busy} onclick={() => void data.load(dataset?.id)}><RefreshCw size={14} /></button></div>
+  <div class="imported-row"><label for="imported-dataset">Imported datasets</label><select id="imported-dataset" class="select" value={dataset?.id ?? ''} disabled={!connected || data.busy || !data.datasets.length} onchange={(event) => void data.selectDataset(event.currentTarget.value)}><option value="">Choose an imported dataset</option>{#each data.datasets as imported}<option value={imported.id}>{datasetOptionLabel(imported)}</option>{/each}</select><button class="icon-button" aria-label="Refresh imported datasets" disabled={!connected || data.busy} onclick={() => void data.load(dataset?.id)}><RefreshCw size={14} /></button></div>
 
   {#if dataset && config}
     <div class="data-workspace">
       <div class="data-details">
         <div class="section-heading"><div><span class="eyebrow">Imported dataset</span><h3>{dataset.name}</h3></div><span class="tag"><Check size={12} />Imported</span></div>
         <p class="dataset-meta">{dataset.rowCount.toLocaleString()} rows · {dataset.columns.length} columns · {dataSize(dataset.byteCount)} · {missing.toLocaleString()} missing cells</p>
-        <p class="dataset-provenance">{dataset.source.kind === 'local' ? 'Local files' : 'Hugging Face'}{dataset.source.repo ? ` · ${dataset.source.repo}` : ''}{#if dataset.source.revision}<br />Revision <code>{dataset.source.revision}</code>{/if}</p>
+        <p class="dataset-provenance">{dataset.source.kind === 'assistant' ? 'Made by the assistant' : dataset.source.kind === 'local' ? 'Local files' : 'Hugging Face'}{dataset.source.repo ? ` · ${dataset.source.repo}` : ''}{#if dataset.source.revision}<br />Revision <code>{dataset.source.revision}</code>{/if}</p>
+        {#if made}<section class="assistant-provenance" aria-label="How the assistant made this dataset"><div class="section-heading"><h3>{made.title}</h3><span class="tag">Assistant</span></div><p>From {made.inputs.length ? made.inputs.join(', ') : 'no input datasets'}</p>{#each made.summaryLines as line}<p class="source-note">{line}</p>{/each}<details><summary>View script</summary><!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need to focus this overflowing script to scroll it.) --><pre class="script-view" tabindex="0">{made.script}</pre></details></section>{/if}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need to focus this overflowing table to scroll its columns.) -->
         <div class="table-scroll" tabindex="0" role="region" aria-label="Actual imported row preview"><table><caption>Actual imported rows · showing {Math.min(dataset.preview?.length ?? 0, 20)} of {dataset.rowCount.toLocaleString()} · cells truncated at 256 characters</caption><thead><tr>{#each dataset.columns as column}<th scope="col">{column.name}<span>{column.kind} · {column.missing} missing</span></th>{/each}</tr></thead><tbody>{#each (dataset.preview ?? []).slice(0, 20) as row}<tr>{#each dataset.columns as column}<td title={row[column.name] ?? ''}>{row[column.name] ?? ''}</td>{/each}</tr>{/each}</tbody></table></div>
         <section class="split-section" aria-labelledby="data-splits"><div class="section-heading"><h3 id="data-splits">Train / validation / test</h3><span>{config.trainPercent}% / {config.validationPercent}% / {config.testPercent}%</span></div>
@@ -117,6 +120,8 @@
 </section>
 
 <style>
+  .assistant-provenance { border:1px solid var(--color-accent); background:var(--color-accent-soft); border-radius:10px; padding:12px 14px; margin:10px 0; display:flex; flex-direction:column; gap:6px; }
+  .assistant-provenance details { margin-top:4px; } .script-view { margin-top:6px; padding:10px; max-height:220px; overflow:auto; background:var(--color-paper); border:1px solid var(--color-line); border-radius:7px; font-family:var(--font-mono); font-size:11px; line-height:1.55; white-space:pre-wrap; }
   .data-tab { flex:1; min-width:0; min-height:0; overflow:auto; padding:22px 24px 28px; font-size:12px; }
   .data-heading, .section-heading { display:flex; gap:12px; justify-content:space-between; align-items:center; }
   h2 { font-size:20px; font-weight:650; line-height:1.4; } h3 { font-size:13px; font-weight:650; line-height:1.5; }

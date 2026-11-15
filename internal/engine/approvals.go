@@ -53,7 +53,7 @@ func (e *Engine) requestApproval(ctx, sctx context.Context, turn protocol.Turn, 
 	// ApprovalSignature), so "remember" would silently rubber-stamp every
 	// future action in the project rather than the one the person actually
 	// reviewed. Each one always gets a fresh, human decision.
-	if th.ID != "" && !isComputerUseTool(tool) {
+	if th.ID != "" && !neverRememberedTool(tool) {
 		switch e.Store.RememberedThreadDecision(sctx, th.ID, tool, ApprovalSignature(tool, args)) {
 		case "allow":
 			_ = e.Store.Audit(sctx, "approval.remembered", map[string]any{"tool": tool, "thread": th.ID, "decision": "allow"})
@@ -226,7 +226,7 @@ func (e *Engine) respondApprovalCommitted(ctx context.Context, id string, approv
 		}
 	}
 	decided, _ := e.Store.GetApproval(ctx, id)
-	if remember && decided.ID != "" && !isComputerUseTool(decided.Tool) {
+	if remember && decided.ID != "" && !neverRememberedTool(decided.Tool) {
 		if _, err := e.Store.GetThread(ctx, decided.ThreadID); err == nil {
 			decision := "deny"
 			if approve {
@@ -271,6 +271,14 @@ func workflowApprovalAudit(a protocol.Approval, status string) map[string]any {
 // isComputerUseTool reports whether tool is one of the computer.* tools,
 // whose actions must never be covered by a remembered "always allow"
 // decision (see requestApproval and RespondApproval).
+// neverRememberedTool reports tools whose approvals must always get a fresh
+// human decision: each Computer Use action, each assistant data script and each
+// import (its sources are not part of the approval signature) is different, so
+// a remembered "allow" would approve something nobody has read.
+func neverRememberedTool(tool string) bool {
+	return isComputerUseTool(tool) || tool == "workbench.run_data_script" || tool == "workbench.import_data"
+}
+
 func isComputerUseTool(tool string) bool {
 	return strings.HasPrefix(tool, "computer.")
 }

@@ -26,6 +26,31 @@ artifacts are bounded to 256 MiB. Writes use pinned nonsymlink directories and a
 publication. Draft settings survive tab/model/project navigation and are separated by
 model creation timestamp, including deletion followed by reuse of a model name.
 
+## Assistant data work
+
+The Workbench assistant can bring in and prepare data for you, and every result lands in the
+Data tab as an ordinary dataset.
+
+- **Import.** `workbench.import_data` imports local files from the project folder or a Hugging
+  Face repository into one dataset. It asks for approval each time. Absolute and `..` paths are
+  rejected.
+- **Inspect.** `workbench.inspect_data` describes one or more datasets: columns shared across
+  files, row counts, missing cells, the target distribution and a few sample rows. The report is
+  bounded (24 KiB, 120-character cells) and says when it was truncated.
+- **Transform.** `workbench.run_data_script` runs Python the assistant wrote, for example to
+  balance classes or build a training file. It always needs your approval, the approval card shows
+  the full script, and "Always allow" is never offered, so a remembered decision cannot approve a
+  later script. The script runs in the OS sandbox (Seatbelt on macOS, bubblewrap on Linux) with
+  no network access, reads only a copy of the chosen datasets and writes only to its own output
+  folder. If no sandbox is available the run is refused rather than run unsandboxed.
+- **Provenance.** A script's output (CSV, TSV, JSONL or text) becomes a new immutable dataset
+  marked "Made by the assistant", with its title, the script, the input datasets and a summary of
+  its output. The Data tab shows it under **View script**. The originals are not changed.
+
+Scripts only produce raw datasets. Tokenizing, standardizing and splitting still happen in
+**Save preparation**, so Inference replays the same transform. Runs are limited to 120 seconds and
+64 KiB of captured output, and one script runs at a time.
+
 ## Inference
 
 1. Save the visual graph and matching Data preparation.

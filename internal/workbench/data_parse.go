@@ -100,8 +100,8 @@ func decodeDataFiles(files []DataFile) ([]decodedDataFile, string, int, error) {
 }
 
 func normalizeDataSource(source DataSource, files []decodedDataFile) (DataSource, error) {
-	if source.Kind != "local" && source.Kind != "huggingface" && source.Kind != "example" {
-		return source, errors.New("source kind must be local, huggingface, or example")
+	if source.Kind != "local" && source.Kind != "huggingface" && source.Kind != "example" && source.Kind != "assistant" {
+		return source, errors.New("source kind must be local, huggingface, example, or assistant")
 	}
 	source.Name = strings.TrimSpace(source.Name)
 	if source.Name == "" {
@@ -110,7 +110,7 @@ func normalizeDataSource(source DataSource, files []decodedDataFile) (DataSource
 	if len(source.Name) > 256 || strings.ContainsAny(source.Name, "\x00\r\n") {
 		return source, errors.New("source name is invalid")
 	}
-	if source.Kind == "local" {
+	if source.Kind == "local" || source.Kind == "assistant" {
 		source.Repo = ""
 		source.Revision = ""
 		source.Files = nil

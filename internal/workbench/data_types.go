@@ -23,15 +23,25 @@ type DataColumn struct {
 }
 
 type Dataset struct {
-	ID        string              `json:"id"`
-	Name      string              `json:"name"`
-	Source    DataSource          `json:"source"`
-	Format    string              `json:"format"`
-	RowCount  int                 `json:"rowCount"`
-	ByteCount int                 `json:"byteCount"`
-	Columns   []DataColumn        `json:"columns"`
-	Preview   []map[string]string `json:"preview"`
-	CreatedAt string              `json:"createdAt"`
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Source     DataSource          `json:"source"`
+	Format     string              `json:"format"`
+	RowCount   int                 `json:"rowCount"`
+	ByteCount  int                 `json:"byteCount"`
+	Columns    []DataColumn        `json:"columns"`
+	Preview    []map[string]string `json:"preview"`
+	CreatedAt  string              `json:"createdAt"`
+	Provenance *DataProvenance     `json:"provenance,omitempty"`
+}
+
+// DataProvenance records how an assistant-made dataset came to be.
+type DataProvenance struct {
+	CreatedBy       string   `json:"createdBy"`
+	Title           string   `json:"title"`
+	Script          string   `json:"script"`
+	InputDatasetIDs []string `json:"inputDatasetIds"`
+	StdoutSummary   string   `json:"stdoutSummary"`
 }
 
 type DataConfig struct {

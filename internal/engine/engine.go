@@ -181,6 +181,7 @@ type Engine struct {
 	inferenceManager  *workbench.InferenceManager
 	importedRuntime   *workbench.ImportedRuntime
 	inferenceReceipts map[string]inferenceReceipt
+	dataScriptMu      sync.Mutex             // one assistant data script runs at a time
 	workbenchMu       sync.Mutex             // serializes short bundle mutations, never network downloads
 	activeTurns       map[string]*activeTurn // by turn id
 	threadTurns       map[string]string      // thread id -> running turn id

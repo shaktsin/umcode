@@ -2,12 +2,13 @@
   import { app } from '$lib/stores/app.svelte';
   import type { Approval, ProjectArtifactContent } from '$lib/types';
   import { prettyJSON } from '$lib/format';
-  import { approvalActions } from '$lib/approvalActions';
+  import { approvalActions, dataScriptReview } from '$lib/approvalActions';
 
   let { approval, compact = false, chatContext = false }: {
     approval: Approval; compact?: boolean; chatContext?: boolean;
   } = $props();
   let showDetails = $state(false);
+  const scriptReview = $derived(dataScriptReview(approval));
   let screenshotUrl = $state('');
 
   // Computer Use actions can't be "remembered": every click, keystroke or
@@ -52,6 +53,10 @@
     {/if}
     <button class="btn-primary btn-sm" onclick={() => app.respondApproval(approval.id, true)}>{actions.allowLabel}</button>
   </div>
+  {#if scriptReview}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users need to focus this overflowing script to scroll it.) -->
+    <pre class="w-full max-h-72 overflow-auto rounded-lg border border-line bg-paper p-2 font-mono text-[11px] whitespace-pre-wrap break-words selectable" tabindex="0" aria-label="Script the assistant wants to run">{scriptReview.script}</pre>
+  {/if}
   {#if chatContext && showDetails}
     <pre class="w-full max-h-56 overflow-auto rounded-lg border border-line bg-paper p-2 font-mono text-[11px] whitespace-pre-wrap break-all selectable">{prettyJSON(approval.args)}</pre>
   {/if}
