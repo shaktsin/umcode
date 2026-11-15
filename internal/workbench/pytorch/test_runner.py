@@ -284,5 +284,48 @@ class ElementLimitTests(unittest.TestCase):
         self.assertIn("12 million", out)
 
 
+
+class WorkAndParameterLimitTests(unittest.TestCase):
+    """Work and parameter caps keep their defaults and rise only through launcher-provided, range-checked values."""
+    PROBE = (
+        "import json,sys;sys.path.insert(0,%r);import runner;"
+        "g=json.loads(sys.stdin.read());\n"
+        "try:\n runner.analyze(g);print('OK')\n"
+        "except runner.Invalid as e:\n print('ERR',e)\n" % str(HERE))
+
+    def probe(self, graph_nodes, **env_values):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("UMCODE_MAX_")}
+        env.update(env_values)
+        done = subprocess.run([sys.executable, "-I", "-c", self.PROBE], input=json.dumps(graph(graph_nodes)),
+                              env=env, capture_output=True, text=True, timeout=60)
+        return done.stdout.strip()
+
+    HEAVY = [("input", {"mode": "tokens", "sequence": 512}), ("embedding", {"vocab": 259, "width": 512}),
+             ("transformer", {"width": 512, "heads": 8, "repeat": 1, "expansion": 4}), ("meanpool", {}),
+             ("linear", {"outFeatures": 2}), ("output", {})]
+    BIG = [("input", {"mode": "tokens", "sequence": 8}), ("embedding", {"vocab": 259, "width": 512}),
+           ("transformer", {"width": 512, "heads": 8, "repeat": 6, "expansion": 4}), ("meanpool", {}),
+           ("linear", {"outFeatures": 2}), ("output", {})]
+
+    def test_defaults_keep_the_conservative_caps(self):
+        self.assertIn("operation limit", self.probe(self.HEAVY))
+        self.assertIn("16 million parameter", self.probe(self.BIG))
+
+    def test_launcher_values_raise_the_caps(self):
+        self.assertEqual(self.probe(self.HEAVY, UMCODE_MAX_WORK="100000000000", UMCODE_MAX_ELEMENTS="32000000"), "OK")
+        self.assertEqual(self.probe(self.BIG, UMCODE_MAX_PARAMETERS="256000000"), "OK")
+
+    def test_out_of_range_values_fall_back(self):
+        self.assertIn("operation limit", self.probe(self.HEAVY, UMCODE_MAX_WORK="1"))
+        self.assertIn("16 million parameter", self.probe(self.BIG, UMCODE_MAX_PARAMETERS="nope"))
+
+    def test_values_are_clamped_to_hard_ceilings(self):
+        from_runner = subprocess.run([sys.executable, "-I", "-c",
+            "import sys;sys.path.insert(0,%r);import runner;print(runner.MAX_WORK, runner.MAX_PARAMETERS)" % str(HERE)],
+            env=dict(os.environ, UMCODE_MAX_WORK="9"*20, UMCODE_MAX_PARAMETERS="9"*20),
+            capture_output=True, text=True).stdout.split()
+        self.assertEqual(from_runner, ["2000000000000", "512000000"])
+
+
 if __name__ == "__main__":
     unittest.main()

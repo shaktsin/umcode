@@ -62,9 +62,9 @@ func TestTrainingCompatibilityCatchesByteVocabularyMismatch(t *testing.T) {
 func TestTrainingBatchLimitForSavedTextGraph(t *testing.T) {
 	graph := []byte(`{"version":1,"format":"umcode.layers.v1","nodes":[{"id":"input","kind":"input","config":{"mode":"tokens","sequence":512}},{"id":"embedding","kind":"embedding","config":{"width":32}},{"id":"position","kind":"position","config":{"length":512}},{"id":"transformer","kind":"transformer","config":{"width":32,"heads":4,"repeat":1,"expansion":2}},{"id":"meanpool","kind":"meanpool","config":{}},{"id":"linear","kind":"linear","config":{"outFeatures":18}},{"id":"output","kind":"output","config":{}}],"edges":[{"id":"a","source":"input","target":"embedding"},{"id":"b","source":"embedding","target":"position"},{"id":"c","source":"position","target":"transformer"},{"id":"d","source":"transformer","target":"meanpool"},{"id":"e","source":"meanpool","target":"linear"},{"id":"f","source":"linear","target":"output"}]}`)
 	selection := DataSelection{Config: DataConfig{Mode: "text", SequenceLength: 512}, Counts: DataCounts{Train: 1000, Validation: 100, Test: 100}}
-	large, ok := TrainingMaxBatchSize(graph, selection, 16<<30)
-	if !ok || large != 23 {
-		t.Fatalf("large-memory max batch = %d, known = %v", large, ok)
+	large, ok := trainingMaxBatchSize(graph, selection, 16<<30, 1)
+	if !ok || large <= 23 {
+		t.Fatalf("with a scaled work cap the batch is bounded by memory, not the old 500M cap: %d known=%v", large, ok)
 	}
 	small, ok := TrainingMaxBatchSize(graph, selection, 2<<30)
 	if !ok || small < 1 || small >= large {
@@ -134,5 +134,16 @@ func TestLegacyTrainingCheckpointRecoversRawPromptRecipe(t *testing.T) {
 	}
 	if snap.Checkpoint.PromptFormat != "chat-v1" {
 		t.Fatal("imported legacy weights changed format")
+	}
+}
+
+func TestTrainingBatchLimitAllowsLargeGraphWithScaledWorkCap(t *testing.T) {
+	graph := []byte(`{"version":1,"format":"umcode.layers.v1","nodes":[{"id":"i","kind":"input","config":{"mode":"tokens","sequence":256}},{"id":"e","kind":"embedding","config":{"width":384}},{"id":"t","kind":"transformer","config":{"width":384,"heads":6,"repeat":6,"expansion":4}},{"id":"l","kind":"meanpool","config":{}},{"id":"n","kind":"linear","config":{"outFeatures":18}},{"id":"o","kind":"output","config":{}}],"edges":[{"id":"a","source":"i","target":"e"},{"id":"b","source":"e","target":"t"},{"id":"c","source":"t","target":"l"},{"id":"d","source":"l","target":"n"},{"id":"f","source":"n","target":"o"}]}`)
+	selection := DataSelection{Config: DataConfig{Mode: "text", SequenceLength: 256}, Counts: DataCounts{Train: 1000, Validation: 100, Test: 100}}
+	if got, ok := trainingMaxBatchSize(graph, selection, 0, 10); !ok || got != 0 {
+		t.Fatalf("unknown memory keeps the old cap, so this graph stays blocked: %d %v", got, ok)
+	}
+	if got, ok := trainingMaxBatchSize(graph, selection, 16<<30, 10); !ok || got < 1 {
+		t.Fatalf("a 10-core, 16 GiB machine should train this graph, got %d known=%v", got, ok)
 	}
 }

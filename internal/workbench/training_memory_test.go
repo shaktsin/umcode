@@ -54,3 +54,36 @@ func TestWorkerEnvCarriesElementLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkAndParameterLimitsScaleWithMachine(t *testing.T) {
+	if WorkLimit(0, 10) != 500_000_000 || ParameterLimit(0) != 16_000_000 {
+		t.Fatal("unknown memory keeps the conservative defaults")
+	}
+	if got := WorkLimit(16<<30, 10); got != 100_000_000_000 {
+		t.Fatalf("10 cores should allow 100G multiply-adds per sample, got %d", got)
+	}
+	if got := WorkLimit(16<<30, 64); got != 160_000_000_000 {
+		t.Fatalf("work is capped at 16 cores, got %d", got)
+	}
+	if got := WorkLimit(16<<30, 0); got != 10_000_000_000 {
+		t.Fatalf("a bad core count counts as one core, got %d", got)
+	}
+	if got := ParameterLimit(16 << 30); got != 256_000_000 {
+		t.Fatalf("16 GiB free allows the 256M ceiling, got %d", got)
+	}
+	if got := ParameterLimit(512 << 20); got != 16_000_000 {
+		t.Fatalf("a small machine never drops below 16M, got %d", got)
+	}
+}
+
+func TestWorkerEnvCarriesWorkAndParameterLimits(t *testing.T) {
+	joined := strings.Join(workerEnv(16<<30), "\n")
+	for _, name := range []string{"UMCODE_MAX_WORK=", "UMCODE_MAX_PARAMETERS=256000000"} {
+		if !strings.Contains(joined, name) {
+			t.Fatalf("missing %s in %s", name, joined)
+		}
+	}
+	if strings.Contains(strings.Join(workerEnv(0), "\n"), "UMCODE_MAX_WORK") {
+		t.Fatal("unknown memory must not raise the work cap")
+	}
+}
