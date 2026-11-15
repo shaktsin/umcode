@@ -29,7 +29,7 @@ func workbenchContextFrom(ctx context.Context) *protocol.WorkbenchTurnContext {
 }
 
 var assistantID = regexp.MustCompile(`^[a-zA-Z][\w-]{0,63}$`)
-var assistantKinds = map[string]bool{"input": true, "embedding": true, "position": true, "linear": true, "attention": true, "transformer": true, "layernorm": true, "gelu": true, "relu": true, "dropout": true, "meanpool": true, "output": true, "conv2d": true, "batchnorm2d": true, "maxpool2d": true, "avgpool2d": true, "globalpool2d": true, "flatten": true, "patchembedding": true}
+var assistantKinds = map[string]bool{"input": true, "embedding": true, "position": true, "linear": true, "attention": true, "transformer": true, "layernorm": true, "gelu": true, "relu": true, "dropout": true, "meanpool": true, "lasttoken": true, "output": true, "conv2d": true, "batchnorm2d": true, "maxpool2d": true, "avgpool2d": true, "globalpool2d": true, "flatten": true, "patchembedding": true}
 
 func strictWorkbenchJSON(raw []byte, out any) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -171,7 +171,7 @@ func (*workbenchProposalTool) Assess(json.RawMessage) (tools.Risk, string) {
 	return tools.RiskGreen, "Suggest an architecture change"
 }
 func (*workbenchProposalTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["explanation","operations"],"properties":{"explanation":{"type":"string","minLength":1,"maxLength":2048},"operations":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"type":{"type":"string","enum":["update","add","remove","connect","disconnect","restore"]},"nodeId":{"type":"string"},"config":{"type":"object","additionalProperties":{"type":["string","number","boolean"]}},"ref":{"type":"string"},"kind":{"type":"string","enum":["input","embedding","position","linear","attention","transformer","layernorm","gelu","relu","dropout","meanpool","output","conv2d","batchnorm2d","maxpool2d","avgpool2d","globalpool2d","flatten","patchembedding","normalization","pool","cnnblock"]},"source":{"type":"string"},"target":{"type":"string"},"edgeId":{"type":"string"}},"required":["type"],"additionalProperties":false}}}}`)
+	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["explanation","operations"],"properties":{"explanation":{"type":"string","minLength":1,"maxLength":2048},"operations":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"type":{"type":"string","enum":["update","add","remove","connect","disconnect","restore"]},"nodeId":{"type":"string"},"config":{"type":"object","additionalProperties":{"type":["string","number","boolean"]}},"ref":{"type":"string"},"kind":{"type":"string","enum":["input","embedding","position","linear","attention","transformer","layernorm","gelu","relu","dropout","meanpool","lasttoken","output","conv2d","batchnorm2d","maxpool2d","avgpool2d","globalpool2d","flatten","patchembedding","normalization","pool","cnnblock"]},"source":{"type":"string"},"target":{"type":"string"},"edgeId":{"type":"string"}},"required":["type"],"additionalProperties":false}}}}`)
 }
 
 func (*workbenchProposalTool) Call(ctx context.Context, args json.RawMessage) (string, error) {

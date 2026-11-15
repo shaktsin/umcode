@@ -147,7 +147,7 @@ func TrainingMaxBatchSize(raw json.RawMessage, selection DataSelection, availabl
 				work += 4*dims[0]*dims[1]*dims[1] + 2*dims[0]*dims[0]*dims[1]
 			}
 			activations += float64(repeat) * (dims[0]*dims[0]*float64(heads)*2 + dims[0]*dims[1]*float64(9+2*expansion))
-		case "meanpool":
+		case "meanpool", "lasttoken":
 			if len(dims) != 2 {
 				return 0, false
 			}

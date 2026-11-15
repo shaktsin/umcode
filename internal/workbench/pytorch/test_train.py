@@ -84,6 +84,39 @@ class TrainTests(unittest.TestCase):
         result = self.trainer().train(self.request(rows, test=rows, graph=g, selection=saved), lambda _: None)
         self.assertEqual(result["test"]["accuracy"], 1)
 
+    def test_last_token_selects_the_final_unpadded_position(self):
+        import runner
+        g = graph([("input", {"mode": "tokens", "sequence": 5}), ("embedding", {"vocab": 259, "width": 4}),
+                   ("lasttoken", {}), ("linear", {"outFeatures": 3}), ("output", {})])
+        order, shapes = runner.analyze(g)
+        self.assertEqual(shapes[2], [4])
+        model = runner.Model(order, shapes)
+        ids = torch.tensor([[1, 7, 2, 0, 0], [1, 8, 9, 10, 2], [1, 2, 0, 0, 0]])
+        out = model(ids)
+        self.assertEqual(tuple(out.shape), (3, 3))
+        embedded = model.layers["layer_1"](ids)
+        linear = model.layers["layer_3"]
+        for row, last in enumerate([2, 4, 1]):
+            self.assertTrue(torch.allclose(out[row], linear(embedded[row, last]), atol=1e-6))
+
+    def test_last_token_needs_token_input(self):
+        import runner
+        g = graph([("input", {"mode": "features", "features": 4}), ("lasttoken", {}), ("output", {})])
+        with self.assertRaises(runner.Invalid):
+            runner.analyze(g)
+
+    def test_last_token_classification_trains(self):
+        saved = selection(mode="text", purpose="classification", sequenceLength=6)
+        saved["classes"] = ["a", "b"]
+        g = graph([("input", {"mode": "tokens", "sequence": 6}), ("embedding", {"vocab": 259, "width": 8}),
+                   ("transformer", {"width": 8, "heads": 2, "repeat": 1, "expansion": 2, "causal": True, "dropout": 0}),
+                   ("lasttoken", {}), ("linear", {"outFeatures": 2}), ("output", {})])
+        rows = []
+        for x in [0, 1] * 4:
+            rows.append({"inputIds": [1, 100 + x, 2, 0, 0, 0], "attentionMask": [1, 1, 1, 0, 0, 0], "target": x})
+        result = self.trainer().train(self.request(rows, test=rows, graph=g, selection=saved), lambda _: None)
+        self.assertIn("accuracy", result["test"])
+
     def test_generation_shifts_logits_and_weights_metrics_by_unmasked_tokens(self):
         module = self.trainer()
         # Token 1 predicts 4, token 4 predicts 5, token 5 predicts EOS.

@@ -138,3 +138,9 @@ func TestWorkbenchAssistantProposalScopeAndBounds(t *testing.T) {
 		t.Fatal("cancelled call returned actionable data")
 	}
 }
+
+func TestAssistantSchemaOffersLastTokenLayer(t *testing.T) {
+	if !assistantKinds["lasttoken"] || !strings.Contains(string((&workbenchProposalTool{}).Schema()), `"lasttoken"`) {
+		t.Fatal("the assistant must be able to add a Last token layer")
+	}
+}

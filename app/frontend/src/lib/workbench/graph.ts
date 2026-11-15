@@ -1,5 +1,5 @@
 import { inferVisionLayer, visionLayers, visionStarterEntries } from './vision';
-export type LayerKind = 'input' | 'embedding' | 'position' | 'linear' | 'attention' | 'transformer' | 'layernorm' | 'gelu' | 'relu' | 'dropout' | 'meanpool' | 'output' | 'conv2d' | 'batchnorm2d' | 'maxpool2d' | 'avgpool2d' | 'globalpool2d' | 'flatten' | 'patchembedding';
+export type LayerKind = 'input' | 'embedding' | 'position' | 'linear' | 'attention' | 'transformer' | 'layernorm' | 'gelu' | 'relu' | 'dropout' | 'meanpool' | 'lasttoken' | 'output' | 'conv2d' | 'batchnorm2d' | 'maxpool2d' | 'avgpool2d' | 'globalpool2d' | 'flatten' | 'patchembedding';
 export type StarterPreset = 'text' | 'classifier' | 'gpt2' | 'cnn' | 'vit' | 'mlp';
 export type Config = Record<string, number | string | boolean>;
 export interface LayerNode { id: string; kind: LayerKind; position: { x: number; y: number }; config: Config }
@@ -20,6 +20,7 @@ export const layers: LayerDefinition[] = [
   { kind: 'gelu', name: 'GELU', group: 'Norm & activation', description: 'Smooth nonlinear activation', color: '#10b981', defaults: {}, fields: [] },
   { kind: 'relu', name: 'ReLU', group: 'Norm & activation', description: 'Rectified linear activation', color: '#10b981', defaults: {}, fields: [] },
   { kind: 'dropout', name: 'Dropout', group: 'Norm & activation', description: 'Regularize activations during training', color: '#10b981', defaults: { dropout: .1 }, fields: [dropout] },
+  { kind: 'lasttoken', name: 'Last token', group: 'Core layers', description: 'Pick the final real token (end-of-text) as one vector', color: '#3b82f6', defaults: {}, fields: [] },
   { kind: 'meanpool', name: 'Mean pool', group: 'Core layers', description: 'Average the sequence into one vector', color: '#3b82f6', defaults: {}, fields: [] },
   ...visionLayers,
   { kind: 'output', name: 'Output', group: 'Input & output', description: 'Return predictions or features', color: '#ef4444', defaults: {}, fields: [] },
@@ -168,6 +169,11 @@ export function analyzeGraph(g: Graph): Analysis {
     } else if (n.kind === 'layernorm') {
       if (input.dims.length === 4) issue('Use BatchNorm2d for image channels, or flatten/patch-embed before Layer norm.', n.id);
       else parameters += 2 * last;
+    }
+    else if (n.kind === 'lasttoken') {
+      const tokens = g.nodes.find(x => x.kind === 'input')?.config.mode === 'tokens';
+      if (input.dims.length !== 3 || !tokens) issue('Last token needs a token sequence of vectors; use Mean pool for numeric features.', n.id);
+      else shape.dims = ['B', last];
     }
     else if (n.kind === 'meanpool') {
       if (input.dims.length !== 3) issue('Mean pool needs a sequence of vectors.', n.id);

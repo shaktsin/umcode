@@ -36,7 +36,7 @@ DEFAULTS = {
     "linear": dict(outFeatures=64, bias=True, tieEmbedding=False),
     "attention": dict(heads=4, dropout=.1, causal=True),
     "transformer": dict(width=16, heads=4, expansion=4, repeat=2, dropout=.1, causal=True),
-    "layernorm": {}, "gelu": {}, "relu": {}, "dropout": dict(dropout=.1), "meanpool": {},
+    "layernorm": {}, "gelu": {}, "relu": {}, "dropout": dict(dropout=.1), "meanpool": {}, "lasttoken": {},
     "output": {}, "conv2d": dict(channels=16, kernel=3, stride=1, padding=1, bias=True),
     "batchnorm2d": {}, "maxpool2d": dict(kernel=2, stride=2, padding=0),
     "avgpool2d": dict(kernel=2, stride=2, padding=0), "globalpool2d": {},
@@ -183,6 +183,9 @@ def analyze(graph):
             elif kind == "meanpool":
                 require(len(previous) == 2, "Mean pool needs a sequence of vectors.")
                 dims = [width]
+            elif kind == "lasttoken":
+                require(len(previous) == 2 and order[0]["config"]["mode"] == "tokens", "Last token needs a token sequence of vectors.")
+                dims = [width]
             elif kind == "flatten":
                 dims = [math.prod(previous)]
             elif kind in ("conv2d", "batchnorm2d", "maxpool2d", "avgpool2d", "globalpool2d", "patchembedding"):
@@ -253,6 +256,13 @@ class MeanPool(nn.Module):
         return x.mean(dim=1)
 
 
+class LastToken(nn.Module):
+    """Pick each row's final real token (the end-of-text token); padding is token id 0."""
+    def forward(self, x, ids):
+        last = (ids != 0).sum(dim=1).clamp(min=1) - 1
+        return x[torch.arange(x.size(0), device=x.device), last]
+
+
 class PatchEmbedding(nn.Module):
     def __init__(self, channels, width, patch):
         super().__init__()
@@ -283,6 +293,7 @@ class Model(nn.Module):
             elif kind == "layernorm": layer = nn.LayerNorm(width)
             elif kind == "dropout": layer = nn.Dropout(c["dropout"])
             elif kind == "meanpool": layer = MeanPool()
+            elif kind == "lasttoken": layer = LastToken()
             elif kind == "gelu": layer = nn.GELU()
             elif kind == "relu": layer = nn.ReLU()
             elif kind == "conv2d": layer = nn.Conv2d(previous[0], c["channels"], kernel_size=c["kernel"], stride=c["stride"], padding=c["padding"], bias=c["bias"])
@@ -299,8 +310,9 @@ class Model(nn.Module):
                 self.layers[f"layer_{i}"].weight = self.layers[embedding_key].weight
 
     def forward(self, x):
+        ids = x
         for layer in self.layers.values():
-            x = layer(x)
+            x = layer(x, ids) if isinstance(layer, LastToken) else layer(x)
         return x
 
 

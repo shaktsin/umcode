@@ -136,3 +136,12 @@ func TestLegacyTrainingCheckpointRecoversRawPromptRecipe(t *testing.T) {
 		t.Fatal("imported legacy weights changed format")
 	}
 }
+
+func TestTrainingBatchLimitKnowsLastTokenPooling(t *testing.T) {
+	graph := []byte(`{"version":1,"format":"umcode.layers.v1","nodes":[{"id":"input","kind":"input","config":{"mode":"tokens","sequence":512}},{"id":"embedding","kind":"embedding","config":{"width":32}},{"id":"transformer","kind":"transformer","config":{"width":32,"heads":4,"repeat":1,"expansion":2}},{"id":"last","kind":"lasttoken","config":{}},{"id":"linear","kind":"linear","config":{"outFeatures":18}},{"id":"output","kind":"output","config":{}}],"edges":[{"id":"a","source":"input","target":"embedding"},{"id":"b","source":"embedding","target":"transformer"},{"id":"c","source":"transformer","target":"last"},{"id":"d","source":"last","target":"linear"},{"id":"e","source":"linear","target":"output"}]}`)
+	selection := DataSelection{Config: DataConfig{Mode: "text", SequenceLength: 512}, Counts: DataCounts{Train: 1000, Validation: 100, Test: 100}}
+	got, ok := TrainingMaxBatchSize(graph, selection, 16<<30)
+	if !ok || got < 1 {
+		t.Fatalf("a last-token graph must report a positive batch limit, got %d known=%v", got, ok)
+	}
+}

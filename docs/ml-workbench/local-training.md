@@ -44,3 +44,7 @@ Install the managed PyTorch runtime using the [Data/Inference setup](data-infere
 ## Validation
 
 Frontend tests, Svelte check and production build; real Python training/metrics tests; Go storage, real-worker and RPC race checks. Browser acceptance covers real final metrics, Start/Stop, historical checkpoint handoff, learned numeric inference and local chat promotion. Repository-wide Go limitations are recorded in the [Data/Inference verification](data-inference.md#verification-and-limits).
+
+## Classifying a whole passage with a causal transformer
+
+Text preparation already appends an end-of-text token after every passage and pads after it. Put a **Last token** layer after the transformer (and before the final Linear layer) to pick the output at that last real token, giving one `[B, classes]` result per passage. Last token needs a token input; use Mean pool for numeric features. Long contexts are expensive: attention scores grow with sequence length squared times heads, so shrink sequence length, heads or repeats if training reports a memory or batch-size limit.

@@ -86,4 +86,28 @@ describe('visual model architecture', () => {
     expect(added.nodes[0].position).toEqual({ x: 100, y: 200 });
     expect(added.nodes[0].config.outFeatures).toBe(64);
   });
+
+  it('selects the last real token so a causal transformer can classify a whole passage', () => {
+    let graph = emptyGraph();
+    const ids: string[] = [];
+    for (const kind of ['input', 'embedding', 'lasttoken', 'linear', 'output'] as const) {
+      graph = addLayer(graph, kind, { x: 0, y: ids.length * 80 });
+      ids.push(graph.nodes.at(-1)!.id);
+      if (ids.length > 1) graph = connectLayers(graph, ids.at(-2)!, ids.at(-1)!);
+    }
+    const result = analyzeGraph(graph);
+    expect(result.errors).toEqual([]);
+    expect(result.shapes[ids[2]].dims).toEqual(['B', definition('embedding').defaults.width]);
+    expect(generatePython(graph).code).toContain('class LastToken');
+    expect(generatePython(graph).code).toContain('LastToken()');
+  });
+  it('rejects last token pooling on numeric features', () => {
+    let graph = emptyGraph();
+    graph = addLayer(graph, 'input', { x: 0, y: 0 });
+    const input = graph.nodes[0];
+    input.config = { ...input.config, mode: 'features' };
+    graph = addLayer(graph, 'lasttoken', { x: 0, y: 80 });
+    graph = connectLayers(graph, input.id, graph.nodes[1].id);
+    expect(analyzeGraph(graph).errors.some(e => /token/i.test(e.message))).toBe(true);
+  });
 });

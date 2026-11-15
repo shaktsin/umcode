@@ -44,6 +44,11 @@ export function generatePython(graph: Graph): { code: string; lineNodes: (string
     def forward(self, x):
         return x.mean(dim=1)
 \n`);
+  if (graph.nodes.some(n => n.kind === 'lasttoken')) add(`class LastToken(nn.Module):
+    def forward(self, x, ids):
+        last = (ids != 0).sum(dim=1).clamp(min=1) - 1
+        return x[torch.arange(x.size(0), device=x.device), last]
+\n`);
   if (graph.nodes.some(n => n.kind === 'patchembedding')) add(`class PatchEmbedding(nn.Module):
     def __init__(self, channels, width, patch):
         super().__init__()
@@ -69,6 +74,7 @@ export function generatePython(graph: Graph): { code: string; lineNodes: (string
       case 'layernorm': expression = `nn.LayerNorm(${width})`; break;
       case 'dropout': expression = `nn.Dropout(${c.dropout})`; break;
       case 'meanpool': expression = 'MeanPool()'; break;
+      case 'lasttoken': expression = 'LastToken()'; break;
       case 'gelu': expression = 'nn.GELU()'; break;
       case 'relu': expression = 'nn.ReLU()'; break;
       case 'conv2d': expression = `nn.Conv2d(${result.shapes[source].dims[1]}, ${c.channels}, kernel_size=${c.kernel}, stride=${c.stride}, padding=${c.padding}, bias=${c.bias ? 'True' : 'False'})`; break;
@@ -86,7 +92,8 @@ export function generatePython(graph: Graph): { code: string; lineNodes: (string
     add(`        self.layers["${ids.get(node.id)}"].weight = self.layers["${ids.get(embedding.id)}"].weight`, node.id);
   }
   add('\n    def forward(self, x):');
-  for (const node of result.order) if (node.kind !== 'input' && node.kind !== 'output') add(`        x = self.layers["${ids.get(node.id)}"](x)`, node.id);
+  if (result.order.some(n => n.kind === 'lasttoken')) add('        ids = x');
+  for (const node of result.order) if (node.kind !== 'input' && node.kind !== 'output') add(`        x = self.layers["${ids.get(node.id)}"](x${node.kind === 'lasttoken' ? ', ids' : ''})`, node.id);
   add('        return x\n');
   return { code: lines.join('\n'), lineNodes };
 }
