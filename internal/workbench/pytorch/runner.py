@@ -23,23 +23,28 @@ from torch import nn
 MAX_WEIGHTS = 64 * 1024 * 1024
 MAX_HEADER = 1024 * 1024
 MAX_LINE = 12 * 1024 * 1024
-MAX_PARAMETERS = 16_000_000
 MIN_ELEMENTS = 8_000_000
 HARD_MAX_ELEMENTS = 128_000_000
 
 
+def env_limit(name, low, high):
+    """A launcher-provided cap: the default (low) unless the env value is an int in [low, high]; above high is clamped."""
+    try:
+        value = int(os.environ.get(name, ""))
+    except ValueError:
+        return low
+    return low if value < low else min(value, high)
+
+
 def element_limit():
     """8M by default; the Go launcher raises it from free memory (never above 128M)."""
-    try:
-        value = int(os.environ.get("UMCODE_MAX_ELEMENTS", ""))
-    except ValueError:
-        return MIN_ELEMENTS
-    return MIN_ELEMENTS if value < MIN_ELEMENTS else min(value, HARD_MAX_ELEMENTS)
+    return env_limit("UMCODE_MAX_ELEMENTS", MIN_ELEMENTS, HARD_MAX_ELEMENTS)
 
 
+MAX_PARAMETERS = env_limit("UMCODE_MAX_PARAMETERS", 16_000_000, 512_000_000)
 MAX_ELEMENTS = element_limit()
 ELEMENTS_LABEL = f"{MAX_ELEMENTS // 1_000_000} million"
-MAX_WORK = 500_000_000
+MAX_WORK = env_limit("UMCODE_MAX_WORK", 500_000_000, 2_000_000_000_000)
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_PIXELS = 4_000_000
 MAX_TENSORS = 20_000
@@ -223,7 +228,7 @@ def analyze(graph):
                         parameters += out*channels*kernel*kernel + (out if c["bias"] else 0)
                         work += out*h*w*channels*kernel*kernel
         bounded_shape(dims)
-        require(parameters <= MAX_PARAMETERS, "Graph exceeds the 16 million parameter limit.")
+        require(parameters <= MAX_PARAMETERS, f"Graph exceeds the {MAX_PARAMETERS // 1_000_000} million parameter limit.")
         require(work <= MAX_WORK, "Graph exceeds the CPU inference operation limit; use a smaller architecture.")
         shapes.append(dims)
     return order, shapes

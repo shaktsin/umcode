@@ -44,3 +44,13 @@ Install the managed PyTorch runtime using the [Data/Inference setup](data-infere
 ## Validation
 
 Frontend tests, Svelte check and production build; real Python training/metrics tests; Go storage, real-worker and RPC race checks. Browser acceptance covers real final metrics, Start/Stop, historical checkpoint handoff, learned numeric inference and local chat promotion. Repository-wide Go limitations are recorded in the [Data/Inference verification](data-inference.md#verification-and-limits).
+
+## Machine-scaled limits
+
+When free memory is known, three guardrails scale with the machine instead of staying at their toy-sized defaults:
+
+- Per-tensor activation elements: 8 million up to 128 million (a quarter of free RAM).
+- Parameters: 16 million up to 256 million (a quarter of free RAM at 16 bytes per parameter).
+- Work per sample: 500 million multiply-adds, times 20 per CPU core up to 16 cores (100 billion on a 10-core machine). Bigger graphs train, but slowly: training is CPU-only.
+
+Batch size is still checked against free memory. With unknown memory every limit keeps its default.

@@ -103,12 +103,43 @@ func ElementLimit(availableBytes uint64) int {
 	return int(math.Max(minElementLimit, math.Min(maxElementLimit, math.Floor(budget/16))))
 }
 
+const (
+	minWorkLimit      = 500_000_000
+	workPerCore       = 20
+	maxWorkCores      = 16
+	minParameterLimit = 16_000_000
+	maxParameterLimit = 256_000_000
+)
+
+// WorkLimit is the per-sample multiply-add cap for training and inference.
+// With unknown memory it stays at 500 million. Otherwise it grows with CPU
+// cores (20x the base per core, up to 16 cores): training is slower with a
+// higher cap, but no longer refused.
+func WorkLimit(availableBytes uint64, cpus int) int {
+	if availableBytes == 0 {
+		return minWorkLimit
+	}
+	return minWorkLimit * workPerCore * min(max(cpus, 1), maxWorkCores)
+}
+
+// ParameterLimit is the parameter cap: a quarter of free memory at 16 bytes per
+// parameter (weights, gradients, Adam state), between 16 million and 256 million.
+func ParameterLimit(availableBytes uint64) int {
+	if availableBytes == 0 {
+		return minParameterLimit
+	}
+	return int(math.Max(minParameterLimit, math.Min(maxParameterLimit, math.Floor(float64(availableBytes)*.25/16))))
+}
+
 // workerEnv is the environment for the Python training and inference workers.
 // The raised element cap is only passed when free memory is actually known.
 func workerEnv(availableBytes uint64) []string {
 	env := append(os.Environ(), "OMP_NUM_THREADS=1", "MKL_NUM_THREADS=1", "TOKENIZERS_PARALLELISM=false")
 	if availableBytes > 0 {
-		env = append(env, "UMCODE_MAX_ELEMENTS="+strconv.Itoa(ElementLimit(availableBytes)))
+		env = append(env,
+			"UMCODE_MAX_ELEMENTS="+strconv.Itoa(ElementLimit(availableBytes)),
+			"UMCODE_MAX_WORK="+strconv.Itoa(WorkLimit(availableBytes, runtime.NumCPU())),
+			"UMCODE_MAX_PARAMETERS="+strconv.Itoa(ParameterLimit(availableBytes)))
 	}
 	return env
 }

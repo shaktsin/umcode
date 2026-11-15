@@ -3,15 +3,19 @@ package workbench
 import (
 	"encoding/json"
 	"math"
+	"runtime"
 )
 
 const trainingActivationElements = 8_000_000
-const trainingBatchWorkLimit = 500_000_000
 
 // TrainingMaxBatchSize estimates peak training memory for a single-path native
 // token or feature graph. A separate per-batch CPU work cap still applies.
 // Unknown memory falls back to the old conservative activation cap.
 func TrainingMaxBatchSize(raw json.RawMessage, selection DataSelection, availableBytes uint64) (int, bool) {
+	return trainingMaxBatchSize(raw, selection, availableBytes, runtime.NumCPU())
+}
+
+func trainingMaxBatchSize(raw json.RawMessage, selection DataSelection, availableBytes uint64, cpus int) (int, bool) {
 	var graph struct {
 		Nodes []struct {
 			ID     string         `json:"id"`
@@ -201,7 +205,7 @@ func TrainingMaxBatchSize(raw json.RawMessage, selection DataSelection, availabl
 		max = min(max, int(memoryMax))
 	}
 	if work > 0 {
-		max = min(max, int(float64(trainingBatchWorkLimit)/work))
+		max = min(max, int(float64(WorkLimit(availableBytes, cpus))/work))
 	}
 	return max, true
 }
