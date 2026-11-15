@@ -32,15 +32,17 @@ type RuntimeInfo struct {
 }
 
 type Promotion struct {
-	PromptFormat   string `json:"promptFormat,omitempty"`
-	ID             string `json:"id"`
-	ProjectID      string `json:"projectId"`
-	ModelID        string `json:"modelId"`
-	ModelCreatedAt string `json:"modelCreatedAt"`
-	CheckpointID   string `json:"checkpointId"`
-	Name           string `json:"name"`
-	Runtime        string `json:"runtime"`
-	CreatedAt      string `json:"createdAt"`
+	SourceFingerprint string `json:"sourceFingerprint,omitempty"`
+	ContextWindow     int    `json:"contextWindow,omitempty"`
+	PromptFormat      string `json:"promptFormat,omitempty"`
+	ID                string `json:"id"`
+	ProjectID         string `json:"projectId"`
+	ModelID           string `json:"modelId"`
+	ModelCreatedAt    string `json:"modelCreatedAt"`
+	CheckpointID      string `json:"checkpointId"`
+	Name              string `json:"name"`
+	Runtime           string `json:"runtime"`
+	CreatedAt         string `json:"createdAt"`
 }
 
 type InferenceState struct {

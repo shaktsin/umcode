@@ -17,7 +17,7 @@ func TestImportedRuntimeRealWorkflows(t *testing.T) {
 	if python == "" {
 		t.Skip("set UMCODE_IMPORTED_TEST_PYTHON to a Transformers/PyTorch interpreter")
 	}
-	for _, family := range []string{"gpt2", "resnet"} {
+	for _, family := range []string{"gpt2", "resnet", "mixtral", "granitemoe", "qwen2_moe", "qwen3_moe"} {
 		t.Run(family, func(t *testing.T) {
 			fixture := t.TempDir()
 			script := `import sys,io
@@ -32,12 +32,17 @@ if family=='gpt2':
  t=Tokenizer(WordLevel({'[PAD]':0,'[UNK]':1,'hello':2,'world':3},unk_token='[UNK]'));t.pre_tokenizer=Whitespace()
  PreTrainedTokenizerFast(tokenizer_object=t,pad_token='[PAD]',unk_token='[UNK]').save_pretrained(p)
  GPT2LMHeadModel(GPT2Config(vocab_size=4,n_positions=32,n_embd=8,n_layer=1,n_head=2)).save_pretrained(p,safe_serialization=True)
-else:
+elif family=='resnet':
  ResNetForImageClassification(ResNetConfig(embedding_size=8,hidden_sizes=[8,16],depths=[1,1],num_labels=2)).save_pretrained(p,safe_serialization=True)
  ConvNextImageProcessor(size={'shortest_edge':32},crop_pct=1.0).save_pretrained(p)
  Image.new('RGB',(32,32),'red').save(p/'sample.png')
+else:
+ from moe_fixture import create
+ create(p,family)
 `
-			if out, err := exec.Command(python, "-c", script, fixture, family).CombinedOutput(); err != nil {
+			command := exec.Command(python, "-c", script, fixture, family)
+			command.Dir = "pytorch"
+			if out, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("fixture: %v %s", err, out)
 			}
 			dir, err := os.OpenRoot(fixture)
@@ -129,6 +134,16 @@ else:
 			started, err := runtime.Train(context.Background(), target, 1, .001)
 			if err != nil || started.Status != "running" {
 				t.Fatalf("train: %+v %v", started, err)
+			}
+			encodedJob, _ := json.Marshal(started)
+			var snapshot struct {
+				Data struct {
+					DatasetName string        `json:"datasetName"`
+					Selection   DataSelection `json:"selection"`
+				} `json:"data"`
+			}
+			if err = json.Unmarshal(encodedJob, &snapshot); err != nil || snapshot.Data.DatasetName != dataset.Name || snapshot.Data.Selection.DatasetID != dataset.ID || snapshot.Data.Selection.Counts.Train != 3 {
+				t.Fatalf("training job lost its dataset snapshot: %s (%v)", encodedJob, err)
 			}
 			deadline := time.Now().Add(time.Minute)
 			for time.Now().Before(deadline) {

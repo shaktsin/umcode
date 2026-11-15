@@ -23,7 +23,8 @@ func (e *Engine) WorkbenchImportRuntime(ctx context.Context, p protocol.ImportRu
 	if err != nil {
 		return nil, err
 	}
-	if _, err = matchingWorkbenchModel(project.Root, p.ModelID, p.ModelCreatedAt); err != nil {
+	model, err := matchingWorkbenchModel(project.Root, p.ModelID, p.ModelCreatedAt)
+	if err != nil {
 		return nil, err
 	}
 	opened, err := workbench.Open(project.Root, p.ModelID)
@@ -50,7 +51,16 @@ func (e *Engine) WorkbenchImportRuntime(ctx context.Context, p protocol.ImportRu
 	case "validate":
 		return runner.Validate(ctx, target)
 	case "infer":
-		return runner.Infer(ctx, target, p.Prompt, p.ImageBase64, p.Checkpoint, p.MaxTokens)
+		return e.testImportedChat(ctx, target, p)
+	case "promotion":
+		promotion, err := e.importedPromotion(ctx, p)
+		return map[string]any{"promotion": promotion}, err
+	case "promote":
+		e.workbenchMu.Lock()
+		defer e.workbenchMu.Unlock()
+		return e.promoteImportedChat(ctx, target, p, model.Name)
+	case "unpromote":
+		err = e.removeWorkbenchPromotion(ctx, p.ProjectID, p.ModelID, p.ModelCreatedAt)
 	case "train":
 		return runner.Train(ctx, target, p.Epochs, p.LearningRate)
 	case "job":

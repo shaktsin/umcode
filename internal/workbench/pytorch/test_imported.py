@@ -9,6 +9,34 @@ HERE = Path(__file__).parent
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_moe_routing_limits_before_allocation(self):
+        import imported
+        from transformers import MixtralConfig, Qwen2MoeConfig
+        for config in [MixtralConfig(num_local_experts=1000000), MixtralConfig(num_local_experts=2, num_experts_per_tok=3),
+                       Qwen2MoeConfig(num_experts=2, num_experts_per_tok=0)]:
+            with self.assertRaisesRegex(ValueError, 'expert|budget'):
+                imported.check_config_budget(config)
+
+    def test_imported_chat_uses_native_template_and_rejects_overflow(self):
+        import imported
+        from tokenizers import Tokenizer
+        from tokenizers.models import WordLevel
+        from tokenizers.pre_tokenizers import Whitespace
+        from transformers import PreTrainedTokenizerFast
+        raw = Tokenizer(WordLevel({'[UNK]': 0, 'user': 1, 'assistant': 2, 'hello': 3, 'hi': 4, 'again': 5}, unk_token='[UNK]'))
+        raw.pre_tokenizer = Whitespace()
+        tok = PreTrainedTokenizerFast(tokenizer_object=raw, unk_token='[UNK]')
+        tok.chat_template = "{% for m in messages %}{{ m['role'] + ' ' + m['content'] + ' ' }}{% endfor %}{% if add_generation_prompt %}{{ 'assistant' }}{% endif %}"
+        messages = [{'role': 'user', 'content': 'hello'}, {'role': 'assistant', 'content': 'hi'}, {'role': 'user', 'content': 'again'}]
+        inputs = imported.chat_inputs(tok, messages, 16, 4)
+        self.assertEqual(inputs['input_ids'].tolist(), [[1, 3, 2, 4, 1, 5, 2]])
+        with self.assertRaisesRegex(ValueError, 'context'):
+            imported.chat_inputs(tok, messages, 8, 4)
+        with self.assertRaisesRegex(ValueError, 'role'):
+            imported.chat_inputs(tok, [{'role':'tool','content':'x'}],16,4)
+        tok.chat_template = None
+        with self.assertRaisesRegex(ValueError, 'chat template'):
+            imported.chat_inputs(tok, messages,16,4)
     def test_gpt2_legacy_attention_buffers_are_not_missing_weights(self):
         import imported
         import torch
@@ -116,13 +144,13 @@ class ProtocolTests(unittest.TestCase):
             rows = [{'text': 'hello world'}, {'text': 'world hello'}]
             trained = run({**common, 'action': 'train', 'outputDir': str(output), 'splits': {'train': rows, 'validation': rows, 'test': rows}})
             self.assertTrue(trained['ok'], trained)
-            self.assertEqual(trained['trainingMode'], 'output-head-only')
+            self.assertEqual(trained['trainingMode'], 'lora')
             import torch
             from safetensors.torch import load_file
             original = load_file(bundle / 'model.safetensors')
             updated = load_file(output / 'model.safetensors')
             for key, tensor in original.items():
-                if not key.startswith('lm_head.'):
+                if '.attn.c_attn.' not in key:
                     self.assertTrue(torch.equal(tensor, updated[key]), 'Frozen backbone changed: ' + key)
             self.assertTrue(run({**common, 'action': 'validate', 'checkpointDir': str(output)})['ok'])
             one = run({**common, 'action': 'train', 'outputDir': str(Path(tmp) / 'one'),

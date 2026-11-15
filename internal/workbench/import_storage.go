@@ -101,7 +101,7 @@ func CreateImported(projectRoot, name string, raw json.RawMessage) (OpenResult, 
 	}
 	task := "classification"
 	switch family {
-	case "gpt2", "llama", "mistral", "qwen2":
+	case "gpt2", "llama", "mistral", "qwen2", "mixtral", "granitemoe", "qwen2_moe", "qwen3_moe":
 		task = "text-generation"
 	}
 	model := Model{SchemaVersion: 1, ID: id, Name: name, Task: task, CreatedAt: time.Now().UTC()}

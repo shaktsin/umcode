@@ -1,6 +1,22 @@
 import { describe,it,expect } from 'vitest';
 import { importAvailability,modelAssets,uploadModelBundle,readRuntimeSnapshot,CompleteModelImport } from './importRuntime';
 describe('import completeness and local copying',()=>{
+ it.each(['mixtral','granitemoe','qwen2_moe','qwen3_moe'])('accepts complete %s folders but still requires tokenizer assets',family=>{
+  expect(importAvailability(family,['config.json','model.safetensors']).complete).toBe(false);
+  expect(importAvailability(family,['config.json','model.safetensors','tokenizer.json','tokenizer_config.json']).complete).toBe(true);
+ });
+ it('keeps a standalone chat template in the model folder upload',()=>{
+  const file={name:'chat_template.jinja',size:50,webkitRelativePath:'model/chat_template.jinja'} as File;
+  expect(modelAssets([file]).map(a=>a.name)).toEqual(['chat_template.jinja']);
+ });
+ it('allows metadata inspection of large MoE folders without permitting oversized runtime copying',async()=>{
+  const file={name:'model.safetensors',size:90*1024**3,webkitRelativePath:''} as File;
+  expect(()=>modelAssets([file],true)).not.toThrow();
+  expect(()=>modelAssets([file])).toThrow(/8 GiB/);
+  let called=false;
+  await expect(uploadModelBundle(async()=>{called=true;return {};},{},[{name:file.name,file}],()=>true,()=>{})).rejects.toThrow(/8 GiB/);
+  expect(called).toBe(false);
+ });
  it('retains copied files for validation retry and rejects not-ready results',async()=>{
   let uploads=0,ready=false;
   const state=new CompleteModelImport();

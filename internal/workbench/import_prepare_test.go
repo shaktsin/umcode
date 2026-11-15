@@ -1,6 +1,33 @@
 package workbench
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestImportedPreparationKeepsPromptAndResponseSeparate(t *testing.T) {
+	root, id, created, _, _ := runtimeBundleFixture(t)
+	ds, err := ImportData(root, id, DataSource{Kind: "local"}, []DataFile{upload("qa.csv", "question,answer\nhello,world\nhello,world\nhello,world\nhello,world\nhello,world\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = PrepareImportedData(root, id, DataConfig{DatasetID: ds.ID, Mode: "text", Purpose: "text-generation", InputColumns: []string{"question"}, TargetColumn: "answer", TrainPercent: 60, ValidationPercent: 20, TestPercent: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	splits, _, err := readImportedSplits(BundleTarget{root, id, created})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(splits.Train[0])
+	var row map[string]any
+	if err = json.Unmarshal(encoded, &row); err != nil {
+		t.Fatal(err)
+	}
+	if row["text"] != "hello" || row["response"] != "world" {
+		t.Fatalf("lost question/response boundaries: %s", encoded)
+	}
+}
 
 func TestImportedPreparationRejectsInvalidDataset(t *testing.T) {
 	root, id, _, _, _ := runtimeBundleFixture(t)

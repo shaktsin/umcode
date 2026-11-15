@@ -23,6 +23,17 @@ it('captures the selected imported layer and the missing original, even before s
   expect(context.graphJson).toBe(text); expect(context.summary).toContain('layers.1.1'); expect(context.summary).toContain('Transformer decoder layer 0');
   await expect(buildContext('p',{id:'m',name:'Qwen'},text,'import-1')).rejects.toThrow(/select/i);
 });
+it('includes MoE internals in assistant context and preserves source bindings when editing an expert setting',async()=>{
+  const g=fixture();g.source.family='mixtral';
+  const config={family:'mixtral',hiddenSize:16,intermediateSize:32,expertIntermediateSize:32,expertCount:8,expertsPerToken:2,attentionHeads:4,keyValueHeads:2,normalization:'pre RMSNorm',attention:'causal grouped-query self-attention',mlp:'sparse MoE',residual:true};
+  g.nodes=g.nodes.map(n=>({...n,label:'Mixtral block 0',config:{...config},baselineConfig:{...config}}));
+  const text=JSON.stringify(g),context=await buildContext('p',{id:'m',name:'Mixtral'},text,'import-0');
+  expect(context.summary).toContain('Router / top-k selection');expect(context.summary).toContain('2 of 8');
+  const proposal:WorkbenchProposal={projectId:'p',modelId:'m',modelName:'Mixtral',revision:await graphRevision(text),explanation:'Try one expert per token.',operations:[{type:'update',nodeId:'import-0',config:{expertsPerToken:1}}]};
+  const preview=previewWorkbenchProposal(text,proposal);
+  expect(preview.type).toBe('imported');
+  if(preview.type==='imported'){expect(preview.graph.nodes[0].config.expertsPerToken).toBe(1);expect(preview.graph.source).toEqual(g.source);}
+});
 it('restores only from immutable source; preview, apply, undo and redo preserve source and explicit connections',async()=>{
   const {text,state,proposal,editor,g}=await setup();
   state.bindImported(graph=>editor.commit(graph)); state.selectedNodeId='import-0';

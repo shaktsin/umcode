@@ -7,6 +7,7 @@ type ImportRuntimeParams struct {
 	ModelID        string                       `json:"modelId"`
 	ModelCreatedAt string                       `json:"modelCreatedAt"`
 	Action         string                       `json:"action"`
+	TestID         string                       `json:"testId,omitempty"`
 	Files          []workbench.ImportSourceFile `json:"files,omitempty"`
 	UploadID       string                       `json:"uploadId,omitempty"`
 	Name           string                       `json:"name,omitempty"`

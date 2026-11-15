@@ -36,7 +36,7 @@ func BundleFileKind(name string) string {
 	switch name {
 	case "config.json":
 		return "config"
-	case "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "added_tokens.json", "vocab.json", "vocab.txt", "merges.txt", "tokenizer.model", "sentencepiece.bpe.model":
+	case "tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "special_tokens_map.json", "added_tokens.json", "vocab.json", "vocab.txt", "merges.txt", "tokenizer.model", "sentencepiece.bpe.model":
 		return "tokenizer"
 	case "preprocessor_config.json", "processor_config.json", "feature_extractor_config.json":
 		return "processor"
@@ -355,6 +355,9 @@ func (b BundleTarget) VerifiedPath() (string, error) {
 	if e = validateBundleManifest(manifest.Files); e != nil {
 		return "", e
 	}
+	if e = verifyBundleEntries(folder, manifest); e != nil {
+		return "", e
+	}
 	_, hashes, e := bundleMetadata(folder, manifest)
 	if e != nil {
 		return "", e
@@ -363,6 +366,30 @@ func (b BundleTarget) VerifiedPath() (string, error) {
 		return "", errors.New("The copied model files changed. Reimport the model folder.")
 	}
 	return filepath.Join(b.ProjectRoot, "models", b.ModelID, "pretrained"), nil
+}
+
+// Transformers discovers optional sidecars in the directory. Hashing only the
+// listed files would let an added tokenizer/chat template override pinned input.
+func verifyBundleEntries(root *os.Root, manifest bundleManifest) error {
+	allowed := map[string]bool{"manifest.json": true}
+	for _, file := range manifest.Files {
+		allowed[file.Name] = true
+	}
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] || !entry.Type().IsRegular() {
+			return errors.New("Saved model folder contains unexpected files. Reimport the model or train a new checkpoint.")
+		}
+	}
+	return nil
 }
 
 // RuntimeArchitecture checks semantic equality, allowing label and layout edits only.

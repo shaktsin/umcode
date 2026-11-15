@@ -13,9 +13,10 @@ import (
 )
 
 type importedRow struct {
-	Text        string `json:"text,omitempty"`
-	ImageBase64 string `json:"imageBase64,omitempty"`
-	Target      *int   `json:"target,omitempty"`
+	Text        string  `json:"text,omitempty"`
+	Response    *string `json:"response,omitempty"`
+	ImageBase64 string  `json:"imageBase64,omitempty"`
+	Target      *int    `json:"target,omitempty"`
 }
 type importedSplits struct {
 	Train      []importedRow `json:"train"`
@@ -122,7 +123,8 @@ func PrepareImportedData(projectRoot, modelID string, config DataConfig) (DataSe
 		if config.Mode == "text" {
 			out.Text = input
 			if config.Purpose == "text-generation" && config.TargetColumn != "" {
-				out.Text += "\n" + row[config.TargetColumn]
+				answer := row[config.TargetColumn]
+				out.Response = &answer
 			}
 		} else {
 			rawdir, e := openDataDirectory(dataset, "raw", false)
@@ -176,7 +178,7 @@ func PrepareImportedData(projectRoot, modelID string, config DataConfig) (DataSe
 		Schema string
 		Config DataConfig
 		Source ImportedSource
-	}{"imported-v1", config, g.Source})
+	}{"imported-v2", config, g.Source})
 	hash := sha256.Sum256(versionBytes)
 	version := hex.EncodeToString(hash[:])
 	selection := DataSelection{Version: version, DatasetID: ds.ID, Config: config, Counts: DataCounts{Train: len(all[0]), Validation: len(all[1]), Test: len(all[2])}, Classes: classes, Statistics: []DataStatistic{}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Warnings: warnings}
@@ -257,6 +259,15 @@ func readImportedSplits(b BundleTarget) (importedSplits, DataSelection, error) {
 	defer version.Close()
 	if err = readDataJSON(version, "imported.json", maxPreparedDataBytes, &splits); err != nil {
 		return splits, DataSelection{}, errors.New("Prepare this dataset for the imported runtime.")
+	}
+	if selection.Config.Purpose == "text-generation" && selection.Config.TargetColumn != "" {
+		for _, part := range [][]importedRow{splits.Train, splits.Validation, splits.Test} {
+			for _, row := range part {
+				if row.Response == nil {
+					return splits, DataSelection{}, errors.New("This preparation uses the old combined text format. Open Data and click Save preparation again to enable answer-only training.")
+				}
+			}
+		}
 	}
 	return splits, *selection, nil
 }
