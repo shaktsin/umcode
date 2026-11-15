@@ -46,7 +46,7 @@ func startPythonWorker(python string) (*pythonWorker, error) {
 		return nil, errors.New("PyTorch runtime is not installed; configure UMCODE_WORKBENCH_PYTHON to a Python environment with torch, safetensors, Pillow and numpy")
 	}
 	cmd := exec.Command(python, "-I", "-u", "-c", trustedInferenceRunner)
-	cmd.Env = append(os.Environ(), "OMP_NUM_THREADS=1", "MKL_NUM_THREADS=1", "TOKENIZERS_PARALLELISM=false")
+	cmd.Env = workerEnv(TrainingAvailableMemory())
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

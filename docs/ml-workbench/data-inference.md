@@ -69,7 +69,7 @@ there is no unsafe pickle fallback or execution of project Python. The runner bu
 only the supported palette, validates dimensions/allocations before materialization,
 and verifies real finite outputs. Context, image and generation limits are enforced.
 The first runner is CPU-only with at most two resident workers, 16 million parameters,
-8 million activation elements, 8 MiB images and 1–256 generated tokens per request.
+an activation element cap of 8 million (raised with free memory, up to 128 million), 8 MiB images and 1–256 generated tokens per request.
 
 **Test architecture** needs no checkpoint: it executes random weights and reports
 actual shapes and parameter count, clearly marked untrained. It produces no saved

@@ -2,6 +2,7 @@ package workbench
 
 import (
 	"context"
+	"math"
 	"os"
 	"os/exec"
 	"regexp"
@@ -79,4 +80,35 @@ func TrainingAvailableMemory() uint64 {
 		}
 	}
 	return 0
+}
+
+const (
+	minElementLimit = 8_000_000
+	maxElementLimit = 128_000_000
+)
+
+// ElementLimit is the per-tensor activation element cap handed to the Python
+// workers. With unknown memory it stays at the conservative 8 million. Otherwise
+// it scales with free memory (a quarter of it, minus the 256 MiB PyTorch base,
+// at 16 bytes per element for forward/backward copies), never below 8 million
+// or above 128 million. Batch size is still checked against memory separately.
+func ElementLimit(availableBytes uint64) int {
+	if availableBytes == 0 {
+		return minElementLimit
+	}
+	budget := float64(availableBytes)*.25 - float64(256<<20)
+	if budget <= 0 {
+		return minElementLimit
+	}
+	return int(math.Max(minElementLimit, math.Min(maxElementLimit, math.Floor(budget/16))))
+}
+
+// workerEnv is the environment for the Python training and inference workers.
+// The raised element cap is only passed when free memory is actually known.
+func workerEnv(availableBytes uint64) []string {
+	env := append(os.Environ(), "OMP_NUM_THREADS=1", "MKL_NUM_THREADS=1", "TOKENIZERS_PARALLELISM=false")
+	if availableBytes > 0 {
+		env = append(env, "UMCODE_MAX_ELEMENTS="+strconv.Itoa(ElementLimit(availableBytes)))
+	}
+	return env
 }

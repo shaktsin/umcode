@@ -35,7 +35,7 @@ Supported: numeric regression/classification and UTF-8 byte-token text generatio
 
 - One active app-wide training job, with a 45-minute timeout.
 - 1–1,000 epochs, batch size 1–256, learning rate 0.000001–1 and seed 0–2,147,483,647.
-- Eight million batch activation elements, including attention and repeated blocks; reduce batch size for a long-context transformer.
+- Batch activation elements, including attention and repeated blocks, are capped at eight million when free memory cannot be read. Otherwise the per-tensor cap scales with free memory, from eight million up to 128 million (a quarter of free RAM, minus 256 MiB, at 16 bytes per element), and the batch size is still checked against memory. Reduce batch size for a long-context transformer.
 - A combined 256 MiB prepared-file/tensor budget and 100,000 rows, plus existing graph/checkpoint limits.
 - Completed runs enter a short checkpoint validation/publication phase; Stop reports that phase instead of claiming an already completed checkpoint was cancelled.
 

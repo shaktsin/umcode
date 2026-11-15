@@ -24,7 +24,21 @@ MAX_WEIGHTS = 64 * 1024 * 1024
 MAX_HEADER = 1024 * 1024
 MAX_LINE = 12 * 1024 * 1024
 MAX_PARAMETERS = 16_000_000
-MAX_ELEMENTS = 8_000_000
+MIN_ELEMENTS = 8_000_000
+HARD_MAX_ELEMENTS = 128_000_000
+
+
+def element_limit():
+    """8M by default; the Go launcher raises it from free memory (never above 128M)."""
+    try:
+        value = int(os.environ.get("UMCODE_MAX_ELEMENTS", ""))
+    except ValueError:
+        return MIN_ELEMENTS
+    return MIN_ELEMENTS if value < MIN_ELEMENTS else min(value, HARD_MAX_ELEMENTS)
+
+
+MAX_ELEMENTS = element_limit()
+ELEMENTS_LABEL = f"{MAX_ELEMENTS // 1_000_000} million"
 MAX_WORK = 500_000_000
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_PIXELS = 4_000_000
@@ -69,7 +83,7 @@ def object_keys(value, allowed, name):
 
 def bounded_shape(shape):
     require(all(type(x) is int and x > 0 for x in shape), "Graph has an invalid tensor shape.")
-    require(math.prod(shape) <= MAX_ELEMENTS, "Graph exceeds the 8 million activation element limit.")
+    require(math.prod(shape) <= MAX_ELEMENTS, f"Graph exceeds the {ELEMENTS_LABEL} activation element limit.")
 
 
 def analyze(graph):
@@ -169,7 +183,7 @@ def analyze(graph):
             elif kind in ("attention", "transformer"):
                 require(len(previous) == 2 and width % c["heads"] == 0, "Attention needs a sequence with width divisible by heads.")
                 sequence = previous[0]
-                require(sequence * sequence * c["heads"] <= MAX_ELEMENTS, "Attention exceeds the 8 million score element limit.")
+                require(sequence * sequence * c["heads"] <= MAX_ELEMENTS, f"Attention exceeds the {ELEMENTS_LABEL} score element limit.")
                 if kind == "transformer":
                     require(c["width"] == width, "Transformer width must match incoming features.")
                     parameters += c["repeat"] * ((4 + 2*c["expansion"])*width*width + (9+c["expansion"])*width)
