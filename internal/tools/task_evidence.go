@@ -8,6 +8,7 @@ func IsVerificationSource(tool Tool) bool {
 	}
 	return false
 }
+
 // IsAgentControlSource reports the engine-owned agent runtime tools, whose
 // succeeded calls are engine control actions rather than model claims.
 func IsAgentControlSource(tool Tool) bool {

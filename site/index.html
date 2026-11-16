@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>UMCode: a coding agent for Mac that survives rate limits</title>
-<meta name="description" content="A Mac coding agent for any LLM, hosted or local (Ollama, llama.cpp). Model pools switch to the next model when one hits a rate limit, agents work in isolated copies of your project, and a visual workbench builds small models. Free and open source.">
+<meta name="description" content="A Mac coding agent for hosted and local models. Model pools handle rate limits, agents work in isolated copies of your project, and the ML Workbench builds, imports and trains models locally. Free and open source.">
 <meta name="theme-color" content="#fbfbfa">
 <meta name="color-scheme" content="light">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <meta property="og:type" content="website">
 <meta property="og:title" content="UMCode: a coding agent for Mac that survives rate limits">
-<meta property="og:description" content="Works with hosted and local models. Model pools fail over on rate limits. Agents, a visual ML workbench and automatic context compaction. Free and open source.">
+<meta property="og:description" content="Hosted and local models, rate-limit failover, agents, and a local ML Workbench for building, importing and training models. Free and open source.">
 <meta property="og:url" content="https://umcode.dev/">
 <meta property="og:image" content="https://umcode.dev/og.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -138,7 +138,7 @@ footer .links { display: flex; flex-wrap: wrap; gap: 8px 22px; }
 <a class="skip" href="#what">Skip to content</a>
 
 <div class="announce">
-  <span class="tag">New</span><a href="https://github.com/shaktsin/umcode/releases">0.4.3 adds agents, the ML Workbench and automatic compaction. Release notes &rarr;</a>
+  <span class="tag">New</span><a href="https://github.com/shaktsin/umcode/releases">0.4.4 adds imported-model chat, MoE workflows and local LoRA training. Release notes &rarr;</a>
 </div>
 
 <header class="site-header">
@@ -175,7 +175,7 @@ footer .links { display: flex; flex-wrap: wrap; gap: 8px 22px; }
       <a href="#pools"><div class="t">Any model</div><div class="d">Hosted providers, or local through Ollama and llama.cpp.</div></a>
       <a href="#pools"><div class="t">Model pools</div><div class="d">Falls back to the next model on quota or rate limits.</div></a>
       <a href="#agents"><div class="t">Agents</div><div class="d">Several at once, in isolated copies. The lead merges.</div></a>
-      <a href="#workbench"><div class="t">ML Workbench</div><div class="d">Build, train and try small models locally.</div></a>
+      <a href="#workbench"><div class="t">ML Workbench</div><div class="d">Build and train small models, or import supported model folders.</div></a>
       <a href="#long"><div class="t">Long sessions</div><div class="d">Automatic compaction sized to each model's window.</div></a>
       <a href="https://github.com/shaktsin/umcode/blob/master/GO_ENGINE.md"><div class="t">Projects</div><div class="d">Chats and <code>UMCODE.md</code> instructions stay with the folder.</div></a>
       <a href="https://github.com/shaktsin/umcode#plugins"><div class="t">Plugins and skills</div><div class="d">Agent Plugins, plus Codex and Claude plugin folders.</div></a>
@@ -186,7 +186,7 @@ footer .links { display: flex; flex-wrap: wrap; gap: 8px 22px; }
   <section class="section wrap" id="workbench">
     <div class="reveal">
       <h2 class="h2">ML Workbench</h2>
-      <p class="line">Build, train and try small models locally.</p>
+      <p class="line">Build and train small models, or import supported weights to inspect and run locally.</p>
     </div>
     <figure class="shot reveal" style="margin-top: 40px">
       <img src="img/workbench-builder.webp" width="1440" height="900" loading="lazy" decoding="async" alt="The Workbench builder showing a text model as connected layers with shapes and parameter counts.">
@@ -206,7 +206,7 @@ footer .links { display: flex; flex-wrap: wrap; gap: 8px 22px; }
       <img src="img/workbench-data.webp" width="1280" height="720" loading="lazy" decoding="async" alt="The Data tab with a drop zone for CSV, TSV, JSONL or text files, and tabs for Examples, Local files and Hugging Face.">
       <figcaption class="cap">Data from local files or Hugging Face.</figcaption>
     </figure>
-    <p class="cap reveal" style="margin-top: 28px">Training runs on CPU and needs the PyTorch runtime installed separately. Image training is not included yet. <a href="https://github.com/shaktsin/umcode/blob/master/docs/ml-workbench/README.md">Workbench guide</a></p>
+    <p class="cap reveal" style="margin-top: 28px">Imported text models with a native chat template can be tested in Inference and promoted to Chat. Supported imported causal models can be fine-tuned locally with LoRA. Execution runs on CPU and needs the PyTorch runtime installed separately; large MoE models may be inspection-only. Image training is not included yet. <a href="https://github.com/shaktsin/umcode/blob/master/docs/workbench-moe-and-chat.md">Imported model guide</a> · <a href="https://github.com/shaktsin/umcode/blob/master/docs/ml-workbench/README.md">Workbench guide</a></p>
   </section>
 
   <section class="section wrap" id="agents">
