@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UMCode Train plan</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.mono{font-family:'SF Mono',ui-monospace,Menlo,monospace}
+.chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;background:#fff;border:1px solid #d9dee7;font-size:12px;color:#344157}
+.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c}
+.sub{font-size:12px;color:#5b687c}
+.btn{height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px}
+.card{background:#fff;border:1px solid #d9dee7;border-radius:10px}
+.fld{display:flex;align-items:center;justify-content:space-between;height:30px;font-size:12px;color:#344157}
+.fld span.v{box-sizing:border-box;width:140px;height:26px;border:1px solid #d9dee7;background:#fff;border-radius:6px;display:flex;align-items:center;padding:0 8px;font:400 12px/16px 'SF Mono',ui-monospace,Menlo,monospace;color:#172033}
+.th,.tr{display:grid;grid-template-columns:2.3fr 1.2fr 1fr .9fr .9fr;align-items:center;padding:0 14px;font-size:12px;line-height:16px;gap:8px}
+.th{height:32px;background:#eef1f5;border-radius:10px 10px 0 0}
+.tr{min-height:58px;border-top:1px solid #e3e7ed}
+.ok{color:#2f7a5c;font-weight:600}
+.leg{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#344157}
+.leg i{width:10px;height:10px;border-radius:2px;display:block}
+.h2{margin:14px 0 4px}
+.seg{display:flex;background:#eef1f5;border-radius:8px;padding:2px;gap:2px}
+.seg span{flex:1;text-align:center;height:26px;line-height:26px;font-size:12px;color:#344157;border-radius:6px}
+.seg span.on{background:#fff;font-weight:600;color:#172033;box-shadow:0 1px 2px rgba(23,32,51,.12)}
+</style>
+</helmet>
+<div style="width:1440px;height:900px;display:flex;background:#f7f8fa;color:#172033;font:13px/20px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',system-ui,sans-serif;overflow:hidden;border-radius:12px;border:1px solid #c6ccd6;box-sizing:border-box">
+
+<aside style="width:64px;flex:none;background:#eef1f5;border-right:1px solid #d9dee7;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px">
+<div style="width:32px;height:32px;border-radius:8px;background:#3569d4;color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;margin-bottom:12px">UM</div>
+<button aria-label="Chat" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg></button>
+<button aria-label="Build" aria-current="page" style="width:40px;height:40px;border:0;border-radius:8px;background:#dfe9ff;color:#2454b5;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+<button aria-label="Approvals" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/></svg></button>
+<button aria-label="Plugins" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+<button aria-label="Periodic" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
+</aside>
+
+<section style="width:340px;flex:none;display:flex;flex-direction:column;border-right:1px solid #d9dee7">
+<header style="height:44px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #d9dee7"><strong>umcode-ml</strong><span class="sub">· support 7B</span></header>
+<div style="flex:1;min-height:0;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="align-self:flex-end;max-width:270px;background:#dfe9ff;border-radius:12px 12px 4px 12px;padding:8px 12px">What do I need to finetune this 7B model on v3?</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div>With full finetuning, optimizer and weights need about 112 GB. That doesn't fit one GPU, so I'd shard it across several with FSDP.</div>
+<div>Your 4× A100 box fits it but takes about 2 days. <strong>cluster-h100 with 8 GPUs</strong> finishes in about 7 hours for roughly $129. If you only have one A100, LoRA fits and takes about 5 days.</div>
+<div class="sub">These are estimates. I'll correct them from the real speed after the first 50 steps.</div>
+</div>
+</div>
+<div style="padding:12px 16px 16px"><div style="border:1px solid #c6ccd6;background:#fff;border-radius:16px;padding:10px 12px"><span class="sub" style="font-size:13px">Ask for a cheaper or faster plan…</span></div></div>
+</section>
+
+<section style="flex:1;min-width:0;display:flex;flex-direction:column">
+<header style="height:44px;box-sizing:border-box;padding:0 12px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #d9dee7">
+<div role="tablist" style="display:flex;background:#eef1f5;border-radius:8px;padding:2px;gap:2px">
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Data</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Build</button>
+<button role="tab" aria-selected="true" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:#fff;color:#172033;font-size:13px;font-weight:600;box-shadow:0 1px 2px rgba(23,32,51,.12)">Train</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Inference</button>
+</div>
+<span class="mono" style="font-size:12px;color:#344157">support_7b.model</span>
+<span style="display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;background:#dfe9ff;color:#2454b5;font-size:11px;font-weight:600">Text generation</span>
+<span class="sub">Plan a run</span>
+</header>
+
+<div style="flex:1;min-height:0;display:flex">
+<aside style="width:272px;flex:none;border-right:1px solid #d9dee7;padding:6px 14px;overflow:hidden">
+<div class="h h2">Model</div>
+<div class="fld">Parameters<span class="v">7.0B</span></div>
+<div class="h h2">Method</div>
+<div class="seg"><span class="on">Full</span><span>LoRA</span><span>QLoRA</span></div>
+<div class="fld" style="margin-top:6px">Precision<span class="v">bf16</span></div>
+<div class="fld">Sharding<span class="v">FSDP · auto</span></div>
+<div class="h h2">Data</div>
+<div class="fld">Dataset<span class="v">tickets v3</span></div>
+<div class="fld">Tokens<span class="v">2.0B</span></div>
+<div class="fld">Epochs<span class="v">1</span></div>
+<div class="fld">Sequence length<span class="v">2,048</span></div>
+<div class="fld">Global batch<span class="v">256 seq</span></div>
+<div class="h h2">Limits</div>
+<div class="fld">Budget cap<span class="v">$200</span></div>
+<div class="fld">Stop if slower than<span class="v">60 h</span></div>
+</aside>
+
+<div style="flex:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:12px;overflow:hidden">
+<div class="card" style="overflow:hidden">
+<div class="th"><span class="h">Where to run</span><span class="h">Method</span><span class="h">Memory / GPU</span><span class="h">Time</span><span class="h">Cost</span></div>
+<div class="tr"><span><strong>lab-a100</strong> · 4× A100 80GB · SSH<br><span class="sub">Copy 4 GB over SSH, then train</span></span><span>Full · FSDP</span><span class="ok">38 GB ✓</span><span class="mono">≈ 47 h</span><span class="mono">own box</span></div>
+<div class="tr" style="background:#dfe9ff;border-top:1px solid #b9cdf8"><span><strong>cluster-h100</strong> · 8× H100 80GB · Slurm <span style="font-size:11px;font-weight:600;color:#2454b5;margin-left:4px">Recommended</span><br><span class="sub">us-west-2, same region as data · queue wait ~12 min</span></span><span>Full · FSDP</span><span class="ok">24 GB ✓</span><span class="mono" style="font-weight:600">≈ 7.3 h</span><span class="mono" style="font-weight:600">≈ $129</span></div>
+<div class="tr"><span><strong>lab-a100</strong> · 1× A100 80GB · SSH<br><span class="sub">Only one free GPU, so LoRA</span></span><span>LoRA</span><span class="ok">24 GB ✓</span><span class="mono">≈ 5.1 d</span><span class="mono">own box</span></div>
+<div class="tr" style="grid-template-columns:1fr;min-height:36px;background:#f7f8fa;border-radius:0 0 10px 10px"><span class="sub"><span style="color:#2454b5;font-weight:600">+ Add compute</span> · SSH machine, Slurm cluster, Kubernetes, on-demand cloud with a budget cap · Data in S3 us-west-2, datasets/v3 · 4.0 GB, same region as cluster-h100</span></div>
+</div>
+
+<div class="card" style="padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:center"><strong>Memory per GPU</strong><span class="sub" style="margin-left:8px">cluster-h100 · 8× H100 · 24 GB of 80 GB</span></div>
+<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:#e3e7ed">
+<div style="width:2.2%;background:#3569d4"></div><div style="width:2.2%;background:#6b4fbb"></div><div style="width:13.1%;background:#9a681e"></div><div style="width:12.5%;background:#2f7a5c"></div>
+</div>
+<div style="display:flex;gap:16px;flex-wrap:wrap">
+<span class="leg"><i style="background:#3569d4"></i>Weights 1.8 GB</span>
+<span class="leg"><i style="background:#6b4fbb"></i>Gradients 1.8 GB</span>
+<span class="leg"><i style="background:#9a681e"></i>Optimizer and master weights 10.5 GB</span>
+<span class="leg"><i style="background:#2f7a5c"></i>Activations ≈ 10 GB</span>
+<span class="leg" style="margin-left:auto;color:#5b687c">Headroom 56 GB</span>
+</div>
+</div>
+
+<div style="display:flex;gap:12px;flex:1;min-height:0">
+<div class="card" style="flex:1;min-width:0;padding:12px 14px;display:flex;flex-direction:column;gap:6px">
+<strong>How the estimate works</strong>
+<div class="sub" style="line-height:18px">Memory: about 16 bytes per parameter for full finetuning, split across GPUs by FSDP. LoRA trains small adapters on frozen weights, so it needs far less.</div>
+<div class="sub" style="line-height:18px">Time: about 6 × parameters × tokens of compute, at about 40% of GPU peak speed. Cost: GPUs × hours × the rate set on the connector ($2.20 per GPU-hour here).</div>
+</div>
+<div class="card" style="width:318px;flex:none;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+<span class="h">Launch</span>
+<div style="font-size:13px;line-height:20px"><strong>8× H100</strong> on cluster-h100<br><span class="sub">≈ 7.3 h · ≈ $129 · stops at $200</span></div>
+<div class="sub">Checkpoints every 500 steps to S3. If a node fails, the run resumes from the last checkpoint.</div>
+<div style="display:flex;gap:8px;margin-top:auto"><button style="flex:1;height:34px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:13px;font-weight:600">Launch run</button><button class="btn" style="height:34px">Dry run</button></div>
+</div>
+</div>
+</div>
+
+
+</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

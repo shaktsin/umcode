@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Data and connectors</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.mono{font-family:'SF Mono',ui-monospace,Menlo,monospace}
+.card{background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:6px}
+.sub{font-size:12px;color:#5b687c}
+.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c}
+.ok{color:#2f7a5c;font-weight:600}
+.bar{height:6px;border-radius:3px;background:#e3e7ed;overflow:hidden}
+.bar>div{height:100%;border-radius:3px;background:#3569d4}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:10px;font-size:11px;font-weight:600}
+.in{box-sizing:border-box;height:30px;border:1px solid #d9dee7;background:#fff;border-radius:6px;display:flex;align-items:center;padding:0 10px;font-size:12px;color:#172033}
+.lab{font-size:11px;color:#5b687c;margin-bottom:2px}
+</style>
+</helmet>
+<div style="width:1100px;height:760px;display:flex;flex-direction:column;background:#f7f8fa;color:#172033;font:13px/20px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',system-ui,sans-serif;overflow:hidden;border-radius:12px;border:1px solid #c6ccd6;box-sizing:border-box">
+<header style="height:52px;flex:none;box-sizing:border-box;padding:0 20px;display:flex;align-items:center;border-bottom:1px solid #d9dee7"><strong style="font-size:15px">Data sources &amp; compute</strong><span class="sub" style="margin-left:10px">Used by Build, Train and Inference</span></header>
+<div style="flex:1;min-height:0;display:flex">
+
+<!-- DATA -->
+<section style="flex:1;min-width:0;padding:16px 20px;display:flex;flex-direction:column;gap:10px;border-right:1px solid #d9dee7">
+<div style="display:flex;align-items:center"><span class="h">Data sources</span><button style="margin-left:auto;height:28px;padding:0 12px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:12px;font-weight:600">Add source</button></div>
+
+<div class="card" style="border-color:#3569d4;box-shadow:0 0 0 3px #dfe9ff">
+<div style="display:flex;align-items:center;gap:8px"><strong>support-tickets</strong><span class="tag" style="background:#dcefe7;color:#2f7a5c">Indexed</span><span class="sub" style="margin-left:auto">Local folder</span></div>
+<div class="sub mono">~/data/tickets · 48,210 docs · 31.8M tokens</div>
+<div class="sub">Chunk 512 tokens · GPT-2 tokenizer · updated 2 hours ago</div>
+<div style="display:flex;gap:6px;margin-top:2px"><span class="tag" style="background:#dfe9ff;color:#2454b5">Used by Run #7</span><span class="tag" style="background:#eef1f5;color:#344157">Re-index</span><span class="tag" style="background:#eef1f5;color:#344157">Preview rows</span></div>
+</div>
+
+<div class="card">
+<div style="display:flex;align-items:center;gap:8px"><strong>wiki-export</strong><span class="tag" style="background:#f3e6c8;color:#6e4a10">Indexing 63%</span><span class="sub" style="margin-left:auto">Git repo</span></div>
+<div class="sub mono">github.com/acme/wiki · 6,902 files</div>
+<div class="bar"><div style="width:63%"></div></div>
+</div>
+
+<div class="card">
+<div style="display:flex;align-items:center;gap:8px"><strong>prod-events</strong><span class="tag" style="background:#dcefe7;color:#2f7a5c">Indexed</span><span class="sub" style="margin-left:auto">Postgres · read-only</span></div>
+<div class="sub mono">events_2026 · 1.2M rows · 9 columns</div>
+</div>
+
+<div style="border:1px dashed #c6ccd6;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px">
+<span class="sub">Add from</span>
+<div style="display:flex;flex-wrap:wrap;gap:6px"><span class="tag" style="background:#eef1f5;color:#344157;height:26px">Folder</span><span class="tag" style="background:#eef1f5;color:#344157;height:26px">Git repo</span><span class="tag" style="background:#eef1f5;color:#344157;height:26px">S3 / GCS</span><span class="tag" style="background:#eef1f5;color:#344157;height:26px">Hugging Face</span><span class="tag" style="background:#eef1f5;color:#344157;height:26px">Postgres</span><span class="tag" style="background:#eef1f5;color:#344157;height:26px">URL</span></div>
+</div>
+</section>
+
+<!-- COMPUTE -->
+<section style="width:470px;flex:none;padding:16px 20px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;align-items:center"><span class="h">Compute</span></div>
+
+<div class="card">
+<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#2f7a5c"></span><strong>This Mac</strong><span class="sub" style="margin-left:auto">Local</span></div>
+<div class="sub">Apple M-series · MPS · 36 GB unified memory · good for small models and tests</div>
+</div>
+
+<div class="card" style="border-color:#3569d4;box-shadow:0 0 0 3px #dfe9ff">
+<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#2f7a5c"></span><strong>lab-a100</strong><span class="ok" style="margin-left:auto;font-size:12px">Connected</span></div>
+<div class="sub mono">ssh gpu.lab.internal · 4× A100 80GB · CUDA 12.4</div>
+<div class="sub">3 GPUs free · 1 in use by another user</div>
+</div>
+
+<div class="card">
+<div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:#bd4b51"></span><strong>cloud-h100</strong><span class="sub" style="margin-left:auto;color:#bd4b51">Unreachable</span></div>
+<div class="sub mono">ssh 34.82.14.9 · last seen 3 days ago</div>
+</div>
+
+<div class="h" style="margin-top:6px">Add a GPU machine</div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+<div><div class="lab">Name</div><div class="in">lab-h100</div></div>
+<div><div class="lab">Host</div><div class="in mono">gpu2.lab.internal</div></div>
+<div><div class="lab">User</div><div class="in mono">shakti</div></div>
+<div><div class="lab">SSH key</div><div class="in">Keychain · id_ed25519</div></div>
+</div>
+<div class="card" style="background:#eef1f5;border-color:#d9dee7;gap:4px">
+<div class="ok" style="font-size:12px">✓ Reachable · 82 ms</div>
+<div class="ok" style="font-size:12px">✓ CUDA 12.4 · torch 2.5.1 found</div>
+<div class="ok" style="font-size:12px">✓ 2× H100 80GB · both free</div>
+<div class="sub">UMCode runner will be installed in ~/.umcode on that machine. Nothing else is changed.</div>
+</div>
+<div style="display:flex;gap:8px;justify-content:flex-end"><button style="height:30px;padding:0 14px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px">Test again</button><button style="height:30px;padding:0 14px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:12px;font-weight:600">Save machine</button></div>
+</section>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1100,"height":760}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

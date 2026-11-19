@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UMCode Data preparation</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.mono{font-family:'SF Mono',ui-monospace,Menlo,monospace}
+.chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:8px;background:#fff;border:1px solid #d9dee7;font-size:12px;color:#344157}
+.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#5b687c}
+.sub{font-size:12px;color:#5b687c}
+.btn{height:28px;padding:0 12px;border-radius:8px;border:1px solid #c6ccd6;background:#fff;color:#172033;font-size:12px}
+.card{background:#fff;border:1px solid #d9dee7;border-radius:10px}
+.step{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:8px 10px;min-height:48px;box-sizing:border-box}
+.step .n{width:20px;height:20px;border-radius:50%;background:#eef1f5;color:#344157;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;flex:none}
+.step b{display:block;font-size:13px;line-height:18px}
+.step span.p{display:block;font:400 11px/15px 'SF Mono',ui-monospace,Menlo,monospace;color:#5b687c}
+.step .d{margin-left:auto;font:600 12px/16px 'SF Mono',ui-monospace,Menlo,monospace;color:#bd4b51;white-space:nowrap}
+.link{width:2px;height:8px;background:#c6ccd6;margin:0 auto 0 19px}
+.tile{flex:1;min-width:0;background:#fff;border:1px solid #d9dee7;border-radius:10px;padding:10px 12px}
+.tile small{display:block;font-size:11px;color:#5b687c}
+.tile b{font-size:16px;line-height:26px;font-weight:600;white-space:nowrap}
+.tile i{font-style:normal;font-size:11px;color:#5b687c;margin-left:6px}
+.bar{height:8px;border-radius:4px;background:#e3e7ed;overflow:hidden}
+.bar>div{height:100%;border-radius:4px;background:#3569d4}
+.txt{font-size:12px;line-height:18px;color:#344157;white-space:pre-wrap}
+</style>
+</helmet>
+<div style="width:1440px;height:900px;display:flex;background:#f7f8fa;color:#172033;font:13px/20px -apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',system-ui,sans-serif;overflow:hidden;border-radius:12px;border:1px solid #c6ccd6;box-sizing:border-box">
+
+<aside style="width:64px;flex:none;background:#eef1f5;border-right:1px solid #d9dee7;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px">
+<div style="width:32px;height:32px;border-radius:8px;background:#3569d4;color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;margin-bottom:12px">UM</div>
+<button aria-label="Chat" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z"/></svg></button>
+<button aria-label="Build" aria-current="page" style="width:40px;height:40px;border:0;border-radius:8px;background:#dfe9ff;color:#2454b5;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+<button aria-label="Approvals" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/></svg></button>
+<button aria-label="Plugins" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+<button aria-label="Periodic" style="width:40px;height:40px;border:0;border-radius:8px;background:transparent;color:#344157;display:flex;align-items:center;justify-content:center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></button>
+</aside>
+
+<section style="width:340px;flex:none;display:flex;flex-direction:column;border-right:1px solid #d9dee7">
+<header style="height:44px;box-sizing:border-box;padding:0 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #d9dee7"><strong>umcode-ml</strong><span class="sub">· GPT-2 finetune</span></header>
+<div style="flex:1;min-height:0;padding:16px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+<div style="align-self:flex-end;max-width:270px;background:#dfe9ff;border-radius:12px 12px 4px 12px;padding:8px 12px">Why is the loss so high on API errors?</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div>API errors are only <strong>8%</strong> of your tickets, the smallest category, so the model sees them rarely. Duplicates and very short tickets also add noise.</div>
+<div>I added a suggested step: <strong>oversample API errors ×2</strong>. The preview shows the category mix after it. I haven't changed the saved dataset.</div>
+<div style="display:flex;gap:8px"><button style="height:28px;padding:0 12px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:12px;font-weight:600">Accept step</button><button class="btn">Dismiss</button></div>
+</div>
+</div>
+<div style="padding:12px 16px 16px"><div style="border:1px solid #c6ccd6;background:#fff;border-radius:16px;padding:10px 12px;display:flex;flex-direction:column;gap:8px"><span class="chip" style="align-self:flex-start;height:24px;background:#dfe9ff;border-color:#b9cdf8;color:#2454b5">Context · Dataset v3 draft</span><span class="sub" style="font-size:13px">Ask about the data or add a step…</span></div></div>
+</section>
+
+<section style="flex:1;min-width:0;display:flex;flex-direction:column">
+<header style="height:44px;box-sizing:border-box;padding:0 12px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #d9dee7">
+<div role="tablist" style="display:flex;background:#eef1f5;border-radius:8px;padding:2px;gap:2px">
+<button role="tab" aria-selected="true" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:#fff;color:#172033;font-size:13px;font-weight:600;box-shadow:0 1px 2px rgba(23,32,51,.12)">Data</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Build</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Train</button>
+<button role="tab" aria-selected="false" style="height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:#344157;font-size:13px">Inference</button>
+</div>
+<span class="mono" style="font-size:12px;color:#344157">gpt2_support.model</span>
+<span style="display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;background:#dfe9ff;color:#2454b5;font-size:11px;font-weight:600">Text generation</span>
+</header>
+
+<div style="flex:none;padding:10px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #d9dee7;background:#eef1f5">
+<span class="chip">Source · support-tickets <span style="color:#5b687c">▾</span></span>
+<span class="chip">Dataset · v3 draft <span style="color:#5b687c">▾</span></span>
+<span class="sub">Previewing 2,000 sampled rows · v2 used by Run #7</span>
+<button class="btn" style="margin-left:auto">Compare with v2</button>
+<button style="height:30px;padding:0 14px;border-radius:8px;border:0;background:#2454b5;color:#fff;font-size:12px;font-weight:600">Apply to all and save v3</button>
+</div>
+
+<div style="flex:1;min-height:0;display:flex">
+<!-- pipeline -->
+<aside style="width:304px;flex:none;border-right:1px solid #d9dee7;padding:14px;overflow:hidden">
+<div style="display:flex;align-items:center;margin-bottom:8px"><span class="h">Pipeline</span><span style="margin-left:auto;font-size:12px;color:#2454b5;font-weight:600">+ Add step ▾</span></div>
+<div class="step" style="background:#eef1f5"><span class="n">✓</span><span><b>Source</b><span class="p">support-tickets · 48,210 docs</span></span></div>
+<div class="link"></div>
+<div class="step"><span class="n">1</span><span><b>Filter by length</b><span class="p">20 – 1,024 tokens</span></span><span class="d">−2,140</span></div>
+<div class="link"></div>
+<div class="step"><span class="n">2</span><span><b>Remove near-duplicates</b><span class="p">similarity ≥ 0.92</span></span><span class="d">−1,305</span></div>
+<div class="link"></div>
+<div class="step"><span class="n">3</span><span><b>Redact PII</b><span class="p">email, phone, name</span></span><span class="d" style="color:#9a681e">4,812 edited</span></div>
+<div class="link"></div>
+<div class="step"><span class="n">4</span><span><b>Format as text</b><span class="p">Customer: {body} Agent: {reply}</span></span></div>
+<div class="link"></div>
+<div class="step"><span class="n">5</span><span><b>Split</b><span class="p">95 / 5 · by category · by customer</span></span></div>
+<div class="link"></div>
+<div class="step" style="border:1px dashed #3569d4;background:#dfe9ff"><span class="n" style="background:#fff;color:#2454b5">+</span><span><b>Oversample API errors</b><span class="p">×2 · suggested by chat</span></span><span class="d" style="color:#2f7a5c">+3,420</span></div>
+<div class="link"></div>
+<div class="step"><span class="n">6</span><span><b>Tokenize and pack</b><span class="p">gpt2 · 512 tokens</span></span></div>
+<div class="link"></div>
+<div class="step" style="background:#dcefe7;border-color:#b6d9c8"><span class="n" style="background:#fff;color:#2f7a5c">→</span><span><b>Dataset v3</b><span class="p">45,947 train · 2,238 held-out</span></span></div>
+</aside>
+
+<!-- insights -->
+<div style="flex:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:12px;overflow:hidden">
+<div style="display:flex;gap:10px">
+<div class="tile"><small>Documents</small><b>48,210 → 44,765</b></div>
+<div class="tile"><small>Tokens</small><b>31.8M → 29.6M</b></div>
+<div class="tile"><small>Duplicates</small><b>2.7% → 0.0%</b></div>
+<div class="tile"><small>PII found</small><b>9.9% → 0.0%</b></div>
+</div>
+
+<div style="display:flex;gap:12px">
+<div class="card" style="flex:1.5;min-width:0;padding:12px 14px">
+<div style="display:flex;align-items:center;margin-bottom:4px"><strong>Length in tokens</strong><span class="sub" style="margin-left:auto">grey bars are removed by step 1</span></div>
+<svg role="img" aria-label="Histogram of ticket lengths. Bars at the very short and very long ends are greyed out as removed." viewBox="0 0 528 140" width="100%" height="140" preserveAspectRatio="none" style="display:block">
+<g fill="#3569d4">
+<rect x="44" y="76" width="18" height="54" rx="2"/><rect x="66" y="48" width="18" height="82" rx="2"/><rect x="88" y="30" width="18" height="100" rx="2"/><rect x="110" y="18" width="18" height="112" rx="2"/><rect x="132" y="26" width="18" height="104" rx="2"/><rect x="154" y="40" width="18" height="90" rx="2"/><rect x="176" y="56" width="18" height="74" rx="2"/><rect x="198" y="70" width="18" height="60" rx="2"/><rect x="220" y="82" width="18" height="48" rx="2"/><rect x="242" y="92" width="18" height="38" rx="2"/><rect x="264" y="100" width="18" height="30" rx="2"/><rect x="286" y="106" width="18" height="24" rx="2"/><rect x="308" y="112" width="18" height="18" rx="2"/><rect x="330" y="116" width="18" height="14" rx="2"/><rect x="352" y="119" width="18" height="11" rx="2"/><rect x="374" y="122" width="18" height="8" rx="2"/><rect x="396" y="124" width="18" height="6" rx="2"/><rect x="418" y="125" width="18" height="5" rx="2"/><rect x="440" y="126" width="18" height="4" rx="2"/><rect x="462" y="127" width="18" height="3" rx="2"/>
+</g>
+<g fill="#c6ccd6"><rect x="0" y="108" width="18" height="22" rx="2"/><rect x="22" y="90" width="18" height="40" rx="2"/><rect x="484" y="127" width="18" height="3" rx="2"/><rect x="506" y="128" width="18" height="2" rx="2"/></g>
+<line x1="0" y1="130.5" x2="528" y2="130.5" stroke="#929caf"/>
+</svg>
+<div style="display:flex;justify-content:space-between;font:400 10px/14px 'SF Mono',ui-monospace,Menlo,monospace;color:#5b687c"><span>0</span><span>256</span><span>512</span><span>768</span><span>1,024+</span></div>
+</div>
+<div class="card" style="flex:1;min-width:0;padding:12px 14px;display:flex;flex-direction:column;gap:7px">
+<div style="display:flex;align-items:center"><strong>Ticket category</strong><span class="sub" style="margin-left:auto">after step 6</span></div>
+<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px"><span>Billing</span><span class="mono">30%</span></div><div class="bar"><div style="width:30%"></div></div></div>
+<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px"><span>Login</span><span class="mono">21%</span></div><div class="bar"><div style="width:21%"></div></div></div>
+<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px"><span>Shipping</span><span class="mono">18%</span></div><div class="bar"><div style="width:18%"></div></div></div>
+<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px"><span style="color:#2454b5;font-weight:600">API errors <span style="font-weight:400" class="sub">was 8%</span></span><span class="mono" style="color:#2454b5;font-weight:600">15%</span></div><div class="bar"><div style="width:15%;background:#2454b5"></div></div></div>
+<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px"><span>Other</span><span class="mono">16%</span></div><div class="bar"><div style="width:16%"></div></div></div>
+</div>
+</div>
+
+<div class="card" style="flex:1;min-height:0;padding:12px 14px;display:flex;flex-direction:column;gap:8px;overflow:hidden">
+<div style="display:flex;align-items:center"><strong>Row preview</strong><span class="sub" style="margin-left:8px">ticket 18,442 · Billing</span><span style="margin-left:auto;font-size:12px;color:#2454b5;font-weight:600">◀ Previous · Next ▶</span></div>
+<div style="display:flex;gap:12px;flex:1;min-height:0">
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><span class="h">Before</span><div class="txt" style="background:#f7f8fa;border:1px solid #e3e7ed;border-radius:8px;padding:10px 12px;flex:1">From: maria.lopez@acme.com
+&lt;p&gt;Hi, I was charged twice on 4/12.&lt;br&gt;Call me on 415-555-0142.&lt;/p&gt;
+Reply: Hi Maria, I see both payments. I've refunded the duplicate.</div></div>
+<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><span class="h">After step 1–4</span><div class="txt" style="background:#fff;border:1px solid #b6d9c8;border-radius:8px;padding:10px 12px;flex:1">Customer: Hi, I was charged twice on 4/12. Call me on <span style="background:#f3e6c8;border-radius:3px;padding:0 3px">[PHONE]</span>.
+Agent: Hi <span style="background:#f3e6c8;border-radius:3px;padding:0 3px">[NAME]</span>, I see both payments. I've refunded the duplicate.</div></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
