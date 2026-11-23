@@ -79,7 +79,7 @@
   {/if}
 
   {#if data.stage}<div class="feedback loading" role="status"><RefreshCw size={13} class="spinner" />{data.stage}</div>{/if}
-  {#if data.error}<div class="feedback error" role="alert">{data.error}</div>{/if}
+  {#if data.error && !(dataset && config)}<div class="feedback error" role="alert">{data.error}</div>{/if}
   {#if data.notice}<div class="feedback" role="status">{data.notice}</div>{/if}
   <div class="imported-row"><label for="imported-dataset">Imported datasets</label><select id="imported-dataset" class="select" value={dataset?.id ?? ''} disabled={!connected || data.busy || !data.datasets.length} onchange={(event) => void data.selectDataset(event.currentTarget.value)}><option value="">Choose an imported dataset</option>{#each data.datasets as imported}<option value={imported.id}>{datasetOptionLabel(imported)}</option>{/each}</select><button class="icon-button" aria-label="Refresh imported datasets" disabled={!connected || data.busy} onclick={() => void data.load(dataset?.id)}><RefreshCw size={14} /></button></div>
 
@@ -114,7 +114,9 @@
         {#if mappingWarnings.length}<div class="validation" role="status"><strong>Review these fields</strong><ul>{#each mappingWarnings as warning}<li>{warning}</li>{/each}</ul></div>{/if}
         {#if data.validation.length}<div class="validation" role="status"><strong>Check preparation</strong><ul>{#each data.validation as issue}<li>{issue}</li>{/each}</ul></div>{/if}
         <div class="compatibility selectable" class:has-issues={compatibility.length > 0}><strong>{compatibility.length ? 'Review in Build' : imported ? 'Uses imported preprocessing' : 'Current graph dimensions match'}</strong>{#if compatibility.length}<ul>{#each compatibility as issue}<li>{issue}</li>{/each}</ul>{/if}<button class="btn-ghost btn-sm" onclick={onBuild}><ArrowLeft size={13} />Back to Build</button></div>
-        <button class="btn-primary save-preparation" disabled={!connected || data.busy || data.validation.length > 0 || (!imported && !data.dirty)} onclick={() => void data.prepare()}>{data.stage === 'Saving preparation…' ? 'Saving preparation…' : !imported && data.selection && !data.dirty ? 'Preparation saved' : 'Save preparation'}</button><p class="source-note">Saves data settings separately from the model graph. You can save while graph issues remain; resolve them in Build before starting training.</p>
+        <button class="btn-primary save-preparation" disabled={!connected || data.busy || data.validation.length > 0 || (!imported && !data.dirty)} onclick={() => void data.prepare()}>{data.stage === 'Saving preparation…' ? 'Saving preparation…' : data.selection && !data.dirty && !data.error ? 'Preparation saved' : 'Save preparation'}</button>
+        {#if data.error}<div class="feedback error" role="alert">{data.error}</div>{/if}
+        <p class="source-note">Saves data settings separately from the model graph. You can save while graph issues remain; resolve them in Build before starting training.</p>
       </aside>
     </div>
   {:else if !data.busy}<div class="empty-data"><Database size={23} strokeWidth={1.4} /><p>{data.source === 'local' ? 'No local dataset selected. Choose files to import and preview actual rows.' : 'Import a dataset above or choose one already imported into this model.'}</p></div>{/if}

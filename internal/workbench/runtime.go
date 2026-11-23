@@ -18,6 +18,9 @@ import (
 //go:embed pytorch/requirements.txt
 var pytorchRequirements string
 
+//go:embed pytorch/requirements-imported.txt
+var importedRequirements string
+
 const probeScript = `import importlib.util,importlib.metadata,json,sys
 missing=[]
 for module,dist,minimum,maximum in (("torch","torch",(2,6),3),("safetensors","safetensors",(0,6),1),("PIL","Pillow",(11,0),13),("numpy","numpy",(2,0),3)):
@@ -27,15 +30,24 @@ for module,dist,minimum,maximum in (("torch","torch",(2,6),3),("safetensors","sa
   pair=(int(version[0]),int(version[1]))
   if pair<minimum or pair[0]>=maximum: missing.append(dist)
  except Exception: missing.append(dist)
-print(json.dumps({"version":sys.version.split()[0],"missing":missing}))`
+extra=[]
+for requirement in sys.argv[1].splitlines():
+ if "==" in requirement:
+  name,version=requirement.split("==")
+  try:
+   if importlib.metadata.version(name)==version and importlib.util.find_spec(name): continue
+  except importlib.metadata.PackageNotFoundError: pass
+  extra.append(name)
+print(json.dumps({"importMissing":extra,"version":sys.version.split()[0],"missing":missing}))`
 
 type PythonCandidate struct {
-	Path    string   `json:"path"`
-	Version string   `json:"version,omitempty"`
-	Missing []string `json:"missing"`
-	Ready   bool     `json:"ready"`
-	Source  string   `json:"source"`
-	Error   string   `json:"error,omitempty"`
+	ImportMissing []string `json:"importMissing"`
+	Path          string   `json:"path"`
+	Version       string   `json:"version,omitempty"`
+	Missing       []string `json:"missing"`
+	Ready         bool     `json:"ready"`
+	Source        string   `json:"source"`
+	Error         string   `json:"error,omitempty"`
 }
 type RuntimeState struct {
 	Selected     string            `json:"selected"`
@@ -100,7 +112,7 @@ func probePython(ctx context.Context, path, source string) PythonCandidate {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "-I", "-c", probeScript)
+	cmd := exec.CommandContext(ctx, path, "-I", "-c", probeScript, importedRequirements)
 	cmd.Env = append(os.Environ(), "PYTHONNOUSERSITE=1")
 	output, err := cmd.Output()
 	if err != nil {
@@ -108,13 +120,15 @@ func probePython(ctx context.Context, path, source string) PythonCandidate {
 		return c
 	}
 	var result struct {
-		Version string   `json:"version"`
-		Missing []string `json:"missing"`
+		ImportMissing []string `json:"importMissing"`
+		Version       string   `json:"version"`
+		Missing       []string `json:"missing"`
 	}
 	if json.Unmarshal(output, &result) != nil || result.Version == "" {
 		c.Error = "This executable did not return Python environment details"
 		return c
 	}
+	c.ImportMissing = result.ImportMissing
 	c.Version = result.Version
 	c.Missing = result.Missing
 	c.Ready = len(c.Missing) == 0
@@ -237,7 +251,7 @@ func (s *RuntimeService) Select(ctx context.Context, path string) (RuntimeState,
 	}
 	return RuntimeState{Selected: path, Candidates: []PythonCandidate{candidate}, Ready: candidate.Ready, Missing: candidate.Missing, ManagedPath: s.managedPath()}, nil
 }
-func (s *RuntimeService) Install(ctx context.Context, base string) error {
+func (s *RuntimeService) Install(ctx context.Context, base string, imported bool) error {
 	if err := pythonFile(base); err != nil {
 		return err
 	}
@@ -256,7 +270,7 @@ func (s *RuntimeService) Install(ctx context.Context, base string) error {
 	go func() {
 		installCtx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
-		err := s.installManaged(installCtx, base)
+		err := s.installManaged(installCtx, base, imported)
 		s.mu.Lock()
 		s.installing = false
 		if err != nil {
@@ -266,7 +280,7 @@ func (s *RuntimeService) Install(ctx context.Context, base string) error {
 	}()
 	return nil
 }
-func (s *RuntimeService) installManaged(ctx context.Context, base string) error {
+func (s *RuntimeService) installManaged(ctx context.Context, base string, imported bool) error {
 	dir := filepath.Dir(filepath.Dir(s.managedPath()))
 	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
 		return err
@@ -282,7 +296,11 @@ func (s *RuntimeService) installManaged(ctx context.Context, base string) error 
 		return err
 	}
 	defer os.Remove(req.Name())
-	if _, err = req.WriteString(pytorchRequirements); err != nil {
+	requirements := pytorchRequirements
+	if imported {
+		requirements += "\n" + importedRequirements
+	}
+	if _, err = req.WriteString(requirements); err != nil {
 		req.Close()
 		return err
 	}
@@ -296,7 +314,10 @@ func (s *RuntimeService) installManaged(ctx context.Context, base string) error 
 		return fmt.Errorf("install PyTorch dependencies: %w", err)
 	}
 	checked := probePython(ctx, s.managedPath(), "UMCode managed")
-	if !checked.Ready {
+	if imported {
+		checked.Missing = append(checked.Missing, checked.ImportMissing...)
+	}
+	if !checked.Ready || len(checked.Missing) > 0 {
 		return fmt.Errorf("managed environment is incomplete: %s", strings.Join(checked.Missing, ", "))
 	}
 	b, err := json.Marshal(struct {

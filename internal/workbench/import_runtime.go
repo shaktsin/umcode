@@ -76,7 +76,21 @@ func (r *ImportedRuntime) CancelModel(projectRoot, modelID string) {
 }
 
 func NewImportedRuntime(home string) *ImportedRuntime {
-	return &ImportedRuntime{python: NewInferenceManager(home).python}
+	python := NewInferenceManager(home).python
+	if saved := NewRuntimeService(home).saved(); saved != "" {
+		python = saved
+	}
+	return &ImportedRuntime{python: python}
+}
+func (r *ImportedRuntime) SetPython(path string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.python = path
+}
+func (r *ImportedRuntime) pythonPath() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.python
 }
 func (r *ImportedRuntime) Close() {
 	r.mu.Lock()
@@ -160,7 +174,7 @@ func (r *ImportedRuntime) Status(b BundleTarget) (ImportRuntimeState, error) {
 	if err != nil {
 		return ImportRuntimeState{Task: task, Reason: err.Error()}, nil
 	}
-	if r.python == "" {
+	if r.pythonPath() == "" {
 		return ImportRuntimeState{Task: task, Reason: "The local Python runtime is not installed."}, nil
 	}
 	root, err := b.model()
@@ -175,7 +189,7 @@ func (r *ImportedRuntime) Status(b BundleTarget) (ImportRuntimeState, error) {
 	return receipt.State, nil
 }
 func (r *ImportedRuntime) run(ctx context.Context, request map[string]any, progress func(map[string]any)) (map[string]any, error) {
-	if r.python == "" {
+	if r.pythonPath() == "" {
 		return nil, errors.New("The local Python runtime is not installed.")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -184,7 +198,7 @@ func (r *ImportedRuntime) run(ctx context.Context, request map[string]any, progr
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, r.python, "-I", "-u", "-c", importedRunner)
+	cmd := exec.CommandContext(ctx, r.pythonPath(), "-I", "-u", "-c", importedRunner)
 	cmd.Env = append(os.Environ(), "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1", "HF_DATASETS_OFFLINE=1", "TOKENIZERS_PARALLELISM=false")
 	cmd.Stdin = bytes.NewReader(input)
 	stdout, err := cmd.StdoutPipe()

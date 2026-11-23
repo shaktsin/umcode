@@ -7,6 +7,15 @@
  import type {DataState} from '$lib/workbench/dataTypes';
  import {modelAssets,importAvailability,uploadModelBundle,readRuntimeSnapshot,type RuntimeStatus,type ImportJob} from '$lib/workbench/importRuntime';
  import {parseImportedGraph} from '$lib/workbench/modelImport';
+ import RuntimeSetupDialog, {type RuntimeState} from './RuntimeSetupDialog.svelte';
+ let setupOpen=$state(false), missing=$state<string[]>([]);
+ let runtimeReady = $state(false);
+ function updateRuntime(state: RuntimeState) {
+  const selected = state.candidates.find(candidate => candidate.path === state.selected);
+  missing = [...(selected?.missing ?? []), ...(selected?.importMissing ?? [])];
+  runtimeReady = state.ready && !!selected?.ready && Array.isArray(selected.importMissing) && missing.length === 0;
+ }
+ $effect(()=>{const project=projectId;let active=true;missing=[];runtimeReady=false;if(connected&&tab==='Build')app.call('workbench/runtime/get',{projectId:project}).then(s=>{if(active)updateRuntime(s as RuntimeState);}).catch(e=>{if(active)error=(e as Error).message;});return ()=>{active=false;};});
  import DataTab from './DataTab.svelte';
  import type {WorkbenchTask} from '$lib/workbench/types';
  let {projectId,modelId,modelCreatedAt,tab,graphText,task,connected,dirty,onBuild,onData,onInference}:{
@@ -70,6 +79,7 @@
  const canPromote=$derived(!blocked&&!busy&&!running&&!!testId&&chatCompatible===true&&testedScope===promptScope());
  const metrics=$derived.by(()=>{const m=job?.result?.metrics;if(!m||typeof m!=='object')return [];return Object.entries(m).filter(([,v])=>v&&typeof v==='object').map(([split,v])=>({split,values:Object.entries(v as Record<string,unknown>).filter(([,n])=>typeof n==='number')}));});
 </script>
+{#if setupOpen}<RuntimeSetupDialog {projectId} imported onUpdated={updateRuntime} onClose={()=>{setupOpen=false;void refresh();}} />{/if}
 <section class="runtime-tab" class:is-build={tab==='Build'} aria-label={'Imported model '+tab}>
  {#if tab!=='Build'}
  <header><div><h2>{tab} · Imported {imageModel?'vision':'text'} model</h2><p>Runs on your Mac · Built-in Transformers runtime · Source files stay unchanged</p></div><button class="btn-outline btn-sm" disabled={!connected||!!busy} onclick={()=>void refresh()}>Refresh</button></header>
@@ -78,7 +88,8 @@
   <section class="model-files" aria-label="Model files">
    <div><h3>Model files</h3><p>{!connected?'Connect to the local engine to set up model files.':blocked?gate:'Model files validated. Data, Train and Inference use this model’s attached files.'}</p>
    {#if blocked}<p>Add the complete folder for this architecture here. Folders with a different configuration or tensor layout are rejected; import those as a new model. You can still inspect and edit layers below.</p>{/if}</div>
-   <div class="actions">{#if !status?.ready}<button class="btn-outline" disabled={!connected||!!busy||dirty||running} onclick={()=>folder?.click()}>Add complete model folder</button>{/if}<button class="btn-outline" disabled={!connected||!!busy||dirty||running} onclick={validate}>Validate local model</button></div>
+   {#if missing.length}<p role="status">Python packages to install or update: {missing.join(', ')}.</p>{/if}
+   <div class="actions">{#if !runtimeReady}<button class="btn-outline" disabled={!connected||!!busy||running} onclick={()=>setupOpen=true}>{missing.length?'Install missing packages':'Set up Python runtime'}</button>{/if}{#if !status?.ready}<button class="btn-outline" disabled={!connected||!!busy||dirty||running} onclick={()=>folder?.click()}>Add complete model folder</button>{/if}<button class="btn-outline" disabled={!connected||!!busy||dirty||running} onclick={validate}>Validate local model</button></div>
   </section>
  {:else if blocked}
   <section class="gate" aria-label={tab+' unavailable'}>
