@@ -7,6 +7,15 @@
  import type {DataState} from '$lib/workbench/dataTypes';
  import {modelAssets,importAvailability,uploadModelBundle,readRuntimeSnapshot,type RuntimeStatus,type ImportJob} from '$lib/workbench/importRuntime';
  import {parseImportedGraph} from '$lib/workbench/modelImport';
+ import RuntimeSetupDialog, {type RuntimeState} from './RuntimeSetupDialog.svelte';
+ let setupOpen=$state(false), missing=$state<string[]>([]);
+ let runtimeReady = $state(false);
+ function updateRuntime(state: RuntimeState) {
+  const selected = state.candidates.find(candidate => candidate.path === state.selected);
+  missing = [...(selected?.missing ?? []), ...(selected?.importMissing ?? [])];
+  runtimeReady = state.ready && !!selected?.ready && Array.isArray(selected.importMissing) && missing.length === 0;
+ }
+ $effect(()=>{const project=projectId;let active=true;missing=[];runtimeReady=false;if(connected&&tab==='Build')app.call('workbench/runtime/get',{projectId:project}).then(s=>{if(active)updateRuntime(s as RuntimeState);}).catch(e=>{if(active)error=(e as Error).message;});return ()=>{active=false;};});
  import DataTab from './DataTab.svelte';
  import type {WorkbenchTask} from '$lib/workbench/types';
  let {projectId,modelId,modelCreatedAt,tab,graphText,task,connected,dirty,onBuild,onData,onInference}:{
@@ -70,6 +79,7 @@
  const canPromote=$derived(!blocked&&!busy&&!running&&!!testId&&chatCompatible===true&&testedScope===promptScope());
  const metrics=$derived.by(()=>{const m=job?.result?.metrics;if(!m||typeof m!=='object')return [];return Object.entries(m).filter(([,v])=>v&&typeof v==='object').map(([split,v])=>({split,values:Object.entries(v as Record<string,unknown>).filter(([,n])=>typeof n==='number')}));});
 </script>
+{#if setupOpen}<RuntimeSetupDialog {projectId} imported onUpdated={updateRuntime} onClose={()=>{setupOpen=false;void refresh();}} />{/if}
 <section class="runtime-tab" class:is-build={tab==='Build'} aria-label={'Imported model '+tab}>
  {#if tab!=='Build'}
  <header><div><h2>{tab} · Imported {imageModel?'vision':'text'} model</h2><p>Runs on your Mac · Built-in Transformers runtime · Source files stay unchanged</p></div><button class="btn-outline btn-sm" disabled={!connected||!!busy} onclick={()=>void refresh()}>Refresh</button></header>
@@ -78,7 +88,8 @@
   <section class="model-files" aria-label="Model files">
    <div><h3>Model files</h3><p>{!connected?'Connect to the local engine to set up model files.':blocked?gate:'Model files validated. Data, Train and Inference use this model’s attached files.'}</p>
    {#if blocked}<p>Add the complete folder for this architecture here. Folders with a different configuration or tensor layout are rejected; import those as a new model. You can still inspect and edit layers below.</p>{/if}</div>
-   <div class="actions">{#if !status?.ready}<button class="btn-outline" disabled={!connected||!!busy||dirty||running} onclick={()=>folder?.click()}>Add complete model folder</button>{/if}<button class="btn-outline" disabled={!connected||!!busy||dirty||running} onclick={validate}>Validate local model</button></div>
+   {#if missing.length}<p role="status">Python packages to install or update: {missing.join(', ')}.</p>{/if}
+   <div class="actions">{#if !runtimeReady}<button class="btn-outline" disabled={!connected||!!busy||running} onclick={()=>setupOpen=true}>{missing.length?'Install missing packages':'Set up Python runtime'}</button>{/if}{#if !status?.ready}<button class="btn-outline" disabled={!connected||!!busy||dirty||running} onclick={()=>folder?.click()}>Add complete model folder</button>{/if}<button class="btn-outline" disabled={!connected||!!busy||dirty||running} onclick={validate}>Validate local model</button></div>
   </section>
  {:else if blocked}
   <section class="gate" aria-label={tab+' unavailable'}>
@@ -109,7 +120,13 @@
    {#if status?.task==='text-generation'}<p>For questions and answers, select both the prompt and response columns in Data, then click Save preparation again. Training uses the native chat format and learns from answers only. A text corpus trains continuation, not question answering. Start with one epoch; LoRA does not guarantee better answers.</p>{/if}
    <div class="settings"><label>Epochs<input class="input" type="number" min="1" max="10" bind:value={epochs} disabled={running} /></label><label>Learning rate<input class="input" type="number" min="0.0000001" max={status?.task==='text-generation'?0.001:0.1} step="0.00001" bind:value={learningRate} disabled={running} /></label></div>
    <div class="actions"><button class="btn-primary" disabled={!!busy||running||!trainingData?.selection||!!trainingDataError} onclick={train}>Start fine-tuning</button>{#if running}<button class="btn-outline" onclick={cancel}>Stop training</button>{/if}</div>
-   {#if job}<h3 class="job-state">{job.status} · Epoch {job.epoch}/{job.epochs}</h3><progress max={job.epochs||1} value={job.epoch}></progress>
+   {#if job}<h3 class="job-state">{job.status} · Epoch {job.epoch}/{job.epochs}</h3>{#if job.status === 'running' && job.totalSteps}
+     <p>{job.phase} · {job.step ?? 0} of {job.totalSteps} optimizer steps complete</p>
+     <progress aria-label="Training steps" max={job.totalSteps} value={job.step ?? 0}></progress>
+    {:else if job.status === 'running'}
+     <p>Waiting for worker progress…</p><progress aria-label="Waiting for worker progress"></progress>
+    {:else}<progress max={job.epochs||1} value={job.epoch}></progress>{/if}
+    {#if job.timeLimitSeconds === 0}<p>No training time limit.</p>{:else if job.timeLimitSeconds}<p>Worker time limit: {job.timeLimitSeconds / 60} minutes per run</p>{/if}
     {#if job.data}<p>Run dataset: <strong>{job.data.datasetName}</strong> · preparation {job.data.selection.version.slice(0,12)}</p>{:else}<p>Dataset details were not recorded for this older run.</p>{/if}
     {#if job.trainLoss!==undefined}<p>Training loss: {job.trainLoss.toFixed(4)}{job.validationLoss!==undefined?' · Validation loss: '+job.validationLoss.toFixed(4):''}</p>{/if}
     {#if job.error}<p class="error">{job.error}</p>{/if}

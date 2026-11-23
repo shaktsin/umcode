@@ -4,6 +4,7 @@
   import { app } from '$lib/stores/app.svelte';
   import { WorkbenchDataState, workbenchDataDrafts } from '$lib/workbench/data.svelte';
   import { assistantProvenance, dataCompatibility, dataExamples, dataMappingWarnings, dataSize, datasetOptionLabel } from '$lib/workbench/data';
+  import { dataPreviews, previewKey } from '$lib/workbench/dataPreview.svelte';
   import { assistantDatasetToShow } from '$lib/workbench/actionResult';
   import type { DataConfig, DataSourceTab } from '$lib/workbench/dataTypes';
   import type { WorkbenchActionResult } from '$lib/workbench/actionResult';
@@ -19,6 +20,12 @@
   $effect(() => { const id=projectId, model=modelId, version=modelCreatedAt; const changed=(event:Event) => { const result=(event as CustomEvent<WorkbenchActionResult>).detail; if (result?.projectId===id && result.modelId===model && result.modelCreatedAt===version) { const show=assistantDatasetToShow(result); if (show.refresh) void data.load(show.datasetId); } }; window.addEventListener('umcode:workbench-action',changed); return () => window.removeEventListener('umcode:workbench-action',changed); });
   onDestroy(() => { token = ''; data.dispose(); });
   const dataset = $derived(data.dataset), config = $derived(data.config);
+  const key = $derived(previewKey(projectId, modelId, modelCreatedAt));
+  const pending = $derived(dataPreviews.get(key));
+  const proposed = $derived(pending?.preview ?? config);
+  const baseline = $derived(data.selection?.config);
+  const changes = $derived(baseline && proposed ? (Object.keys(proposed) as (keyof DataConfig)[]).filter(field => JSON.stringify(proposed[field]) !== JSON.stringify(baseline[field])) : []);
+  const canApply = $derived(pending?.baseVersion === data.selection?.version && pending?.datasetId === dataset?.id && !data.dirty && !data.busy);
   const made = $derived(dataset ? assistantProvenance(dataset, data.datasets) : null);
   const compatibility = $derived(dataset && config ? dataCompatibility(graphText, dataset, config, data.selection) : []);
   const mappingWarnings = $derived(dataset && config ? dataMappingWarnings(dataset, config) : []);
@@ -79,7 +86,7 @@
   {/if}
 
   {#if data.stage}<div class="feedback loading" role="status"><RefreshCw size={13} class="spinner" />{data.stage}</div>{/if}
-  {#if data.error}<div class="feedback error" role="alert">{data.error}</div>{/if}
+  {#if data.error && !(dataset && config)}<div class="feedback error" role="alert">{data.error}</div>{/if}
   {#if data.notice}<div class="feedback" role="status">{data.notice}</div>{/if}
   <div class="imported-row"><label for="imported-dataset">Imported datasets</label><select id="imported-dataset" class="select" value={dataset?.id ?? ''} disabled={!connected || data.busy || !data.datasets.length} onchange={(event) => void data.selectDataset(event.currentTarget.value)}><option value="">Choose an imported dataset</option>{#each data.datasets as imported}<option value={imported.id}>{datasetOptionLabel(imported)}</option>{/each}</select><button class="icon-button" aria-label="Refresh imported datasets" disabled={!connected || data.busy} onclick={() => void data.load(dataset?.id)}><RefreshCw size={14} /></button></div>
 
@@ -114,7 +121,21 @@
         {#if mappingWarnings.length}<div class="validation" role="status"><strong>Review these fields</strong><ul>{#each mappingWarnings as warning}<li>{warning}</li>{/each}</ul></div>{/if}
         {#if data.validation.length}<div class="validation" role="status"><strong>Check preparation</strong><ul>{#each data.validation as issue}<li>{issue}</li>{/each}</ul></div>{/if}
         <div class="compatibility selectable" class:has-issues={compatibility.length > 0}><strong>{compatibility.length ? 'Review in Build' : imported ? 'Uses imported preprocessing' : 'Current graph dimensions match'}</strong>{#if compatibility.length}<ul>{#each compatibility as issue}<li>{issue}</li>{/each}</ul>{/if}<button class="btn-ghost btn-sm" onclick={onBuild}><ArrowLeft size={13} />Back to Build</button></div>
-        <button class="btn-primary save-preparation" disabled={!connected || data.busy || data.validation.length > 0 || (!imported && !data.dirty)} onclick={() => void data.prepare()}>{data.stage === 'Saving preparation…' ? 'Saving preparation…' : !imported && data.selection && !data.dirty ? 'Preparation saved' : 'Save preparation'}</button><p class="source-note">Saves data settings separately from the model graph. You can save while graph issues remain; resolve them in Build before starting training.</p>
+        {#if pending || (data.dirty && changes.length)}
+          <section class="saved-preparation" aria-label="Preparation changes">
+            <h3>{pending ? 'Assistant proposal' : 'Unsaved preparation changes'}</h3>
+            {#if pending && !canApply}<p>Review the saved dataset and any unsaved edits before applying this proposal.</p>
+            {:else if baseline && proposed}
+              {#each changes as field}<p>{field.replace(/([A-Z])/g, ' $1').toLowerCase()} · {String(baseline[field] ?? '—')} → {String(proposed[field] ?? '—')}</p>{/each}
+              {#if !changes.length}<p>No settings changed.</p>{/if}
+            {/if}
+            {#if pending}<button class="btn-outline btn-sm" disabled={!connected || !canApply || !changes.length} onclick={() => { if (pending?.preview) data.updateConfig(pending.preview); dataPreviews.delete(key); }}>Apply to draft</button>
+              <button class="btn-ghost btn-sm" onclick={() => dataPreviews.delete(key)}>Dismiss</button>{/if}
+          </section>
+        {/if}
+        <button class="btn-primary save-preparation" disabled={!connected || data.busy || data.validation.length > 0 || (!imported && !data.dirty)} onclick={() => void data.prepare()}>{data.stage === 'Saving preparation…' ? 'Saving preparation…' : data.selection && !data.dirty && !data.error ? 'Preparation saved' : 'Save preparation'}</button>
+        {#if data.error}<div class="feedback error" role="alert">{data.error}</div>{/if}
+        <p class="source-note">Saves data settings separately from the model graph. You can save while graph issues remain; resolve them in Build before starting training.</p>
       </aside>
     </div>
   {:else if !data.busy}<div class="empty-data"><Database size={23} strokeWidth={1.4} /><p>{data.source === 'local' ? 'No local dataset selected. Choose files to import and preview actual rows.' : 'Import a dataset above or choose one already imported into this model.'}</p></div>{/if}

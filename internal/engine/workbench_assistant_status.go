@@ -52,25 +52,54 @@ func (e *Engine) workbenchStageSnapshot(ctx context.Context, c *protocol.Workben
 		status["data"] = stage
 	}
 
-	runs, err := e.trainingRunner().List(project.Root, c.ModelID, version)
-	if err != nil {
-		status["train"] = map[string]any{"error": err.Error()}
-	} else {
-		recent := make([]map[string]any, 0, min(len(runs), 3))
-		for _, run := range runs[:min(len(runs), 3)] {
-			failure := run.Error
+	if workbench.IsImportedGraph(model.Graph) {
+		target := workbench.BundleTarget{ProjectRoot: project.Root, ModelID: c.ModelID, CreatedAt: version}
+		job, err := e.importedRunner().Job(target)
+		stage := map[string]any{"kind": "imported", "latestJob": nil}
+		if err != nil {
+			stage["error"] = err.Error()
+		} else if job != nil {
+			failure := job.Error
 			if len(failure) > 2048 {
 				failure = failure[:2048] + "…"
 			}
-			recent = append(recent, map[string]any{"id": run.ID, "name": run.Name, "status": run.Status, "error": failure, "epoch": run.Epoch, "config": run.Config, "preparationVersion": run.PreparationVersion, "checkpointId": run.CheckpointID, "recentEpochs": run.History[max(0, len(run.History)-3):], "trainMetrics": run.Train, "validationMetrics": run.Validation, "testMetrics": run.Test})
-		}
-		trainStatus := map[string]any{"runtimeAvailable": e.trainingRunner().Available(), "runCount": len(runs), "recentRuns": recent}
-		if data, readErr := workbench.ReadData(project.Root, c.ModelID, ""); readErr == nil && data.Selection != nil {
-			if maxBatch, known := workbench.TrainingMaxBatchSize(model.Graph, *data.Selection, workbench.TrainingAvailableMemory()); known {
-				trainStatus["maxBatchSize"] = maxBatch
+			latest := map[string]any{"id": job.ID, "status": job.Status, "epoch": job.Epoch, "epochs": job.Epochs, "error": failure}
+			if job.TimeLimitSeconds != nil {
+				latest["timeLimitSeconds"] = *job.TimeLimitSeconds
+				latest["hasTimeLimit"] = *job.TimeLimitSeconds > 0
 			}
+			if job.TotalSteps > 0 {
+				latest["phase"] = job.Phase
+				latest["step"] = job.Step
+				latest["totalSteps"] = job.TotalSteps
+			}
+			if job.Data != nil {
+				latest["preparationVersion"] = job.Data.Selection.Version
+			}
+			stage["latestJob"] = latest
 		}
-		status["train"] = trainStatus
+		status["train"] = stage
+	} else {
+		runs, err := e.trainingRunner().List(project.Root, c.ModelID, version)
+		if err != nil {
+			status["train"] = map[string]any{"error": err.Error()}
+		} else {
+			recent := make([]map[string]any, 0, min(len(runs), 3))
+			for _, run := range runs[:min(len(runs), 3)] {
+				failure := run.Error
+				if len(failure) > 2048 {
+					failure = failure[:2048] + "…"
+				}
+				recent = append(recent, map[string]any{"id": run.ID, "name": run.Name, "status": run.Status, "error": failure, "epoch": run.Epoch, "config": run.Config, "preparationVersion": run.PreparationVersion, "checkpointId": run.CheckpointID, "recentEpochs": run.History[max(0, len(run.History)-3):], "trainMetrics": run.Train, "validationMetrics": run.Validation, "testMetrics": run.Test})
+			}
+			trainStatus := map[string]any{"runtimeAvailable": e.trainingRunner().Available(), "runCount": len(runs), "recentRuns": recent}
+			if data, readErr := workbench.ReadData(project.Root, c.ModelID, ""); readErr == nil && data.Selection != nil {
+				if maxBatch, known := workbench.TrainingMaxBatchSize(model.Graph, *data.Selection, workbench.TrainingAvailableMemory()); known {
+					trainStatus["maxBatchSize"] = maxBatch
+				}
+			}
+			status["train"] = trainStatus
+		}
 	}
 
 	inference, err := e.inferenceState(ctx, protocol.WorkbenchInferenceParams{ProjectID: c.ProjectID, ModelID: c.ModelID, ModelCreatedAt: version}, project.Root)

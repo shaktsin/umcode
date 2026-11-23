@@ -29,6 +29,9 @@ func (e *Engine) applyRuntimeLocked(python string) error {
 	}
 	e.inferenceMu.Lock()
 	defer e.inferenceMu.Unlock()
+	if e.importedRuntime != nil {
+		e.importedRuntime.SetPython(python)
+	}
 	if e.inferenceManager != nil {
 		e.inferenceManager.SetPython(python)
 	}
@@ -77,7 +80,7 @@ func (e *Engine) WorkbenchRuntime(ctx context.Context, op string, p protocol.Wor
 		if busy {
 			return nil, errors.New("stop the active training run before installing a new runtime")
 		}
-		if err = svc.Install(ctx, p.Path); err != nil {
+		if err = svc.Install(ctx, p.Path, p.Imported); err != nil {
 			return nil, err
 		}
 		return svc.State(ctx, project.Root), nil

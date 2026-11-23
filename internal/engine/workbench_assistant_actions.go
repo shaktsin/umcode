@@ -20,7 +20,7 @@ func workbenchActionSpecs() []llm.ToolSpec {
 		{Name: tools.ToWire("workbench.import_data"), Description: "Import datasets for this Workbench model: project-relative local file paths and public or token-accessible Hugging Face repositories (pinned revision required). Several sources import in one call; each becomes its own dataset.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["sources"],"properties":{"sources":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"type":"string","enum":["local","huggingface"]},"path":{"type":"string"},"repo":{"type":"string"},"revision":{"type":"string"},"files":{"type":"array","items":{"type":"string"}}}}}}}`)},
 		{Name: tools.ToWire("workbench.inspect_data"), Description: "Read sample rows, column kinds, missing values, likely target distribution and shared columns across this model's imported datasets. Empty datasetIds inspects all of them.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"datasetIds":{"type":"array","items":{"type":"string"}},"sample":{"type":"integer","minimum":0,"maximum":20}}}`)},
 		{Name: tools.ToWire("workbench.run_data_script"), Description: "Run a Python script that analyzes, transforms, merges, balances or generates data. The user must approve every run and sees the code first. The script runs sandboxed with no network, reads copies of the chosen imported datasets from inputs/<dataset name>/, writes CSV, TSV, JSONL or TXT files to out/, and prints findings to stdout. pandas is NOT installed; numpy, Pillow, torch and the standard library are. A 120 second limit applies. With expectOutput dataset, the files in out/ become one new imported dataset named outputName; with report, only stdout is returned. Existing datasets are never modified.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["title","outputName","script","expectOutput"],"properties":{"title":{"type":"string","maxLength":80},"inputDatasetIds":{"type":"array","maxItems":8,"items":{"type":"string"}},"outputName":{"type":"string","maxLength":256},"script":{"type":"string","maxLength":32768},"expectOutput":{"type":"string","enum":["dataset","report"]}}}`)},
-		{Name: tools.ToWire("workbench.save_data"), Description: "Save Data preparation for this model using the selected imported dataset (set config.datasetId to choose one, including assistant-made datasets). Supply the complete Data configuration from the saved status with requested changes. Recomputes train, validation and test splits.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["config"],"properties":{"config":{"type":"object"}}}`)},
+		{Name: tools.ToWire("workbench.save_data"), Description: "Save Data preparation for this model using the selected imported dataset (set config.datasetId to choose one, including assistant-made datasets). Set preview=true to show proposed changes in Data without saving. Supply the complete Data configuration from the saved status with requested changes. Recomputes train, validation and test splits.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["config"],"properties":{"config":{"type":"object"},"preview":{"type":"boolean"}}}`)},
 		{Name: tools.ToWire("workbench.train"), Description: "Start or stop a local training run for the selected Workbench model. Starting returns a running run ID, not a completed result. Supply training config when starting and runId when stopping.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["operation"],"properties":{"operation":{"type":"string","enum":["start","stop"]},"config":{"type":"object"},"runId":{"type":"string"}}}`)},
 		{Name: tools.ToWire("workbench.test_checkpoint"), Description: "Run local PyTorch inference for an existing checkpoint of this model and return the actual prediction. Supply prompt for text or numeric features for a feature model.", Schema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["checkpointId"],"properties":{"checkpointId":{"type":"string"},"prompt":{"type":"string"},"features":{"type":"object","additionalProperties":{"type":"number"}},"temperature":{"type":"number"},"maxNewTokens":{"type":"integer"}}}`)},
 	}
@@ -241,7 +241,8 @@ func (e *Engine) saveWorkbenchData(ctx context.Context, args json.RawMessage) (s
 		return "", errors.New("Data action exceeds 32 KiB")
 	}
 	var request struct {
-		Config workbench.DataConfig `json:"config"`
+		Config  workbench.DataConfig `json:"config"`
+		Preview bool                 `json:"preview"`
 	}
 	if err := strictWorkbenchJSON(args, &request); err != nil {
 		return "", err
@@ -266,14 +267,14 @@ func (e *Engine) saveWorkbenchData(ctx context.Context, args json.RawMessage) (s
 	if version != c.DataVersion {
 		return "", errors.New("saved Data preparation changed during this chat turn; ask again with the latest model")
 	}
-	opened, err := workbench.Open(project.Root, c.ModelID)
-	if err != nil {
-		return "", err
+	if request.Preview {
+		if data.Selection == nil || data.Selection.DatasetID != request.Config.DatasetID {
+			return "", errors.New("preview requires a saved preparation for the selected dataset")
+		}
+		result, err := json.Marshal(map[string]any{"action": "save_data", "saved": false, "preview": request.Config, "baseVersion": version, "datasetId": request.Config.DatasetID, "modelId": c.ModelID, "projectId": c.ProjectID, "modelCreatedAt": c.ModelCreatedAt})
+		return string(result), err
 	}
-	if workbench.IsImportedGraph(opened.Graph) {
-		return "", errors.New("automatic Data preparation supports native models only")
-	}
-	selection, err := workbench.PrepareData(project.Root, c.ModelID, request.Config)
+	selection, err := prepareModelData(project.Root, c.ModelID, request.Config)
 	if err != nil {
 		return "", err
 	}
