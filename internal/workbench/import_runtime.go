@@ -28,16 +28,23 @@ type ImportRuntimeState struct {
 	Labels     []string `json:"labels,omitempty"`
 	Checkpoint string   `json:"checkpoint,omitempty"`
 }
+
+const importedWorkerTimeout = 10 * time.Minute
+
 type ImportJob struct {
-	ID             string              `json:"id"`
-	Status         string              `json:"status"`
-	Epoch          int                 `json:"epoch"`
-	Epochs         int                 `json:"epochs"`
-	TrainLoss      *float64            `json:"trainLoss,omitempty"`
-	ValidationLoss *float64            `json:"validationLoss,omitempty"`
-	Result         map[string]any      `json:"result,omitempty"`
-	Error          string              `json:"error,omitempty"`
-	Data           *ImportTrainingData `json:"data,omitempty"`
+	TimeLimitSeconds *int                `json:"timeLimitSeconds,omitempty"`
+	Phase            string              `json:"phase,omitempty"`
+	Step             int                 `json:"step"`
+	TotalSteps       int                 `json:"totalSteps,omitempty"`
+	ID               string              `json:"id"`
+	Status           string              `json:"status"`
+	Epoch            int                 `json:"epoch"`
+	Epochs           int                 `json:"epochs"`
+	TrainLoss        *float64            `json:"trainLoss,omitempty"`
+	ValidationLoss   *float64            `json:"validationLoss,omitempty"`
+	Result           map[string]any      `json:"result,omitempty"`
+	Error            string              `json:"error,omitempty"`
+	Data             *ImportTrainingData `json:"data,omitempty"`
 }
 type ImportTrainingData struct {
 	DatasetName string        `json:"datasetName"`
@@ -192,8 +199,12 @@ func (r *ImportedRuntime) run(ctx context.Context, request map[string]any, progr
 	if r.pythonPath() == "" {
 		return nil, errors.New("The local Python runtime is not installed.")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
+	// Fine-tuning uses the job context so Stop and engine shutdown still cancel it.
+	if request["action"] != "train" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, importedWorkerTimeout)
+		defer cancel()
+	}
 	input, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
@@ -426,7 +437,8 @@ func (r *ImportedRuntime) Train(ctx context.Context, b BundleTarget, epochs int,
 		return ImportJob{}, errors.New("A training job is already running or the runtime is closed.")
 	}
 	id := fmt.Sprintf("%d", time.Now().UnixNano())
-	job := ImportJob{ID: id, Status: "running", Epochs: epochs, Data: &ImportTrainingData{DatasetName: data.Dataset.Name, Selection: selection}}
+	noTimeLimit := 0
+	job := ImportJob{TimeLimitSeconds: &noTimeLimit, ID: id, Status: "running", Epochs: epochs, Data: &ImportTrainingData{DatasetName: data.Dataset.Name, Selection: selection}}
 	r.job = &job
 	r.target = b
 	jobCtx, cancel := context.WithCancel(context.Background())
@@ -450,6 +462,15 @@ func (r *ImportedRuntime) Train(ctx context.Context, b BundleTarget, epochs int,
 			result, err = r.run(jobCtx, request, func(p map[string]any) {
 				r.mu.Lock()
 				defer r.mu.Unlock()
+				if phase, ok := p["phase"].(string); ok {
+					r.job.Phase = phase
+				}
+				if step, ok := p["step"].(float64); ok {
+					r.job.Step = int(step)
+				}
+				if total, ok := p["totalSteps"].(float64); ok {
+					r.job.TotalSteps = int(total)
+				}
 				if v, ok := p["epoch"].(float64); ok {
 					r.job.Epoch = int(v)
 				}

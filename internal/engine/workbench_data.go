@@ -109,21 +109,23 @@ func (e *Engine) PrepareWorkbenchData(ctx context.Context, p protocol.WorkbenchD
 	if _, err := matchingWorkbenchModel(root, p.ModelID, p.ModelCreatedAt); err != nil {
 		return nil, err
 	}
-	opened, err := workbench.Open(root, p.ModelID)
-	if err != nil {
-		return nil, err
-	}
-	var selection workbench.DataSelection
-	if workbench.IsImportedGraph(opened.Graph) {
-		selection, err = workbench.PrepareImportedData(root, p.ModelID, p.Config)
-	} else {
-		selection, err = workbench.PrepareData(root, p.ModelID, p.Config)
-	}
+	selection, err := prepareModelData(root, p.ModelID, p.Config)
 	if err != nil {
 		return nil, protocol.Errorf(protocol.CodeInvalidParams, "prepare dataset: %v", err)
 	}
 	_ = e.Store.Audit(ctx, "workbench.data.prepare", map[string]any{"projectId": p.ProjectID, "modelId": p.ModelID, "datasetId": selection.DatasetID, "version": selection.Version})
 	return selection, nil
+}
+
+func prepareModelData(root, modelID string, config workbench.DataConfig) (workbench.DataSelection, error) {
+	opened, err := workbench.Open(root, modelID)
+	if err != nil {
+		return workbench.DataSelection{}, err
+	}
+	if workbench.IsImportedGraph(opened.Graph) {
+		return workbench.PrepareImportedData(root, modelID, config)
+	}
+	return workbench.PrepareData(root, modelID, config)
 }
 
 func (e *Engine) WorkbenchHuggingFace(ctx context.Context, p protocol.WorkbenchDataHuggingFaceParams) (any, error) {

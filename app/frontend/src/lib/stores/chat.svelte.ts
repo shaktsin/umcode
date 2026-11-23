@@ -8,6 +8,7 @@ import { app } from './app.svelte';
 import { projects } from './projects.svelte';
 import { errMsg } from '$lib/format';
 import type { WorkbenchContext } from '$lib/workbench/assistant';
+import { dataPreviews, previewKey } from '$lib/workbench/dataPreview.svelte';
 import { assistantDatasetToShow, workbenchActionResult } from '$lib/workbench/actionResult';
 import { workbench } from '$lib/workbench/store.svelte';
 import { inspector } from './inspector.svelte';
@@ -291,6 +292,13 @@ class ChatState {
       this.each((v) => v.applyItem(p.item));
       const action = workbenchActionResult(p.item);
       if (action) {
+        if (action.action === 'save_data') {
+          const key = previewKey(action.projectId, action.modelId, action.modelCreatedAt);
+          if (action.preview) {
+            dataPreviews.set(key, action);
+            if (workbench.projectId === action.projectId && workbench.selected?.model.id === action.modelId && workbench.selected.model.createdAt === action.modelCreatedAt) workbench.tab = 'Data';
+          } else dataPreviews.delete(key);
+        }
         if (action.action === 'save_build' && action.baseDraftRevision) void workbench.reconcileAssistantSave(action.projectId, action.modelId, action.modelCreatedAt, action.baseDraftRevision).catch((error) => app.toast('error', errMsg(error)));
         if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('umcode:workbench-action', { detail: action }));
         if (action.action === 'train' && action.operation === 'start' && action.status === 'running' && workbench.projectId === action.projectId && workbench.selected?.model.id === action.modelId && workbench.selected.model.createdAt === action.modelCreatedAt) workbench.tab = 'Train';

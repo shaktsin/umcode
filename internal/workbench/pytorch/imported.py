@@ -385,6 +385,10 @@ def run(request, progress=lambda _: None):
             metrics['accuracy'] = correct / count
         return metrics
 
+    def report(phase):
+        progress({'event': 'progress', 'phase': phase, 'step': step, 'totalSteps': total_steps})
+
+    report('Baseline validation')
     baseline = evaluate('validation')
     best_loss, best_epoch = (baseline['loss'] if baseline else math.inf), 0
     best = {name: p.detach().clone() for name, p in trainable.items()}
@@ -399,6 +403,7 @@ def run(request, progress=lambda _: None):
         total, tokens = 0.0, 0
         rows = list(prepared['train'])
         rng.shuffle(rows)
+        report('Training')
         for start in range(0, len(rows), accumulation):
             batch = [ready(item) for item in rows[start:start + accumulation]]
             optimizer.zero_grad(set_to_none=True)
@@ -416,6 +421,8 @@ def run(request, progress=lambda _: None):
                 group['lr'] = rate * scale
             optimizer.step()
             step += 1
+            report('Training')
+        report('Validation')
         validation = evaluate('validation')
         if validation is None or validation['loss'] < best_loss:
             best_loss = validation['loss'] if validation else math.inf
@@ -425,6 +432,7 @@ def run(request, progress=lambda _: None):
         if validation is not None:
             event['validationLoss'] = validation['loss']
         progress(event)
+    report('Final evaluation and checkpoint')
     with torch.no_grad():
         for name, p in trainable.items():
             p.copy_(best[name])

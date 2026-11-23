@@ -120,7 +120,13 @@
    {#if status?.task==='text-generation'}<p>For questions and answers, select both the prompt and response columns in Data, then click Save preparation again. Training uses the native chat format and learns from answers only. A text corpus trains continuation, not question answering. Start with one epoch; LoRA does not guarantee better answers.</p>{/if}
    <div class="settings"><label>Epochs<input class="input" type="number" min="1" max="10" bind:value={epochs} disabled={running} /></label><label>Learning rate<input class="input" type="number" min="0.0000001" max={status?.task==='text-generation'?0.001:0.1} step="0.00001" bind:value={learningRate} disabled={running} /></label></div>
    <div class="actions"><button class="btn-primary" disabled={!!busy||running||!trainingData?.selection||!!trainingDataError} onclick={train}>Start fine-tuning</button>{#if running}<button class="btn-outline" onclick={cancel}>Stop training</button>{/if}</div>
-   {#if job}<h3 class="job-state">{job.status} · Epoch {job.epoch}/{job.epochs}</h3><progress max={job.epochs||1} value={job.epoch}></progress>
+   {#if job}<h3 class="job-state">{job.status} · Epoch {job.epoch}/{job.epochs}</h3>{#if job.status === 'running' && job.totalSteps}
+     <p>{job.phase} · {job.step ?? 0} of {job.totalSteps} optimizer steps complete</p>
+     <progress aria-label="Training steps" max={job.totalSteps} value={job.step ?? 0}></progress>
+    {:else if job.status === 'running'}
+     <p>Waiting for worker progress…</p><progress aria-label="Waiting for worker progress"></progress>
+    {:else}<progress max={job.epochs||1} value={job.epoch}></progress>{/if}
+    {#if job.timeLimitSeconds === 0}<p>No training time limit.</p>{:else if job.timeLimitSeconds}<p>Worker time limit: {job.timeLimitSeconds / 60} minutes per run</p>{/if}
     {#if job.data}<p>Run dataset: <strong>{job.data.datasetName}</strong> · preparation {job.data.selection.version.slice(0,12)}</p>{:else}<p>Dataset details were not recorded for this older run.</p>{/if}
     {#if job.trainLoss!==undefined}<p>Training loss: {job.trainLoss.toFixed(4)}{job.validationLoss!==undefined?' · Validation loss: '+job.validationLoss.toFixed(4):''}</p>{/if}
     {#if job.error}<p class="error">{job.error}</p>{/if}
